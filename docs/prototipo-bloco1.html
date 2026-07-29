@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Conciliação Shopee — Protótipo testável (Bloco 1)</title>
+<style>
+:root{
+  --bg:#f4f6fb; --panel:#ffffff; --panel-2:#fbfcfe; --ink:#1a2233; --muted:#64708a; --line:#e5e9f2;
+  --brand:#1f3a8a; --brand-2:#2b4bd6; --sidebar:#101a33; --sidebar-ink:#c3cce0; --sidebar-mut:#6d7aa0;
+  --ok:#0f9d6b; --ok-bg:#e6f6ee; --warn:#c47f00; --warn-bg:#fdf3e0;
+  --err:#d13b3b; --err-bg:#fbe9e9; --info:#2b6fd6; --info-bg:#e8f0fc;
+  --neutral:#5b6478; --neutral-bg:#eef1f7;
+  --radius:12px; --shadow:0 1px 2px rgba(16,26,51,.06),0 6px 18px rgba(16,26,51,.05);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0f1524; --panel:#161f33; --panel-2:#111a2c; --ink:#e6ebf5; --muted:#9aa6be; --line:#26304a;
+    --brand:#5b7bff; --brand-2:#4f70f0; --sidebar:#0b1220; --sidebar-ink:#c3cce0; --sidebar-mut:#5f6d90;
+    --ok:#39c58c; --ok-bg:#123026; --warn:#e0a53a; --warn-bg:#33280f;
+    --err:#ef6a6a; --err-bg:#3a1c1e; --info:#6aa3f0; --info-bg:#12233c;
+    --neutral:#9aa6be; --neutral-bg:#222c44;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 18px rgba(0,0,0,.28);
+  }
+}
+:root[data-theme="light"]{
+  --bg:#f4f6fb; --panel:#ffffff; --panel-2:#fbfcfe; --ink:#1a2233; --muted:#64708a; --line:#e5e9f2;
+  --brand:#1f3a8a; --brand-2:#2b4bd6; --sidebar:#101a33; --sidebar-ink:#c3cce0; --sidebar-mut:#6d7aa0;
+  --ok:#0f9d6b; --ok-bg:#e6f6ee; --warn:#c47f00; --warn-bg:#fdf3e0;
+  --err:#d13b3b; --err-bg:#fbe9e9; --info:#2b6fd6; --info-bg:#e8f0fc;
+  --neutral:#5b6478; --neutral-bg:#eef1f7; --shadow:0 1px 2px rgba(16,26,51,.06),0 6px 18px rgba(16,26,51,.05);
+}
+:root[data-theme="dark"]{
+  --bg:#0f1524; --panel:#161f33; --panel-2:#111a2c; --ink:#e6ebf5; --muted:#9aa6be; --line:#26304a;
+  --brand:#5b7bff; --brand-2:#4f70f0; --sidebar:#0b1220; --sidebar-ink:#c3cce0; --sidebar-mut:#5f6d90;
+  --ok:#39c58c; --ok-bg:#123026; --warn:#e0a53a; --warn-bg:#33280f;
+  --err:#ef6a6a; --err-bg:#3a1c1e; --info:#6aa3f0; --info-bg:#12233c;
+  --neutral:#9aa6be; --neutral-bg:#222c44; --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 18px rgba(0,0,0,.28);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.45}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit;cursor:pointer}
+.hidden{display:none!important}
+.tabnum{font-variant-numeric:tabular-nums}
+
+/* Login */
+.login-wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#101a33,#1f3a8a 60%,#2b4bd6);padding:20px}
+.login-card{background:var(--panel);width:404px;max-width:94vw;border-radius:16px;padding:32px;box-shadow:0 20px 60px rgba(0,0,0,.35)}
+.logo{display:flex;align-items:center;gap:10px;margin-bottom:20px}
+.logo-badge{width:38px;height:38px;border-radius:9px;background:linear-gradient(135deg,var(--brand),var(--brand-2));display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800}
+.login-card h1{font-size:19px;margin:0}
+.sub{color:var(--muted);margin:2px 0 22px;font-size:13px}
+label.fld{display:block;font-size:12px;color:var(--muted);margin:14px 0 5px;font-weight:600}
+.input{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:9px;font-size:14px;background:var(--panel-2);color:var(--ink)}
+.input:focus{outline:2px solid var(--brand-2);outline-offset:1px;border-color:var(--brand-2)}
+.quick{display:flex;gap:7px;margin-top:8px}
+.quick button{flex:1;padding:8px 6px;border:1px solid var(--line);border-radius:8px;background:var(--panel);font-size:12px;font-weight:600;color:var(--muted)}
+.quick button:hover{border-color:var(--brand-2);color:var(--brand)}
+.quick button.on{background:var(--brand-2);color:#fff;border-color:var(--brand-2)}
+.btn{border:none;border-radius:9px;padding:11px 16px;font-weight:600;font-size:14px}
+.btn-primary{background:var(--brand-2);color:#fff}
+.btn-primary:hover{filter:brightness(1.06)}
+.btn-block{width:100%;margin-top:20px}
+.demo-note{margin-top:16px;font-size:11.5px;color:var(--muted);text-align:center;line-height:1.6}
+.form-err{background:var(--err-bg);color:var(--err);border-radius:8px;padding:9px 12px;font-size:12.5px;margin-top:14px}
+
+/* Shell */
+.shell{display:grid;grid-template-columns:250px 1fr;min-height:100vh}
+.sidebar{background:var(--sidebar);color:var(--sidebar-ink);padding:18px 14px;position:sticky;top:0;height:100vh;overflow:auto}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 8px 18px;border-bottom:1px solid rgba(255,255,255,.08);margin-bottom:12px}
+.brand b{color:#fff;font-size:15px}
+.brand small{display:block;color:#8b97b6;font-size:11px;font-weight:500}
+.nav-group{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--sidebar-mut);margin:16px 8px 6px}
+.nav a{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;color:var(--sidebar-ink);font-weight:500;margin-bottom:2px;font-size:13.5px}
+.nav a .ic{width:18px;text-align:center;opacity:.9}
+.nav a:hover{background:rgba(255,255,255,.06);color:#fff}
+.nav a.active{background:var(--brand-2);color:#fff}
+.nav a.soon{opacity:.5;cursor:default}
+.nav a .soon-tag{margin-left:auto;font-size:9px;background:rgba(255,255,255,.12);padding:1px 6px;border-radius:6px;letter-spacing:.03em}
+
+.main{display:flex;flex-direction:column;min-width:0}
+.topbar{background:var(--panel);border-bottom:1px solid var(--line);padding:11px 24px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:5}
+.crumbs{font-size:12.5px;color:var(--muted)}
+.crumbs b{color:var(--ink)}
+.spacer{flex:1}
+.top-store{display:flex;align-items:center;gap:8px;font-size:13px;border:1px solid var(--line);padding:6px 10px;border-radius:8px;background:var(--panel-2)}
+.top-store .dot{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+.iconbtn{border:1px solid var(--line);background:var(--panel);border-radius:8px;width:34px;height:34px;font-size:15px;color:var(--muted)}
+.iconbtn:hover{border-color:var(--brand-2);color:var(--brand)}
+.avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
+.role-pill{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:6px;background:var(--neutral-bg);color:var(--neutral)}
+.logout{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:7px 11px;font-size:12.5px;color:var(--muted);font-weight:600}
+.logout:hover{border-color:var(--err);color:var(--err)}
+.content{padding:24px;max-width:1200px;width:100%}
+.page-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:16px;gap:16px;flex-wrap:wrap}
+.page-head h2{margin:0;font-size:20px;text-wrap:balance}
+.page-head p{margin:3px 0 0;color:var(--muted);font-size:13px}
+
+.info-banner{background:var(--info-bg);border:1px solid color-mix(in srgb, var(--info) 30%, transparent);color:var(--info);border-radius:10px;padding:10px 14px;font-size:12.5px;margin-bottom:18px}
+.demo-strip{background:var(--warn-bg);border:1px solid color-mix(in srgb, var(--warn) 35%, transparent);color:var(--warn);border-radius:10px;padding:8px 14px;font-size:12px;margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.demo-strip .rst{margin-left:auto;border:1px solid currentColor;background:transparent;color:inherit;border-radius:6px;padding:3px 9px;font-size:11.5px;font-weight:700}
+
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px;margin-bottom:18px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow)}
+.kpi .lbl{font-size:12px;color:var(--muted);font-weight:600}
+.kpi .val{font-size:23px;font-weight:750;margin-top:8px}
+.kpi .sub{font-size:11.5px;color:var(--muted);margin-top:4px}
+
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;margin-bottom:16px}
+.panel .ph{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px}
+.panel .ph h3{margin:0;font-size:14.5px}
+.pb{padding:16px}
+.pb ul{margin:0;padding-left:18px;line-height:1.9}
+
+.table-wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px;min-width:540px}
+th{text-align:left;padding:10px 14px;color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.03em;border-bottom:1px solid var(--line);white-space:nowrap;background:var(--panel-2)}
+td{padding:11px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--panel-2)}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:12px}
+
+.badge{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:11.5px;font-weight:600}
+.badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.b-ok{background:var(--ok-bg);color:var(--ok)}
+.b-warn{background:var(--warn-bg);color:var(--warn)}
+.b-err{background:var(--err-bg);color:var(--err)}
+.b-info{background:var(--info-bg);color:var(--info)}
+.b-neutral{background:var(--neutral-bg);color:var(--neutral)}
+
+.btn-sm{padding:6px 12px;border-radius:7px;border:1px solid var(--line);background:var(--panel);font-size:12.5px;font-weight:600;color:var(--brand)}
+.btn-sm:hover{background:color-mix(in srgb,var(--brand-2) 10%,var(--panel));border-color:var(--brand-2)}
+.btn-sm.primary{background:var(--brand-2);color:#fff;border-color:var(--brand-2)}
+.btn-sm.danger{color:var(--err)}
+.btn-sm.danger:hover{background:var(--err-bg);border-color:var(--err)}
+.btn-sm:disabled{opacity:.45;cursor:default}
+.readonly-note{font-size:12px;color:var(--muted);background:var(--neutral-bg);padding:3px 10px;border-radius:6px}
+
+.empty{padding:44px;text-align:center;color:var(--muted)}
+.empty .ico{font-size:32px;opacity:.4}
+.footnote{color:var(--muted);font-size:11.5px;margin-top:10px}
+
+.overlay{position:fixed;inset:0;background:rgba(16,26,51,.5);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px}
+.modal{background:var(--panel);border-radius:14px;width:460px;max-width:96vw;box-shadow:0 30px 80px rgba(0,0,0,.45);border:1px solid var(--line)}
+.modal .mh{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+.modal .mh h3{margin:0;font-size:16px}
+.modal .mbd{padding:20px}
+.modal .mf{padding:14px 20px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px}
+.x{border:none;background:none;font-size:20px;color:var(--muted);cursor:pointer;line-height:1}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 18px;border-radius:9px;font-size:13px;font-weight:600;box-shadow:0 10px 30px rgba(0,0,0,.3);z-index:80;opacity:0;transition:opacity .2s,transform .2s}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(-4px)}
+@media (prefers-reduced-motion:reduce){.toast{transition:none}}
+</style>
+</head>
+<body>
+
+<!-- ===================== LOGIN ===================== -->
+<div id="login" class="login-wrap">
+  <form class="login-card" onsubmit="doLogin(event)">
+    <div class="logo"><div class="logo-badge">CS</div><div><h1>Conciliação Shopee</h1></div></div>
+    <p class="sub">Sistema de conciliação financeira · painel do vendedor</p>
+
+    <label class="fld">Entrar como (clique para preencher)</label>
+    <div class="quick" id="quick">
+      <button type="button" data-mail="admin@demo.local" onclick="pick(this)">Administrador</button>
+      <button type="button" data-mail="financeiro@demo.local" onclick="pick(this)">Financeiro</button>
+      <button type="button" data-mail="viewer@demo.local" onclick="pick(this)">Consulta</button>
+    </div>
+
+    <label class="fld">E-mail</label>
+    <input class="input" id="lg-mail" value="admin@demo.local" autocomplete="username">
+    <label class="fld">Senha</label>
+    <input class="input" id="lg-pass" type="password" value="Demo@12345" autocomplete="current-password">
+
+    <div id="lg-err" class="form-err hidden"></div>
+    <button class="btn btn-primary btn-block" type="submit">Entrar</button>
+    <div class="demo-note">
+      Protótipo <b>testável</b> do Bloco 1 — roda 100% no navegador (sem servidor).<br>
+      Usuários: admin / financeiro / viewer @demo.local · senha <b>Demo@12345</b>
+    </div>
+  </form>
+</div>
+
+<!-- ===================== APP ===================== -->
+<div id="app" class="shell hidden">
+  <aside class="sidebar">
+    <div class="brand"><div class="logo-badge">CS</div><div><b>Conciliação</b><small>Shopee · Financeiro</small></div></div>
+    <nav class="nav" id="nav">
+      <div class="nav-group">Operação</div>
+      <a data-page="dashboard" class="active" onclick="nav('dashboard')"><span class="ic">▦</span>Dashboard</a>
+      <a class="soon"><span class="ic">⭱</span>Importações<span class="soon-tag">Bloco 2</span></a>
+      <a class="soon"><span class="ic">⇄</span>Conciliação<span class="soon-tag">Bloco 4</span></a>
+      <a class="soon"><span class="ic">⚑</span>Pendências<span class="soon-tag">Bloco 5</span></a>
+      <div class="nav-group">Dados</div>
+      <a class="soon"><span class="ic">▤</span>Pedidos<span class="soon-tag">Bloco 3</span></a>
+      <a class="soon"><span class="ic">₿</span>Movimentações<span class="soon-tag">Bloco 3</span></a>
+      <a class="soon"><span class="ic">◫</span>Produtos e custos<span class="soon-tag">Bloco 3</span></a>
+      <div class="nav-group">Gestão</div>
+      <a data-page="usuarios" onclick="nav('usuarios')"><span class="ic">👤</span>Usuários</a>
+      <a data-page="lojas" onclick="nav('lojas')"><span class="ic">🏬</span>Lojas</a>
+      <a data-page="auditoria" onclick="nav('auditoria')"><span class="ic">📜</span>Auditoria</a>
+    </nav>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <div class="crumbs">Início / <b id="crumb">Dashboard</b></div>
+      <div class="spacer"></div>
+      <div class="top-store"><span class="dot"></span> Loja: <b>lidermolduras</b></div>
+      <button class="iconbtn" onclick="toggleTheme()" id="themebtn" title="Alternar tema">◐</button>
+      <div class="avatar" id="avatar" title="">AD</div>
+      <span class="role-pill" id="rolepill">ADMIN</span>
+      <button class="logout" onclick="doLogout()">Sair</button>
+    </div>
+    <div class="content" id="content"></div>
+  </div>
+</div>
+
+<div id="modal-root"></div>
+<div id="toast" class="toast"></div>
+
+<script>
+/* ===================== ESTADO EM MEMÓRIA (simula o backend) ===================== */
+const DEMO_PASSWORD = 'Demo@12345';
+const ROLE_LABEL = { ADMIN:'Administrador', FINANCIAL:'Financeiro', VIEWER:'Consulta' };
+let uid = 100;
+function nowStr(){ return new Date().toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'}); }
+
+let state, current, page = 'dashboard', pendingLoginMail = 'admin@demo.local';
+
+function seed(){
+  state = {
+    users: [
+      { id:'u_admin', name:'Admin (demo)', email:'admin@demo.local', role:'ADMIN', status:'ACTIVE', createdAt:nowStr() },
+      { id:'u_fin', name:'Financeiro (demo)', email:'financeiro@demo.local', role:'FINANCIAL', status:'ACTIVE', createdAt:nowStr() },
+      { id:'u_view', name:'Consulta (demo)', email:'viewer@demo.local', role:'VIEWER', status:'ACTIVE', createdAt:nowStr() },
+    ],
+    audit: [],
+  };
+}
+seed();
+
+function audit(action, entityType, entityId){
+  state.audit.unshift({ id:'a'+(uid++), time:nowStr(), userName: current?current.name:'—', action, entityType, entityId });
+}
+
+/* ===================== LOGIN ===================== */
+function pick(btn){
+  document.querySelectorAll('#quick button').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  document.getElementById('lg-mail').value = btn.dataset.mail;
+  document.getElementById('lg-pass').value = DEMO_PASSWORD;
+}
+function doLogin(e){
+  e.preventDefault();
+  const mail = document.getElementById('lg-mail').value.trim().toLowerCase();
+  const pass = document.getElementById('lg-pass').value;
+  const err = document.getElementById('lg-err');
+  const user = state.users.find(u=>u.email===mail);
+  if(!user || user.status!=='ACTIVE'){ err.textContent='Credenciais inválidas (usuário inexistente ou inativo).'; err.classList.remove('hidden'); return; }
+  if(pass!==DEMO_PASSWORD){ err.textContent='Senha incorreta. Use Demo@12345.'; err.classList.remove('hidden'); return; }
+  err.classList.add('hidden');
+  current = user;
+  audit('LOGIN','User',user.id);
+  document.getElementById('login').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  syncTopbar();
+  nav('dashboard');
+}
+function doLogout(){
+  audit('LOGOUT','User',current?current.id:null);
+  current = null;
+  document.getElementById('app').classList.add('hidden');
+  document.getElementById('login').classList.remove('hidden');
+}
+function syncTopbar(){
+  const ini = (current.name||'US').split(' ').map(p=>p[0]).slice(0,2).join('').toUpperCase();
+  document.getElementById('avatar').textContent = ini;
+  document.getElementById('avatar').title = current.email;
+  document.getElementById('rolepill').textContent = current.role;
+}
+
+/* ===================== NAV ===================== */
+const CRUMB = { dashboard:'Dashboard', usuarios:'Usuários', lojas:'Lojas', auditoria:'Auditoria' };
+function nav(p){
+  page = p;
+  document.querySelectorAll('#nav a[data-page]').forEach(a=>a.classList.toggle('active',a.dataset.page===p));
+  document.getElementById('crumb').textContent = CRUMB[p];
+  document.getElementById('content').innerHTML = PAGES[p]();
+  window.scrollTo(0,0);
+}
+
+const demoStrip = `<div class="demo-strip">🧪 <span><b>Modo demonstração.</b> Tudo funciona no navegador com dados em memória — criar/desativar usuários e a auditoria são reais nesta sessão, mas nada é gravado em servidor.</span><button class="rst" onclick="resetDemo()">Reiniciar demo</button></div>`;
+
+/* ===================== PÁGINAS ===================== */
+const PAGES = {};
+
+PAGES.dashboard = () => `
+<div class="page-head"><div><h2>Dashboard</h2><p>Bem-vindo, ${current.name} · perfil ${ROLE_LABEL[current.role]}</p></div></div>
+${demoStrip}
+<div class="info-banner">ℹ <b>Base do sistema (Bloco 1).</b> Ainda não há dados financeiros — importação dos relatórios da Shopee e conciliação chegam nos próximos blocos. Os indicadores abaixo ficam zerados até a primeira importação.</div>
+<div class="kpi-grid">
+  <div class="kpi"><div class="lbl">Entradas na carteira</div><div class="val tabnum">R$ 0,00</div><div class="sub">sem importações ainda</div></div>
+  <div class="kpi"><div class="lbl">% Conciliado</div><div class="val">—</div><div class="sub">disponível no Bloco 4</div></div>
+  <div class="kpi"><div class="lbl">Pendências abertas</div><div class="val tabnum">0</div><div class="sub">disponível no Bloco 5</div></div>
+  <div class="kpi"><div class="lbl">Valor não explicado</div><div class="val tabnum">R$ 0,00</div><div class="sub">sem dados</div></div>
+</div>
+<div class="panel"><div class="ph"><h3>O que você pode testar agora</h3></div><div class="pb">
+  <ul>
+    <li><b>Permissões:</b> saia e entre como <b>Consulta</b> ou <b>Financeiro</b> — os botões de criar/desativar somem, e a Auditoria fica restrita ao Admin.</li>
+    <li><b>Usuários:</b> como Admin, crie um usuário e depois desative-o.</li>
+    <li><b>Auditoria:</b> veja login, criação e desativação registrados em tempo real.</li>
+    <li><b>Lojas:</b> a estrutura multiloja com a conta <b>lidermolduras</b>.</li>
+    <li><b>Tema:</b> botão ◐ no topo alterna claro/escuro.</li>
+  </ul>
+</div></div>
+<div class="panel"><div class="ph"><h3>Próximos blocos</h3></div><div class="pb">
+  <ul>
+    <li><b>Bloco 2 — Importação:</b> upload e leitura de CSV/XLS/XLSX com deduplicação.</li>
+    <li><b>Bloco 3 — Pedidos e eventos:</b> carteira, Acelera, afiliados, devoluções.</li>
+    <li><b>Bloco 4 — Conciliação:</b> motor determinístico e ficha financeira por pedido.</li>
+    <li><b>Bloco 5 — Pendências</b> · <b>Bloco 6 — Dashboard/Relatórios</b>.</li>
+  </ul>
+</div></div>`;
+
+const roleBadge = { ADMIN:'b-info', FINANCIAL:'b-ok', VIEWER:'b-neutral' };
+PAGES.usuarios = () => {
+  const admin = current.role==='ADMIN';
+  return `
+<div class="page-head"><div><h2>Usuários</h2><p>Gestão de acesso da organização.</p></div>
+${admin ? `<button class="btn-sm primary" onclick="openCreate()">+ Novo usuário</button>` : `<span class="readonly-note">Somente leitura — seu perfil (${ROLE_LABEL[current.role]}) não cria/edita usuários.</span>`}</div>
+${demoStrip}
+<div class="panel"><div class="table-wrap"><table>
+<thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Status</th><th>Criado em</th>${admin?'<th>Ações</th>':''}</tr></thead>
+<tbody>
+${state.users.map(u=>`<tr>
+  <td>${u.name}</td>
+  <td class="mono">${u.email}</td>
+  <td><span class="badge ${roleBadge[u.role]}">${ROLE_LABEL[u.role]}</span></td>
+  <td><span class="badge ${u.status==='ACTIVE'?'b-ok':'b-neutral'}">${u.status==='ACTIVE'?'Ativo':'Inativo'}</span></td>
+  <td class="tabnum">${u.createdAt}</td>
+  ${admin?`<td><button class="btn-sm danger" ${(u.id===current.id||u.status==='INACTIVE')?'disabled':''} onclick="deactivate('${u.id}')">Desativar</button></td>`:''}
+</tr>`).join('')}
+</tbody></table></div></div>`;
+};
+
+const SOURCE_LABEL = { MANUAL_UPLOAD:'Upload manual', INTERNAL_SHOPEE_API:'API interna Shopee', SHOPEE_OFFICIAL_API:'API oficial Shopee' };
+PAGES.lojas = () => `
+<div class="page-head"><div><h2>Lojas</h2><p>Contas de marketplace da organização. O MVP começa com uma loja; a arquitetura é multiloja.</p></div></div>
+${demoStrip}
+<div class="panel">
+  <div class="ph"><h3>lidermolduras <span class="badge b-ok" style="margin-left:8px">Ativa</span></h3><span class="footnote" style="margin:0">SHOPEE · BRL · America/Sao_Paulo</span></div>
+  <div class="pb">
+    <div class="footnote" style="margin-top:0;margin-bottom:12px">${state.users.filter(u=>u.status==='ACTIVE').length} usuário(s) com acesso</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Fonte de dados</th><th>Status</th><th>Último sincronismo</th></tr></thead>
+      <tbody>
+        <tr><td>${SOURCE_LABEL.MANUAL_UPLOAD}</td><td><span class="badge b-ok">Configurado</span></td><td>—</td></tr>
+        <tr><td>${SOURCE_LABEL.INTERNAL_SHOPEE_API}</td><td><span class="badge b-neutral">Não configurado</span></td><td>—</td></tr>
+        <tr><td>${SOURCE_LABEL.SHOPEE_OFFICIAL_API}</td><td><span class="badge b-neutral">Não configurado</span></td><td>—</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+</div>`;
+
+const ACTION_LABEL = { LOGIN:'Login', LOGOUT:'Logout', USER_CREATE:'Criou usuário', USER_DEACTIVATE:'Desativou usuário' };
+PAGES.auditoria = () => {
+  if(current.role!=='ADMIN'){
+    return `<div class="page-head"><div><h2>Auditoria</h2><p>Trilha de ações do sistema.</p></div></div>
+    <div class="panel"><div class="empty"><div class="ico">🔒</div><div>A trilha de auditoria é visível somente para administradores.<br>Você está como <b>${ROLE_LABEL[current.role]}</b>.</div></div></div>`;
+  }
+  return `
+<div class="page-head"><div><h2>Auditoria</h2><p>Trilha de ações do sistema (quem, o quê, quando).</p></div></div>
+${demoStrip}
+<div class="panel"><div class="table-wrap"><table>
+<thead><tr><th>Quando</th><th>Usuário</th><th>Ação</th><th>Entidade</th><th>ID</th></tr></thead>
+<tbody>
+${state.audit.length? state.audit.map(a=>`<tr>
+  <td class="tabnum">${a.time}</td><td>${a.userName}</td>
+  <td><span class="badge b-info">${ACTION_LABEL[a.action]||a.action}</span></td>
+  <td>${a.entityType}</td><td class="mono">${a.entityId||'—'}</td>
+</tr>`).join('') : `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:24px">Sem registros ainda.</td></tr>`}
+</tbody></table></div></div>`;
+};
+
+/* ===================== AÇÕES ===================== */
+function openCreate(){
+  document.getElementById('modal-root').innerHTML = `
+  <div class="overlay" onclick="if(event.target===this)closeModal()">
+    <form class="modal" onsubmit="createUser(event)">
+      <div class="mh"><h3>Novo usuário</h3><button type="button" class="x" onclick="closeModal()">×</button></div>
+      <div class="mbd">
+        <label class="fld">Nome</label><input class="input" id="nu-name" required>
+        <label class="fld">E-mail</label><input class="input" id="nu-mail" type="email" required>
+        <label class="fld">Senha (mín. 8)</label><input class="input" id="nu-pass" type="password" minlength="8" required>
+        <label class="fld">Perfil</label>
+        <select class="input" id="nu-role"><option value="ADMIN">Administrador</option><option value="FINANCIAL" selected>Financeiro</option><option value="VIEWER">Consulta</option></select>
+        <div id="nu-err" class="form-err hidden"></div>
+      </div>
+      <div class="mf"><button type="button" class="btn-sm" onclick="closeModal()">Cancelar</button><button type="submit" class="btn-sm primary">Criar</button></div>
+    </form>
+  </div>`;
+}
+function closeModal(){ document.getElementById('modal-root').innerHTML=''; }
+function createUser(e){
+  e.preventDefault();
+  const name=document.getElementById('nu-name').value.trim();
+  const email=document.getElementById('nu-mail').value.trim().toLowerCase();
+  const role=document.getElementById('nu-role').value;
+  const err=document.getElementById('nu-err');
+  if(state.users.some(u=>u.email===email)){ err.textContent='Já existe um usuário com este e-mail.'; err.classList.remove('hidden'); return; }
+  const u={ id:'u'+(uid++), name, email, role, status:'ACTIVE', createdAt:nowStr() };
+  state.users.push(u);
+  audit('USER_CREATE','User',u.id);
+  closeModal(); nav('usuarios'); toast('Usuário criado.');
+}
+function deactivate(id){
+  const u=state.users.find(x=>x.id===id); if(!u) return;
+  u.status='INACTIVE';
+  audit('USER_DEACTIVATE','User',id);
+  nav('usuarios'); toast('Usuário desativado.');
+}
+function resetDemo(){ seed(); if(current){ current = state.users.find(u=>u.email===current.email) || state.users[0]; audit('LOGIN','User',current.id); syncTopbar(); } nav(page); toast('Demo reiniciada.'); }
+
+/* ===================== TEMA + TOAST ===================== */
+function toggleTheme(){
+  const root=document.documentElement;
+  const cur=root.getAttribute('data-theme');
+  const isDark = cur ? cur==='dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+  root.setAttribute('data-theme', isDark?'light':'dark');
+}
+let toastT;
+function toast(msg){
+  const el=document.getElementById('toast'); el.textContent=msg; el.classList.add('show');
+  clearTimeout(toastT); toastT=setTimeout(()=>el.classList.remove('show'),1800);
+}
+</script>
+</body>
+</html>
