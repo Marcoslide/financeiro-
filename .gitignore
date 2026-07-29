@@ -1,0 +1,28 @@
+# ---- Planilhas / dados reais da Shopee (NUNCA versionar — contêm dados pessoais) ----
+*.csv
+*.xls
+*.xlsx
+/data/
+/uploads/
+/storage/
+!docs/**/*.example.csv
+!**/fixtures/**   # fixtures sanitizadas de teste são permitidas
+
+# ---- Node / build ----
+node_modules/
+.next/
+dist/
+build/
+coverage/
+*.log
+
+# ---- Ambiente / segredos ----
+.env
+.env.*
+!.env.example
+
+# ---- SO / editor ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
