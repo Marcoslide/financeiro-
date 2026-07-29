@@ -22,8 +22,10 @@ originais, normaliza, **deduplica por relatório (hash canônico)** e é **idemp
 > **Homologação com arquivos reais (Bloco 2.1) — pendente.** O desenvolvimento está
 > validado sobre fixtures sanitizadas; a conclusão definitiva depende de importar as
 > **planilhas reais da Shopee** na sua máquina. Guia + harness de pré-check:
-> **[docs/bloco-2-homologacao.md](docs/bloco-2-homologacao.md)**
-> (`pnpm --filter @financeiro/api homologar -- /pasta/dos/arquivos`).
+> **[docs/bloco-2-homologacao.md](docs/bloco-2-homologacao.md)**. Duas formas de
+> pré-check dos seus arquivos, ambas **100% locais**: abrir **`docs/homologacao.html`**
+> no navegador (arrastar os arquivos — roda o motor real, offline, nada é enviado)
+> ou `pnpm --filter @financeiro/api homologar -- /pasta/dos/arquivos` no terminal.
 
 Bloco 1 (base): autenticação, isolamento multiloja, usuários/permissões, auditoria, Docker,
 migrações, seed e telas reais — **[docs/bloco-1-plano.md](docs/bloco-1-plano.md)** e

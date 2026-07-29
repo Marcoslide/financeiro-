@@ -12,7 +12,26 @@ próprio Bloco 2, antes do Bloco 3).
 
 ---
 
-## Passo 1 — Pré-check rápido (sem banco, em segundos)
+## Passo 0 — HTML de teste (zero instalação, offline)
+
+O jeito mais rápido de conferir seus arquivos: abra **`docs/homologacao.html`** no
+navegador (duplo clique) e **arraste os arquivos reais**. Ele roda **o mesmo motor
+de leitura/detecção do sistema** (o código do importador foi empacotado para o
+navegador) e mostra, por arquivo: tipo detectado + confiança, formato real,
+**linha do cabeçalho**, colunas (e o esperado), prévia, contagens e **hash**.
+
+- **Privacidade:** tudo acontece no seu navegador — **nada é enviado para a
+  internet**. Pode usar os arquivos reais (com dados pessoais) com segurança.
+- Solte o **mesmo arquivo duas vezes** para ver a **deduplicação** (0 importadas
+  na 2ª vez). Solte dois períodos que se sobrepõem para ver a interseção duplicada.
+- É um **pré-check de leitura**. A homologação definitiva continua sendo a
+  importação pela **Central do sistema real** (Passo 2), que persiste e gera o lote.
+
+Para regerar o HTML após mudanças no importador: `pnpm --filter @financeiro/api build:homolog`.
+
+---
+
+## Passo 1 — Pré-check via terminal (sem banco, em segundos)
 
 Antes de subir o sistema, rode o harness de leitura sobre a pasta com seus arquivos.
 Ele usa o **mesmo** pipeline da importação e revela problemas de leitura na hora.

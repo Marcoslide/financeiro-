@@ -10,7 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "fixtures": "tsx test/fixtures/generate.ts",
-    "homologar": "tsx scripts/homologar.ts"
+    "homologar": "tsx scripts/homologar.ts",
+    "build:homolog": "node scripts/build-homolog-html.cjs"
   },
   "dependencies": {
     "@financeiro/database": "workspace:*",
@@ -22,6 +23,7 @@
     "@nestjs/platform-express": "^10.4.4",
     "@prisma/client": "^5.22.0",
     "argon2": "^0.41.1",
+    "buffer": "5.7.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "dotenv": "^16.4.5",
@@ -40,6 +42,7 @@
     "@types/supertest": "^6.0.2",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
+    "esbuild": "0.21.5",
     "eslint": "^8.57.0",
     "supertest": "^7.0.0",
     "tsx": "4.19.1",
