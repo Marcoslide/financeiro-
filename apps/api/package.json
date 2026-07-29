@@ -11,6 +11,7 @@
     "test": "vitest run",
     "fixtures": "tsx test/fixtures/generate.ts",
     "homologar": "tsx scripts/homologar.ts",
+    "homologar:db": "tsx scripts/inspecionar-banco.ts",
     "build:homolog": "node scripts/build-homolog-html.cjs"
   },
   "dependencies": {

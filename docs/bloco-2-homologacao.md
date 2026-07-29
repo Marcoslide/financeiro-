@@ -74,10 +74,11 @@ pnpm dev                                  # API:3001 + Web:3000
 ```
 
 Entre em **http://localhost:3000** com `admin@demo.local` / `Demo@12345`, menu
-**Importações**. Importe **um por um**, nesta ordem sugerida:
+**Importações**. Importe **um por um** os **oito** relatórios (Afiliados são dois):
 
-1. Pedidos · 2. Carteira · 3. Acelera · 4. Afiliados (Comissão e Performance) ·
-5. Cancelamentos · 6. Falha na entrega · 7. Devoluções.
+1. Pedidos · 2. Cancelamentos · 3. Falha na entrega · 4. Devoluções e reembolsos ·
+5. Carteira Shopee · 6. Shopee Acelera · 7. Afiliados — Comissão ·
+8. Afiliados — Performance.
 
 Para **cada** arquivo, confira na tela:
 
@@ -92,11 +93,39 @@ Para **cada** arquivo, confira na tela:
 | Hash do arquivo e do lote | detalhe do lote |
 | Linhas com erro/alerta consultáveis | detalhe do lote → filtros |
 
-Depois, para provar a **idempotência**:
+### Checklist do backend (o que a Etapa 2 precisa comprovar)
 
-8. **Reimporte o mesmo arquivo** → deve dar **0 importadas** (tudo duplicado).
-9. (Opcional) Renomeie um arquivo e importe → deve ser reconhecido como já
-   importado (mesmo conteúdo).
+Cada item abaixo é o que o sistema **real** deve provar — e onde verificar. O
+script `pnpm --filter @financeiro/api homologar:db` lê o **PostgreSQL** (somente
+leitura) e imprime lotes, linhas, rawPayload, hashes, chaves de dedup e auditoria.
+
+| Requisito | Como comprovar |
+|---|---|
+| Upload pela API | importar pela Central; lote aparece na lista |
+| Armazenamento do arquivo | `homologar:db` mostra `storageKey` (arquivo salvo em disco) |
+| Lote no PostgreSQL (`ImportBatch`) | `homologar:db` lista o lote com os números |
+| Linhas (`ImportRow`) | `homologar:db` mostra `ImportRow` do lote = linhas de dados |
+| `rawPayload` preservado | `homologar:db` → "Amostra de linha" (colunas preservadas) |
+| Hash bruto e canônico | `homologar:db` → `rawHash ≠ canonicalHash` |
+| Reimportação do mesmo arquivo | reimportar → **0 importadas**; `ImportDedupKey` não cresce |
+| Mesmo arquivo, nome diferente | renomear e importar → reconhecido (mesmo `fileHash`) |
+| Períodos sobrepostos | importar 2 períodos → só o novo entra; interseção duplica |
+| Reprocessamento | botão **Reprocessar** no detalhe → números iguais, sem duplicar |
+| Erros e alertas consultáveis | detalhe do lote → filtros "Com erro"/"Com alerta" |
+| Auditoria | `homologar:db` → `AuditLog(import)` > 0; tela **Auditoria** |
+| Permissões | logar como `viewer@demo.local` → **não** vê "Nova importação" |
+| Isolamento loja/organização | dados só aparecem para a loja/organização dona |
+
+### Prova de que a dedup PERSISTE (não é só da sessão)
+
+1. Importe um arquivo pela Central. Rode `homologar:db` e anote `ImportDedupKey`.
+2. **Pare a API e o front** (Ctrl+C) e **suba de novo** (`pnpm dev`).
+3. **Reimporte o mesmo arquivo** pela Central → deve dar **0 importadas**.
+4. Rode `homologar:db` de novo → `ImportDedupKey` **não aumentou**; o 2º lote tem
+   `duplicadas = ` linhas do 1º. Isso prova que a dedup vem do **banco**, não da memória.
+
+> Já há um teste automatizado desse cenário — `test/imports-persistence.e2e-spec.ts`
+> derruba a instância da API, sobe outra (conexão nova) e reimporta: **0 importadas**.
 
 ### Dica sobre Cancelamentos × Falha na entrega × Pedidos
 Esses três compartilham o layout. A detecção usa o **conteúdo** e, como desempate,
@@ -107,12 +136,15 @@ o tipo errado, basta **selecionar o tipo correto** na etapa 2 antes de confirmar
 
 ## Passo 3 — Critério de "homologado"
 
-O Bloco 2 estará **definitivamente concluído** quando, com os **arquivos reais**:
-- os 7 relatórios entrarem com o **tipo, cabeçalho e colunas corretos**;
+O Bloco 2 estará **definitivamente concluído** quando, com os **arquivos reais**,
+**pelo sistema real** (não só pelo HTML):
+- os **8 relatórios** entrarem com o **tipo, cabeçalho e colunas corretos**;
 - **nenhuma linha for perdida** (linhas de dados = importadas + duplicadas +
   atualizadas + erros justificados);
-- **reimportar não duplicar** (0 importadas na 2ª vez);
-- linhas com erro/alerta ficarem **consultáveis** e não invalidarem o lote.
+- **reimportar não duplicar** (0 importadas na 2ª vez), **inclusive após reiniciar
+  a API** (dedup persistida no banco, verificada com `homologar:db`);
+- linhas com erro/alerta ficarem **consultáveis** e não invalidarem o lote;
+- **auditoria, permissões e isolamento** por loja/organização confirmados.
 
 ---
 
