@@ -5,6 +5,7 @@
 /data/
 /uploads/
 /storage/
+storage/
 !docs/**/*.example.csv
 # fixtures sanitizadas de teste são permitidas
 !**/fixtures/**
@@ -21,6 +22,7 @@ coverage/
 packages/shared/dist/
 apps/web/test-results/
 apps/web/playwright-report/
+apps/api/test-results/
 
 # ---- Ambiente / segredos ----
 .env

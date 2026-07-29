@@ -8,7 +8,7 @@ import { useAuth } from '@/lib/auth';
 const NAV = [
   { group: 'Operação', items: [
     { href: '/dashboard', label: 'Dashboard', ic: '▦', soon: false },
-    { href: '/importacoes', label: 'Importações', ic: '⭱', soon: true },
+    { href: '/importacoes', label: 'Importações', ic: '⭱', soon: false },
     { href: '/conciliacao', label: 'Conciliação', ic: '⇄', soon: true },
     { href: '/pendencias', label: 'Pendências', ic: '⚑', soon: true },
   ]},
@@ -26,10 +26,17 @@ const NAV = [
 
 const CRUMB: Record<string, string> = {
   '/dashboard': 'Dashboard',
+  '/importacoes': 'Importações',
   '/usuarios': 'Usuários',
   '/lojas': 'Lojas',
   '/auditoria': 'Auditoria',
 };
+
+function crumbFor(pathname: string): string {
+  if (CRUMB[pathname]) return CRUMB[pathname];
+  if (pathname.startsWith('/importacoes/')) return 'Importações';
+  return '';
+}
 
 export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -88,7 +95,7 @@ export function Shell({ children }: { children: ReactNode }) {
       <div className="main">
         <div className="topbar">
           <div className="crumbs">
-            Início / <b>{CRUMB[pathname] ?? ''}</b>
+            Início / <b>{crumbFor(pathname)}</b>
           </div>
           <div className="spacer" />
           <div className="top-store">

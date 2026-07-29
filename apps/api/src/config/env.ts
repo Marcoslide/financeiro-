@@ -10,6 +10,9 @@ export const envSchema = z.object({
   ENCRYPTION_KEY: z.string().min(1),
   API_PORT: z.coerce.number().int().positive().default(3001),
   NEXT_PUBLIC_API_URL: z.string().optional(),
+  // Bloco 2 — armazenamento dos arquivos brutos importados.
+  STORAGE_DIR: z.string().default('./storage'),
+  MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(26214400), // 25 MiB
 });
 
 export type Env = z.infer<typeof envSchema>;

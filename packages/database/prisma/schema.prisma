@@ -38,6 +38,52 @@ enum ConnectionStatus {
   ERROR
 }
 
+// ============================================================================
+// Bloco 2 — Importação. Enums do pipeline de entrada de dados.
+// ============================================================================
+
+/// Os oito relatórios reais da Shopee + a declaração semanal (reservada) + desconhecido.
+enum ReportType {
+  ORDERS
+  ORDER_CANCELLATION
+  FAILED_DELIVERY
+  RETURN_REFUND
+  WALLET_TRANSACTION
+  SHOPEE_ACELERA
+  AFFILIATE_COMMISSION
+  AFFILIATE_PERFORMANCE
+  WEEKLY_INCOME_STATEMENT
+  UNKNOWN
+}
+
+/// Formato REAL do arquivo, detectado pelo conteúdo (magic bytes), não pela extensão.
+enum FileFormat {
+  XLSX
+  XLS
+  CSV
+}
+
+/// Ciclo de vida de um lote de importação.
+enum ImportBatchStatus {
+  AWAITING_CONFIRMATION
+  PROCESSING
+  COMPLETED
+  COMPLETED_WITH_ERRORS
+  FAILED
+  DISCARDED
+}
+
+/// Resultado do processamento de uma linha física.
+enum ImportRowStatus {
+  PENDING
+  IMPORTED
+  DUPLICATE
+  UPDATED
+  WARNING
+  ERROR
+  SKIPPED
+}
+
 /// Raiz do isolamento. Toda informação pertence a uma organização.
 model Organization {
   id        String       @id @default(cuid())
@@ -49,6 +95,7 @@ model Organization {
   marketplaceAccounts MarketplaceAccount[]
   users               User[]
   auditLogs           AuditLog[]
+  importBatches       ImportBatch[]
 
   @@map("organizations")
 }
@@ -70,6 +117,8 @@ model MarketplaceAccount {
   organization Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   connections  MarketplaceConnection[]
   memberships  Membership[]
+  importBatches ImportBatch[]
+  dedupKeys     ImportDedupKey[]
 
   @@unique([organizationId, marketplace, displayName])
   @@index([organizationId])
@@ -113,6 +162,7 @@ model User {
   memberships   Membership[]
   refreshTokens RefreshToken[]
   auditLogs     AuditLog[]
+  importBatches ImportBatch[]
 
   @@index([organizationId])
   @@map("users")
@@ -167,4 +217,137 @@ model AuditLog {
   @@index([organizationId, createdAt])
   @@index([entityType, entityId])
   @@map("audit_logs")
+}
+
+// ============================================================================
+// Bloco 2 — Importação
+// ============================================================================
+
+/// Lote de importação: um arquivo enviado, analisado e (após confirmação) processado.
+/// Guarda TODOS os metadados exigidos no resultado da importação e a análise (prévia,
+/// alertas, colunas). Isolado por organização + loja. Ver docs/bloco-2-plano.md.
+model ImportBatch {
+  id                   String            @id @default(cuid())
+  organizationId       String
+  marketplaceAccountId String
+  ingestionSource      IngestionSource   @default(MANUAL_UPLOAD)
+
+  // Detecção do relatório
+  reportType               ReportType @default(UNKNOWN) // efetivo (após eventual override manual)
+  detectedReportType       ReportType @default(UNKNOWN) // o que a detecção automática sugeriu
+  reportTypeConfidence     Float      @default(0) // 0..1
+  reportTypeManualOverride Boolean    @default(false)
+
+  // Arquivo (formato detectado pelo conteúdo, não pela extensão)
+  originalFilename  String
+  sanitizedFilename String
+  declaredExtension String // ex.: "xls" — pode divergir do conteúdo real
+  fileFormat        FileFormat
+  extensionMismatch Boolean    @default(false) // ex.: .xls que na verdade é XLSX
+  fileSizeBytes     Int
+  fileHash          String // sha256 do conteúdo bruto — dedup em nível de arquivo
+  storageKey        String // caminho no armazenamento (bytes originais intactos)
+
+  // Estrutura detectada
+  sheetName         String?
+  headerRowIndex    Int? // linha física do cabeçalho (1-based)
+  dataStartRowIndex Int? // linha física da 1ª linha de dados
+  columnCount       Int     @default(0)
+  physicalRowCount  Int     @default(0) // linhas físicas do arquivo/aba
+  dataRowCount      Int     @default(0) // linhas de dados (após o cabeçalho, sem vazias)
+
+  // Período coberto (min/max das datas de evento)
+  periodStart DateTime?
+  periodEnd   DateTime?
+
+  // Resultado
+  status        ImportBatchStatus @default(AWAITING_CONFIRMATION)
+  totalRows     Int               @default(0) // linhas de dados consideradas
+  validRows     Int               @default(0) // parseadas sem erro
+  importedRows  Int               @default(0) // novas
+  updatedRows   Int               @default(0) // mesma chave natural, campo mutável mudou
+  duplicatedRows Int              @default(0) // hash canônico já visto
+  warningRows   Int               @default(0) // importadas mas com alerta
+  failedRows    Int               @default(0) // erro de parsing/validação
+  processingMs  Int?
+  errorMessage  String?
+
+  // Análise (prévia, alertas, colunas) — Json para a tela mostrar antes de confirmar
+  analysis Json?
+
+  // Rastreamento
+  reprocessedFromBatchId String?
+  createdByUserId        String?
+  startedAt              DateTime?
+  completedAt            DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplaceAccount MarketplaceAccount @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+  createdBy          User?              @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  rows               ImportRow[]
+
+  @@index([organizationId, createdAt])
+  @@index([marketplaceAccountId, fileHash])
+  @@index([marketplaceAccountId, reportType])
+  @@map("import_batches")
+}
+
+/// Uma linha física preservada integralmente. rawPayload é IMUTÁVEL após a importação.
+/// Nenhuma coluna original é descartada, mesmo as ainda não utilizadas.
+model ImportRow {
+  id            String @id @default(cuid())
+  importBatchId String
+
+  sheetName         String
+  physicalRowNumber Int // número da linha no arquivo (1-based)
+  logicalRowNumber  Int // número da linha de dados (1-based, ignorando cabeçalho/metadados)
+
+  rawPayload          Json // todas as colunas originais (por posição e por nome), texto bruto
+  normalizedPayload   Json? // campos normalizados na 1ª versão
+  detectedIdentifiers Json? // ids detectados (orderId, returnId, redemptionId, etc.)
+  externalOrderId     String?
+  externalReference   String?
+
+  rawHash              String // sha256 da linha bruta
+  canonicalHash        String // sha256 do conjunto canônico por relatório (§9.1)
+  canonicalHashVersion String @default("v1")
+
+  processingStatus ImportRowStatus @default(PENDING)
+  warnings         Json?
+  errors           Json?
+
+  createdAt DateTime @default(now())
+
+  batch ImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+
+  @@unique([importBatchId, physicalRowNumber])
+  @@index([importBatchId, processingStatus])
+  @@index([canonicalHash])
+  @@map("import_rows")
+}
+
+/// Livro de identidade para deduplicação entre lotes (e períodos sobrepostos).
+/// Uma entrada por (loja, relatório, hash canônico). Permite reconhecer o que já
+/// existe sem, ainda, materializar as tabelas de eventos financeiros (Bloco 3).
+/// Ver data-contract.md §9.
+model ImportDedupKey {
+  id                   String     @id @default(cuid())
+  marketplaceAccountId String
+  reportType           ReportType
+  canonicalHash        String
+  naturalKey           String // chave natural documentada por relatório (para detectar atualização)
+  firstSeenBatchId     String
+  lastSeenBatchId      String
+  firstSeenRowId       String?
+  occurrences          Int        @default(1)
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+
+  marketplaceAccount MarketplaceAccount @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([marketplaceAccountId, reportType, canonicalHash])
+  @@index([marketplaceAccountId, reportType, naturalKey])
+  @@map("import_dedup_keys")
 }
