@@ -47,10 +47,15 @@ describe('parseFile em todas as fixtures reais sanitizadas', () => {
     expect(analysis.issues.some((i) => i.code === 'EXTENSION_MISMATCH')).toBe(true);
   });
 
-  it('falha na entrega: baixa confiança (ambíguo com pedidos/cancelamentos)', () => {
-    const parsed = parseFile(read('Order.failed_delivery.20260729.xlsx'), 'Order.failed_delivery.20260729.xlsx');
-    // detecção automática sugere FAILED_DELIVERY com confiança reduzida (<0.8)
-    expect(parsed.confidence).toBeLessThan(0.8);
+  it('falha na entrega: ambíguo por conteúdo, resolvido pelo nome do arquivo', () => {
+    // Sem a dica do nome, o conteúdo é ambíguo → confiança reduzida (~0.7).
+    const neutro = parseFile(read('Order.failed_delivery.20260729.xlsx'), 'relatorio.xlsx');
+    expect(neutro.reportType).toBe(ReportType.FAILED_DELIVERY);
+    expect(neutro.confidence).toBeLessThan(0.8);
+    // Com o nome real ("failed_delivery"), a detecção ganha confiança.
+    const comNome = parseFile(read('Order.failed_delivery.20260729.xlsx'), 'Order.failed_delivery.20260729.xlsx');
+    expect(comNome.reportType).toBe(ReportType.FAILED_DELIVERY);
+    expect(comNome.confidence).toBeGreaterThanOrEqual(0.8);
   });
 
   it('carteira: cabeçalho na linha 18 e alerta de offset', () => {

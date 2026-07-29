@@ -19,6 +19,12 @@ originais, normaliza, **deduplica por relatório (hash canônico)** e é **idemp
 **[docs/bloco-2-matriz.md](docs/bloco-2-matriz.md)** (matriz dos 8 arquivos) e
 **[docs/bloco-2-evidencias.md](docs/bloco-2-evidencias.md)** (testes + capturas + roteiro).
 
+> **Homologação com arquivos reais (Bloco 2.1) — pendente.** O desenvolvimento está
+> validado sobre fixtures sanitizadas; a conclusão definitiva depende de importar as
+> **planilhas reais da Shopee** na sua máquina. Guia + harness de pré-check:
+> **[docs/bloco-2-homologacao.md](docs/bloco-2-homologacao.md)**
+> (`pnpm --filter @financeiro/api homologar -- /pasta/dos/arquivos`).
+
 Bloco 1 (base): autenticação, isolamento multiloja, usuários/permissões, auditoria, Docker,
 migrações, seed e telas reais — **[docs/bloco-1-plano.md](docs/bloco-1-plano.md)** e
 **[docs/bloco-1-evidencias.md](docs/bloco-1-evidencias.md)**.

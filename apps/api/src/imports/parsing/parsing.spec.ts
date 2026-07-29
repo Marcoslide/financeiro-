@@ -10,9 +10,13 @@ import {
 } from './value-parsers';
 import { detectFileFormat, isExtensionMismatch } from './format';
 import { FileFormat } from '@financeiro/shared';
-import { parseCsv, sniffDelimiter } from './workbook';
+import { parseCsv, sniffDelimiter, decodeText } from './workbook';
 import { processRow } from './index';
 import { getReportSpec } from './report-specs';
+import { reportTypeFromFilename } from './detect';
+import * as fs from 'fs';
+import * as path from 'path';
+import { parseFile } from './analyze';
 
 describe('parseDecimal — três formatos monetários reais', () => {
   it('ponto decimal simples', () => {
@@ -111,6 +115,37 @@ describe('CSV parser', () => {
   });
   it('sniff de delimitador', () => {
     expect(sniffDelimiter('a;b;c\n1;2;3')).toBe(';');
+  });
+});
+
+describe('encoding — CSV Latin-1/Windows-1252 é decodificado corretamente', () => {
+  it('acentos em latin1 não viram caractere de substituição', () => {
+    const latin1 = Buffer.from('Descrição;Comissão;Endereço\naçaí;ção;coração', 'latin1');
+    const text = decodeText(latin1);
+    expect(text).toContain('Descrição');
+    expect(text).toContain('coração');
+    expect(text).not.toContain('�');
+  });
+  it('UTF-8 com BOM é lido sem o BOM', () => {
+    const utf8bom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('a,b,c', 'utf8')]);
+    expect(decodeText(utf8bom).startsWith('a')).toBe(true);
+  });
+});
+
+describe('desambiguação por nome de arquivo (desempate na família de pedidos)', () => {
+  const read = (f: string) => fs.readFileSync(path.resolve(__dirname, '../../../test/fixtures/files', f));
+  it('mapa de palavras-chave', () => {
+    expect(reportTypeFromFilename('Order.cancelled.xlsx')).toBe(ReportType.ORDER_CANCELLATION);
+    expect(reportTypeFromFilename('Order.failed_delivery.xlsx')).toBe(ReportType.FAILED_DELIVERY);
+    expect(reportTypeFromFilename('Order.toship.xlsx')).toBe(ReportType.ORDERS);
+  });
+  it('arquivo de pedidos renomeado como failed_delivery é detectado como Falha', () => {
+    const parsed = parseFile(read('Order.toship.20260729.xlsx'), 'Order.failed_delivery.20260729.xlsx');
+    expect(parsed.reportType).toBe(ReportType.FAILED_DELIVERY);
+  });
+  it('conteúdo decisivo vence o nome: arquivo com "Cancelar Motivo" é sempre Cancelamento', () => {
+    const parsed = parseFile(read('Order.cancelled.20260729.xlsx'), 'nome_enganoso_toship.xlsx');
+    expect(parsed.reportType).toBe(ReportType.ORDER_CANCELLATION);
   });
 });
 

@@ -8,7 +8,9 @@
     "start": "node dist/main.js",
     "lint": "eslint \"src/**/*.ts\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "fixtures": "tsx test/fixtures/generate.ts",
+    "homologar": "tsx scripts/homologar.ts"
   },
   "dependencies": {
     "@financeiro/database": "workspace:*",
@@ -40,6 +42,7 @@
     "@typescript-eslint/parser": "^7.18.0",
     "eslint": "^8.57.0",
     "supertest": "^7.0.0",
+    "tsx": "4.19.1",
     "typescript": "^5.4.5",
     "unplugin-swc": "^1.5.1",
     "vitest": "^2.1.1"

@@ -110,12 +110,31 @@ export function parseCsv(content: string, delimiter: string): string[][] {
   return rows;
 }
 
-function decodeText(buffer: Buffer): string {
-  // remove BOM UTF-8 se presente
+/**
+ * Decodifica o texto do CSV tolerando encodings comuns de exportações brasileiras.
+ * Exportações da Shopee costumam ser UTF-8, mas algumas ferramentas geram
+ * Windows-1252/Latin-1. Estratégia: BOM UTF-16/UTF-8 explícito; senão tenta UTF-8
+ * e, se aparecer caractere de substituição (), refaz como latin1.
+ */
+export function decodeText(buffer: Buffer): string {
+  if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
+    return buffer.slice(2).toString('utf16le');
+  }
+  if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
+    // UTF-16 BE: troca a ordem dos bytes e lê como LE
+    const swapped = Buffer.from(buffer.slice(2));
+    swapped.swap16();
+    return swapped.toString('utf16le');
+  }
   if (buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
     return buffer.slice(3).toString('utf8');
   }
-  return buffer.toString('utf8');
+  const utf8 = buffer.toString('utf8');
+  if (utf8.includes('�')) {
+    // bytes inválidos em UTF-8 → provavelmente Latin-1/Windows-1252
+    return buffer.toString('latin1');
+  }
+  return utf8;
 }
 
 /** Lê o arquivo bruto no modelo interno, de acordo com o formato REAL detectado. */

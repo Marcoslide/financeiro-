@@ -20,6 +20,32 @@ export interface DetectionResult {
   /** Confiança final (0..1) ponderada pelo teto do relatório. */
   confidence: number;
   candidates: HeaderMatch[];
+  /** Se o nome do arquivo ajudou a desempatar dentro da família de pedidos. */
+  usedFilenameHint?: boolean;
+}
+
+/** Família de relatórios que compartilham o layout de pedidos (ambíguos por conteúdo). */
+const ORDER_FAMILY: ReportType[] = [
+  ReportType.ORDERS,
+  ReportType.ORDER_CANCELLATION,
+  ReportType.FAILED_DELIVERY,
+];
+
+/**
+ * Dica pelo nome do arquivo — usada APENAS como desempate dentro da família de
+ * pedidos (o conteúdo continua sendo o sinal primário). Os nomes reais da Shopee
+ * trazem palavras-chave estáveis (`toship`, `cancelled`, `failed_delivery`, …).
+ */
+export function reportTypeFromFilename(filename: string): ReportType | null {
+  const n = filename.toLowerCase();
+  if (/cancel/.test(n)) return ReportType.ORDER_CANCELLATION;
+  if (/failed[_-]?delivery|falha/.test(n)) return ReportType.FAILED_DELIVERY;
+  if (/toship|to[_-]?ship|pedido/.test(n)) return ReportType.ORDERS;
+  if (/return|refund|devolu/.test(n)) return ReportType.RETURN_REFUND;
+  if (/balance|wallet|carteira|transaction/.test(n)) return ReportType.WALLET_TRANSACTION;
+  if (/performance/.test(n)) return ReportType.AFFILIATE_PERFORMANCE;
+  if (/validation|commission|payment|comiss/.test(n)) return ReportType.AFFILIATE_COMMISSION;
+  return null;
 }
 
 function rowLabelSet(sheet: SheetData, r: number): Set<string> {
@@ -78,7 +104,7 @@ function bestMatchForSpec(wb: Workbook, spec: ReportSpec): HeaderMatch | null {
  * linha 18, Acelera linha 6) sem hardcode. Se `forced` for informado (correção
  * manual do usuário), usa esse tipo e apenas localiza o cabeçalho dele.
  */
-export function detectReport(wb: Workbook, forced?: ReportType): DetectionResult {
+export function detectReport(wb: Workbook, forced?: ReportType, filename?: string): DetectionResult {
   const candidates: HeaderMatch[] = [];
   for (const spec of REPORT_SPECS) {
     const m = bestMatchForSpec(wb, spec);
@@ -110,10 +136,33 @@ export function detectReport(wb: Workbook, forced?: ReportType): DetectionResult
     }
   }
 
-  if (!best || bestConfidence < 0.5) {
-    return { best: null, confidence: bestConfidence, candidates };
+  // Desempate por nome de arquivo APENAS dentro da família de pedidos: o layout
+  // Pedidos × Cancelamentos × Falha é ambíguo por conteúdo. O nome nunca sobrepõe
+  // um conteúdo decisivo (ex.: presença de "Cancelar Motivo" fixa cancelamento).
+  let usedFilenameHint = false;
+  if (filename && best && ORDER_FAMILY.includes(best.type)) {
+    const hint = reportTypeFromFilename(filename);
+    if (hint && hint !== best.type && ORDER_FAMILY.includes(hint)) {
+      // só troca se o alvo do nome casar o conteúdo AO MENOS tão bem quanto o
+      // melhor atual — assim o nome nunca derruba um conteúdo decisivo
+      // (ex.: "Cancelar Motivo" presente fixa Cancelamento com score 1).
+      const hintCand = candidates.find(
+        (c) => c.type === hint && c.score >= 0.66 && c.score >= best!.score,
+      );
+      if (hintCand) {
+        best = hintCand;
+        bestConfidence = Math.max(bestConfidence, 0.8);
+        usedFilenameHint = true;
+      }
+    } else if (hint && hint === best.type) {
+      bestConfidence = Math.max(bestConfidence, 0.85);
+    }
   }
-  return { best, confidence: bestConfidence, candidates };
+
+  if (!best || bestConfidence < 0.5) {
+    return { best: null, confidence: bestConfidence, candidates, usedFilenameHint };
+  }
+  return { best, confidence: bestConfidence, candidates, usedFilenameHint };
 }
 
 function fallbackHeader(wb: Workbook, forced: ReportType): HeaderMatch | null {

@@ -202,10 +202,12 @@ const cancellationSpec: ReportSpec = {
 const failedDeliverySpec: ReportSpec = {
   type: ReportType.FAILED_DELIVERY,
   label: REPORT_TYPE_LABELS[ReportType.FAILED_DELIVERY],
-  // Compartilha o schema de pedidos; distinguimos pela AUSÊNCIA das colunas
-  // exclusivas de pedidos/cancelamentos. Baixa confiança -> seleção manual.
+  // Compartilha quase todo o schema de pedidos. Excluímos apenas o discriminador
+  // forte de cancelamento ("Cancelar Motivo"); a distinção final Pedidos × Falha
+  // usa a dica do nome do arquivo (desempate) e/ou a seleção manual — o conteúdo
+  // sozinho é ambíguo (ver data-contract.md, §"Detecção de relatório").
   signature: ['ID do pedido', 'Status do pedido', 'Número de rastreamento'],
-  antiSignature: ['Cancelar Motivo', 'Taxa de comissão líquida'],
+  antiSignature: ['Cancelar Motivo'],
   confidenceCap: 0.7,
   priority: 10,
   normalize(row) {

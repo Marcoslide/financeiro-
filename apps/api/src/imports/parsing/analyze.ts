@@ -67,8 +67,9 @@ export function parseFile(buffer: Buffer, filename: string, forcedType?: ReportT
   const ext = declaredExtension(filename);
   const extensionMismatch = isExtensionMismatch(format, ext);
   const wb = readWorkbook(buffer, format);
-  const detection = detectReport(wb, forcedType);
-  const detectedReportType = detectReport(wb).best?.type ?? ReportType.UNKNOWN;
+  const detection = detectReport(wb, forcedType, filename);
+  const autoDetection = detectReport(wb, undefined, filename);
+  const detectedReportType = autoDetection.best?.type ?? ReportType.UNKNOWN;
 
   const base: ParsedFile = {
     format,
