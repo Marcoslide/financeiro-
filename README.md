@@ -18,8 +18,9 @@ antes do desenvolvimento (Bloco 1). Nenhum código funcional do sistema foi escr
 |---|---|
 | [`docs/00-inspecao-dados.md`](docs/00-inspecao-dados.md) | Inventário dos 8 relatórios, formatos, IDs, mapa de campos, riscos |
 | [`docs/data-contract.md`](docs/data-contract.md) | Contrato de dados: cabeçalhos, aliases, tipos, transformações, dedup |
-| [`docs/arquitetura-e-plano.md`](docs/arquitetura-e-plano.md) | Stack, modelo de dados, regras de conciliação, blocos, dúvidas |
-| [`index.html`](index.html) | **Protótipo visual navegável** (abra no navegador) |
+| [`docs/arquitetura-e-plano.md`](docs/arquitetura-e-plano.md) | Stack, modelo de dados, deduplicação, classificação temporal, decisões, blocos |
+| [`docs/bloco-1-plano.md`](docs/bloco-1-plano.md) | **Plano exato do Bloco 1** (base do sistema) — para validação |
+| [`index.html`](index.html) | **Protótipo visual navegável** (abra no navegador) — só direção visual |
 
 ### Como ver o protótipo
 Abra `index.html` diretamente no navegador (duplo clique). Não precisa de backend nem de

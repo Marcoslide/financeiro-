@@ -187,6 +187,13 @@ cada relatório é um **recorte temporal e de estágio de ciclo de vida diferent
 
 **Conclusão:** a conciliação **não** fecha num único dia/arquivo. Ela **ganha densidade
 conforme os relatórios acumulam** ao longo das semanas. Por isso o sistema precisa de:
-(a) estados como `WAITING_FOR_DATA` / `WAITING_FOR_MARKETPLACE`; (b) **reprocessamento**
-a cada novo arquivo; (c) nunca forçar vínculo aproximado para "fechar" a conta.
-Isto está refletido no motor de conciliação e nos tipos de pendência do plano.
+(a) uma **classificação temporal** que distingue *ausência ainda esperada* de *falta real*
+(`NOT_YET_EXPECTED` · `WAITING_COMPLEMENTARY_PERIOD` · `WAITING_FOR_MARKETPLACE` ·
+`OVERDUE_DIVERGENCE` · `REAL_PENDENCY` — ver `arquitetura-e-plano.md` §5.1), de modo que **só
+falta real** entra na fila operacional; (b) **reprocessamento** a cada novo arquivo, que reavalia
+a situação temporal; (c) **nunca** forçar vínculo aproximado para "fechar" a conta.
+
+> Importante: a baixa interseção observada **não** deve virar, na importação, uma enxurrada de
+> pendências. Um evento cujo prazo de liquidação ainda não venceu, ou cujo período nem foi
+> importado, é *ausência esperada* — não problema. O sistema só promove a pendência real quando
+> vence a **janela de tolerância** do tipo de evento.

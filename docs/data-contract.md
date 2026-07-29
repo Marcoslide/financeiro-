@@ -118,9 +118,20 @@ do arquivo. Detecção pelo conteúdo, com fallback para seleção manual.
 | Valor pago pelo comprador | decimal | não | `R$…,..`→Decimal | `buyerPaidAmount` |
 | Status de rastreamento de devolução | string | não | — | `returnTrackingStatus` |
 
-**Dedup:** `(marketplaceAccountId, externalReturnId)`. Relação **1:N** com o pedido
-(um pedido pode ter mais de uma devolução). `requestedRefundAmount` (solicitado) **é diferente**
-do valor efetivamente debitado na carteira — nunca tratar solicitação como prejuízo confirmado.
+**Dedup e histórico (modelo em 3 níveis — ver §9.2):**
+- **Processo de devolução** (`ReturnRefund`): chave `(marketplaceAccountId, externalReturnId)`.
+  Relação **1:N** com o pedido (um pedido pode ter várias devoluções).
+- **Eventos da devolução** (`ReturnRefundEvent`): cada linha importada vira um evento
+  imutável, deduplicado por **hash canônico** `(externalReturnId · status · resolution ·
+  requestedRefundAmount · sellerCompensationAmount · returnTrackingStatus · observedAt)`.
+- **Snapshot mais recente**: campos correntes do processo (status/valor/solução) apontam
+  para o **último evento** observado.
+
+> ⚠️ **Nunca sobrescrever silenciosamente** o histórico quando status, valor ou solução mudar.
+> Quando a mesma `externalReturnId` reaparece com status diferente (ex.: *Solicitação cancelada*
+> → *Reembolso aprovado*), registra-se um **novo evento** e atualiza-se o snapshot, preservando
+> o anterior. `requestedRefundAmount` (solicitado) **é diferente** do valor efetivamente debitado
+> na carteira — nunca tratar solicitação como prejuízo confirmado.
 
 ---
 
@@ -138,9 +149,22 @@ do valor efetivamente debitado na carteira — nunca tratar solicitação como p
 | Balança após as transações | decimal | não | ponto | `balanceAfter` |
 | Valor a Ser Ajustado | decimal | não | ponto | `adjustmentAmount` |
 
-**Dedup:** hash determinístico da linha
-`sha256(occurredAt|transactionType|amount|externalOrderId|description)` por conta.
-**Livro financeiro** — não sobrescrever de forma destrutiva.
+**Dedup (ordem de precedência — ver §9):**
+1. identificador externo da movimentação, **se existir** no arquivo (não presente nos arquivos
+   inspecionados até agora, mas o modelo reserva `externalTransactionId`);
+2. referência externa completa, se existir;
+3. conjunto determinístico dos campos originais;
+4. **hash canônico da linha** como *fallback* (§9.1).
+
+> ⚠️ **Nunca** usar `(orderId, data, valor)` como identidade. Um mesmo pedido pode ter, no
+> mesmo dia, crédito + débito + reembolso + compensação + ajuste + tarifa + antecipação —
+> todas legítimas. O hash canônico da carteira inclui, no mínimo:
+> `occurredAt (com segundos) · transactionType · moneyDirection · amount · externalOrderId ·
+> description · balanceAfter · adjustmentAmount · status`. O `balanceAfter` (saldo após a
+> transação) é um discriminador forte porque é único na sequência do extrato.
+
+**Livro financeiro** — não sobrescrever de forma destrutiva; nunca apagar uma linha só porque
+ela não reaparece num arquivo posterior (§9.4).
 `transactionType ∈ {Shopee Acelera, Ajuste, Renda do pedido, Pix, Saques}` (observados).
 
 ---
@@ -162,8 +186,19 @@ do valor efetivamente debitado na carteira — nunca tratar solicitação como p
 | Data de vencimento | datetime | não | parse | `maturityDate` |
 | Status | string | sim | — | `status` |
 
-**Dedup:** `(marketplaceAccountId, externalRedemptionId, externalOrderId)`.
-Um **resgate** cobre **N pedidos** (observado: 5 resgates → 295 pedidos). Vários eventos por pedido.
+**Dedup (ordem de precedência — ver §9):**
+1. `externalRedemptionId` (ID do resgate) + `externalOrderId`, **quando o par identifica um
+   único evento**;
+2. ID do evento, se o arquivo trouxer (reservado: `externalEventId`);
+3. `externalOrderId` + `tipo/status do evento` + `requestDate` + referência;
+4. **hash canônico da linha** como *fallback* (§9.1).
+
+> ⚠️ **Nunca** deduplicar só por `externalOrderId`. Um pedido pode ter mais de um evento,
+> resgate ou ajuste de antecipação (observado: status varia entre *paga*, *parcialmente
+> reembolsada*, *totalmente reembolsada* para o mesmo fluxo). Um **resgate** cobre **N pedidos**
+> (5 resgates → 295 pedidos); e um **pedido** pode aparecer em **N eventos** ao longo do tempo.
+> O hash canônico inclui: `externalRedemptionId · externalOrderId · requestDate · status ·
+> acceleratedAmount · feeAmount · refundedAmount · pendingAmount · maturityDate`.
 
 ---
 
@@ -183,8 +218,17 @@ Um **resgate** cobre **N pedidos** (observado: 5 resgates → 295 pedidos). Vár
 | Método de dedução | string | não | `deductionMethod` |
 | Período de cobrança da comissão | datetime | não | `billingPeriod` |
 
-**Dedup:** `(marketplaceAccountId, externalOrderId, externalCommissionAttributionId)`.
-Todos os demais campos da planilha preservados no `rawPayload`.
+**Dedup (nível real da linha — a planilha é por atribuição/item de comissão):**
+chave composta por **todos** os discriminadores presentes:
+`externalCommissionAttributionId · externalOrderId · (externalProductId/externalModelId ou
+variationSku) · afiliado (username) · campanha · período de cobrança · tipo do evento`.
+Fallback: **hash canônico da linha** (§9.1).
+
+> ⚠️ **Nunca colapsar** várias comissões legítimas do mesmo pedido. O mesmo `externalOrderId`
+> pode ter comissões de itens/afiliados/campanhas diferentes, e o mesmo par
+> `(orderId, attributionId)` pode reaparecer com valores atualizados (verificação/dedução) —
+> nesse caso é **atualização** do registro existente (§9.3), não um novo registro.
+> Todos os demais campos da planilha preservados no `rawPayload`.
 
 ---
 
@@ -203,6 +247,61 @@ Todos os demais campos da planilha preservados no `rawPayload`.
 **Dedup:** `(marketplaceAccountId, affiliateId, periodStart, periodEnd)`.
 Agregado por afiliado, **sem** ID de pedido → não entra na conciliação por pedido; serve de
 **auditoria de totais** de comissão.
+
+---
+
+## 9. Deduplicação, atualização, snapshots e sobreposição de períodos
+
+Princípio-guia: **num sistema financeiro, deduplicar errado é pior do que não conciliar.**
+Uma chave curta demais pode descartar um débito/crédito legítimo. Por isso, toda entidade tem
+uma **cadeia de identidade** (do identificador mais forte ao hash canônico) e uma **política de
+atualização** que separa o que é *imutável* do que é *mutável*.
+
+### 9.1 Hash canônico (fallback universal)
+Quando não há identificador externo confiável, a identidade da linha é
+`sha256(canonical)`, onde `canonical` é a concatenação **ordenada e normalizada** dos campos
+originais **relevantes** daquele relatório (valores em `Decimal` com escala fixa, datas em ISO
+com timezone, strings *trim*). O conjunto de campos é definido **por relatório** (ver as caixas
+⚠️ em §4–§7) e deve ser suficiente para distinguir **duas linhas legítimas do mesmo pedido no
+mesmo dia**. O hash é armazenado em `dedupHash` e indexado por conta. Reimportar a mesma linha
+gera o mesmo hash → é ignorada (não duplica dinheiro).
+
+### 9.2 Imutável vs mutável (livro-razão + snapshot)
+- **Eventos financeiros são imutáveis** (`WalletTransaction`, `AccelerationEvent`,
+  `ReturnRefundEvent`, `AffiliateCommission` como linha de origem). Nunca são reescritos nem
+  apagados; formam o livro-razão.
+- **Entidades "de estado" carregam um snapshot** que aponta para o evento mais recente
+  (`ReturnRefund` → último `ReturnRefundEvent`; `Order` → resumo corrente). O snapshot é
+  atualizado; o histórico é preservado em eventos + `AuditLog`.
+
+### 9.3 Política de atualização (quando um registro reaparece)
+| Situação | Ação |
+|---|---|
+| Linha idêntica (mesmo `dedupHash`) | ignora (duplicata) |
+| Mesma chave natural, **campos mutáveis** mudaram (status, valor aprovado, dedução) | cria **novo evento** + atualiza snapshot; registra `AuditLog(before/after)` |
+| Mesma chave natural, **campos imutáveis** divergem (data/valor de um evento já gravado) | **não** sobrescreve: gera pendência `duplicidade`/`divergência` para revisão manual |
+| Chave nova | insere |
+
+Todo registro guarda `firstSeenBatchId` e `lastSeenBatchId` (§9.4).
+
+### 9.4 Sobreposição de períodos (reimportar 01–10 e depois 05–15)
+O sistema **precisa** aceitar períodos sobrepostos sem duplicar. Regras:
+- reconhecer eventos já existentes pelo `dedupHash`/chave e **inserir só os novos**;
+- **preservar** os anteriores;
+- atualizar apenas registros **mutáveis** quando houver evidência (§9.3);
+- gravar `lastSeenBatchId` = lote mais recente em que o dado foi observado;
+- **nunca apagar** um evento porque ele deixou de aparecer num arquivo posterior (um arquivo de
+  05–15 não "remove" um evento de 02, apenas não o contém).
+
+### 9.5 Precedência de fontes (mesma informação em fontes diferentes)
+Quando o mesmo fato aparece em mais de uma fonte, a **confirmação financeira** vem sempre da
+carteira. Ordem de confiança do valor:
+1. **Carteira** (dinheiro efetivamente movimentado) — fonte da verdade financeira;
+2. relatório específico do evento (Devoluções, Acelera, Afiliados) — valor *previsto/solicitado*;
+3. resumo/agregado (Performance de afiliados, blocos "Resumo") — auditoria de totais.
+Ex.: o *reembolso solicitado* (Devoluções) só vira *prejuízo confirmado* quando há o **débito
+correspondente na carteira**. Enquanto não houver, é situação temporal (ver
+`arquitetura-e-plano.md` §5.1), não pendência real.
 
 ---
 

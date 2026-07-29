@@ -60,14 +60,25 @@ Ajustado à inspeção real. `Decimal(18,2)` para dinheiro; `Decimal(18,6)` para
 - `OrderItemCostSnapshot` — **congela** o custo aplicado ao pedido (custo depende da
   **categoria interna**, não da imagem vendida). Alterar custo depois **não** reescreve pedidos antigos.
 
-### Eventos financeiros (um por fonte)
-- `WalletTransaction`, `AccelerationEvent`, `AffiliateCommission`, `ReturnRefund`,
+### Eventos financeiros (um por fonte) — **imutáveis**
+- `WalletTransaction`, `AccelerationEvent`, `AffiliateCommission`,
   `OrderCancellation`, `FailedDelivery`, `AffiliatePerformanceSnapshot`, `WeeklyIncomeStatement`.
-- Cada evento guarda **origem**: `importRowId`, `importBatchId`, `ingestionSource`,
-  `externalId`, `rawPayload`, data de importação.
+- **Devolução em 3 níveis** (evita sobrescrita silenciosa — `data-contract.md` §9.2):
+  - `ReturnRefund` (processo; chave `returnId`; guarda o **snapshot** corrente e aponta o último evento);
+  - `ReturnRefundEvent` (cada linha importada; imutável; um novo evento a cada mudança de status/valor);
+- Cada evento guarda **origem e rastreamento**: `importRowId`, `importBatchId`, `ingestionSource`,
+  `externalId`, `rawPayload`, `dedupHash`, `firstSeenBatchId`, `lastSeenBatchId`, `observedAt`.
+
+### Produtos, custos e classificação (respostas §8.1 e §8.2)
+- `InternalCategory`, `CategoryCost(amount, validFrom, validUntil, notes)` — custo por vigência.
+- `SkuClassification(skuId, internalCategoryId, method[MANUAL|RULE_APPROVED], ruleId?, createdByUserId, timestamps)`
+  + `SkuClassificationHistory` — vínculo SKU→categoria feito na tela, com histórico e alteração posterior.
+- `ClassificationRuleSuggestion(pattern, matchType[PREFIX|REGEX], suggestedCategoryId, status[PENDING|APPROVED|REJECTED])`
+  — sugestão por prefixo/padrão, **sem** classificação automática irreversível (usuário aprova).
+- `OrderItemCostSnapshot` — **congela** o custo aplicado ao pedido; alterar custo depois não reescreve pedidos antigos.
 
 ### Conciliação
-- `OrderReconciliation(orderId, state, completeness, reconciledAmount, unexplainedAmount, lastAttemptAt)`
+- `OrderReconciliation(orderId, state, temporalStatus, completeness, reconciledAmount, unexplainedAmount, toleranceDeadline, lastAttemptAt)` — `temporalStatus` conforme §5.1
 - `ReconciliationLink(id, orderId?, eventType, eventId, linkType[AUTO|MANUAL], confidence, ruleId, justification, createdByUserId, timestamps)`
 - `Pendency(id, type, priority, status, orderId?, amount, source, assigneeId?, suggestion, ageDays, history Json, lastAutoAttemptAt, timestamps)`
 - `AuditLog(id, organizationId, userId, action, entityType, entityId, beforePayload, afterPayload, metadata, createdAt)`
@@ -79,19 +90,28 @@ Ajustado à inspeção real. `Decimal(18,2)` para dinheiro; `Decimal(18,6)` para
 
 ## 4. Regras de deduplicação (idempotência)
 
-| Entidade | Chave natural | Ação em reimportação |
+> **Princípio:** num sistema financeiro, **deduplicar errado é pior do que não conciliar**.
+> Nenhuma chave pode ser curta a ponto de descartar um débito/crédito legítimo. Cada entidade
+> tem uma **cadeia de identidade** (id externo → referência → conjunto determinístico → **hash
+> canônico**) e uma **política de atualização** (imutável × mutável). Detalhamento completo em
+> `data-contract.md` §9. Resumo:
+
+| Entidade | Identidade (em ordem de precedência) | Reimportação |
 |---|---|---|
-| Order / OrderItem | `(account, orderId[, variationSku])` | **upsert** (atualiza campos, preserva histórico) |
-| WalletTransaction | hash `(occurredAt, type, amount, orderId, description)` | ignora duplicata; nunca duplica dinheiro |
-| AccelerationEvent | `(account, redemptionId, orderId)` | upsert |
-| AffiliateCommission | `(account, orderId, attributionId)` | upsert |
-| ReturnRefund | `(account, returnId)` | upsert |
+| Order / OrderItem | `(account, orderId[, variationSku])` | **upsert** do snapshot; preserva histórico |
+| WalletTransaction | `externalTransactionId` → referência → **hash canônico** (inclui `balanceAfter`, `adjustmentAmount`, `direction`, `status`) | imutável; ignora duplicata; **nunca** por `orderId+data+valor` |
+| AccelerationEvent | `redemptionId+orderId` → `orderId+tipo+data+ref` → **hash canônico** | imutável; **nunca** só por `orderId` |
+| AffiliateCommission | `attributionId+orderId+produto/SKU+afiliado+campanha+período` → **hash canônico** | imutável; não colapsa comissões legítimas |
+| ReturnRefund (processo) | `(account, returnId)` | snapshot atualizável |
+| ReturnRefundEvent | **hash canônico** `(returnId+status+valores+rastreio+observedAt)` | imutável; novo evento a cada mudança |
 | OrderCancellation | `(account, orderId)` | upsert |
 | FailedDelivery | `(account, orderId, trackingCode)` | upsert |
-| ImportBatch | `fileHash` | avisa "arquivo já importado"; permite reprocesso controlado |
+| ImportBatch | `fileHash` | avisa "arquivo já importado"; reprocesso controlado |
 
-**Reimportar o mesmo arquivo nunca duplica dado financeiro.** O `fileHash` bloqueia reenvio
-acidental; o hash por linha garante idempotência mesmo em arquivos parcialmente sobrepostos.
+**Campos de rastreamento em todo evento:** `dedupHash`, `firstSeenBatchId`, `lastSeenBatchId`,
+`observedAt`. **Reimportar o mesmo arquivo nunca duplica dado financeiro** e **períodos
+sobrepostos** (01–10 depois 05–15) inserem só o novo, preservam o anterior e **nunca apagam** um
+evento que deixou de aparecer num arquivo posterior (`data-contract.md` §9.4).
 
 ---
 
@@ -122,8 +142,29 @@ na carteira conta como prejuízo.
 WAITING_FOR_MARKETPLACE · VALUE_DIVERGENCE · UNMATCHED · MANUALLY_RECONCILED ·
 IGNORED_WITH_JUSTIFICATION · REOPENED`.
 
-> Pela inspeção, a maioria dos pedidos num primeiro import fica em `WAITING_FOR_DATA`
-> (evento financeiro ainda não chegou). Isso é **correto** e esperado — ver §6 da inspeção.
+### 5.1 Classificação temporal — ausência esperada × falta real (obrigatório)
+
+Um evento ausente **não** vira pendência operacional automaticamente no momento da importação.
+Antes, o motor classifica a **situação temporal** comparando a data esperada do evento com o
+**período coberto** pelos arquivos importados e com uma **janela de tolerância** por tipo de
+evento (ex.: prazo normal de liquidação da carteira, prazo de fechamento de devolução).
+
+| Situação temporal | Significado | Vira pendência? |
+|---|---|---|
+| `NOT_YET_EXPECTED` | dado ainda não deveria ter aparecido (dentro do prazo de liquidação) | **não** |
+| `WAITING_COMPLEMENTARY_PERIOD` | período importado não cobre a data esperada (falta importar o arquivo daquele intervalo) | não — sinaliza "importar período X" |
+| `WAITING_FOR_MARKETPLACE` | já deveria ter aparecido; aguardando a Shopee dentro da tolerância | informativo |
+| `OVERDUE_DIVERGENCE` | passou a janela de tolerância e continua faltando/divergente | **sim** |
+| `REAL_PENDENCY` | ausência/divergência confirmada com impacto financeiro | **sim** (prioriza) |
+
+O objetivo é **não encher a fila diária de falsos problemas**: só `OVERDUE_DIVERGENCE` e
+`REAL_PENDENCY` entram na fila operacional; os demais ficam como estado do pedido, visíveis mas
+fora da fila de trabalho. A cada novo arquivo, o reprocessamento reavalia a situação temporal.
+
+> Pela inspeção, a maioria dos pedidos num primeiro import fica em `NOT_YET_EXPECTED` /
+> `WAITING_COMPLEMENTARY_PERIOD` (o evento financeiro ainda não chegou ou está fora do período
+> importado). Isso é **correto** e esperado — ver §6 da inspeção. Ele **não** deve ser tratado
+> como pendência real até vencer a janela de tolerância.
 
 ### Reprocessamento
 A cada novo arquivo/sync: reprocessa só as pendências afetadas; resolve automaticamente
@@ -152,6 +193,12 @@ justificativa · reabrir · observar · atribuir responsável.
 Regra operacional: o dia pode terminar com pendências, mas **nenhuma** sem status,
 responsável ou justificativa.
 
+> **Entra na fila apenas o que é falta real.** A fila operacional recebe somente itens com
+> situação temporal `OVERDUE_DIVERGENCE` ou `REAL_PENDENCY` (§5.1). Itens `NOT_YET_EXPECTED`,
+> `WAITING_COMPLEMENTARY_PERIOD` e `WAITING_FOR_MARKETPLACE` ficam visíveis como **estado do
+> pedido**, não como pendência de trabalho — isso impede a fila diária de virar uma lista
+> enorme de falsos problemas.
+
 ---
 
 ## 7. Divisão em blocos (com critério de aceite)
@@ -173,24 +220,33 @@ esconder falhas; sem declarar "funciona" sem teste; arquivos reais usados na val
 
 ---
 
-## 8. Dúvidas realmente bloqueadoras
+## 8. Decisões registradas (respostas do cliente)
 
-A maioria das perguntas foi respondida pela inspeção. Restam **poucas** que dependem de
-decisão de negócio (não dá para inferir dos arquivos):
+As quatro dúvidas foram respondidas e viram requisitos:
 
-1. **Custo interno por categoria** — não há arquivo de custos. Como o sistema deve receber os
-   custos por categoria interna (upload próprio, cadastro manual na tela, ou planilha à parte)?
-   Sem isso, todo pedido gera pendência `categoria sem custo` (comportamento já previsto).
-2. **Mapeamento SKU → categoria interna** — os SKUs reais (ex.: `KIT-6-PERSONALIZADO-50X50…`,
-   `3000-CX-80x120-MF-SV`) precisam ser agrupados em categorias internas. Existe uma regra
-   (prefixo do SKU? tabela de‑para?) ou será cadastro manual?
-3. **Declaração de renda semanal** — o relatório citado no prompt (fonte de auditoria de
-   totais) **não** foi enviado. Confirmar se virá e em qual formato, ou se a auditoria semanal
-   deve, por ora, usar os totais do "Resumo" da carteira.
-4. **Multiloja** — os arquivos citam `lidermolduras`. Haverá mais de uma loja Shopee no MVP,
-   ou começamos com uma conta e mantemos a estrutura multiloja preparada?
+**8.1 Custos internos por categoria** — cadastro **no próprio sistema** (não por planilha
+nesta versão). Requer: cadastro de categorias internas; custos por categoria; `validFrom`;
+histórico de alterações; **edição em massa**; e *hook* preparado para importar planilha de
+custos no futuro. O custo aplicado ao pedido fica como **snapshot histórico**
+(`OrderItemCostSnapshot`); alterar o custo atual **não** modifica pedidos antigos já calculados.
 
-Nenhuma dessas dúvidas bloqueia o **upload manual** nem os blocos 1–2.
+**8.2 SKU → categoria interna** — vínculo feito por **tela de classificação**. Requer: lista de
+SKUs não classificados; seleção individual e **em massa**; busca e filtros; vínculo SKU↔categoria;
+alteração posterior com **histórico**; **sugestão por prefixo/padrão** de SKU — mas **sem
+classificação automática irreversível** (a regra em massa é apenas *sugerida* e o usuário
+**aprova**). Modelado em `SkuClassification(+History)` e `ClassificationRuleSuggestion`.
+
+**8.3 Declaração de renda semanal** — será enviada **depois**. Não bloqueia os primeiros blocos.
+O contrato/estrutura ficam **preparados** (`WeeklyIncomeStatement`), mas **sem** regras
+específicas até o arquivo ser inspecionado. Quando chegar, passará por **nova inspeção** e o
+contrato será atualizado.
+
+**8.4 Multiloja** — o MVP começa com **uma** loja (`lidermolduras`), mas a arquitetura permanece
+**multiloja**. **Nenhum** registro (financeiro, pedido, importação, custo, integração,
+conciliação) pode existir sem `organizationId` **e** `marketplaceAccountId`. **Não** haverá,
+por ora, experiência complexa de administração multiloja — apenas o **isolamento** correto.
+
+Nenhuma dessas decisões bloqueia o Bloco 1.
 
 ---
 
@@ -207,5 +263,11 @@ Nenhuma dessas dúvidas bloqueia o **upload manual** nem os blocos 1–2.
 
 ## 10. Próximo passo
 
-Entregues: **inspeção + contrato de dados + modelo + regras + plano + `index.html` navegável**.
-Aguardando sua **aprovação do visual e do diagnóstico** antes de iniciar o **Bloco 1**.
+Inspeção e direção **aprovadas** pelo cliente, com os ajustes obrigatórios já incorporados
+(deduplicação por relatório + hash canônico, snapshots, classificação temporal, sobreposição de
+períodos, precedência de fontes, decisões §8). O **plano exato do Bloco 1** está em
+[`docs/bloco-1-plano.md`](bloco-1-plano.md), aguardando validação antes da implementação.
+
+> **Nota sobre o protótipo:** o `index.html` foi aprovado **apenas como direção visual**, não
+> como aceite de funcionamento. Os dados demonstrativos **não** serão usados como seed que possa
+> ser confundido com dados reais; qualquer dado simulado permanece rotulado como demonstração.
