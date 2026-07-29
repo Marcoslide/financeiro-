@@ -1,0 +1,170 @@
+// ============================================================================
+// Schema Prisma — Bloco 1 (Base do Sistema)
+// Apenas o núcleo: organização, lojas, usuários, permissões, auditoria.
+// NENHUMA tabela de evento financeiro ainda (Blocos 2–4).
+// Isolamento multiloja: toda tabela operacional carrega organizationId; tabelas
+// de loja carregam também marketplaceAccountId. Ver docs/bloco-1-plano.md §3.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  FINANCIAL
+  VIEWER
+}
+
+enum EntityStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum IngestionSource {
+  MANUAL_UPLOAD
+  INTERNAL_SHOPEE_API
+  SHOPEE_OFFICIAL_API
+}
+
+enum ConnectionStatus {
+  NOT_CONFIGURED
+  CONFIGURED
+  ERROR
+}
+
+/// Raiz do isolamento. Toda informação pertence a uma organização.
+model Organization {
+  id        String       @id @default(cuid())
+  name      String
+  status    EntityStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  marketplaceAccounts MarketplaceAccount[]
+  users               User[]
+  auditLogs           AuditLog[]
+
+  @@map("organizations")
+}
+
+/// Loja/conta de marketplace (uma conta Shopee). MVP: "lidermolduras".
+model MarketplaceAccount {
+  id             String       @id @default(cuid())
+  organizationId String
+  marketplace    String       @default("SHOPEE")
+  displayName    String
+  shopId         String?
+  sellerId       String?
+  currency       String       @default("BRL")
+  timezone       String       @default("America/Sao_Paulo")
+  status         EntityStatus @default(ACTIVE)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connections  MarketplaceConnection[]
+  memberships  Membership[]
+
+  @@unique([organizationId, marketplace, displayName])
+  @@index([organizationId])
+  @@map("marketplace_accounts")
+}
+
+/// Conexão de fonte de dados da loja. Credenciais criptografadas; só estrutura no Bloco 1.
+model MarketplaceConnection {
+  id                   String           @id @default(cuid())
+  marketplaceAccountId String
+  sourceType           IngestionSource
+  connectionStatus     ConnectionStatus @default(NOT_CONFIGURED)
+  encryptedCredentials String?
+  tokenExpiresAt       DateTime?
+  lastSyncAt           DateTime?
+  lastSuccessfulSyncAt DateTime?
+  lastError            String?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  marketplaceAccount MarketplaceAccount @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([marketplaceAccountId, sourceType])
+  @@index([marketplaceAccountId])
+  @@map("marketplace_connections")
+}
+
+/// Usuário do sistema. Senha com Argon2. Vinculado a uma organização.
+model User {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  email          String       @unique
+  passwordHash   String
+  role           Role         @default(VIEWER)
+  status         EntityStatus @default(ACTIVE)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  memberships   Membership[]
+  refreshTokens RefreshToken[]
+  auditLogs     AuditLog[]
+
+  @@index([organizationId])
+  @@map("users")
+}
+
+/// Acesso de um usuário a uma loja específica (isolamento fino).
+model Membership {
+  id                   String   @id @default(cuid())
+  userId               String
+  marketplaceAccountId String
+  createdAt            DateTime @default(now())
+
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  marketplaceAccount MarketplaceAccount @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, marketplaceAccountId])
+  @@index([marketplaceAccountId])
+  @@map("memberships")
+}
+
+/// Refresh token rotacionado (guardado como hash).
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+/// Trilha de auditoria (quem, o quê, antes/depois).
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String?
+  action         String
+  entityType     String
+  entityId       String?
+  beforePayload  Json?
+  afterPayload   Json?
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}

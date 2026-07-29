@@ -1,0 +1,27 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: financeiro_pg
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: financeiro_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: financeiro_redis
+    ports:
+      - "6379:6379"
+    # Provisionado para o processamento assíncrono do Bloco 2+ (BullMQ).
+
+volumes:
+  pgdata:

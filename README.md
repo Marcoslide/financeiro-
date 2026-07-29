@@ -9,10 +9,44 @@ reembolsado, compensado e o que **ainda não foi explicado**.
 > afiliados, Shopee Acelera, cancelamentos e falhas de entrega são **fontes** que explicam
 > o resultado financeiro dos pedidos.
 
-## Estado atual — Bloco 0 (Inspeção) concluído
+## Estado atual — Bloco 1 (Base do sistema) implementado
 
-Esta entrega é o **diagnóstico dos dados + arquitetura + protótipo visual**, para aprovação
-antes do desenvolvimento (Bloco 1). Nenhum código funcional do sistema foi escrito ainda.
+Monorepo funcional com autenticação, isolamento multiloja, usuários/permissões, auditoria,
+Docker, migrações, seed e telas reais. Ver **[docs/bloco-1-plano.md](docs/bloco-1-plano.md)**
+(plano) e **[docs/bloco-1-evidencias.md](docs/bloco-1-evidencias.md)** (evidências: lint,
+typecheck, testes e capturas).
+
+### Rodar localmente
+
+```bash
+# 1. Banco (Postgres 16 + Redis 7)
+docker compose up -d
+
+# 2. Dependências
+corepack enable && pnpm install
+
+# 3. Variáveis de ambiente
+cp .env.example .env
+
+# 4. Banco: migração + seed de demonstração
+pnpm db:migrate && pnpm db:generate && pnpm db:seed
+
+# 5. Subir API (3001) e Web (3000)
+pnpm dev
+```
+
+Acesse http://localhost:3000 e entre com um dos usuários de demonstração
+(`admin@demo.local` · `financeiro@demo.local` · `viewer@demo.local`, senha `Demo@12345`).
+
+### Qualidade
+```bash
+pnpm lint          # ESLint em todos os pacotes
+pnpm typecheck     # tsc --noEmit em todos os pacotes
+pnpm test          # unit + e2e (API contra Postgres) — 19 testes
+pnpm --filter @financeiro/web test:e2e   # smoke Playwright (requer API+Web no ar)
+```
+
+## Documentos de planejamento (Bloco 0)
 
 | Documento | Conteúdo |
 |---|---|

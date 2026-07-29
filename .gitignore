@@ -6,7 +6,8 @@
 /uploads/
 /storage/
 !docs/**/*.example.csv
-!**/fixtures/**   # fixtures sanitizadas de teste são permitidas
+# fixtures sanitizadas de teste são permitidas
+!**/fixtures/**
 
 # ---- Node / build ----
 node_modules/
@@ -15,6 +16,11 @@ dist/
 build/
 coverage/
 *.log
+.turbo/
+*.tsbuildinfo
+packages/shared/dist/
+apps/web/test-results/
+apps/web/playwright-report/
 
 # ---- Ambiente / segredos ----
 .env
