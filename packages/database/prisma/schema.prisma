@@ -103,6 +103,9 @@ model Organization {
   marketplaceOrders   MarketplaceOrder[]
   postSaleOccurrences PostSaleOccurrence[]
   postSaleImportBatches PostSaleImportBatch[]
+  aiSetting           AiSetting?
+  aiAnalyses          AiAnalysis[]
+  actionPlans         ActionPlan[]
 
   @@map("organizations")
 }
@@ -133,6 +136,8 @@ model MarketplaceAccount {
   marketplaceOrders    MarketplaceOrder[]
   postSaleOccurrences  PostSaleOccurrence[]
   postSaleImportBatches PostSaleImportBatch[]
+  aiAnalyses           AiAnalysis[]
+  actionPlans          ActionPlan[]
 
   @@unique([organizationId, marketplace, displayName])
   @@index([organizationId])
@@ -684,6 +689,8 @@ model PostSaleOccurrenceItem {
   occurrenceId   String
   organizationId String
 
+  /// Chave estável do item dentro da ocorrência (SKU ou índice) — idempotência.
+  itemKey       String
   sku           String?
   parentSku     String?
   productName   String?
@@ -695,16 +702,120 @@ model PostSaleOccurrenceItem {
   productVariationId String?
   skuLinked          Boolean @default(false)
 
+  /// Linha bruta original preservada (camada RAW, §7).
+  rawPayload Json?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   occurrence       PostSaleOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
   productVariation ProductVariation?  @relation(fields: [productVariationId], references: [id], onDelete: SetNull)
 
+  @@unique([occurrenceId, itemKey])
   @@index([occurrenceId])
   @@index([organizationId, skuLinked])
   @@index([sku])
   @@map("post_sale_occurrence_items")
+}
+
+// ============================================================================
+// Bloco 4 — camada de Inteligência (IA plugável) e Plano de Ação.
+// ============================================================================
+
+/// Configuração de IA por organização. A credencial é criptografada e NUNCA vai
+/// para o frontend/bundle. Provider desacoplado (§45–§47).
+model AiSetting {
+  id                  String   @id @default(cuid())
+  organizationId      String   @unique
+  provider            String   @default("anthropic") // anthropic | openai
+  model               String   @default("claude-sonnet-4-5")
+  encryptedApiKey     String?
+  enabled             Boolean  @default(false)
+  updatedByUserId     String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("ai_settings")
+}
+
+/// Histórico/cache de análises da IA (§56–§57). Toda análise é rastreável:
+/// contexto determinístico de entrada, resposta, evidências, prompt, tokens.
+model AiAnalysis {
+  id                   String   @id @default(cuid())
+  organizationId       String
+  marketplaceAccountId String
+  functionKey          String // executive_summary | findings | investigator | chat | ...
+  promptVersion        String   @default("v1")
+  provider             String
+  model                String
+  scopeKey             String // hash do período/filtros (cache)
+  input                Json
+  output               Json?
+  evidences            Json?
+  status               String   @default("OK") // OK | INVALID | ERROR
+  tokensInput          Int?
+  tokensOutput         Int?
+  costUsd              Decimal? @db.Decimal(12, 6)
+  errorMessage         String?
+  createdByUserId      String?
+  createdAt            DateTime @default(now())
+
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplaceAccount MarketplaceAccount @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, functionKey, scopeKey])
+  @@index([marketplaceAccountId, createdAt])
+  @@map("ai_analyses")
+}
+
+/// Plano de ação (§63–§73). Nasce de achados/hipóteses/IA, mas sempre confirmado
+/// pelo usuário. Guarda baseline/meta e a data de implantação (marco de medição).
+model ActionPlan {
+  id                   String   @id @default(cuid())
+  organizationId       String
+  marketplaceAccountId String
+  title                String
+  description          String?
+  origin               String?  // user | finding | ai | cause | sku | ...
+  status               String   @default("SUGGESTED") // §65
+  priority             String   @default("MEDIUM")
+  ownerName            String?
+  dueDate              DateTime?
+  implementedAt        DateTime?
+  reviewAt             DateTime?
+  indicator            String?
+  baselineValue        Decimal? @db.Decimal(14, 4)
+  targetValue          Decimal? @db.Decimal(14, 4)
+  financialImpact      Decimal? @db.Decimal(14, 2)
+  notes                String?
+  relatedSkus          Json?
+  relatedFindings      Json?
+  createdByUserId      String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  organization       Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplaceAccount MarketplaceAccount       @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+  checklist          ActionPlanChecklistItem[]
+
+  @@index([organizationId, status])
+  @@map("action_plans")
+}
+
+model ActionPlanChecklistItem {
+  id        String  @id @default(cuid())
+  planId    String
+  text      String
+  done      Boolean @default(false)
+  order     Int     @default(0)
+  createdAt DateTime @default(now())
+
+  plan ActionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@index([planId])
+  @@map("action_plan_checklist_items")
 }
 
 /// Trajetória de status observada da ocorrência (mudanças entre importações).

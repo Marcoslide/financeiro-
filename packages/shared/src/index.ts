@@ -76,6 +76,11 @@ export enum AuditAction {
   PRODUCT_FAMILY_UPDATE = 'PRODUCT_FAMILY_UPDATE',
   PRODUCT_VARIATION_UPDATE = 'PRODUCT_VARIATION_UPDATE',
   PRODUCT_CLASSIFY = 'PRODUCT_CLASSIFY',
+  // Bloco 4 — Pós-venda
+  POSTSALE_IMPORT = 'POSTSALE_IMPORT',
+  ACTION_PLAN_UPSERT = 'ACTION_PLAN_UPSERT',
+  AI_SETTING_UPDATE = 'AI_SETTING_UPDATE',
+  AI_ANALYZE = 'AI_ANALYZE',
 }
 
 // ============================================================================
