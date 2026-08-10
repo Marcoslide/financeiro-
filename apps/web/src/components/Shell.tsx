@@ -12,10 +12,13 @@ const NAV = [
     { href: '/conciliacao', label: 'Conciliação', ic: '⇄', soon: true },
     { href: '/pendencias', label: 'Pendências', ic: '⚑', soon: true },
   ]},
+  { group: 'Produtos', items: [
+    { href: '/produtos', label: 'Produtos Shopee', ic: '◫', soon: false },
+    { href: '/produtos/familias', label: 'Famílias', ic: '⁘', soon: false },
+  ]},
   { group: 'Dados', items: [
     { href: '/pedidos', label: 'Pedidos', ic: '▤', soon: true },
     { href: '/movimentacoes', label: 'Movimentações', ic: '₿', soon: true },
-    { href: '/produtos', label: 'Produtos e custos', ic: '◫', soon: true },
   ]},
   { group: 'Gestão', items: [
     { href: '/usuarios', label: 'Usuários', ic: '👤', soon: false },
@@ -27,6 +30,8 @@ const NAV = [
 const CRUMB: Record<string, string> = {
   '/dashboard': 'Dashboard',
   '/importacoes': 'Importações',
+  '/produtos': 'Produtos Shopee',
+  '/produtos/familias': 'Famílias',
   '/usuarios': 'Usuários',
   '/lojas': 'Lojas',
   '/auditoria': 'Auditoria',
@@ -35,6 +40,7 @@ const CRUMB: Record<string, string> = {
 function crumbFor(pathname: string): string {
   if (CRUMB[pathname]) return CRUMB[pathname];
   if (pathname.startsWith('/importacoes/')) return 'Importações';
+  if (pathname.startsWith('/produtos')) return 'Produtos';
   return '';
 }
 

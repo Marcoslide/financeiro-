@@ -70,6 +70,12 @@ export enum AuditAction {
   IMPORT_CONFIRM = 'IMPORT_CONFIRM',
   IMPORT_REPROCESS = 'IMPORT_REPROCESS',
   IMPORT_DISCARD = 'IMPORT_DISCARD',
+  // Bloco 3 — Produtos e Famílias
+  PRODUCT_IMPORT = 'PRODUCT_IMPORT',
+  PRODUCT_FAMILY_CREATE = 'PRODUCT_FAMILY_CREATE',
+  PRODUCT_FAMILY_UPDATE = 'PRODUCT_FAMILY_UPDATE',
+  PRODUCT_VARIATION_UPDATE = 'PRODUCT_VARIATION_UPDATE',
+  PRODUCT_CLASSIFY = 'PRODUCT_CLASSIFY',
 }
 
 // ============================================================================
@@ -192,6 +198,51 @@ export interface ImportAnalysis {
   previewRows: Array<Record<string, string>>;
   issues: ImportIssue[];
   alreadyImported: boolean;
+}
+
+// ============================================================================
+// Bloco 3 — Produtos, Variações/SKUs e Famílias. Nomenclatura compartilhada.
+// ============================================================================
+
+/** Uma linha da planilha que não pôde ser importada (prompt §17). */
+export interface ProductImportError {
+  physicalRow: number;
+  shopeeProductId: string | null;
+  sku: string | null;
+  message: string;
+}
+
+/** Resultado da importação do catálogo de produtos da Shopee (prompt §17). */
+export interface ProductImportSummary {
+  batchId: string;
+  status: ImportBatchStatus;
+  fileFormat: FileFormat;
+  headerRowIndex: number | null;
+  dataStartRowIndex: number | null;
+  columnCount: number;
+  physicalRowCount: number;
+  /** Linhas de dados processadas (variações). */
+  totalRows: number;
+  /** Anúncios distintos identificados no arquivo. */
+  productsSeen: number;
+  /** Variações/SKUs identificados no arquivo. */
+  variationsSeen: number;
+  newProducts: number;
+  newVariations: number;
+  updatedRecords: number;
+  unchangedRecords: number;
+  ignoredRows: number;
+  errorRows: number;
+  errors: ProductImportError[];
+  alreadyImported: boolean;
+}
+
+/** Custo vigente da família resolvido para uma variação (SKU → família → custo). */
+export interface ResolvedFamilyCost {
+  familyId: string;
+  familyName: string;
+  costAmount: string | null;
+  effectiveFrom: string | null;
 }
 
 /** Usuário autenticado exposto ao front (sem dados sensíveis). */

@@ -96,6 +96,10 @@ model Organization {
   users               User[]
   auditLogs           AuditLog[]
   importBatches       ImportBatch[]
+  products            Product[]
+  productVariations   ProductVariation[]
+  productFamilies     ProductFamily[]
+  productImportBatches ProductImportBatch[]
 
   @@map("organizations")
 }
@@ -119,6 +123,10 @@ model MarketplaceAccount {
   memberships  Membership[]
   importBatches ImportBatch[]
   dedupKeys     ImportDedupKey[]
+  products             Product[]
+  productVariations    ProductVariation[]
+  productFamilies      ProductFamily[]
+  productImportBatches ProductImportBatch[]
 
   @@unique([organizationId, marketplace, displayName])
   @@index([organizationId])
@@ -163,6 +171,9 @@ model User {
   refreshTokens RefreshToken[]
   auditLogs     AuditLog[]
   importBatches ImportBatch[]
+  productFamilies          ProductFamily[]
+  productFamilyCostEntries ProductFamilyCostHistory[]
+  productImportBatches     ProductImportBatch[]
 
   @@index([organizationId])
   @@map("users")
@@ -350,4 +361,201 @@ model ImportDedupKey {
   @@unique([marketplaceAccountId, reportType, canonicalHash])
   @@index([marketplaceAccountId, reportType, naturalKey])
   @@map("import_dedup_keys")
+}
+
+// ============================================================================
+// Bloco 3 — Produtos, Variações/SKUs, Famílias e Custos.
+//
+// Entidade principal = ANÚNCIO Shopee (Product), identificado por shopeeProductId
+// ("ID do Produto"). Cada anúncio agrupa VARIAÇÕES (ProductVariation), cada uma
+// com seu SKU, preço e estoque próprios. A FAMÍLIA (ProductFamily) é a unidade
+// interna de CUSTO: várias variações apontam para uma família; o custo mora na
+// família (com HISTÓRICO, para não corromper a análise de pedidos antigos).
+//
+// Regra central: SKU → variação → família → custo vigente.
+// Regra de reimportação: campos importados da Shopee (preço cheio, estoque, nome)
+// são sincronizados; campos internos (família, preço de fechamento, notas) NUNCA
+// são sobrescritos por uma reimportação.
+// ============================================================================
+
+/// Família de produtos — unidade interna de CUSTO. Ver prompt §8, §9, §22.
+model ProductFamily {
+  id                   String       @id @default(cuid())
+  organizationId       String
+  marketplaceAccountId String
+  name                 String
+  /// Nome normalizado (sem acento, minúsculo) — garante unicidade e busca estável.
+  normalizedName       String
+  internalCode         String?
+  notes                String?
+  status               EntityStatus @default(ACTIVE)
+
+  // Custo vigente — desnormalizado a partir do histórico para leitura rápida.
+  // null = "custo não informado" (exibido explicitamente na interface).
+  currentCostAmount        Decimal?  @db.Decimal(14, 4)
+  currentCostEffectiveFrom DateTime?
+  costUpdatedAt            DateTime?
+
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization       Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplaceAccount MarketplaceAccount         @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+  createdBy          User?                      @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  costHistory        ProductFamilyCostHistory[]
+  variations         ProductVariation[]
+
+  @@unique([marketplaceAccountId, normalizedName])
+  @@index([organizationId])
+  @@index([marketplaceAccountId, status])
+  @@map("product_families")
+}
+
+/// Histórico de custo da família — preserva o custo antigo (prompt §9). O custo
+/// vigente em uma data D = a entrada de maior effectiveFrom com effectiveFrom <= D.
+model ProductFamilyCostHistory {
+  id              String   @id @default(cuid())
+  familyId        String
+  costAmount      Decimal  @db.Decimal(14, 4)
+  effectiveFrom   DateTime
+  note            String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  family    ProductFamily @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  createdBy User?         @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([familyId, effectiveFrom])
+  @@map("product_family_cost_history")
+}
+
+/// Anúncio Shopee (entidade principal). Agrupa variações. Ver prompt §5, §16.
+model Product {
+  id                   String       @id @default(cuid())
+  organizationId       String
+  marketplaceAccountId String
+  /// "ID do Produto" — identificador único do anúncio na Shopee.
+  shopeeProductId      String
+  name                 String
+  status               EntityStatus @default(ACTIVE)
+
+  firstImportBatchId String?
+  lastImportBatchId  String?
+  firstSeenAt        DateTime @default(now())
+  lastSeenAt         DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplaceAccount MarketplaceAccount @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+  variations         ProductVariation[]
+
+  @@unique([marketplaceAccountId, shopeeProductId])
+  @@index([organizationId])
+  @@map("products")
+}
+
+/// Variação / SKU (entidade filha do anúncio). Mistura dados da Shopee (mutáveis
+/// na reimportação) com dados INTERNOS (família, preço de fechamento) que a
+/// reimportação nunca sobrescreve. Ver prompt §5, §6, §10–§16.
+model ProductVariation {
+  id                   String @id @default(cuid())
+  organizationId       String
+  marketplaceAccountId String
+  productId            String
+
+  /// "Variante Identificador" (pode vir vazio em anúncios de variação única).
+  shopeeVariationId String
+  /// Chave estável da variação DENTRO do anúncio (variante id, ou SKU, ou sentinela).
+  variationKey      String
+
+  // --- Dados importados da Shopee (sincronizados na reimportação) ---
+  variationName   String?
+  sku             String?
+  referenceSku    String?
+  gtin            String?
+  /// "Preço" da planilha = preço cheio/cadastrado na Shopee (NÃO é o de fechamento).
+  shopeeFullPrice Decimal? @db.Decimal(14, 4)
+  sellerStock     Int?
+  failReason      String?
+
+  // --- Dados INTERNOS (nunca sobrescritos por reimportação) ---
+  /// Preço de fechamento/com desconto — decisão nossa. null = "não informado".
+  closingPrice  Decimal?      @db.Decimal(14, 4)
+  familyId      String?
+  internalNotes String?
+
+  firstImportBatchId String?
+  lastImportBatchId  String?
+  firstSeenAt        DateTime @default(now())
+  lastSeenAt         DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplaceAccount MarketplaceAccount @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+  product            Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+  family             ProductFamily?     @relation(fields: [familyId], references: [id], onDelete: SetNull)
+
+  @@unique([productId, variationKey])
+  @@index([marketplaceAccountId])
+  @@index([marketplaceAccountId, sku])
+  @@index([familyId])
+  @@map("product_variations")
+}
+
+/// Histórico de importações do catálogo de produtos (auditoria, prompt §18).
+model ProductImportBatch {
+  id                   String          @id @default(cuid())
+  organizationId       String
+  marketplaceAccountId String
+  ingestionSource      IngestionSource @default(MANUAL_UPLOAD)
+
+  originalFilename  String
+  sanitizedFilename String
+  declaredExtension String
+  fileFormat        FileFormat
+  fileSizeBytes     Int
+  fileHash          String
+  storageKey        String
+
+  sheetName         String?
+  headerRowIndex    Int?
+  dataStartRowIndex Int?
+  columnCount       Int     @default(0)
+  physicalRowCount  Int     @default(0)
+  dataRowCount      Int     @default(0)
+
+  status ImportBatchStatus @default(PROCESSING)
+
+  // Resultado da sincronização (prompt §17).
+  totalRows        Int @default(0)
+  productsSeen     Int @default(0)
+  variationsSeen   Int @default(0)
+  newProducts      Int @default(0)
+  newVariations    Int @default(0)
+  updatedRecords   Int @default(0)
+  unchangedRecords Int @default(0)
+  ignoredRows      Int @default(0)
+  errorRows        Int @default(0)
+  processingMs     Int?
+  errorMessage     String?
+
+  errors   Json?
+  analysis Json?
+
+  createdByUserId String?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplaceAccount MarketplaceAccount @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+  createdBy          User?              @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([marketplaceAccountId, fileHash])
+  @@map("product_import_batches")
 }

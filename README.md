@@ -31,6 +31,18 @@ Bloco 1 (base): autenticação, isolamento multiloja, usuários/permissões, aud
 migrações, seed e telas reais — **[docs/bloco-1-plano.md](docs/bloco-1-plano.md)** e
 **[docs/bloco-1-evidencias.md](docs/bloco-1-evidencias.md)**.
 
+## Bloco 3 — Produtos, Variações/SKUs, Famílias e Custos
+
+Primeira fundação do **cadastro** que conectará os próximos módulos. A tela **Produtos
+Shopee** recebe a planilha de produtos da Shopee (`.xlsx`), **localiza o cabeçalho fora
+da linha 1**, ignora as linhas técnicas/de instrução, **agrupa por anúncio** e
+materializa **anúncios + variações/SKUs** com preço cheio e estoque próprios.
+Reimportar é **idempotente**: sincroniza preço/estoque **sem duplicar** e **sem
+apagar** os dados internos (família e **preço de fechamento**). As **Famílias** são a
+unidade interna de **custo** (com **histórico**), e a classificação de SKUs em família
+pode ser feita **em massa**. Regra central: **SKU → variação → família → custo vigente**.
+Ver **[docs/bloco-3-plano.md](docs/bloco-3-plano.md)**.
+
 ### Rodar localmente
 
 ```bash
@@ -97,6 +109,7 @@ Planilhas reais **não** são versionadas (`.gitignore`). Fixtures de teste são
 Credenciais/tokens criptografados e nunca em logs.
 
 ## Próximo passo
-Bloco 2 (Importação) concluído. Aguardando validação para iniciar o **Bloco 3 —
-Pedidos e eventos** (materializar as tabelas de eventos financeiros a partir das linhas
-já importadas e relacioná-las por pedido).
+Blocos 2 (Importação) e 3 (Produtos e Famílias) concluídos. Próximo: **Pedidos e
+eventos** — materializar as tabelas de eventos financeiros a partir das linhas já
+importadas, relacioná-las por pedido e cruzar com produto/variação/família/custo para
+reconstruir o resultado real de cada pedido.
