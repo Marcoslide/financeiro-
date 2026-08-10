@@ -202,7 +202,7 @@ describe('Bloco 3 — famílias, custo e classificação em massa', () => {
 });
 
 describe('Bloco 3 — busca, filtros, ordenação, seleção total e ações em massa', () => {
-  it('busca por SKU encontra o anúncio e marca a variação (auto-expand)', async () => {
+  it('busca por SKU mostra o master APENAS com a variação correspondente (contexto)', async () => {
     const res = await http
       .get(`/api/products?marketplaceAccountId=${accountId}&search=SKU-5070-PT`)
       .set('Authorization', `Bearer ${adminToken}`);
@@ -210,17 +210,38 @@ describe('Bloco 3 — busca, filtros, ordenação, seleção total e ações em 
     expect(res.body.items).toHaveLength(1);
     const p = res.body.items[0];
     expect(p.shopeeProductId).toBe('43819067914');
-    expect(p.autoExpand).toBe(true);
-    expect(p.variations.find((v: any) => v.sku === 'SKU-5070-PT').matched).toBe(true);
+    // O anúncio tem 4 variações no total, mas só 1 pertence ao resultado da busca.
+    expect(p.variationCount).toBe(4);
+    expect(p.shownCount).toBe(1);
+    expect(p.variations).toHaveLength(1);
+    expect(p.variations[0].sku).toBe('SKU-5070-PT');
+    expect(res.body.matchedVariations).toBe(1);
   });
 
-  it('filtro "sem família" + contagem de SKUs correspondentes', async () => {
+  it('filtro "sem família" recorta no nível do SKU: só as variações sem família (§8/§62)', async () => {
+    // Paisagem já teve SKU-4060-PT e SKU-4060-BR classificados; as duas 50x70/60x90 seguem sem família.
     const res = await http
-      .get(`/api/products?marketplaceAccountId=${accountId}&family=without`)
+      .get(`/api/products?marketplaceAccountId=${accountId}&family=without&search=Paisagem`)
       .set('Authorization', `Bearer ${adminToken}`);
-    // Após classificar 2 variações antes, os demais anúncios ainda têm SKUs sem família.
-    expect(res.body.total).toBeGreaterThan(0);
-    expect(typeof res.body.matchedVariations).toBe('number');
+    const p = res.body.items.find((x: any) => x.shopeeProductId === '43819067914');
+    expect(p).toBeTruthy();
+    expect(p.shownCount).toBe(2); // só as 2 sem família (não as 4)
+    expect(p.variations.every((v: any) => v.familyId == null)).toBe(true);
+    const skus = p.variations.map((v: any) => v.sku).sort();
+    expect(skus).toEqual(['SKU-5070-PT', 'SKU-6090-PT']);
+  });
+
+  it('fonte única: contador = "selecionar todos" para o MESMO filtro', async () => {
+    const qs = `marketplaceAccountId=${accountId}&family=without`;
+    const list = await http.get(`/api/products?${qs}`).set('Authorization', `Bearer ${adminToken}`);
+    const ids = await http.get(`/api/products/variation-ids?${qs}`).set('Authorization', `Bearer ${adminToken}`);
+    // A contagem exibida e o total selecionável são exatamente o mesmo conjunto.
+    expect(ids.body.variationIds.length).toBe(list.body.matchedVariations);
+    // e nenhuma dessas variações possui família (recorte correto).
+    const withFam = await prisma.productVariation.count({
+      where: { id: { in: ids.body.variationIds }, familyId: { not: null } },
+    });
+    expect(withFam).toBe(0);
   });
 
   it('ordenação por maior estoque respeita o agregado denormalizado', async () => {

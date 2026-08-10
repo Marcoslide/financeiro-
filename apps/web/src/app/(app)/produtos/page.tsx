@@ -16,8 +16,8 @@ interface Variation {
   familyId: string | null; family: { id: string; name: string; currentCostAmount: string | null } | null; matched: boolean;
 }
 interface Product {
-  id: string; shopeeProductId: string; name: string; status: 'ACTIVE' | 'INACTIVE';
-  variationCount: number; totalStock: number; priceMin: string | null; priceMax: string | null;
+  id: string; shopeeProductId: string; name: string; principalSku: string | null; status: 'ACTIVE' | 'INACTIVE';
+  variationCount: number; shownCount: number; totalStock: number; priceMin: string | null; priceMax: string | null;
   variationsWithoutFamily: number; variationsWithoutClosingPrice: number;
   familySummary: 'none' | 'single' | 'multiple'; autoExpand: boolean; lastSeenAt: string; variations: Variation[];
 }
@@ -97,10 +97,11 @@ export default function ProdutosPage() {
         setItems(res.items);
         setTotal(res.total);
         setMatchedVariations(res.matchedVariations);
-        if (filters.search) setExpanded((prev) => { const n = new Set(prev); res.items.forEach((i) => i.autoExpand && n.add(i.id)); return n; });
+        // Abre automaticamente os masters cujo resultado veio de um recorte de SKUs.
+        setExpanded((prev) => { const n = new Set(prev); res.items.forEach((i) => i.autoExpand && n.add(i.id)); return n; });
       })
       .finally(() => setLoading(false));
-  }, [account, params, filters.search]);
+  }, [account, params]);
 
   useEffect(() => { loadAux(); }, [loadAux]);
   useEffect(() => { loadProducts(); }, [loadProducts]);
@@ -244,11 +245,11 @@ export default function ProdutosPage() {
                     <th style={{ width: 30 }}>{canEdit && <Chk checked={pageAllSelected} onChange={(e) => togglePage(e.target.checked)} />}</th>
                     <th style={{ width: 26 }}></th>
                     <th>Produto</th>
-                    <th>ID Shopee</th>
-                    <th>Variações</th>
-                    <th>Faixa de preço</th>
+                    <th>SKUs</th>
+                    <th>Família</th>
+                    <th>Preço</th>
+                    <th>Custo</th>
                     <th>Estoque</th>
-                    <th>Parametrização</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -257,6 +258,7 @@ export default function ProdutosPage() {
                     <MasterRows
                       key={p.id}
                       product={p}
+                      families={families}
                       open={expanded.has(p.id)}
                       selected={selected}
                       canEdit={canEdit}
@@ -264,6 +266,7 @@ export default function ProdutosPage() {
                       onToggleMaster={(on) => toggleMaster(p, on)}
                       onToggleVariation={toggleVariation}
                       onEdit={(v) => setEditVar({ product: p, variation: v })}
+                      onSaved={(msg) => { reloadAll(); setToast({ title: 'Salvo', body: msg }); }}
                     />
                   ))}
                 </tbody>
@@ -368,21 +371,73 @@ function Chk({ checked, indeterminate, onChange }: { checked: boolean; indetermi
   return <input ref={ref} type="checkbox" className="chk" checked={checked} onChange={onChange} />;
 }
 
-function familyBadge(summary: Product['familySummary']) {
-  if (summary === 'none') return <span className="tag warn">sem família</span>;
-  if (summary === 'single') return <span className="tag ok">família única</span>;
-  return <span className="tag info">múltiplas famílias</span>;
+function InlineFamily({ current, families, canEdit, onSave }: { current: { id: string; name: string } | null; families: FamilyLite[]; canEdit: boolean; onSave: (id: string | null) => void }) {
+  const [editing, setEditing] = useState(false);
+  const active = families.filter((f) => f.status === 'ACTIVE' || f.id === current?.id);
+  const label = current ? <span className="tag info">{current.name}</span> : <span className="tag warn">sem família</span>;
+  if (!canEdit) return label;
+  if (!editing) return <span className="cell-edit" title="Clique para classificar" onClick={() => setEditing(true)}>{label}</span>;
+  return (
+    <select autoFocus className="select sm" defaultValue={current?.id ?? ''}
+      onChange={(e) => { onSave(e.target.value || null); setEditing(false); }}
+      onKeyDown={(e) => { if (e.key === 'Escape') setEditing(false); }}
+      onBlur={() => setEditing(false)}>
+      <option value="">— sem família —</option>
+      {active.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+    </select>
+  );
+}
+
+function InlineClose({ value, canEdit, onSave, onTab }: { value: string | null; canEdit: boolean; onSave: (v: string | null) => void; onTab?: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [v, setV] = useState(value ?? '');
+  const label = value != null ? <>{brl(value)}</> : <span className="tag warn">não informado</span>;
+  if (!canEdit) return label;
+  if (!editing) return <span className="cell-edit" title="Clique para editar" onClick={() => { setV(value ?? ''); setEditing(true); }}>{label}</span>;
+  return (
+    <input autoFocus className="input sm" style={{ width: 100 }} value={v} placeholder="0,00"
+      onChange={(e) => setV(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { onSave(v === '' ? null : v); setEditing(false); }
+        else if (e.key === 'Escape') setEditing(false);
+        else if (e.key === 'Tab') { onSave(v === '' ? null : v); setEditing(false); if (onTab) { e.preventDefault(); onTab(); } }
+      }}
+      onBlur={() => { onSave(v === '' ? null : v); setEditing(false); }} />
+  );
 }
 
 function MasterRows({
-  product: p, open, selected, canEdit, onToggleExpand, onToggleMaster, onToggleVariation, onEdit,
+  product: p, families, open, selected, canEdit, onToggleExpand, onToggleMaster, onToggleVariation, onEdit, onSaved,
 }: {
-  product: Product; open: boolean; selected: Set<string>; canEdit: boolean;
+  product: Product; families: FamilyLite[]; open: boolean; selected: Set<string>; canEdit: boolean;
   onToggleExpand: () => void; onToggleMaster: (on: boolean) => void; onToggleVariation: (id: string) => void; onEdit: (v: Variation) => void;
+  onSaved: (msg: string) => void;
 }) {
   const selCount = p.variations.filter((v) => selected.has(v.id)).length;
   const allSel = p.variations.length > 0 && selCount === p.variations.length;
   const priceRange = p.priceMin == null ? '—' : p.priceMin === p.priceMax ? brl(p.priceMin) : `${brl(p.priceMin)} — ${brl(p.priceMax)}`;
+  const shownIds = p.variations.map((v) => v.id);
+  // agregados do master sobre os SKUs em contexto
+  const masterFamily = p.familySummary === 'single' ? p.variations[0]?.family ?? null : null;
+  const closes = Array.from(new Set(p.variations.map((v) => (v.closingPrice == null ? null : v.closingPrice))));
+  const masterClose = closes.length === 1 ? closes[0] : null;
+  const costs = Array.from(new Set(p.variations.map((v) => v.family?.currentCostAmount ?? null)));
+  const masterCost = costs.length === 1 ? costs[0] : null;
+
+  async function saveMasterFamily(id: string | null) {
+    if (p.familySummary !== 'none' && !window.confirm(`Aplicar esta família a ${shownIds.length} variação(ões)? Isso substituirá as classificações atuais.`)) return;
+    await api.post('/products/classify', { variationIds: shownIds, familyId: id });
+    onSaved(`${shownIds.length} SKUs classificados.`);
+  }
+  async function saveMasterClose(price: string | null) {
+    const hasIndiv = p.variations.some((v) => v.closingPrice != null) && closes.length > 1;
+    if (hasIndiv && !window.confirm(`Aplicar ${price ? brl(price) : '—'} a ${shownIds.length} variação(ões)? Existem preços individuais que serão substituídos.`)) return;
+    await api.post('/products/bulk', { variationIds: shownIds, closingPrice: price });
+    onSaved(`Preço aplicado a ${shownIds.length} SKUs.`);
+  }
+  async function saveVarFamily(v: Variation, id: string | null) { await api.patch(`/products/variations/${v.id}`, { familyId: id }); onSaved('Família da variação atualizada.'); }
+  async function saveVarClose(v: Variation, price: string | null) { await api.patch(`/products/variations/${v.id}`, { closingPrice: price }); onSaved('Preço de fechamento atualizado.'); }
+
   return (
     <>
       <tr className="master-row">
@@ -390,16 +445,17 @@ function MasterRows({
         <td><button className="expander" onClick={onToggleExpand}>{open ? '▾' : '▸'}</button></td>
         <td>
           <div className="pname">{p.name}{p.status === 'INACTIVE' && <span className="tag" style={{ marginLeft: 6 }}>inativo</span>}</div>
+          <div className="footnote" style={{ margin: 0 }}>{p.principalSku && <>SKU: <span className="mono">{p.principalSku}</span> · </>}ID Shopee: <span className="mono">{p.shopeeProductId}</span></div>
         </td>
-        <td className="mono">{p.shopeeProductId}</td>
-        <td>{p.variationCount}</td>
-        <td>{priceRange}</td>
-        <td>{p.totalStock.toLocaleString('pt-BR')}</td>
+        <td>{p.shownCount}{p.shownCount < p.variationCount && <span className="footnote" style={{ margin: 0 }}> de {p.variationCount}</span>}</td>
         <td>
-          {familyBadge(p.familySummary)}
-          {p.variationsWithoutFamily > 0 && <span className="tag warn" style={{ marginLeft: 4 }}>{p.variationsWithoutFamily} s/ família</span>}
-          {p.variationsWithoutClosingPrice > 0 && <span className="tag" style={{ marginLeft: 4 }}>{p.variationsWithoutClosingPrice} s/ fechamento</span>}
+          {p.familySummary === 'multiple'
+            ? <><span className="tag info">múltiplas</span> {canEdit && <span className="footnote" style={{ margin: 0 }}><InlineFamily current={null} families={families} canEdit={canEdit} onSave={saveMasterFamily} /></span>}</>
+            : <InlineFamily current={masterFamily} families={families} canEdit={canEdit} onSave={saveMasterFamily} />}
         </td>
+        <td>{priceRange}<div className="footnote" style={{ margin: 0 }}>fech.: <InlineClose value={masterClose} canEdit={canEdit} onSave={saveMasterClose} /></div></td>
+        <td>{masterCost != null ? <>{brl(masterCost)} <span className="inh-cost">herdado</span></> : (costs.length > 1 ? <span className="tag">múltiplos</span> : '—')}</td>
+        <td>{p.totalStock.toLocaleString('pt-BR')}</td>
         <td><button className="btn-sm" onClick={onToggleExpand}>{open ? 'Recolher' : 'Ver SKUs'}</button></td>
       </tr>
       {open && (
@@ -408,29 +464,20 @@ function MasterRows({
             <table style={{ minWidth: 0 }}>
               <thead>
                 <tr>
-                  <th style={{ width: 30 }}></th>
-                  <th>Variação</th>
-                  <th>SKU</th>
-                  <th>Família</th>
-                  <th>Preço Shopee</th>
-                  <th>Preço Fechamento</th>
-                  <th>Custo (herdado)</th>
-                  <th>Estoque</th>
-                  <th></th>
+                  <th style={{ width: 30 }}></th><th>Variação</th><th>Família</th><th>Preço Shopee</th><th>Preço Fechamento</th><th>Custo (herdado)</th><th>Estoque</th><th></th>
                 </tr>
               </thead>
               <tbody>
-                {p.variations.map((v) => (
+                {p.variations.map((v, i) => (
                   <tr key={v.id} className={`subrow ${v.matched ? 'matched' : ''}`}>
                     <td>{canEdit && <input type="checkbox" className="chk" checked={selected.has(v.id)} onChange={() => onToggleVariation(v.id)} />}</td>
-                    <td className="vname">{v.variationName ?? '(única)'}</td>
-                    <td className="mono">{v.sku ?? '—'}</td>
-                    <td>{v.family ? <span className="tag info">{v.family.name}</span> : <span className="tag warn">sem família</span>}</td>
+                    <td className="vname">{v.variationName ?? '(única)'}<div className="footnote" style={{ margin: 0 }}>SKU: <span className="mono">{v.sku ?? '—'}</span></div></td>
+                    <td><InlineFamily current={v.family} families={families} canEdit={canEdit} onSave={(id) => saveVarFamily(v, id)} /></td>
                     <td>{brl(v.shopeeFullPrice) ?? '—'}</td>
-                    <td>{v.closingPrice != null ? brl(v.closingPrice) : <span className="tag warn">não informado</span>}</td>
+                    <td><InlineClose value={v.closingPrice} canEdit={canEdit} onSave={(price) => saveVarClose(v, price)} onTab={() => { const nx = p.variations[i + 1]; if (nx) onEdit(nx); }} /></td>
                     <td>{v.family?.currentCostAmount != null ? <span>{brl(v.family.currentCostAmount)} <span className="inh-cost">herdado</span></span> : '—'}</td>
                     <td>{v.sellerStock ?? '—'}</td>
-                    <td>{canEdit && <button className="btn-sm" onClick={() => onEdit(v)}>Editar</button>}</td>
+                    <td>{canEdit && <button className="btn-sm" onClick={() => onEdit(v)}>Ficha</button>}</td>
                   </tr>
                 ))}
               </tbody>

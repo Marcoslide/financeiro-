@@ -528,26 +528,33 @@ export class ProductsService {
   // Leitura de produtos (listagem por anúncio com variações expansíveis)
   // ===========================================================================
 
-  /** Monta os filtros de produto e de variação a partir dos parâmetros da tela. */
-  private buildProductWhere(
+  /**
+   * Constrói o CONJUNTO FILTRADO ÚNICO. `scopedVariationWhere` define quais SKUs
+   * pertencem ao resultado (nível de variação: família, preço de fechamento,
+   * estoque e busca). O mesmo escopo alimenta a listagem (variações exibidas), a
+   * contagem de SKUs, a seleção total e as ações em massa — sempre os mesmos ids.
+   * Busca por título/ID casa o anúncio inteiro (todas as suas variações entram);
+   * busca por SKU/variação casa apenas a variação correspondente.
+   */
+  private buildScopes(
     organizationId: string,
     marketplaceAccountId: string | undefined,
     filters: ProductFilters,
   ) {
-    const and: Prisma.ProductWhereInput[] = [];
     const search = filters.search?.trim();
+    const varAnd: Prisma.ProductVariationWhereInput[] = [];
     if (search) {
-      and.push({
+      varAnd.push({
         OR: [
-          { name: { contains: search, mode: 'insensitive' } },
-          { shopeeProductId: { contains: search } },
+          { sku: { contains: search, mode: 'insensitive' } },
+          { variationName: { contains: search, mode: 'insensitive' } },
+          { shopeeVariationId: { contains: search } },
           {
-            variations: {
-              some: {
+            product: {
+              is: {
                 OR: [
-                  { sku: { contains: search, mode: 'insensitive' } },
-                  { variationName: { contains: search, mode: 'insensitive' } },
-                  { shopeeVariationId: { contains: search } },
+                  { name: { contains: search, mode: 'insensitive' } },
+                  { shopeeProductId: { contains: search } },
                 ],
               },
             },
@@ -555,22 +562,39 @@ export class ProductsService {
         ],
       });
     }
-    if (filters.familyId) and.push({ variations: { some: { familyId: filters.familyId } } });
-    if (filters.family === 'with') and.push({ variations: { some: { familyId: { not: null } } } });
-    if (filters.family === 'without') and.push({ variations: { some: { familyId: null } } });
-    if (filters.closingPrice === 'with') and.push({ variations: { some: { closingPrice: { not: null } } } });
-    if (filters.closingPrice === 'without') and.push({ variations: { some: { closingPrice: null } } });
-    if (filters.stock === 'with') and.push({ variations: { some: { sellerStock: { gt: 0 } } } });
-    if (filters.stock === 'zero') and.push({ variations: { some: { sellerStock: 0 } } });
-    if (filters.stock === 'without') and.push({ NOT: { variations: { some: { sellerStock: { gt: 0 } } } } });
-    if (filters.variations === 'single') and.push({ variationCount: 1 });
-    if (filters.variations === 'multiple') and.push({ variationCount: { gt: 1 } });
-    if (filters.status) and.push({ status: filters.status as DbEntityStatus });
+    if (filters.familyId) varAnd.push({ familyId: filters.familyId });
+    if (filters.family === 'with') varAnd.push({ familyId: { not: null } });
+    if (filters.family === 'without') varAnd.push({ familyId: null });
+    if (filters.closingPrice === 'with') varAnd.push({ closingPrice: { not: null } });
+    if (filters.closingPrice === 'without') varAnd.push({ closingPrice: null });
+    if (filters.stock === 'with') varAnd.push({ sellerStock: { gt: 0 } });
+    if (filters.stock === 'zero') varAnd.push({ sellerStock: 0 });
+    if (filters.stock === 'without') varAnd.push({ OR: [{ sellerStock: null }, { sellerStock: { lte: 0 } }] });
 
-    const where: Prisma.ProductWhereInput = { organizationId };
-    if (marketplaceAccountId) where.marketplaceAccountId = marketplaceAccountId;
-    if (and.length) where.AND = and;
-    return where;
+    const hasVarScope = varAnd.length > 0;
+    const scopedVariationWhere: Prisma.ProductVariationWhereInput = hasVarScope ? { AND: varAnd } : {};
+
+    // Filtros ao nível do ANÚNCIO (não recortam os filhos).
+    const prodAnd: Prisma.ProductWhereInput[] = [];
+    if (filters.variations === 'single') prodAnd.push({ variationCount: 1 });
+    if (filters.variations === 'multiple') prodAnd.push({ variationCount: { gt: 1 } });
+    if (filters.status) prodAnd.push({ status: filters.status as DbEntityStatus });
+
+    const baseProductWhere: Prisma.ProductWhereInput = { organizationId };
+    if (marketplaceAccountId) baseProductWhere.marketplaceAccountId = marketplaceAccountId;
+    if (prodAnd.length) baseProductWhere.AND = prodAnd;
+
+    const productWhere: Prisma.ProductWhereInput = hasVarScope
+      ? { ...baseProductWhere, variations: { some: scopedVariationWhere } }
+      : baseProductWhere;
+
+    // Contagem de SKUs correspondentes = variações no escopo cujo anúncio passa
+    // nos filtros de anúncio. Mesma cláusula usada para "selecionar todos".
+    const variationScopeWhere: Prisma.ProductVariationWhereInput = hasVarScope
+      ? { AND: [scopedVariationWhere, { product: { is: baseProductWhere } }] }
+      : { product: { is: baseProductWhere } };
+
+    return { scopedVariationWhere, hasVarScope, productWhere, variationScopeWhere };
   }
 
   private orderByFor(sort: ProductSort | undefined): Prisma.ProductOrderByWithRelationInput[] {
@@ -603,18 +627,24 @@ export class ProductsService {
     const pageSize = [25, 50, 100].includes(filters.pageSize ?? 0) ? filters.pageSize! : 25;
     const page = Math.max(1, filters.page ?? 1);
     const search = filters.search?.trim()?.toLowerCase();
-    const where = this.buildProductWhere(organizationId, marketplaceAccountId, filters);
+    const { scopedVariationWhere, hasVarScope, productWhere, variationScopeWhere } = this.buildScopes(
+      organizationId,
+      marketplaceAccountId,
+      filters,
+    );
 
     const [total, matchedVariations, products] = await this.prisma.$transaction([
-      this.prisma.product.count({ where }),
-      this.prisma.productVariation.count({ where: { product: { is: where } } }),
+      this.prisma.product.count({ where: productWhere }),
+      this.prisma.productVariation.count({ where: variationScopeWhere }),
       this.prisma.product.findMany({
-        where,
+        where: productWhere,
         orderBy: this.orderByFor(filters.sort),
         skip: (page - 1) * pageSize,
         take: pageSize,
         include: {
+          // Apenas os SKUs EM CONTEXTO (que pertencem ao resultado filtrado).
           variations: {
+            where: hasVarScope ? scopedVariationWhere : undefined,
             orderBy: [{ variationName: 'asc' }, { sku: 'asc' }],
             include: {
               family: {
@@ -632,28 +662,31 @@ export class ProductsService {
         (v.variationName ?? '').toLowerCase().includes(search) ||
         (v.shopeeVariationId ?? '').toLowerCase().includes(search));
 
+    const num = (d: Prisma.Decimal | null) => (d == null ? null : Number(d));
     const items = products.map((p) => {
-      const families = new Set(p.variations.map((v) => v.familyId).filter(Boolean) as string[]);
+      const shown = p.variations; // já recortadas ao contexto
+      const fams = new Set(shown.map((v) => v.familyId).filter(Boolean) as string[]);
       const familySummary =
-        families.size === 0 ? 'none' : p.variations.every((v) => v.familyId) && families.size === 1 ? 'single' : 'multiple';
-      const nameMatches = !!search && (p.name.toLowerCase().includes(search) || p.shopeeProductId.includes(search));
-      const anyVarMatch = p.variations.some(matchVar);
+        fams.size === 0 ? 'none' : shown.every((v) => v.familyId) && fams.size === 1 ? 'single' : 'multiple';
+      const prices = shown.map((v) => num(v.shopeeFullPrice)).filter((n): n is number => n != null);
       return {
         id: p.id,
         shopeeProductId: p.shopeeProductId,
         name: p.name,
+        principalSku: shown.find((v) => v.referenceSku)?.referenceSku ?? null,
         status: p.status,
+        // total do anúncio × quantos SKUs estão em contexto no filtro atual
         variationCount: p.variationCount,
-        totalStock: p.totalStock,
-        priceMin: p.minPrice != null ? p.minPrice.toString() : null,
-        priceMax: p.maxPrice != null ? p.maxPrice.toString() : null,
-        variationsWithoutFamily: p.variationsWithoutFamily,
-        variationsWithoutClosingPrice: p.variationsWithoutClosingPrice,
+        shownCount: shown.length,
+        totalStock: shown.reduce((s, v) => s + (v.sellerStock ?? 0), 0),
+        priceMin: prices.length ? Math.min(...prices).toString() : null,
+        priceMax: prices.length ? Math.max(...prices).toString() : null,
+        variationsWithoutFamily: shown.filter((v) => !v.familyId).length,
+        variationsWithoutClosingPrice: shown.filter((v) => v.closingPrice == null).length,
         familySummary,
-        // Abre o master automaticamente quando o casamento veio de uma variação.
-        autoExpand: !!search && anyVarMatch && !nameMatches,
+        autoExpand: hasVarScope && shown.length < p.variationCount,
         lastSeenAt: p.lastSeenAt,
-        variations: p.variations.map((v) => ({
+        variations: shown.map((v) => ({
           id: v.id,
           shopeeVariationId: v.shopeeVariationId,
           variationName: v.variationName,
@@ -675,18 +708,19 @@ export class ProductsService {
   }
 
   /**
-   * IDs de TODAS as variações que casam com o filtro atual (todas as páginas) —
-   * base do "selecionar todos os N resultados". Limitado por segurança.
+   * IDs das variações EM CONTEXTO no filtro atual (todas as páginas) — mesma
+   * cláusula da listagem e da contagem: "selecionar todos" seleciona exatamente
+   * os SKUs exibidos/contados. Limitado por segurança.
    */
   async variationIdsForFilter(
     organizationId: string,
     marketplaceAccountId: string | undefined,
     filters: ProductFilters,
   ): Promise<{ variationIds: string[]; truncated: boolean }> {
-    const where = this.buildProductWhere(organizationId, marketplaceAccountId, filters);
+    const { variationScopeWhere } = this.buildScopes(organizationId, marketplaceAccountId, filters);
     const LIMIT = 20000;
     const rows = await this.prisma.productVariation.findMany({
-      where: { product: { is: where } },
+      where: variationScopeWhere,
       select: { id: true },
       take: LIMIT + 1,
     });
