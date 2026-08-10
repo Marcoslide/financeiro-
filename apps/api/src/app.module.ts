@@ -10,6 +10,8 @@ import { MarketplaceAccountsModule } from './marketplace-accounts/marketplace-ac
 import { ImportsModule } from './imports/imports.module';
 import { ProductsModule } from './products/products.module';
 import { PostSaleModule } from './postsale/postsale.module';
+import { AiModule } from './ai/ai.module';
+import { OrdersModule } from './orders/orders.module';
 import { JwtAuthGuard } from './common/jwt-auth.guard';
 import { RolesGuard } from './common/roles.guard';
 import { TenantGuard } from './common/tenant.guard';
@@ -26,6 +28,8 @@ import { HealthController } from './health.controller';
     ImportsModule,
     ProductsModule,
     PostSaleModule,
+    AiModule,
+    OrdersModule,
   ],
   controllers: [HealthController],
   providers: [

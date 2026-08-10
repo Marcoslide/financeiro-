@@ -81,6 +81,8 @@ export enum AuditAction {
   ACTION_PLAN_UPSERT = 'ACTION_PLAN_UPSERT',
   AI_SETTING_UPDATE = 'AI_SETTING_UPDATE',
   AI_ANALYZE = 'AI_ANALYZE',
+  // Módulo Pedidos
+  ORDERS_IMPORT = 'ORDERS_IMPORT',
 }
 
 // ============================================================================

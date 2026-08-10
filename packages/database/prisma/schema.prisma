@@ -106,6 +106,7 @@ model Organization {
   aiSetting           AiSetting?
   aiAnalyses          AiAnalysis[]
   actionPlans         ActionPlan[]
+  salesImportBatches  SalesImportBatch[]
 
   @@map("organizations")
 }
@@ -138,6 +139,7 @@ model MarketplaceAccount {
   postSaleImportBatches PostSaleImportBatch[]
   aiAnalyses           AiAnalysis[]
   actionPlans          ActionPlan[]
+  salesImportBatches   SalesImportBatch[]
 
   @@unique([organizationId, marketplace, displayName])
   @@index([organizationId])
@@ -186,6 +188,7 @@ model User {
   productFamilyCostEntries ProductFamilyCostHistory[]
   productImportBatches     ProductImportBatch[]
   postSaleImportBatches    PostSaleImportBatch[]
+  salesImportBatches       SalesImportBatch[]
 
   @@index([organizationId])
   @@map("users")
@@ -521,6 +524,7 @@ model ProductVariation {
   product            Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
   family             ProductFamily?     @relation(fields: [familyId], references: [id], onDelete: SetNull)
   occurrenceItems    PostSaleOccurrenceItem[]
+  orderItems         MarketplaceOrderItem[]
 
   @@unique([productId, variationKey])
   @@index([marketplaceAccountId])
@@ -611,10 +615,69 @@ model MarketplaceOrder {
   organizationId       String
   marketplaceAccountId String
   externalOrderId      String // "ID do pedido"
-  orderStatus          String?
-  orderCreatedAt       DateTime?
-  buyerUsername        String?
 
+  // --- Status (§13: preserva original + normalizado) ---
+  orderStatus       String? // status_original_marketplace (texto cru da Shopee)
+  normalizedStatus  String? // NAO_PAGO | A_ENVIAR | ENVIADO | CONCLUIDO | CANCELADO
+  cancelReason      String?
+  returnRefundStatus String?
+
+  // --- Logística ---
+  trackingNumber String?
+  shippingOption String?
+  shippingMethod String?
+
+  // --- Datas ---
+  orderCreatedAt DateTime?
+  paidAt         DateTime?
+  shipByDate     DateTime?
+  shippedAt      DateTime?
+  deliveredAt    DateTime?
+  completedAt    DateTime?
+  cancelledAt    DateTime?
+
+  // --- Financeiro do PEDIDO (persistido UMA vez — §17) ---
+  itemsSubtotal      Decimal? @db.Decimal(14, 2) // soma dos subtotais de itens
+  totalAmount        Decimal? @db.Decimal(14, 2) // "Valor Total"
+  grandTotal         Decimal? @db.Decimal(14, 2) // "Total global"
+  buyerPaidShipping  Decimal? @db.Decimal(14, 2)
+  reverseShippingFee Decimal? @db.Decimal(14, 2)
+  transactionFee     Decimal? @db.Decimal(14, 2)
+  commissionGross    Decimal? @db.Decimal(14, 2)
+  commissionNet      Decimal? @db.Decimal(14, 2)
+  serviceFeeGross    Decimal? @db.Decimal(14, 2)
+  serviceFeeNet      Decimal? @db.Decimal(14, 2)
+  estimatedShipping  Decimal? @db.Decimal(14, 2)
+  sellerDiscountTotal Decimal? @db.Decimal(14, 2)
+
+  // --- Resultado estimado (determinístico; recalculado na importação) ---
+  marketplaceFeesTotal Decimal? @db.Decimal(14, 2)
+  productCostTotal     Decimal? @db.Decimal(14, 2)
+  estimatedResult      Decimal? @db.Decimal(14, 2)
+  estimatedMarginPct   Decimal? @db.Decimal(9, 4)
+  costPending          Boolean  @default(false) // algum item sem custo/sem vínculo
+
+  unitsTotal   Int? // "Número de produtos pedidos" / soma de quantidades
+  itemCount    Int  @default(0)
+
+  // --- Cliente / entrega (PII — nunca enviado à LLM) ---
+  buyerUsername String?
+  recipientName String?
+  phone         String?
+  address       String?
+  city          String?
+  district      String?
+  uf            String?
+  country       String?
+  cep           String?
+  buyerNote     String?
+  note          String?
+
+  /// Linha bruta completa por pedido (auditoria §18/§37) — cabeçalho→valor.
+  rawPayload Json?
+
+  firstImportBatchId String?
+  lastImportBatchId  String?
   firstSeenAt DateTime @default(now())
   lastSeenAt  DateTime @default(now())
   createdAt   DateTime @default(now())
@@ -623,10 +686,123 @@ model MarketplaceOrder {
   organization       Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   marketplaceAccount MarketplaceAccount   @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
   occurrences        PostSaleOccurrence[]
+  items              MarketplaceOrderItem[]
+  statusHistory      OrderStatusHistory[]
 
   @@unique([marketplaceAccountId, externalOrderId])
   @@index([organizationId])
+  @@index([marketplaceAccountId, normalizedStatus])
+  @@index([marketplaceAccountId, orderCreatedAt])
+  @@index([trackingNumber])
   @@map("marketplace_orders")
+}
+
+/// Item (linha de produto) de um pedido. Vários itens podem pertencer ao mesmo
+/// pedido (§15/§16). Identidade estável por itemKey dentro do pedido.
+model MarketplaceOrderItem {
+  id             String @id @default(cuid())
+  organizationId String
+  orderId        String
+  /// Identidade estável do item dentro do pedido (SKU normalizado + posição de desempate).
+  itemKey        String
+  lineIndex      Int    @default(0)
+
+  productName  String?
+  sku          String?
+  mainSkuRef   String?
+  variationName String?
+
+  originalPrice   Decimal? @db.Decimal(14, 2)
+  agreedPrice     Decimal? @db.Decimal(14, 2) // PREÇO REAL DA VENDA (§25)
+  quantity        Int      @default(1)
+  productSubtotal Decimal? @db.Decimal(14, 2)
+  sellerDiscount1 Decimal? @db.Decimal(14, 2)
+  sellerDiscount2 Decimal? @db.Decimal(14, 2)
+  weightSku       Decimal? @db.Decimal(14, 4)
+
+  // --- Vínculo com Produtos/Família (§21) ---
+  productVariationId String?
+  skuLinked          Boolean @default(false)
+
+  // --- Snapshot de custo (§23) — congelado no momento da venda ---
+  costUnit        Decimal? @db.Decimal(14, 4)
+  costTotal       Decimal? @db.Decimal(14, 2)
+  costSource      String? // FAMILY | NONE
+  costFamilyId    String?
+  costReferenceAt DateTime?
+  costMissing     Boolean  @default(false) // vinculado mas sem custo cadastrado
+
+  // --- Rateio determinístico (§29) ---
+  allocatedFees   Decimal? @db.Decimal(14, 2)
+  estimatedResult Decimal? @db.Decimal(14, 2)
+  estimatedMarginPct Decimal? @db.Decimal(9, 4)
+
+  /// Linha bruta completa do item (auditoria §18/§37).
+  rawPayload Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order            MarketplaceOrder  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productVariation ProductVariation? @relation(fields: [productVariationId], references: [id], onDelete: SetNull)
+
+  @@unique([orderId, itemKey])
+  @@index([organizationId])
+  @@index([sku])
+  @@index([productVariationId])
+  @@map("marketplace_order_items")
+}
+
+/// Histórico de alterações relevantes de um pedido detectadas em reimportações (§12).
+model OrderStatusHistory {
+  id            String   @id @default(cuid())
+  orderId       String
+  field         String // status | trackingNumber | ...
+  oldValue      String?
+  newValue      String?
+  importBatchId String?
+  observedAt    DateTime @default(now())
+
+  order MarketplaceOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, observedAt])
+  @@map("order_status_history")
+}
+
+/// Lote de importação de PEDIDOS (§20) — contadores de upsert e metadados.
+model SalesImportBatch {
+  id                   String   @id @default(cuid())
+  organizationId       String
+  marketplaceAccountId String
+
+  originalFilename String
+  fileHash         String
+  parserVersion    String  @default("v1")
+
+  rowsProcessed   Int @default(0)
+  ordersSeen      Int @default(0)
+  newOrders       Int @default(0)
+  updatedOrders   Int @default(0)
+  unchangedOrders Int @default(0)
+  itemsSeen       Int @default(0)
+  newItems        Int @default(0)
+  updatedItems    Int @default(0)
+  unchangedItems  Int @default(0)
+  errors          Int @default(0)
+  warnings        Int @default(0)
+
+  periodStart DateTime?
+  periodEnd   DateTime?
+
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplaceAccount MarketplaceAccount @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+  createdBy          User?              @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, marketplaceAccountId, createdAt])
+  @@map("sales_import_batches")
 }
 
 /// Ocorrência de pós-venda. Os VALORES financeiros (reembolso, compensação) vivem
