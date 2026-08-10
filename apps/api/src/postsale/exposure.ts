@@ -30,9 +30,12 @@ export interface ExposureResult {
 }
 
 export function classifyExposure(o: OccurrenceExposureInput): ExposureResult {
-  const s = norm(o.status);
-  const requested = dnum(o.requestedRefundAmount);
-  const compensation = dnum(o.sellerCompensationAmount);
+  return classifyExposureNumbers(o.status, dnum(o.requestedRefundAmount), dnum(o.sellerCompensationAmount));
+}
+
+/** Versão pura (sem Prisma) — reutilizável no bundle de navegador. */
+export function classifyExposureNumbers(status: string | null, requested: number, compensation: number): ExposureResult {
+  const s = norm(status);
   const zero: ExposureResult = { bucket: 'UNCLASSIFIED', requested, compensation, confirmedLoss: 0, atRisk: 0 };
 
   if (/cancel|recus|rejeit|desist|nao aprov|indefer|encerrad sem/.test(s)) {
