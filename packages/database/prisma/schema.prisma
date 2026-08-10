@@ -100,6 +100,9 @@ model Organization {
   productVariations   ProductVariation[]
   productFamilies     ProductFamily[]
   productImportBatches ProductImportBatch[]
+  marketplaceOrders   MarketplaceOrder[]
+  postSaleOccurrences PostSaleOccurrence[]
+  postSaleImportBatches PostSaleImportBatch[]
 
   @@map("organizations")
 }
@@ -127,6 +130,9 @@ model MarketplaceAccount {
   productVariations    ProductVariation[]
   productFamilies      ProductFamily[]
   productImportBatches ProductImportBatch[]
+  marketplaceOrders    MarketplaceOrder[]
+  postSaleOccurrences  PostSaleOccurrence[]
+  postSaleImportBatches PostSaleImportBatch[]
 
   @@unique([organizationId, marketplace, displayName])
   @@index([organizationId])
@@ -174,6 +180,7 @@ model User {
   productFamilies          ProductFamily[]
   productFamilyCostEntries ProductFamilyCostHistory[]
   productImportBatches     ProductImportBatch[]
+  postSaleImportBatches    PostSaleImportBatch[]
 
   @@index([organizationId])
   @@map("users")
@@ -508,6 +515,7 @@ model ProductVariation {
   marketplaceAccount MarketplaceAccount @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
   product            Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
   family             ProductFamily?     @relation(fields: [familyId], references: [id], onDelete: SetNull)
+  occurrenceItems    PostSaleOccurrenceItem[]
 
   @@unique([productId, variationKey])
   @@index([marketplaceAccountId])
@@ -569,4 +577,201 @@ model ProductImportBatch {
   @@index([organizationId, createdAt])
   @@index([marketplaceAccountId, fileHash])
   @@map("product_import_batches")
+}
+
+// ============================================================================
+// Bloco 4 — Pós-venda & Perdas (devoluções, reembolsos, cancelamentos, falhas
+// de entrega, disputas). Regra estrutural: PEDIDO ≠ OCORRÊNCIA ≠ ITEM.
+//
+// Fluxo: o Bloco 2 já importa e preserva as LINHAS BRUTAS dos três relatórios
+// (return_refund, cancelamento, falha de entrega). Este módulo MATERIALIZA
+// essas linhas em Pedido/Ocorrência/Item, conecta ao catálogo (SKU→variação→
+// produto→família) e habilita análise/achados. Financeiro por OCORRÊNCIA (nunca
+// somar linhas multi-SKU ingenuamente).
+// ============================================================================
+
+/// Tipo de ocorrência de pós-venda.
+enum OccurrenceType {
+  RETURN_REFUND
+  ORDER_CANCELLATION
+  FAILED_DELIVERY
+  DISPUTE
+  COMPENSATION
+}
+
+/// Pedido (a venda). Hub que conectará venda, financeiro, Ads, logística etc.
+/// Identificado por (loja, ID do pedido). Um pedido pode ter várias ocorrências.
+model MarketplaceOrder {
+  id                   String   @id @default(cuid())
+  organizationId       String
+  marketplaceAccountId String
+  externalOrderId      String // "ID do pedido"
+  orderStatus          String?
+  orderCreatedAt       DateTime?
+  buyerUsername        String?
+
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  organization       Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplaceAccount MarketplaceAccount   @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+  occurrences        PostSaleOccurrence[]
+
+  @@unique([marketplaceAccountId, externalOrderId])
+  @@index([organizationId])
+  @@map("marketplace_orders")
+}
+
+/// Ocorrência de pós-venda. Os VALORES financeiros (reembolso, compensação) vivem
+/// AQUI (nível da ocorrência), nunca somados por item — evita a soma ingênua
+/// multi-SKU. `externalReturnId` preservado para devoluções (um pedido pode ter
+/// várias devoluções). `naturalKey` identifica a ocorrência entre importações.
+model PostSaleOccurrence {
+  id                   String         @id @default(cuid())
+  organizationId       String
+  marketplaceAccountId String
+  orderId              String
+  type                 OccurrenceType
+
+  /// Chave natural por tipo (returnId p/ devolução; orderId p/ cancel/falha).
+  naturalKey        String
+  externalReturnId  String? // "ID da Devolução"
+  externalOrderId   String // redundante p/ consulta rápida
+
+  status            String?
+  reason            String?
+  resolution        String? // "Solução para Retorno e Reembolso"
+  returnType        String?
+  disputeReason     String?
+  sellerNote        String?
+
+  // Financeiro AO NÍVEL DA OCORRÊNCIA (uma vez por ocorrência).
+  requestedRefundAmount   Decimal? @db.Decimal(14, 2)
+  sellerCompensationAmount Decimal? @db.Decimal(14, 2)
+  buyerPaidAmount         Decimal? @db.Decimal(14, 2)
+
+  occurredAt        DateTime? // data do evento (criação do pedido/finalização)
+  trackingNumber    String?
+  trackingStatus    String?
+
+  sourceReportType  String // ORDERS/RETURN_REFUND/ORDER_CANCELLATION/FAILED_DELIVERY
+  firstImportBatchId String?
+  lastImportBatchId  String?
+  firstSeenAt       DateTime @default(now())
+  lastSeenAt        DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization       Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplaceAccount MarketplaceAccount        @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+  order              MarketplaceOrder          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  items              PostSaleOccurrenceItem[]
+  statusHistory      OccurrenceStatusHistory[]
+
+  @@unique([marketplaceAccountId, type, naturalKey])
+  @@index([organizationId, type])
+  @@index([marketplaceAccountId, occurredAt])
+  @@index([orderId])
+  @@map("post_sale_occurrences")
+}
+
+/// Item (SKU/variação/produto afetado) de uma ocorrência. Quantidades e preço
+/// unitário AQUI; conectado ao catálogo por SKU (variação) quando houver match.
+model PostSaleOccurrenceItem {
+  id             String  @id @default(cuid())
+  occurrenceId   String
+  organizationId String
+
+  sku           String?
+  parentSku     String?
+  productName   String?
+  variationName String?
+  quantity      Int?
+  unitPrice     Decimal? @db.Decimal(14, 2)
+
+  // Conexão com o catálogo (módulo Produtos). Null = "SKU NÃO VINCULADO".
+  productVariationId String?
+  skuLinked          Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  occurrence       PostSaleOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  productVariation ProductVariation?  @relation(fields: [productVariationId], references: [id], onDelete: SetNull)
+
+  @@index([occurrenceId])
+  @@index([organizationId, skuLinked])
+  @@index([sku])
+  @@map("post_sale_occurrence_items")
+}
+
+/// Trajetória de status observada da ocorrência (mudanças entre importações).
+model OccurrenceStatusHistory {
+  id             String   @id @default(cuid())
+  occurrenceId   String
+  observedAt     DateTime @default(now())
+  previousStatus String?
+  newStatus      String?
+  importBatchId  String?
+  createdAt      DateTime @default(now())
+
+  occurrence PostSaleOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+
+  @@index([occurrenceId, observedAt])
+  @@map("occurrence_status_history")
+}
+
+/// Histórico/execução de importação de pós-venda (por tipo de relatório).
+model PostSaleImportBatch {
+  id                   String         @id @default(cuid())
+  organizationId       String
+  marketplaceAccountId String
+  occurrenceType       OccurrenceType
+
+  originalFilename  String
+  sanitizedFilename String
+  fileFormat        FileFormat
+  fileSizeBytes     Int
+  fileHash          String
+  storageKey        String
+  parserVersion     String @default("v1")
+
+  sheetName         String?
+  headerRowIndex    Int?
+  physicalRowCount  Int @default(0)
+  dataRowCount      Int @default(0)
+  periodStart       DateTime?
+  periodEnd         DateTime?
+
+  status ImportBatchStatus @default(PROCESSING)
+
+  totalRows        Int @default(0)
+  occurrencesSeen  Int @default(0)
+  itemsSeen        Int @default(0)
+  newOccurrences   Int @default(0)
+  updatedOccurrences Int @default(0)
+  unchangedOccurrences Int @default(0)
+  ordersTouched    Int @default(0)
+  unlinkedItems    Int @default(0)
+  errorRows        Int @default(0)
+  processingMs     Int?
+  errorMessage     String?
+  errors           Json?
+
+  createdByUserId String?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplaceAccount MarketplaceAccount @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+  createdBy          User?              @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([marketplaceAccountId, occurrenceType])
+  @@index([marketplaceAccountId, fileHash])
+  @@map("post_sale_import_batches")
 }
