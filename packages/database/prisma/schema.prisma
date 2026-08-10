@@ -821,8 +821,10 @@ model PostSaleOccurrence {
   externalReturnId  String? // "ID da Devolução"
   externalOrderId   String // redundante p/ consulta rápida
 
-  status            String?
-  reason            String?
+  // --- DADO SHOPEE (importado, auditável — nunca sobrescrito silenciosamente) ---
+  status            String?  // status original da Shopee
+  reason            String?  // motivo original Shopee
+  reasonRevised     String?  // motivo revisado Shopee
   resolution        String? // "Solução para Retorno e Reembolso"
   returnType        String?
   disputeReason     String?
@@ -837,6 +839,35 @@ model PostSaleOccurrence {
   trackingNumber    String?
   trackingStatus    String?
 
+  // --- CONTROLE INTERNO (operacional — informado pela equipe, §8/§9/§15/§21) ---
+  internalStatus     String  @default("NOVA") // NOVA|ANALISE|AGUARDANDO_EVIDENCIA|AGUARDANDO_RETORNO|EM_TRANSITO|RECEBIDO|EM_DISPUTA|AGUARDANDO_RESULTADO|RESOLVIDA|ENCERRADA|EXIGE_ACAO
+  priority           String  @default("MEDIA") // BAIXA|MEDIA|ALTA|URGENTE
+  ownerName          String? // responsável operacional
+  internalCause      String? // causa interna (≠ motivo Shopee)
+  causeFamily        String? // família da causa (ex.: "Avaria / Embalagem")
+  responsibility     String  @default("NAO_IDENTIFICADA") // OPERACAO|SHOPEE|LOGISTICA|COMPRADOR|COMPARTILHADA|NAO_IDENTIFICADA
+  merchandiseStatus  String  @default("DESCONHECIDO") // DESCONHECIDO|CLIENTE_POSSUI|RETORNO_DISPENSADO|AGUARDANDO_POSTAGEM|EM_TRANSITO|RECEBIDO|EXTRAVIADO|PERDIDO
+  merchandiseCondition String? // REAPROVEITAVEL|REQUER_RETRABALHO|AVARIADO|PERDA_TOTAL
+  recoverableValue   Decimal? @db.Decimal(14, 2) // valor recuperável estimado do produto
+  operatorNotes      String?
+  checklist          Json?    // [{text, done}]
+
+  // --- DISPUTA operacional (§11/§12) ---
+  hasDispute            Boolean  @default(false)
+  disputeStatus         String   @default("NAO_INICIADA") // NAO_INICIADA|POSSIVEL|EM_PREPARACAO|RESPONDIDA|AGUARDANDO_SHOPEE|GANHA|PARCIAL|PERDIDA|PRAZO_PERDIDO|CANCELADA
+  disputeDeadline       DateTime?
+  disputeRespondedAt    DateTime?
+  disputeContestedAmount Decimal? @db.Decimal(14, 2)
+  disputeRecoveredAmount Decimal? @db.Decimal(14, 2)
+  disputeNote           String?
+
+  // --- CÁLCULO desnormalizado (motor determinístico §16/§19 — recalculado) ---
+  refundedTotal      Decimal? @db.Decimal(14, 2)
+  additionalCostTotal Decimal? @db.Decimal(14, 2) // frete reverso + retrabalho + outros custos
+  recoveredTotal     Decimal? @db.Decimal(14, 2)  // compensação + recuperação disputa + valor recuperável
+  knownNetImpact     Decimal? @db.Decimal(14, 2)  // impacto líquido conhecido
+  cmvAvailable       Boolean  @default(false)
+
   sourceReportType  String // ORDERS/RETURN_REFUND/ORDER_CANCELLATION/FAILED_DELIVERY
   firstImportBatchId String?
   lastImportBatchId  String?
@@ -850,12 +881,63 @@ model PostSaleOccurrence {
   order              MarketplaceOrder          @relation(fields: [orderId], references: [id], onDelete: Cascade)
   items              PostSaleOccurrenceItem[]
   statusHistory      OccurrenceStatusHistory[]
+  financialEvents    OccurrenceFinancialEvent[]
+  activities         OccurrenceActivity[]
 
   @@unique([marketplaceAccountId, type, naturalKey])
   @@index([organizationId, type])
   @@index([marketplaceAccountId, occurredAt])
+  @@index([marketplaceAccountId, internalStatus])
+  @@index([marketplaceAccountId, disputeStatus])
   @@index([orderId])
   @@map("post_sale_occurrences")
+}
+
+/// Evento financeiro de uma ocorrência (§13/§17). Idempotente por dedupeKey — uma
+/// compensação importada e reimportada não entra duas vezes. Direção COST/RECOVERY.
+model OccurrenceFinancialEvent {
+  id             String   @id @default(cuid())
+  organizationId String
+  occurrenceId   String
+  type           String   // REEMBOLSO_SOLICITADO|REEMBOLSO_PAGO|FRETE_REVERSO|FRETE_ADICIONAL|COMPENSACAO_SHOPEE|RECUPERACAO_DISPUTA|PRODUTO_RECUPERADO|PRODUTO_PERDIDO|CUSTO_RETRABALHO|AJUSTE_MANUAL|OUTRO
+  direction      String   // COST | RECOVERY | NEUTRAL
+  amount         Decimal  @db.Decimal(14, 2)
+  occurredAt     DateTime @default(now())
+  source         String   @default("MANUAL") // MANUAL | IMPORT
+  externalRef    String?  // referência de origem (para idempotência de importados)
+  importBatchId  String?
+  createdByUserId String?
+  createdByName  String?
+  note           String?
+  /// Chave de deduplicação estável (idempotência §17).
+  dedupeKey      String
+  createdAt      DateTime @default(now())
+
+  occurrence PostSaleOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+
+  @@unique([occurrenceId, dedupeKey])
+  @@index([organizationId])
+  @@index([occurrenceId])
+  @@map("occurrence_financial_events")
+}
+
+/// Timeline operacional/auditoria (§10/§29): toda mudança manual ou comentário.
+model OccurrenceActivity {
+  id            String   @id @default(cuid())
+  occurrenceId  String
+  kind          String   // CHANGE | COMMENT | FINANCIAL | DISPUTE | STATUS
+  field         String?
+  oldValue      String?
+  newValue      String?
+  message       String?
+  userId        String?
+  userName      String?
+  createdAt     DateTime @default(now())
+
+  occurrence PostSaleOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+
+  @@index([occurrenceId, createdAt])
+  @@map("occurrence_activities")
 }
 
 /// Item (SKU/variação/produto afetado) de uma ocorrência. Quantidades e preço

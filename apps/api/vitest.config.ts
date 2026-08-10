@@ -14,6 +14,9 @@ export default defineConfig({
     root: './',
     testTimeout: 20000,
     hookTimeout: 30000,
+    // Os e2e compartilham o MESMO Postgres/loja — rodar arquivos em série evita
+    // interferência de estado entre suítes (contagens de importação, vínculos de SKU).
+    fileParallelism: false,
   },
   plugins: [
     // Compila decorators do Nest para os testes.

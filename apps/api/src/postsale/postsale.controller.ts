@@ -1,9 +1,10 @@
-import { Body, Controller, Get, Param, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthUser, Role } from '@financeiro/shared';
 import { PostSaleService } from './postsale.service';
+import { OccurrenceOpsService } from './occurrence-ops.service';
 import { CurrentUser, Roles } from '../common/decorators';
-import { ImportPostSaleDto, ListBatchesDto, ListOccurrencesDto, PostSaleQueryDto } from './dto';
+import { CommentDto, DisputeDto, FinancialEventDto, ImportPostSaleDto, ListBatchesDto, ListOccurrencesDto, PatchOccurrenceDto, PostSaleQueryDto } from './dto';
 import { PostSaleType } from './parsing/postsale-rows';
 
 function period(q: { from?: string; to?: string }) {
@@ -15,7 +16,7 @@ function period(q: { from?: string; to?: string }) {
 
 @Controller('post-sale')
 export class PostSaleController {
-  constructor(private readonly svc: PostSaleService) {}
+  constructor(private readonly svc: PostSaleService, private readonly ops: OccurrenceOpsService) {}
 
   @Get('overview')
   overview(@CurrentUser() u: AuthUser, @Query() q: PostSaleQueryDto) {
@@ -51,7 +52,32 @@ export class PostSaleController {
 
   @Get('occurrences/:id')
   occurrence(@CurrentUser() u: AuthUser, @Param('id') id: string) {
-    return this.svc.getOccurrence(u.organizationId, id);
+    return this.ops.detail(u.organizationId, id);
+  }
+
+  // --- Operação da ficha (§8-§19) ---
+  @Patch('occurrences/:id')
+  @Roles(Role.ADMIN, Role.FINANCIAL)
+  patch(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: PatchOccurrenceDto) {
+    return this.ops.patchInternal(u.organizationId, u.id, u.name, id, dto);
+  }
+
+  @Post('occurrences/:id/comment')
+  @Roles(Role.ADMIN, Role.FINANCIAL)
+  comment(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: CommentDto) {
+    return this.ops.addComment(u.organizationId, u.id, u.name, id, dto.message);
+  }
+
+  @Post('occurrences/:id/financial-event')
+  @Roles(Role.ADMIN, Role.FINANCIAL)
+  financialEvent(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: FinancialEventDto) {
+    return this.ops.addFinancialEvent(u.organizationId, u.id, u.name, id, dto);
+  }
+
+  @Post('occurrences/:id/dispute')
+  @Roles(Role.ADMIN, Role.FINANCIAL)
+  dispute(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: DisputeDto) {
+    return this.ops.resolveDispute(u.organizationId, u.id, u.name, id, dto);
   }
 
   @Get('import-batches')

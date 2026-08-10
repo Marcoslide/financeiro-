@@ -83,6 +83,10 @@ export enum AuditAction {
   AI_ANALYZE = 'AI_ANALYZE',
   // Módulo Pedidos
   ORDERS_IMPORT = 'ORDERS_IMPORT',
+  // Devolução — operação
+  OCCURRENCE_UPDATE = 'OCCURRENCE_UPDATE',
+  OCCURRENCE_FINANCIAL = 'OCCURRENCE_FINANCIAL',
+  OCCURRENCE_DISPUTE = 'OCCURRENCE_DISPUTE',
 }
 
 // ============================================================================

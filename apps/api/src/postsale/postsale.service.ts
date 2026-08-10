@@ -12,6 +12,7 @@ import { sanitizeFilename, detectFileFormat, declaredExtension } from '../import
 import { fileHash as hashFile } from '../imports/parsing/hashing';
 import { parsePostSale, PostSaleType, PostSaleRow } from './parsing/postsale-rows';
 import { classifyExposure, EXPOSURE_METHODOLOGY } from './exposure';
+import { putImportFinancialEvents, recomputeOccurrenceImpact } from './impact-store';
 
 interface UploadedFile { originalname: string; buffer: Buffer; size: number }
 
@@ -250,6 +251,14 @@ export class PostSaleService {
           },
         });
       }
+
+      // Eventos financeiros idempotentes (compensação/reembolso confirmado) + impacto (§16/§17).
+      await putImportFinancialEvents(
+        this.prisma,
+        { id: occId, organizationId, status: rep.status, requested: Number(rep.requestedRefundAmount ?? 0), compensation: Number(rep.sellerCompensationAmount ?? 0) },
+        batchId,
+      );
+      await recomputeOccurrenceImpact(this.prisma, occId);
     }
 
     return { occurrencesSeen, itemsSeen, newOccurrences, updatedOccurrences, unchangedOccurrences, ordersTouched: orderIds.size, unlinkedItems, errorRows: errors.length, errors };
