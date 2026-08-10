@@ -16,9 +16,12 @@ const NAV = [
     // Módulo Produtos: uma ÚNICA entrada no menu. Famílias e Importações são
     // abas internas da página Produtos, não itens de menu.
     { href: '/produtos', label: 'Produtos', ic: '◫', soon: false },
+    { href: '/pedidos', label: 'Pedidos', ic: '▤', soon: false },
     { href: '/pos-venda', label: 'Pós-venda', ic: '↩', soon: false },
-    { href: '/pedidos', label: 'Pedidos', ic: '▤', soon: true },
     { href: '/movimentacoes', label: 'Movimentações', ic: '₿', soon: true },
+  ]},
+  { group: 'Inteligência', items: [
+    { href: '/inteligencia', label: 'Inteligência', ic: '✦', soon: false },
   ]},
   { group: 'Gestão', items: [
     { href: '/usuarios', label: 'Usuários', ic: '👤', soon: false },
@@ -34,6 +37,8 @@ const CRUMB: Record<string, string> = {
   '/produtos/familias': 'Produtos › Famílias',
   '/produtos/importacoes': 'Produtos › Importações',
   '/pos-venda': 'Pós-venda',
+  '/pedidos': 'Pedidos',
+  '/inteligencia': 'Inteligência',
   '/usuarios': 'Usuários',
   '/lojas': 'Lojas',
   '/auditoria': 'Auditoria',
@@ -44,6 +49,8 @@ function crumbFor(pathname: string): string {
   if (pathname.startsWith('/importacoes/')) return 'Importações';
   if (pathname.startsWith('/produtos')) return 'Produtos';
   if (pathname.startsWith('/pos-venda')) return 'Pós-venda';
+  if (pathname.startsWith('/pedidos')) return 'Pedidos';
+  if (pathname.startsWith('/inteligencia')) return 'Inteligência';
   return '';
 }
 
