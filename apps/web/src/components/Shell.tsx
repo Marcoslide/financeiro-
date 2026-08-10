@@ -15,6 +15,7 @@ const NAV = [
   { group: 'Produtos', items: [
     { href: '/produtos', label: 'Produtos Shopee', ic: '◫', soon: false },
     { href: '/produtos/familias', label: 'Famílias', ic: '⁘', soon: false },
+    { href: '/produtos/importacoes', label: 'Importações', ic: '⭱', soon: false },
   ]},
   { group: 'Dados', items: [
     { href: '/pedidos', label: 'Pedidos', ic: '▤', soon: true },
@@ -32,6 +33,7 @@ const CRUMB: Record<string, string> = {
   '/importacoes': 'Importações',
   '/produtos': 'Produtos Shopee',
   '/produtos/familias': 'Famílias',
+  '/produtos/importacoes': 'Importações',
   '/usuarios': 'Usuários',
   '/lojas': 'Lojas',
   '/auditoria': 'Auditoria',

@@ -14,12 +14,25 @@ export class ImportProductsDto {
   marketplaceAccountId!: string;
 }
 
+const SORTS = [
+  'name_asc',
+  'name_desc',
+  'stock_desc',
+  'stock_asc',
+  'price_desc',
+  'price_asc',
+  'variations_desc',
+  'variations_asc',
+  'without_family',
+  'without_closing',
+] as const;
+
 export class ListProductsQueryDto {
   @IsOptional()
   @IsString()
   marketplaceAccountId?: string;
 
-  /** Busca por nome do anúncio, ID do Produto ou SKU. */
+  /** Busca por nome do anúncio, ID do Produto, SKU, nome/ID da variação. */
   @IsOptional()
   @IsString()
   search?: string;
@@ -28,19 +41,71 @@ export class ListProductsQueryDto {
   @IsString()
   familyId?: string;
 
-  /** "with" | "without" — filtra variações com/sem família (prompt §20). */
+  /** "with" | "without" — variações com/sem família (prompt §5/§20). */
   @IsOptional()
   @IsIn(['with', 'without'])
   family?: 'with' | 'without';
 
-  /** "with" | "without" — filtra variações com/sem preço de fechamento (prompt §20). */
+  /** "with" | "without" — variações com/sem preço de fechamento (prompt §20). */
   @IsOptional()
   @IsIn(['with', 'without'])
   closingPrice?: 'with' | 'without';
 
+  /** Estoque: com estoque / sem estoque / estoque zerado (prompt §20). */
+  @IsOptional()
+  @IsIn(['with', 'without', 'zero'])
+  stock?: 'with' | 'without' | 'zero';
+
+  /** Produto sem variação / com variações (prompt §20). */
+  @IsOptional()
+  @IsIn(['single', 'multiple'])
+  variations?: 'single' | 'multiple';
+
+  @IsOptional()
+  @IsIn(['ACTIVE', 'INACTIVE'])
+  status?: 'ACTIVE' | 'INACTIVE';
+
+  @IsOptional()
+  @IsIn(SORTS as unknown as string[])
+  sort?: (typeof SORTS)[number];
+
   @IsOptional()
   @IsString()
   page?: string;
+
+  @IsOptional()
+  @IsString()
+  pageSize?: string;
+}
+
+export class BulkUpdateDto {
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsString({ each: true })
+  variationIds!: string[];
+
+  @IsOptional()
+  @IsString()
+  familyId?: string | null;
+
+  @IsOptional()
+  @Transform(({ value }) => (value === '' ? null : value))
+  @IsString()
+  closingPrice?: string | null;
+
+  @IsOptional()
+  @IsEnum(EntityStatus)
+  status?: EntityStatus;
+}
+
+export class SuggestFamiliesDto {
+  @IsString()
+  marketplaceAccountId!: string;
+
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsString({ each: true })
+  variationIds!: string[];
 }
 
 export class CreateFamilyDto {

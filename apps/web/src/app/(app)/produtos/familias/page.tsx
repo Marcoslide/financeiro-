@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@/lib/auth';
 import { api } from '@/lib/api';
 import { dateBR } from '@/lib/format';
+import { ProductTabs } from '@/components/products/ProductTabs';
 
 interface Account { id: string; displayName: string }
 interface Family {
@@ -31,6 +32,7 @@ export default function FamiliasPage() {
   const [families, setFamilies] = useState<Family[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'' | 'ACTIVE' | 'INACTIVE' | 'NOCOST'>('');
   const [editing, setEditing] = useState<Family | 'new' | null>(null);
 
   useEffect(() => {
@@ -47,17 +49,24 @@ export default function FamiliasPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  const shown = families.filter((f) =>
+    statusFilter === '' ? true :
+    statusFilter === 'NOCOST' ? f.currentCostAmount == null :
+    f.status === statusFilter,
+  );
+
   return (
     <>
       <div className="page-head">
         <div>
-          <h2>Famílias de Produtos</h2>
+          <h2>Produtos</h2>
           <p>A família é a unidade interna de custo. Vários SKUs apontam para uma família; o custo mora aqui, com histórico.</p>
         </div>
         {canEdit && account && (
           <button className="btn-sm primary" onClick={() => setEditing('new')}>+ Nova família</button>
         )}
       </div>
+      <ProductTabs />
 
       {!canEdit && (
         <div className="info-banner">Seu perfil (Consulta) pode visualizar as famílias, mas não criar nem editar.</div>
@@ -66,17 +75,23 @@ export default function FamiliasPage() {
       <div className="panel">
         <div className="ph">
           <h3>Famílias cadastradas</h3>
-          <span className="footnote" style={{ margin: 0 }}>{families.length} família(s)</span>
+          <span className="footnote" style={{ margin: 0 }}>{shown.length} família(s)</span>
         </div>
         <div className="pb">
           <div className="toolbar">
             <input className="input" style={{ width: 260 }} placeholder="Buscar família" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <select className="select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}>
+              <option value="">Todas</option>
+              <option value="ACTIVE">Ativas</option>
+              <option value="INACTIVE">Inativas</option>
+              <option value="NOCOST">Sem custo</option>
+            </select>
           </div>
         </div>
         <div className="pb" style={{ padding: 0 }}>
           {loading ? (
             <div className="empty">Carregando…</div>
-          ) : families.length === 0 ? (
+          ) : shown.length === 0 ? (
             <div className="empty"><div className="ico">⁘</div><p>Nenhuma família ainda. {canEdit && 'Crie a primeira para começar a atribuir custo.'}</p></div>
           ) : (
             <div className="table-wrap">
@@ -85,7 +100,7 @@ export default function FamiliasPage() {
                   <tr><th>Família</th><th>Código</th><th>Custo atual</th><th>SKUs vinculados</th><th>Status</th><th>Custo atualizado</th><th></th></tr>
                 </thead>
                 <tbody>
-                  {families.map((f) => (
+                  {shown.map((f) => (
                     <tr key={f.id}>
                       <td><b>{f.name}</b></td>
                       <td className="mono">{f.internalCode ?? '—'}</td>

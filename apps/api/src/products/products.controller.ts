@@ -14,6 +14,7 @@ import { AuthUser, Role } from '@financeiro/shared';
 import { ProductsService } from './products.service';
 import { CurrentUser, Roles } from '../common/decorators';
 import {
+  BulkUpdateDto,
   ClassifyVariationsDto,
   CreateFamilyDto,
   ImportProductsDto,
@@ -21,9 +22,25 @@ import {
   ListProductBatchesQueryDto,
   ListProductsQueryDto,
   ProductStatsQueryDto,
+  SuggestFamiliesDto,
   UpdateFamilyDto,
   UpdateVariationDto,
 } from './dto';
+
+function filtersOf(query: ListProductsQueryDto) {
+  return {
+    search: query.search,
+    familyId: query.familyId,
+    family: query.family,
+    closingPrice: query.closingPrice,
+    stock: query.stock,
+    variations: query.variations,
+    status: query.status,
+    sort: query.sort,
+    page: query.page ? parseInt(query.page, 10) : 1,
+    pageSize: query.pageSize ? parseInt(query.pageSize, 10) : 25,
+  };
+}
 
 @Controller('products')
 export class ProductsController {
@@ -32,13 +49,12 @@ export class ProductsController {
   // --- Leitura (inclusive VIEWER) ---
   @Get()
   list(@CurrentUser() user: AuthUser, @Query() query: ListProductsQueryDto) {
-    return this.products.listProducts(user.organizationId, query.marketplaceAccountId, {
-      search: query.search,
-      familyId: query.familyId,
-      family: query.family,
-      closingPrice: query.closingPrice,
-      page: query.page ? parseInt(query.page, 10) : 1,
-    });
+    return this.products.listProducts(user.organizationId, query.marketplaceAccountId, filtersOf(query));
+  }
+
+  @Get('variation-ids')
+  variationIds(@CurrentUser() user: AuthUser, @Query() query: ListProductsQueryDto) {
+    return this.products.variationIdsForFilter(user.organizationId, query.marketplaceAccountId, filtersOf(query));
   }
 
   @Get('stats')
@@ -89,6 +105,18 @@ export class ProductsController {
   @Roles(Role.ADMIN, Role.FINANCIAL)
   classify(@CurrentUser() user: AuthUser, @Body() dto: ClassifyVariationsDto) {
     return this.products.classifyVariations(user.organizationId, user.id, dto);
+  }
+
+  @Post('bulk')
+  @Roles(Role.ADMIN, Role.FINANCIAL)
+  bulk(@CurrentUser() user: AuthUser, @Body() dto: BulkUpdateDto) {
+    return this.products.bulkUpdate(user.organizationId, user.id, dto);
+  }
+
+  @Post('suggest-families')
+  @Roles(Role.ADMIN, Role.FINANCIAL)
+  suggest(@CurrentUser() user: AuthUser, @Body() dto: SuggestFamiliesDto) {
+    return this.products.suggestFamilies(user.organizationId, dto.marketplaceAccountId, dto.variationIds);
   }
 
   @Patch('variations/:id')

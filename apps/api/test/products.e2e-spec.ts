@@ -85,8 +85,9 @@ describe('Bloco 3 — importação do catálogo de produtos', () => {
     const paisagem = list.body.items.find((p: any) => p.shopeeProductId === '43819067914');
     expect(paisagem).toBeTruthy();
     expect(paisagem.variationCount).toBe(4);
-    expect(paisagem.priceMin).toBe('199.90');
-    expect(paisagem.priceMax).toBe('479.00');
+    expect(paisagem.priceMin).toBe('199.9');
+    expect(paisagem.priceMax).toBe('479');
+    expect(paisagem.totalStock).toBe(10 + 5 + 8 + 3);
     const v5070 = paisagem.variations.find((v: any) => v.sku === 'SKU-5070-PT');
     expect(v5070.shopeeFullPrice).toBe('269');
     expect(v5070.sellerStock).toBe(8);
@@ -197,6 +198,81 @@ describe('Bloco 3 — famílias, custo e classificação em massa', () => {
 
     const entries = await prisma.productFamilyCostHistory.count({ where: { familyId } });
     expect(entries).toBe(2);
+  });
+});
+
+describe('Bloco 3 — busca, filtros, ordenação, seleção total e ações em massa', () => {
+  it('busca por SKU encontra o anúncio e marca a variação (auto-expand)', async () => {
+    const res = await http
+      .get(`/api/products?marketplaceAccountId=${accountId}&search=SKU-5070-PT`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(1);
+    const p = res.body.items[0];
+    expect(p.shopeeProductId).toBe('43819067914');
+    expect(p.autoExpand).toBe(true);
+    expect(p.variations.find((v: any) => v.sku === 'SKU-5070-PT').matched).toBe(true);
+  });
+
+  it('filtro "sem família" + contagem de SKUs correspondentes', async () => {
+    const res = await http
+      .get(`/api/products?marketplaceAccountId=${accountId}&family=without`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    // Após classificar 2 variações antes, os demais anúncios ainda têm SKUs sem família.
+    expect(res.body.total).toBeGreaterThan(0);
+    expect(typeof res.body.matchedVariations).toBe('number');
+  });
+
+  it('ordenação por maior estoque respeita o agregado denormalizado', async () => {
+    const res = await http
+      .get(`/api/products?marketplaceAccountId=${accountId}&sort=stock_desc`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    const stocks = res.body.items.map((p: any) => p.totalStock);
+    const sorted = [...stocks].sort((a, b) => b - a);
+    expect(stocks).toEqual(sorted);
+  });
+
+  it('selecionar todos os resultados filtrados devolve os IDs de variação (todas as páginas)', async () => {
+    const res = await http
+      .get(`/api/products/variation-ids?marketplaceAccountId=${accountId}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.variationIds.length).toBe(7);
+    expect(res.body.truncated).toBe(false);
+  });
+
+  it('ação em massa: definir preço de fechamento em várias variações de uma vez', async () => {
+    const ids = (
+      await http.get(`/api/products/variation-ids?marketplaceAccountId=${accountId}&family=without`).set('Authorization', `Bearer ${adminToken}`)
+    ).body.variationIds.slice(0, 3);
+    const res = await http
+      .post('/api/products/bulk')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ variationIds: ids, closingPrice: '150,00' });
+    expect(res.status).toBe(201);
+    expect(res.body.updated).toBe(3);
+    const v = await prisma.productVariation.findUnique({ where: { id: ids[0] } });
+    expect(v?.closingPrice?.toString()).toBe('150');
+  });
+
+  it('sugestão de família (heurística) casa pelo tamanho/nome sem alterar nada', async () => {
+    const fam = await http
+      .post('/api/products/families')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ marketplaceAccountId: accountId, name: 'Quadro Paisagem 50x70', cost: '40,00' });
+    const list = await http
+      .get(`/api/products?marketplaceAccountId=${accountId}&search=SKU-5070-PT`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    const vid = list.body.items[0].variations.find((v: any) => v.sku === 'SKU-5070-PT').id;
+    const res = await http
+      .post('/api/products/suggest-families')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ marketplaceAccountId: accountId, variationIds: [vid] });
+    expect(res.status).toBe(201);
+    expect(res.body.suggestions[0].suggestion?.familyId).toBe(fam.body.id);
+    // Nada foi alterado: a variação continua sem família.
+    const v = await prisma.productVariation.findUnique({ where: { id: vid } });
+    expect(v?.familyId).toBeNull();
   });
 });
 

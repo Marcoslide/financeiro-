@@ -108,3 +108,62 @@ tbody tr:hover{background:#f8faff}
 .x{border:none;background:none;font-size:20px;color:var(--muted);cursor:pointer}
 .select{padding:9px 12px;border:1px solid var(--line);border-radius:9px;background:#fff;font-size:13px;color:var(--ink)}
 .footnote{color:var(--muted);font-size:11.5px;margin-top:10px}
+
+/* ---- Módulo de Produtos (Bloco 3) ---- */
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:16px}
+.tab{padding:9px 14px;font-size:13px;font-weight:600;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab:hover{color:var(--ink)}
+.tab.active{color:var(--brand-2);border-bottom-color:var(--brand-2)}
+
+.kpi.clickable{cursor:pointer;transition:.12s}
+.kpi.clickable:hover{border-color:var(--brand-2);box-shadow:0 2px 6px rgba(43,75,214,.12)}
+.kpi.on{border-color:var(--brand-2);background:#f5f8ff}
+.kpi .val.small{font-size:19px}
+
+.importbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:12px 16px;margin-bottom:16px}
+.importbar .ib-title{font-weight:700;font-size:13.5px}
+.importbar .ib-meta{color:var(--muted);font-size:12px}
+.importbar .spacer{flex:1}
+
+.toolbar2{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.input.sm,.select.sm{padding:7px 10px;font-size:12.5px;border-radius:8px}
+.link-btn{background:none;border:none;color:var(--brand-2);font-weight:600;font-size:12.5px;padding:0;cursor:pointer}
+.count-line{font-size:12.5px;color:var(--muted);margin:2px 0 12px}
+.count-line b{color:var(--ink)}
+
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{background:#fff;border:none;padding:6px 10px;font-size:12px;font-weight:600;color:var(--muted)}
+.seg button.on{background:var(--brand-2);color:#fff}
+
+.selbanner{background:var(--info-bg);border:1px solid #cfe0fb;color:#1b4c99;border-radius:10px;padding:8px 14px;font-size:12.5px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+
+.bulkbar{position:sticky;bottom:14px;z-index:20;background:var(--sidebar);color:#fff;border-radius:12px;padding:10px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;box-shadow:0 12px 30px rgba(16,26,51,.35);margin-top:12px}
+.bulkbar b{font-size:14px}
+.bulkbar .spacer{flex:1}
+.bulkbar .btn-sm{background:rgba(255,255,255,.1);border-color:transparent;color:#fff}
+.bulkbar .btn-sm:hover{background:rgba(255,255,255,.2)}
+.bulkbar .btn-sm.primary{background:#fff;color:var(--brand)}
+
+.master-row>td{background:#fbfcff;border-top:1px solid var(--line)}
+.master-row .pname{font-weight:700}
+.subrow>td{background:#fff}
+.subrow .vname{font-weight:600}
+tr.matched>td{background:#fff8e6}
+.chk{width:15px;height:15px;cursor:pointer;accent-color:var(--brand-2)}
+.expander{border:1px solid var(--line);background:#fff;border-radius:6px;width:22px;height:22px;font-weight:700;color:var(--brand);line-height:1;cursor:pointer;padding:0}
+.tag{display:inline-block;padding:2px 7px;border-radius:6px;font-size:10.5px;font-weight:700;background:var(--neutral-bg);color:var(--neutral)}
+.tag.warn{background:var(--warn-bg);color:var(--warn)}
+.tag.info{background:var(--info-bg);color:var(--info)}
+.tag.ok{background:var(--ok-bg);color:var(--ok)}
+.inh-cost{color:var(--muted);font-size:11px}
+
+.drawer{position:fixed;inset:0;background:rgba(16,26,51,.45);display:flex;justify-content:flex-end;z-index:60}
+.drawer-panel{background:#fff;width:440px;max-width:96vw;height:100%;box-shadow:-20px 0 60px rgba(0,0,0,.25);display:flex;flex-direction:column}
+.drawer-panel .dh{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+.drawer-panel .dbd{padding:20px;overflow:auto;flex:1}
+.drawer-panel .df{padding:14px 20px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px}
+.ro{background:#f6f8fc;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px}
+
+.toast{position:fixed;right:22px;bottom:22px;z-index:80;background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--ok);border-radius:10px;box-shadow:0 12px 30px rgba(16,26,51,.2);padding:12px 16px;max-width:360px;font-size:12.5px}
+.toast.err{border-left-color:var(--err)}
+.toast .tt{font-weight:700;margin-bottom:2px}

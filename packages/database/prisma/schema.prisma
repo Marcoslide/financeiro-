@@ -440,6 +440,15 @@ model Product {
   name                 String
   status               EntityStatus @default(ACTIVE)
 
+  // Agregados denormalizados (recalculados na importação e na classificação) —
+  // permitem busca/ordenação/paginação eficientes com milhares de anúncios.
+  variationCount                Int      @default(0)
+  totalStock                    Int      @default(0)
+  minPrice                      Decimal? @db.Decimal(14, 4)
+  maxPrice                      Decimal? @db.Decimal(14, 4)
+  variationsWithoutFamily       Int      @default(0)
+  variationsWithoutClosingPrice Int      @default(0)
+
   firstImportBatchId String?
   lastImportBatchId  String?
   firstSeenAt        DateTime @default(now())
@@ -453,6 +462,8 @@ model Product {
 
   @@unique([marketplaceAccountId, shopeeProductId])
   @@index([organizationId])
+  @@index([marketplaceAccountId, name])
+  @@index([marketplaceAccountId, variationsWithoutFamily])
   @@map("products")
 }
 

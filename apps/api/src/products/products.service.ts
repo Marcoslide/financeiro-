@@ -31,13 +31,32 @@ interface UploadedFile {
   size: number;
 }
 
+export type ProductSort =
+  | 'name_asc'
+  | 'name_desc'
+  | 'stock_desc'
+  | 'stock_asc'
+  | 'price_desc'
+  | 'price_asc'
+  | 'variations_desc'
+  | 'variations_asc'
+  | 'without_family'
+  | 'without_closing';
+
 interface ProductFilters {
   search?: string;
   familyId?: string;
   family?: 'with' | 'without';
   closingPrice?: 'with' | 'without';
+  stock?: 'with' | 'without' | 'zero';
+  variations?: 'single' | 'multiple';
+  status?: 'ACTIVE' | 'INACTIVE';
+  sort?: ProductSort;
   page?: number;
+  pageSize?: number;
 }
+
+type Db = Prisma.TransactionClient;
 
 /** Comparação de decimais tolerante a nulos (evita falsos "alterado"). */
 function decChanged(dbValue: Prisma.Decimal | null, parsed: string | null): boolean {
@@ -55,6 +74,33 @@ function chunk<T>(arr: T[], size = CHUNK): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
+}
+
+// --- Similaridade de tokens para a sugestão de família (heurística) ---
+const STOPWORDS = new Set(['de', 'do', 'da', 'com', 'sem', 'para', 'e', 'o', 'a', 'em', 'kit', 'un']);
+const SIZE_RE = /^\d{1,3}x\d{1,3}$/;
+
+function tokenize(text: string): Set<string> {
+  const norm = normalizeLabel(text);
+  const out = new Set<string>();
+  for (const raw of norm.split(/[^a-z0-9]+/)) {
+    const t = raw.trim();
+    if (t.length < 2 || STOPWORDS.has(t)) continue;
+    out.add(t);
+  }
+  return out;
+}
+function intersectionSize(a: Set<string>, b: Set<string>): number {
+  let n = 0;
+  for (const x of a) if (b.has(x)) n++;
+  return n;
+}
+function unionSize(a: Set<string>, b: Set<string>): number {
+  return a.size + b.size - intersectionSize(a, b);
+}
+function shareSizeToken(a: Set<string>, b: Set<string>): boolean {
+  for (const x of a) if (SIZE_RE.test(x) && b.has(x)) return true;
+  return false;
 }
 
 @Injectable()
@@ -415,6 +461,9 @@ export class ProductsService {
             data: { lastImportBatchId: batchId, lastSeenAt: now },
           });
         }
+        // Recalcula os agregados de TODOS os anúncios tocados (contagem, estoque,
+        // faixa de preço, SKUs sem família/sem preço de fechamento).
+        await this.recomputeAggregates(allProducts.map((p) => p.id), tx);
       },
       { timeout: 120000 },
     );
@@ -431,41 +480,137 @@ export class ProductsService {
     };
   }
 
+  /**
+   * Recalcula os agregados denormalizados de um conjunto de anúncios em UM único
+   * UPDATE (eficiente mesmo com milhares de anúncios). Chamado na importação e
+   * em qualquer operação que altere família/preço de fechamento de variações.
+   */
+  private async recomputeAggregates(ids: string[], client: Db = this.prisma) {
+    if (!ids.length) return;
+    for (const c of chunk(ids, 2000)) {
+      await client.$executeRaw(Prisma.sql`
+        UPDATE "products" p SET
+          "variationCount" = agg.cnt,
+          "totalStock" = agg.stock,
+          "minPrice" = agg.minp,
+          "maxPrice" = agg.maxp,
+          "variationsWithoutFamily" = agg.nofam,
+          "variationsWithoutClosingPrice" = agg.noclose,
+          "updatedAt" = now()
+        FROM (
+          SELECT "productId",
+            count(*)::int AS cnt,
+            coalesce(sum("sellerStock"), 0)::int AS stock,
+            min("shopeeFullPrice") AS minp,
+            max("shopeeFullPrice") AS maxp,
+            count(*) FILTER (WHERE "familyId" IS NULL)::int AS nofam,
+            count(*) FILTER (WHERE "closingPrice" IS NULL)::int AS noclose
+          FROM "product_variations"
+          WHERE "productId" IN (${Prisma.join(c)})
+          GROUP BY "productId"
+        ) agg
+        WHERE p."id" = agg."productId";
+      `);
+    }
+  }
+
+  private async productIdsOfVariations(variationIds: string[]): Promise<string[]> {
+    if (!variationIds.length) return [];
+    const rows = await this.prisma.productVariation.findMany({
+      where: { id: { in: variationIds } },
+      select: { productId: true },
+      distinct: ['productId'],
+    });
+    return rows.map((r) => r.productId);
+  }
+
   // ===========================================================================
   // Leitura de produtos (listagem por anúncio com variações expansíveis)
   // ===========================================================================
-  async listProducts(organizationId: string, marketplaceAccountId: string | undefined, filters: ProductFilters) {
-    const pageSize = 25;
-    const page = Math.max(1, filters.page ?? 1);
 
-    // Filtros ao nível de variação (família / preço de fechamento).
-    const variationWhere: Prisma.ProductVariationWhereInput = {};
-    if (filters.familyId) variationWhere.familyId = filters.familyId;
-    if (filters.family === 'with') variationWhere.familyId = { not: null };
-    if (filters.family === 'without') variationWhere.familyId = null;
-    if (filters.closingPrice === 'with') variationWhere.closingPrice = { not: null };
-    if (filters.closingPrice === 'without') variationWhere.closingPrice = null;
-    const hasVariationFilter = Object.keys(variationWhere).length > 0;
+  /** Monta os filtros de produto e de variação a partir dos parâmetros da tela. */
+  private buildProductWhere(
+    organizationId: string,
+    marketplaceAccountId: string | undefined,
+    filters: ProductFilters,
+  ) {
+    const and: Prisma.ProductWhereInput[] = [];
+    const search = filters.search?.trim();
+    if (search) {
+      and.push({
+        OR: [
+          { name: { contains: search, mode: 'insensitive' } },
+          { shopeeProductId: { contains: search } },
+          {
+            variations: {
+              some: {
+                OR: [
+                  { sku: { contains: search, mode: 'insensitive' } },
+                  { variationName: { contains: search, mode: 'insensitive' } },
+                  { shopeeVariationId: { contains: search } },
+                ],
+              },
+            },
+          },
+        ],
+      });
+    }
+    if (filters.familyId) and.push({ variations: { some: { familyId: filters.familyId } } });
+    if (filters.family === 'with') and.push({ variations: { some: { familyId: { not: null } } } });
+    if (filters.family === 'without') and.push({ variations: { some: { familyId: null } } });
+    if (filters.closingPrice === 'with') and.push({ variations: { some: { closingPrice: { not: null } } } });
+    if (filters.closingPrice === 'without') and.push({ variations: { some: { closingPrice: null } } });
+    if (filters.stock === 'with') and.push({ variations: { some: { sellerStock: { gt: 0 } } } });
+    if (filters.stock === 'zero') and.push({ variations: { some: { sellerStock: 0 } } });
+    if (filters.stock === 'without') and.push({ NOT: { variations: { some: { sellerStock: { gt: 0 } } } } });
+    if (filters.variations === 'single') and.push({ variationCount: 1 });
+    if (filters.variations === 'multiple') and.push({ variationCount: { gt: 1 } });
+    if (filters.status) and.push({ status: filters.status as DbEntityStatus });
 
     const where: Prisma.ProductWhereInput = { organizationId };
     if (marketplaceAccountId) where.marketplaceAccountId = marketplaceAccountId;
-    if (filters.search) {
-      const s = filters.search.trim();
-      where.OR = [
-        { name: { contains: s, mode: 'insensitive' } },
-        { shopeeProductId: { contains: s } },
-        { variations: { some: { sku: { contains: s, mode: 'insensitive' } } } },
-      ];
-    }
-    if (hasVariationFilter) {
-      where.variations = { some: variationWhere };
-    }
+    if (and.length) where.AND = and;
+    return where;
+  }
 
-    const [total, products] = await this.prisma.$transaction([
+  private orderByFor(sort: ProductSort | undefined): Prisma.ProductOrderByWithRelationInput[] {
+    const nulls = 'last' as const;
+    switch (sort) {
+      case 'name_desc':
+        return [{ name: 'desc' }];
+      case 'stock_desc':
+        return [{ totalStock: 'desc' }, { name: 'asc' }];
+      case 'stock_asc':
+        return [{ totalStock: 'asc' }, { name: 'asc' }];
+      case 'price_desc':
+        return [{ maxPrice: { sort: 'desc', nulls } }, { name: 'asc' }];
+      case 'price_asc':
+        return [{ minPrice: { sort: 'asc', nulls } }, { name: 'asc' }];
+      case 'variations_desc':
+        return [{ variationCount: 'desc' }, { name: 'asc' }];
+      case 'variations_asc':
+        return [{ variationCount: 'asc' }, { name: 'asc' }];
+      case 'without_family':
+        return [{ variationsWithoutFamily: 'desc' }, { name: 'asc' }];
+      case 'without_closing':
+        return [{ variationsWithoutClosingPrice: 'desc' }, { name: 'asc' }];
+      default:
+        return [{ name: 'asc' }];
+    }
+  }
+
+  async listProducts(organizationId: string, marketplaceAccountId: string | undefined, filters: ProductFilters) {
+    const pageSize = [25, 50, 100].includes(filters.pageSize ?? 0) ? filters.pageSize! : 25;
+    const page = Math.max(1, filters.page ?? 1);
+    const search = filters.search?.trim()?.toLowerCase();
+    const where = this.buildProductWhere(organizationId, marketplaceAccountId, filters);
+
+    const [total, matchedVariations, products] = await this.prisma.$transaction([
       this.prisma.product.count({ where }),
+      this.prisma.productVariation.count({ where: { product: { is: where } } }),
       this.prisma.product.findMany({
         where,
-        orderBy: { name: 'asc' },
+        orderBy: this.orderByFor(filters.sort),
         skip: (page - 1) * pageSize,
         take: pageSize,
         include: {
@@ -473,7 +618,7 @@ export class ProductsService {
             orderBy: [{ variationName: 'asc' }, { sku: 'asc' }],
             include: {
               family: {
-                select: { id: true, name: true, currentCostAmount: true, status: true },
+                select: { id: true, name: true, currentCostAmount: true, currentCostEffectiveFrom: true, status: true },
               },
             },
           },
@@ -481,19 +626,32 @@ export class ProductsService {
       }),
     ]);
 
+    const matchVar = (v: { sku: string | null; variationName: string | null; shopeeVariationId: string | null }) =>
+      !!search &&
+      ((v.sku ?? '').toLowerCase().includes(search) ||
+        (v.variationName ?? '').toLowerCase().includes(search) ||
+        (v.shopeeVariationId ?? '').toLowerCase().includes(search));
+
     const items = products.map((p) => {
-      const prices = p.variations
-        .map((v) => (v.shopeeFullPrice != null ? Number(v.shopeeFullPrice) : null))
-        .filter((n): n is number => n != null);
+      const families = new Set(p.variations.map((v) => v.familyId).filter(Boolean) as string[]);
+      const familySummary =
+        families.size === 0 ? 'none' : p.variations.every((v) => v.familyId) && families.size === 1 ? 'single' : 'multiple';
+      const nameMatches = !!search && (p.name.toLowerCase().includes(search) || p.shopeeProductId.includes(search));
+      const anyVarMatch = p.variations.some(matchVar);
       return {
         id: p.id,
         shopeeProductId: p.shopeeProductId,
         name: p.name,
         status: p.status,
-        variationCount: p.variations.length,
-        priceMin: prices.length ? Math.min(...prices).toFixed(2) : null,
-        priceMax: prices.length ? Math.max(...prices).toFixed(2) : null,
-        variationsWithoutFamily: p.variations.filter((v) => !v.familyId).length,
+        variationCount: p.variationCount,
+        totalStock: p.totalStock,
+        priceMin: p.minPrice != null ? p.minPrice.toString() : null,
+        priceMax: p.maxPrice != null ? p.maxPrice.toString() : null,
+        variationsWithoutFamily: p.variationsWithoutFamily,
+        variationsWithoutClosingPrice: p.variationsWithoutClosingPrice,
+        familySummary,
+        // Abre o master automaticamente quando o casamento veio de uma variação.
+        autoExpand: !!search && anyVarMatch && !nameMatches,
         lastSeenAt: p.lastSeenAt,
         variations: p.variations.map((v) => ({
           id: v.id,
@@ -508,11 +666,31 @@ export class ProductsService {
           failReason: v.failReason,
           familyId: v.familyId,
           family: v.family,
+          matched: matchVar(v),
         })),
       };
     });
 
-    return { total, page, pageSize, items };
+    return { total, matchedVariations, page, pageSize, items };
+  }
+
+  /**
+   * IDs de TODAS as variações que casam com o filtro atual (todas as páginas) —
+   * base do "selecionar todos os N resultados". Limitado por segurança.
+   */
+  async variationIdsForFilter(
+    organizationId: string,
+    marketplaceAccountId: string | undefined,
+    filters: ProductFilters,
+  ): Promise<{ variationIds: string[]; truncated: boolean }> {
+    const where = this.buildProductWhere(organizationId, marketplaceAccountId, filters);
+    const LIMIT = 20000;
+    const rows = await this.prisma.productVariation.findMany({
+      where: { product: { is: where } },
+      select: { id: true },
+      take: LIMIT + 1,
+    });
+    return { variationIds: rows.slice(0, LIMIT).map((r) => r.id), truncated: rows.length > LIMIT };
   }
 
   async productStats(organizationId: string, marketplaceAccountId?: string) {
@@ -719,6 +897,7 @@ export class ProductsService {
       where: { id: { in: ownedIds } },
       data: { familyId },
     });
+    await this.recomputeAggregates(await this.productIdsOfVariations(ownedIds));
 
     await this.audit.record({
       organizationId,
@@ -728,6 +907,74 @@ export class ProductsService {
       metadata: { count: res.count, familyId },
     });
     return { updated: res.count, familyId };
+  }
+
+  /**
+   * Ação em massa: aplica família, preço de fechamento e/ou status (no anúncio
+   * pai) a um conjunto de variações selecionadas. Só os campos informados mudam.
+   */
+  async bulkUpdate(
+    organizationId: string,
+    actorId: string,
+    dto: {
+      variationIds: string[];
+      familyId?: string | null;
+      closingPrice?: string | null;
+      status?: 'ACTIVE' | 'INACTIVE';
+    },
+  ) {
+    if (!dto.variationIds?.length) throw new BadRequestException('Selecione ao menos uma variação.');
+    const owned = await this.prisma.productVariation.findMany({
+      where: { id: { in: dto.variationIds }, organizationId },
+      select: { id: true, productId: true },
+    });
+    const ownedIds = owned.map((v) => v.id);
+    if (!ownedIds.length) throw new NotFoundException('Nenhuma variação válida selecionada.');
+
+    const varData: Prisma.ProductVariationUncheckedUpdateManyInput = {};
+    if (dto.familyId !== undefined) {
+      if (dto.familyId === null) varData.familyId = null;
+      else {
+        const family = await this.prisma.productFamily.findFirst({
+          where: { id: dto.familyId, organizationId },
+          select: { id: true },
+        });
+        if (!family) throw new NotFoundException('Família não encontrada.');
+        varData.familyId = family.id;
+      }
+    }
+    if (dto.closingPrice !== undefined) {
+      if (dto.closingPrice === null || dto.closingPrice === '') varData.closingPrice = null;
+      else {
+        const p = parseDecimal(dto.closingPrice);
+        if (p.decimal == null) throw new BadRequestException('Preço de fechamento inválido.');
+        varData.closingPrice = new Prisma.Decimal(p.decimal);
+      }
+    }
+
+    let updated = 0;
+    if (Object.keys(varData).length) {
+      const res = await this.prisma.productVariation.updateMany({ where: { id: { in: ownedIds } }, data: varData });
+      updated = res.count;
+    }
+    // Status é aplicado no ANÚNCIO pai das variações selecionadas (prompt §5/§14/§38).
+    if (dto.status) {
+      const productIds = [...new Set(owned.map((v) => v.productId))];
+      await this.prisma.product.updateMany({
+        where: { id: { in: productIds }, organizationId },
+        data: { status: dto.status as DbEntityStatus },
+      });
+    }
+    await this.recomputeAggregates(await this.productIdsOfVariations(ownedIds));
+
+    await this.audit.record({
+      organizationId,
+      userId: actorId,
+      action: AuditAction.PRODUCT_CLASSIFY,
+      entityType: 'ProductVariation',
+      metadata: { count: ownedIds.length, ...dto, variationIds: undefined },
+    });
+    return { updated: ownedIds.length, fieldsUpdated: updated };
   }
 
   async updateVariation(organizationId: string, actorId: string, id: string, dto: UpdateVariationDto) {
@@ -760,6 +1007,7 @@ export class ProductsService {
     }
 
     const updated = await this.prisma.productVariation.update({ where: { id }, data });
+    await this.recomputeAggregates([updated.productId]);
     await this.audit.record({
       organizationId,
       userId: actorId,
@@ -772,6 +1020,63 @@ export class ProductsService {
       },
     });
     return updated;
+  }
+
+  // ===========================================================================
+  // Sugestão de família (prompt §35–§37).
+  //
+  // Implementação DETERMINÍSTICA (heurística de similaridade de tokens) — já é
+  // útil e nunca altera nada sozinha (só sugere). A arquitetura está pronta para
+  // trocar a heurística por uma chamada de LLM sem mudar o contrato: recebe as
+  // variações e as famílias existentes, devolve {variationId, familyId, confiança}.
+  // Custo NUNCA é inferido aqui (§36); vem sempre da família cadastrada.
+  // ===========================================================================
+  async suggestFamilies(organizationId: string, marketplaceAccountId: string, variationIds: string[]) {
+    if (!variationIds.length) return { suggestions: [], engine: 'heuristic' as const };
+    const [variations, families] = await Promise.all([
+      this.prisma.productVariation.findMany({
+        where: { id: { in: variationIds }, organizationId },
+        select: { id: true, variationName: true, sku: true, product: { select: { name: true } } },
+      }),
+      this.prisma.productFamily.findMany({
+        where: { organizationId, marketplaceAccountId, status: DbEntityStatus.ACTIVE },
+        select: { id: true, name: true, currentCostAmount: true },
+      }),
+    ]);
+
+    const famTokens = families.map((f) => ({ ...f, tokens: tokenize(f.name) }));
+    const suggestions = variations.map((v) => {
+      const vtok = tokenize(`${v.product?.name ?? ''} ${v.variationName ?? ''} ${v.sku ?? ''}`);
+      let best: { familyId: string; familyName: string; cost: string | null; confidence: number } | null = null;
+      for (const f of famTokens) {
+        if (!f.tokens.size) continue;
+        const overlap = intersectionSize(vtok, f.tokens);
+        if (overlap === 0) continue;
+        // Jaccard ponderado + bônus para casar padrões de tamanho (40x60, 3x2, …).
+        const jaccard = overlap / unionSize(vtok, f.tokens);
+        const sizeBonus = shareSizeToken(vtok, f.tokens) ? 0.25 : 0;
+        const confidence = Math.min(1, jaccard + sizeBonus);
+        if (!best || confidence > best.confidence) {
+          best = { familyId: f.id, familyName: f.name, cost: f.currentCostAmount?.toString() ?? null, confidence };
+        }
+      }
+      const confident = best && best.confidence >= 0.34 ? best : null;
+      return {
+        variationId: v.id,
+        sku: v.sku,
+        productName: v.product?.name ?? null,
+        variationName: v.variationName,
+        suggestion: confident
+          ? {
+              familyId: confident.familyId,
+              familyName: confident.familyName,
+              cost: confident.cost,
+              confidence: Math.round(confident.confidence * 100),
+            }
+          : null,
+      };
+    });
+    return { suggestions, engine: 'heuristic' as const };
   }
 
   // ===========================================================================
