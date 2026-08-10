@@ -43,6 +43,13 @@ unidade interna de **custo** (com **histórico**), e a classificação de SKUs e
 pode ser feita **em massa**. Regra central: **SKU → variação → família → custo vigente**.
 Ver **[docs/bloco-3-plano.md](docs/bloco-3-plano.md)**.
 
+> **Testar a leitura da sua planilha (offline).** Abra **`docs/homologacao-produtos.html`**
+> no navegador e arraste a planilha real de produtos: roda **o mesmo parser do
+> sistema**, mostra o cabeçalho localizado, as linhas ignoradas, o agrupamento por
+> anúncio e as variações; solte o **mesmo arquivo 2×** para ver a reimportação **sem
+> duplicar**. Nada é enviado para fora. Regenerar:
+> `pnpm --filter @financeiro/api build:homolog-produtos`.
+
 ### Rodar localmente
 
 ```bash

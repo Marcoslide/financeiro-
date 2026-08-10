@@ -12,7 +12,8 @@
     "fixtures": "tsx test/fixtures/generate.ts",
     "homologar": "tsx scripts/homologar.ts",
     "homologar:db": "tsx scripts/inspecionar-banco.ts",
-    "build:homolog": "node scripts/build-homolog-html.cjs"
+    "build:homolog": "node scripts/build-homolog-html.cjs",
+    "build:homolog-produtos": "node scripts/build-products-homolog-html.cjs"
   },
   "dependencies": {
     "@financeiro/database": "workspace:*",

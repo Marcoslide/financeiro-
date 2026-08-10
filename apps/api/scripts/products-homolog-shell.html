@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Homologação Produtos — leitura local da planilha da Shopee</title>
+<style>
+  :root{--bg:#f4f6fb;--panel:#fff;--ink:#1a2233;--muted:#64708a;--line:#e5e9f2;--brand:#1f3a8a;--brand2:#2b4bd6;
+    --ok:#0f9d6b;--okbg:#e6f6ee;--warn:#c47f00;--warnbg:#fdf3e0;--err:#d13b3b;--errbg:#fbe9e9;--info:#2b6fd6;--infobg:#e8f0fc;--neutral:#5b6478;--neutralbg:#eef1f7;}
+  *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.45}
+  header{background:linear-gradient(135deg,#101a33,#1f3a8a 60%,#2b4bd6);color:#fff;padding:22px 26px}
+  header h1{margin:0;font-size:19px}header p{margin:4px 0 0;opacity:.85;font-size:13px;max-width:860px}
+  .wrap{max-width:1080px;margin:0 auto;padding:22px 26px}
+  .privacy{background:var(--infobg);border:1px solid #cfe0fb;color:#1b4c99;border-radius:10px;padding:10px 14px;font-size:12.5px;margin-bottom:16px}
+  #dz{border:2px dashed var(--line);border-radius:14px;padding:40px;text-align:center;cursor:pointer;background:#fbfcfe;transition:.15s}
+  #dz.over{border-color:var(--brand2);background:#f0f4ff}
+  #dz .ic{font-size:34px;opacity:.4}#dz .muted{color:var(--muted);margin-top:8px}
+  .bar{display:flex;justify-content:space-between;align-items:center;margin:18px 0 8px}
+  .bar h2{font-size:15px;margin:0}
+  button.reset{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 12px;font-size:12.5px;color:var(--muted);font-weight:600;cursor:pointer}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 1px 2px rgba(16,26,51,.06);margin-bottom:14px;overflow:hidden}
+  .card.err{border-color:#f0c9c9}
+  .ch{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .ch b{font-size:14px}
+  .cb{padding:14px 16px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:12px}
+  .kp{background:#fbfcfe;border:1px solid var(--line);border-radius:10px;padding:10px}
+  .kl{font-size:11.5px;color:var(--muted);font-weight:600}.kv{font-size:15px;font-weight:700;margin-top:3px}.ks{font-size:11px;color:var(--muted);margin-top:2px}
+  .counts{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px}
+  .ct{min-width:92px;border:1px solid var(--line);border-radius:10px;padding:8px 12px;text-align:center}
+  .ct .cv{font-size:20px;font-weight:750}.ct .cl{font-size:11px;color:var(--muted)}
+  .ct.ok .cv{color:var(--ok)}.ct.info .cv{color:var(--info)}.ct.warn .cv{color:var(--warn)}.ct.err .cv{color:var(--err)}
+  .badge{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:11.5px;font-weight:600}
+  .badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+  .b-ok{background:var(--okbg);color:var(--ok)}.b-warn{background:var(--warnbg);color:var(--warn)}.b-err{background:var(--errbg);color:var(--err)}.b-info{background:var(--infobg);color:var(--info)}.b-neutral{background:var(--neutralbg);color:var(--neutral)}
+  .note{border-radius:8px;padding:8px 12px;font-size:12px;margin:8px 0}.note.warn{background:var(--warnbg);color:var(--warn)}.note.ok{background:var(--okbg);color:var(--ok)}
+  details{margin:6px 0;font-size:12.5px}summary{cursor:pointer;color:var(--brand2);font-weight:600}
+  .muted{color:var(--muted);font-size:11.5px}
+  .tw{overflow-x:auto;border:1px solid var(--line);border-radius:8px;margin-top:8px}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;min-width:560px}
+  th{text-align:left;padding:8px 12px;color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;border-bottom:1px solid var(--line);background:#fbfcfe;white-space:nowrap}
+  td{padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:top}tr:last-child td{border-bottom:none}
+  .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+  .expand{cursor:pointer;border:1px solid var(--line);background:#fff;border-radius:6px;padding:1px 7px;font-weight:700;color:var(--brand)}
+  .empty{padding:40px;text-align:center;color:var(--muted)}
+  .vrow td{background:#fbfcfe}
+</style>
+</head>
+<body>
+<header>
+  <h1>Homologação de Produtos — leitura da planilha da Shopee</h1>
+  <p>Arraste a planilha real de produtos (.xlsx). Esta ferramenta roda <b>o mesmo parser do sistema</b>: localiza o cabeçalho (mesmo fora da linha 1), ignora as linhas técnicas, <b>agrupa por anúncio</b> e mostra as variações com SKU, preço e estoque. Solte o <b>mesmo arquivo 2×</b> para ver que a reimportação <b>não duplica</b>.</p>
+</header>
+<div class="wrap">
+  <div class="privacy">🔒 <b>Privacidade:</b> tudo acontece no seu navegador. Nenhum dado é enviado para a internet — pode usar o arquivo real com segurança. Funciona offline.</div>
+  <div id="dz">
+    <div class="ic">⭱</div>
+    <div><b>Arraste a planilha aqui</b> ou clique para selecionar</div>
+    <div class="muted">Aceita .xlsx. Solte o mesmo arquivo 2× (ou uma versão com estoque/preço alterado) para testar a sincronização.</div>
+    <input id="file" type="file" accept=".xlsx" multiple style="display:none" />
+  </div>
+  <div class="bar">
+    <h2>Resultados</h2>
+    <button class="reset" id="reset">Limpar sessão</button>
+  </div>
+  <div id="results"><div class="empty" id="empty">Nenhuma planilha lida ainda.</div></div>
+</div>
+<!--XLSX--><!--BUNDLE--><!--UI-->
+</body>
+</html>
