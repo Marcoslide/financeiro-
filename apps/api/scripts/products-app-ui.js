@@ -202,7 +202,7 @@
   }
   function tabsHtml(active) {
     return '<div class="tabs">' +
-      ['produtos:Produtos Shopee', 'familias:Famílias', 'importacoes:Importações'].map(function (t) {
+      ['produtos:Produtos', 'familias:Famílias', 'importacoes:Importações'].map(function (t) {
         var k = t.split(':')[0]; return '<div class="tab ' + (active === k ? 'active' : '') + '" data-tab="' + k + '">' + t.split(':')[1] + '</div>';
       }).join('') + '</div>';
   }

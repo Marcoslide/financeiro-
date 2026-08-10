@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
 const TABS = [
-  { href: '/produtos', label: 'Produtos Shopee' },
+  { href: '/produtos', label: 'Produtos' },
   { href: '/produtos/familias', label: 'Famílias' },
   { href: '/produtos/importacoes', label: 'Importações' },
 ];

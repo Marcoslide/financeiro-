@@ -12,12 +12,10 @@ const NAV = [
     { href: '/conciliacao', label: 'Conciliação', ic: '⇄', soon: true },
     { href: '/pendencias', label: 'Pendências', ic: '⚑', soon: true },
   ]},
-  { group: 'Produtos', items: [
-    { href: '/produtos', label: 'Produtos Shopee', ic: '◫', soon: false },
-    { href: '/produtos/familias', label: 'Famílias', ic: '⁘', soon: false },
-    { href: '/produtos/importacoes', label: 'Importações', ic: '⭱', soon: false },
-  ]},
   { group: 'Dados', items: [
+    // Módulo Produtos: uma ÚNICA entrada no menu. Famílias e Importações são
+    // abas internas da página Produtos, não itens de menu.
+    { href: '/produtos', label: 'Produtos', ic: '◫', soon: false },
     { href: '/pedidos', label: 'Pedidos', ic: '▤', soon: true },
     { href: '/movimentacoes', label: 'Movimentações', ic: '₿', soon: true },
   ]},
@@ -31,9 +29,9 @@ const NAV = [
 const CRUMB: Record<string, string> = {
   '/dashboard': 'Dashboard',
   '/importacoes': 'Importações',
-  '/produtos': 'Produtos Shopee',
-  '/produtos/familias': 'Famílias',
-  '/produtos/importacoes': 'Importações',
+  '/produtos': 'Produtos',
+  '/produtos/familias': 'Produtos › Famílias',
+  '/produtos/importacoes': 'Produtos › Importações',
   '/usuarios': 'Usuários',
   '/lojas': 'Lojas',
   '/auditoria': 'Auditoria',
@@ -44,6 +42,11 @@ function crumbFor(pathname: string): string {
   if (pathname.startsWith('/importacoes/')) return 'Importações';
   if (pathname.startsWith('/produtos')) return 'Produtos';
   return '';
+}
+
+/** Item ativo cobre a rota exata e suas sub-rotas (ex.: /produtos/familias). */
+function isActive(pathname: string, href: string): boolean {
+  return pathname === href || pathname.startsWith(href + '/');
 }
 
 export function Shell({ children }: { children: ReactNode }) {
@@ -88,7 +91,7 @@ export function Shell({ children }: { children: ReactNode }) {
                   <Link
                     key={it.href}
                     href={it.href}
-                    className={pathname === it.href ? 'active' : ''}
+                    className={isActive(pathname, it.href) ? 'active' : ''}
                   >
                     <span className="ic">{it.ic}</span>
                     {it.label}
