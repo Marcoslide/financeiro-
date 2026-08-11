@@ -226,14 +226,19 @@ export function parseProductSheet(buffer: Buffer, filename: string): ParsedProdu
     const sellerStock = parseIntSafe(getFirst(accessor, FIELD_LABELS.stock));
     const failReason = strOrNull(getFirst(accessor, FIELD_LABELS.failReason));
 
-    // Chave estável da variação dentro do anúncio: prioriza o identificador da
-    // Shopee; se ausente (anúncio de variação única), cai para o SKU; por fim,
-    // uma sentinela — sempre determinística entre reimportações (prompt §5, §14).
+    // Chave estável da variação dentro do anúncio (§7): prioriza o identificador da
+    // Shopee; depois o SKU; depois o NOME da variação (evita colapsar variações reais
+    // distintas que venham sem ID e sem SKU); por fim, a posição física (anúncio de
+    // variação única/anônima). Sempre determinística entre reimportações — o mesmo
+    // arquivo produz as mesmas chaves (idempotência §14). Nunca colapsa variações
+    // distintas nem inventa variações (§8).
     const variationKey = shopeeVariationId
       ? `vid:${shopeeVariationId}`
       : sku
         ? `sku:${normalizeLabel(sku)}`
-        : '__single__';
+        : variationName
+          ? `var:${normalizeLabel(variationName)}`
+          : `row:${r + 1}`;
 
     let error: string | null = null;
     if (!shopeeProductId) error = 'Linha sem ID do Produto.';

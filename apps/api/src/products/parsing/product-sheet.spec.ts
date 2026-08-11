@@ -38,4 +38,22 @@ describe('parseProductSheet', () => {
     const valid = parsed.rows.filter((r) => !r.error);
     expect(valid).toHaveLength(BASE_ROWS.length - 1);
   });
+
+  it('§7: variações reais SEM ID e SEM SKU não colapsam — usa o nome da variação como identidade', () => {
+    // Anúncio com 6 variações onde as linhas não têm Variante Identificador nem SKU.
+    // Antes: todas caíam em "__single__" e colapsavam em 1. Agora: 6 chaves distintas.
+    const rows = ['Preto 40x60', 'Branco 40x60', 'Freijó 40x60', 'Preto 50x70', 'Branco 50x70', 'Freijó 50x70'].map((nome) => ({
+      productId: '90000001', productName: 'Kit Quadros Multi', variationId: '', variationName: nome,
+      referenceSku: '', sku: '', price: '199.90', gtin: '', stock: '5', failReason: '',
+    }));
+    const p = parseProductSheet(buildProductWorkbook(rows), 'multi.xlsx');
+    const vars = p.rows.filter((r) => r.shopeeProductId === '90000001');
+    expect(vars).toHaveLength(6);
+    const keys = new Set(vars.map((r) => r.variationKey));
+    expect(keys.size).toBe(6); // nenhuma colisão → nenhuma variação perdida
+    expect(vars[0].variationKey).toBe('var:preto 40x60');
+    // idempotência: reparse do mesmo arquivo → mesmas chaves
+    const p2 = parseProductSheet(buildProductWorkbook(rows), 'multi.xlsx');
+    expect(p2.rows.filter((r) => r.shopeeProductId === '90000001').map((r) => r.variationKey)).toEqual(vars.map((r) => r.variationKey));
+  });
 });
