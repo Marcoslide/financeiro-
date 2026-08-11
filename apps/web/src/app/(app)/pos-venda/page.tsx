@@ -19,8 +19,9 @@ const DISPUTE_STATUS: Record<string, string> = { NAO_INICIADA: 'Não iniciada', 
 const EVENT_TYPES: Record<string, string> = { REEMBOLSO_PAGO: 'Reembolso pago', FRETE_REVERSO: 'Frete reverso', FRETE_ADICIONAL: 'Frete adicional', CUSTO_RETRABALHO: 'Custo de retrabalho', COMPENSACAO_SHOPEE: 'Compensação Shopee', RECUPERACAO_DISPUTA: 'Recuperação de disputa', PRODUTO_RECUPERADO: 'Produto recuperado', PRODUTO_PERDIDO: 'Produto perdido', AJUSTE_MANUAL: 'Ajuste manual', OUTRO: 'Outro' };
 
 const SUBTABS = [
-  ['visao', 'Visão Geral'], ['ocorrencias', 'Ocorrências'], ['motivos', 'Motivos'], ['produtos', 'Produtos & SKUs'],
-  ['financeiro', 'Financeiro'], ['disputas', 'Disputas'], ['pendencias', 'Pendências'], ['saude', 'Saúde dos Dados'], ['importacoes', 'Importações'],
+  ['visao', 'Visão Geral'], ['ocorrencias', 'Ocorrências'], ['motivos', 'Motivos'], ['causas', 'Causas'], ['produtos', 'Produtos & SKUs'],
+  ['financeiro', 'Financeiro'], ['disputas', 'Disputas'], ['achados', 'Achados'], ['pendencias', 'Pendências'], ['planos', 'Plano de Ação'],
+  ['saude', 'Saúde dos Dados'], ['importacoes', 'Importações'],
 ] as const;
 
 function periodRange(preset: string): { from?: string; to?: string } {
@@ -70,10 +71,13 @@ export default function DevolucaoPage() {
       {account && tab === 'visao' && <Visao qp={qp} go={setTab} onOpen={setDetail} k={refreshKey} />}
       {account && tab === 'ocorrencias' && <Ocorrencias qp={qp} onOpen={setDetail} k={refreshKey} />}
       {account && tab === 'motivos' && <Motivos qp={qp} k={refreshKey} />}
+      {account && tab === 'causas' && <Causas qp={qp} k={refreshKey} />}
       {account && tab === 'produtos' && <Criticos qp={qp} k={refreshKey} />}
       {account && tab === 'financeiro' && <Financeiro qp={qp} k={refreshKey} />}
       {account && tab === 'disputas' && <Disputas qp={qp} k={refreshKey} />}
+      {account && tab === 'achados' && <Achados qp={qp} accountId={account.id} canEdit={canEdit} onCreated={() => setRefreshKey((x) => x + 1)} k={refreshKey} />}
       {account && tab === 'pendencias' && <Pendencias accountId={account.id} go={setTab} k={refreshKey} />}
+      {account && tab === 'planos' && <Planos accountId={account.id} canEdit={canEdit} k={refreshKey} />}
       {account && tab === 'saude' && <Saude accountId={account.id} />}
       {account && tab === 'importacoes' && <Importacoes accountId={account.id} canEdit={canEdit} onDone={(m) => { setToast(m); setRefreshKey((x) => x + 1); }} />}
       {detail && <FichaDrawer id={detail} canEdit={canEdit} onClose={() => setDetail(null)} onChange={() => setRefreshKey((x) => x + 1)} />}
@@ -193,6 +197,77 @@ function Criticos({ qp, k }: { qp: () => URLSearchParams; k: number }) {
     <thead><tr><th>SKU</th><th>Produto</th><th>Ocor.</th><th>Perda</th><th>Custo adic.</th><th>Recuperado</th><th>% da perda</th><th>Causa dominante</th></tr></thead>
     <tbody>{d ? (d.length ? d.map((s) => <tr key={s.sku}><td className="mono">{s.sku}{!s.linked && <span className="tag warn" style={{ marginLeft: 6 }}>não vinculado</span>}</td><td>{(s.product ?? '—').slice(0, 40)}</td><td>{nn(s.occurrences)}</td><td><b>{brl(s.loss)}</b></td><td>{brl(s.additionalCost)}</td><td>{brl(s.recovered)}</td><td><span className="tag">{pctv(s.shareOfLoss)}</span></td><td>{s.dominantCause}</td></tr>) : <tr><td colSpan={8} className="empty">Sem dados.</td></tr>) : <tr><td colSpan={8} className="empty">Carregando…</td></tr>}</tbody>
   </table></div></div>;
+}
+
+function Causas({ qp, k }: { qp: () => URLSearchParams; k: number }) {
+  const d = useJson<{ key: string; label: string; cases: number; loss: number; atRisk: number; additionalCost: number; recovered: number; netImpact: number; dominantReason: string; shareOfLoss: number }[]>(`/post-sale/causas?${qp().toString()}`, k);
+  return <div className="panel"><div className="ph"><h3>Causas (interna ≠ motivo Shopee)</h3></div><div className="table-wrap"><table>
+    <thead><tr><th>Causa</th><th>Casos</th><th>Perda</th><th>Custo adic.</th><th>Recuperado</th><th>Impacto líq.</th><th>Motivo dominante</th><th>% da perda</th></tr></thead>
+    <tbody>{d ? (d.length ? d.map((c) => <tr key={c.key}><td><b>{c.label}</b></td><td>{nn(c.cases)}</td><td>{brl(c.loss)}</td><td>{brl(c.additionalCost)}</td><td>{brl(c.recovered)}</td><td><b>{brl(c.netImpact)}</b></td><td>{(c.dominantReason || '—').slice(0, 30)}</td><td><span className="tag">{pctv(c.shareOfLoss)}</span></td></tr>) : <tr><td colSpan={8} className="empty">Sem causas classificadas. Defina a causa na ficha da ocorrência.</td></tr>) : <tr><td colSpan={8} className="empty">Carregando…</td></tr>}</tbody>
+  </table></div></div>;
+}
+
+function Achados({ qp, accountId, canEdit, onCreated, k }: { qp: () => URLSearchParams; accountId: string; canEdit: boolean; onCreated: () => void; k: number }) {
+  const d = useJson<{ findings: { type: string; title: string; description: string; confidence: string; evidence: unknown; suggestedAction: string | null }[]; notProblems: { dimension: string; note: string }[]; sampleSize: number; confidence: string }>(`/post-sale/achados?${qp().toString()}`, k);
+  const [busy, setBusy] = useState('');
+  if (!d) return <div className="panel"><div className="empty">Carregando…</div></div>;
+  function createPlan(title: string, findingType: string) {
+    setBusy(findingType); api.post(`/post-sale/action-plans?marketplaceAccountId=${accountId}`, { title, origin: 'finding', relatedFindings: [findingType], priority: 'ALTA' })
+      .then(() => onCreated()).finally(() => setBusy(''));
+  }
+  return <>
+    <div className="count-line">Amostra: <b>{nn(d.sampleSize)}</b> ocorrências · confiança <b>{d.confidence}</b></div>
+    {d.findings.length ? d.findings.map((f, i) => (
+      <div className="panel" key={i}><div className="ph"><h3>{f.title}</h3><span className={`tag ${f.confidence === 'ALTA' ? 'ok' : f.confidence === 'MEDIA' ? 'info' : 'warn'}`}>{f.confidence}</span></div><div className="pb">
+        <p style={{ marginTop: 0 }}>{f.description}</p>
+        {f.suggestedAction && <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}><span className="footnote" style={{ margin: 0 }}>Ação sugerida: <b>{f.suggestedAction}</b></span>{canEdit && <button className="btn-sm primary" disabled={!!busy} onClick={() => createPlan(f.suggestedAction!, f.type)}>Criar plano de ação</button>}</div>}
+      </div></div>
+    )) : <div className="panel"><div className="empty">Nenhum achado relevante no período. 🎉</div></div>}
+    {d.notProblems.length > 0 && <div className="panel"><div className="ph"><h3>O que o problema NÃO é</h3></div><div className="pb">{d.notProblems.map((np, i) => <div className="fin-line" key={i}><span><b>{np.dimension}</b></span><span className="footnote" style={{ margin: 0 }}>{np.note}</span></div>)}</div></div>}
+  </>;
+}
+
+interface Plan { id: string; title: string; description: string | null; status: string; priority: string; ownerName: string | null; indicator: string | null; relatedSkus: string[]; checklist: { id: string; text: string; done: boolean }[]; measure: { baseline: number | null; current: number; currentAfterImplementation: number | null; delta: number | null; improved: boolean | null; indicator: string | null; hasScope: boolean } }
+const PLAN_STATUS: Record<string, string> = { SUGGESTED: 'Sugerido', PLANNED: 'Planejado', IN_PROGRESS: 'Em andamento', IMPLEMENTED: 'Implantado', MEASURING: 'Medindo', DONE: 'Concluído', DISCARDED: 'Descartado' };
+
+function Planos({ accountId, canEdit, k }: { accountId: string; canEdit: boolean; k: number }) {
+  const [plans, setPlans] = useState<Plan[] | null>(null);
+  const [title, setTitle] = useState(''); const [skus, setSkus] = useState('');
+  const load = useCallback(() => { api.get<Plan[]>(`/post-sale/action-plans?marketplaceAccountId=${accountId}`).then(setPlans); }, [accountId]);
+  useEffect(() => { load(); }, [load, k]);
+  function create() { if (!title.trim()) return; api.post(`/post-sale/action-plans?marketplaceAccountId=${accountId}`, { title, priority: 'MEDIA', relatedSkus: skus.split(',').map((s) => s.trim()).filter(Boolean) }).then(() => { setTitle(''); setSkus(''); load(); }); }
+  function setStatus(id: string, status: string) { api.patch(`/post-sale/action-plans/${id}`, { status }).then(load); }
+  function toggle(id: string, itemId: string, done: boolean) { api.patch(`/post-sale/action-plans/${id}/checklist`, { itemId, done }).then(load); }
+  function addItem(id: string, text: string) { api.post(`/post-sale/action-plans/${id}/checklist`, { text }).then(load); }
+  function del(id: string) { api.del(`/post-sale/action-plans/${id}`).then(load); }
+  return <>
+    {canEdit && <div className="importbar"><div style={{ flex: 1, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <input className="input sm" style={{ flex: 2, minWidth: 220 }} placeholder="Nova ação (ex.: novo padrão de embalagem 80x120)" value={title} onChange={(e) => setTitle(e.target.value)} />
+      <input className="input sm" style={{ flex: 1, minWidth: 160 }} placeholder="SKUs (vírgula) — escopo/medição" value={skus} onChange={(e) => setSkus(e.target.value)} />
+      <button className="btn-sm primary" onClick={create}>Criar plano</button>
+    </div></div>}
+    {plans ? (plans.length ? plans.map((p) => (
+      <div className="panel" key={p.id}><div className="ph"><h3>{p.title}</h3><span className="tag info">{PLAN_STATUS[p.status] ?? p.status}</span></div><div className="pb">
+        <div className="kpi-grid" style={{ marginBottom: 10 }}>
+          {card('Baseline (antes)', p.measure.baseline == null ? '—' : brl(p.measure.baseline))}
+          {card('Atual', brl(p.measure.current))}
+          {card('Δ (depois − antes)', p.measure.delta == null ? '—' : brl(p.measure.delta), p.measure.improved ? 'green' : p.measure.improved === false ? 'red' : '')}
+          {card('Desde a implantação', p.measure.currentAfterImplementation == null ? 'não implantado' : brl(p.measure.currentAfterImplementation))}
+        </div>
+        {p.relatedSkus.length > 0 && <div className="footnote">Escopo: {p.relatedSkus.join(', ')}</div>}
+        <div style={{ marginTop: 8 }}>{p.checklist.map((it) => <label key={it.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0' }}><input type="checkbox" checked={it.done} disabled={!canEdit} onChange={(e) => toggle(p.id, it.id, e.target.checked)} /> <span style={{ textDecoration: it.done ? 'line-through' : 'none', color: it.done ? 'var(--muted)' : 'inherit' }}>{it.text}</span></label>)}</div>
+        {canEdit && <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <ChecklistAdd onAdd={(t) => addItem(p.id, t)} />
+          <select className="select sm" value={p.status} onChange={(e) => setStatus(p.id, e.target.value)}>{Object.entries(PLAN_STATUS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+          <button className="btn-sm" onClick={() => del(p.id)}>Excluir</button>
+        </div>}
+      </div></div>
+    )) : <div className="panel"><div className="empty">Nenhum plano de ação. Crie um a partir de um Achado ou manualmente.</div></div>) : <div className="panel"><div className="empty">Carregando…</div></div>}
+  </>;
+}
+function ChecklistAdd({ onAdd }: { onAdd: (t: string) => void }) {
+  const [t, setT] = useState('');
+  return <span style={{ display: 'flex', gap: 6 }}><input className="input sm" style={{ width: 200 }} placeholder="+ item do checklist" value={t} onChange={(e) => setT(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && t.trim()) { onAdd(t.trim()); setT(''); } }} /></span>;
 }
 
 function Financeiro({ qp, k }: { qp: () => URLSearchParams; k: number }) {

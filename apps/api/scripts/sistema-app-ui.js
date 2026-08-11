@@ -18,7 +18,7 @@
 
   // ---------- estado compartilhado ----------
   var route = 'dashboard', DB = null;
-  var orders = [], occ = [], batches = [];
+  var orders = [], occ = [], batches = [], plans = [];
   var skuCost = {}; // sku(lower) -> { linked:true, cost:number|null, familyName:string|null }
   var Produtos = null;
   var sub = { pedidos: 'pedidos', posvenda: 'visao' };
@@ -72,10 +72,10 @@
   function saveOcc(o) { return putMany('occ', [o]); }
 
   // ---------- IndexedDB (v2: adiciona stores de Produtos sem apagar dados) ----------
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id' };
   function openDB() {
     return new Promise(function (res, rej) {
-      var r = indexedDB.open('sistema_marketplace', 2);
+      var r = indexedDB.open('sistema_marketplace', 3);
       r.onupgradeneeded = function () {
         var db = r.result;
         Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); });
@@ -285,23 +285,76 @@
   function sumExposure(list) { var a = { requested: 0, confirmedLoss: 0, atRisk: 0, recovered: 0, cancelled: 0 }; list.forEach(function (o) { var e = o.exposure; a.requested += e.requested; a.confirmedLoss += e.confirmedLoss; a.atRisk += e.atRisk; if (e.bucket === 'RECOVERED') a.recovered += e.compensation; if (e.bucket === 'CANCELLED') a.cancelled += e.requested; }); Object.keys(a).forEach(function (k) { a[k] = Math.round(a[k] * 100) / 100; }); return a; }
   function renderPosVenda() {
     var TYPES = [['RETURN_REFUND', 'Devoluções / Reembolsos'], ['ORDER_CANCELLATION', 'Cancelamentos'], ['FAILED_DELIVERY', 'Falhas de Entrega']];
-    var tabs = [['visao', 'Visão Geral'], ['ocorrencias', 'Ocorrências'], ['motivos', 'Motivos'], ['produtos', 'Produtos & SKUs'], ['financeiro', 'Financeiro'], ['disputas', 'Disputas'], ['pendencias', 'Pendências'], ['import', 'Importações']];
+    var tabs = [['visao', 'Visão Geral'], ['ocorrencias', 'Ocorrências'], ['motivos', 'Motivos'], ['causas', 'Causas'], ['produtos', 'Produtos & SKUs'], ['financeiro', 'Financeiro'], ['disputas', 'Disputas'], ['achados', 'Achados'], ['pendencias', 'Pendências'], ['planos', 'Plano de Ação'], ['import', 'Importações']];
     app.innerHTML = '<div class="page-head"><div><h2>Devolução</h2><p>Operação, controle financeiro, investigação e inteligência — devoluções, reembolsos, cancelamentos e falhas.</p></div></div>' +
       '<div class="subtabs">' + tabs.map(function (t) { return subtab('posvenda', t[0], t[1]); }).join('') + '</div><div id="devbody"></div>';
     var body = document.getElementById('devbody'); var t = sub.posvenda;
     if (t === 'import') body.innerHTML = '<div class="cards6">' + TYPES.map(function (x) { return '<div class="fcard"><div class="lbl">' + x[1] + '</div><button class="btn-sm primary" style="margin-top:10px" data-pv="' + x[0] + '">Importar</button></div>'; }).join('') + '</div>' + importsFor('Pós-venda');
     else if (t === 'ocorrencias') body.innerHTML = devOcc();
     else if (t === 'motivos') body.innerHTML = devMotivos();
+    else if (t === 'causas') body.innerHTML = devCausas();
     else if (t === 'produtos') body.innerHTML = devCriticos();
     else if (t === 'financeiro') body.innerHTML = devFinanceiro();
     else if (t === 'disputas') body.innerHTML = devDisputas();
+    else if (t === 'achados') body.innerHTML = devAchados();
     else if (t === 'pendencias') body.innerHTML = devPendencias();
+    else if (t === 'planos') body.innerHTML = devPlanos();
     else body.innerHTML = devExec();
     app.querySelectorAll('[data-pv]').forEach(function (b) { b.onclick = function () { fileInput(function (f) { importPosVenda(b.dataset.pv, f).then(function (batch) { render(); toast('Importado', batch.seen + ' ocorrências · ' + batch.novo + ' novas · ' + batch.upd + ' atualizadas · ' + batch.unch + ' sem alteração'); }).catch(function (e) { toast('Falha', e.message, true); }); }); }; });
     bindSubtabs('posvenda');
     app.querySelectorAll('[data-oc]').forEach(function (b) { b.onclick = function () { openFicha(b.dataset.oc); }; });
     app.querySelectorAll('[data-go]').forEach(function (b) { b.onclick = function () { sub.posvenda = b.dataset.go; render(); }; });
     if (t === 'ocorrencias') bindDevOcc();
+    if (t === 'achados') bindAchados();
+    if (t === 'planos') bindPlanos();
+  }
+  // ---- Causas, Achados e Plano de Ação (client-side, mesmas regras do backend) ----
+  function devCausasData(list) {
+    var total = devLoss(list) || 1; var map = {};
+    list.forEach(function (o) { var key = o.causeFamily || occGuessCause(o); var c = map[key] = map[key] || { key: key, label: DEV.CAUSE_LABELS[key] || key, cases: 0, loss: 0, atRisk: 0, additional: 0, recovered: 0, reasons: {} }; c.cases++; c.loss += occEffectiveLoss(o); c.atRisk += o.exposure.atRisk; c.additional += o.impact.additionalCostTotal || 0; c.recovered += o.impact.recoveredTotal || 0; var rr = (o.reason || '—').trim(); c.reasons[rr] = (c.reasons[rr] || 0) + 1; });
+    return Object.values(map).map(function (c) { var dom = Object.entries(c.reasons).sort(function (a, b) { return b[1] - a[1]; })[0]; return { key: c.key, label: c.label, cases: c.cases, loss: r2(c.loss), atRisk: r2(c.atRisk), additional: r2(c.additional), recovered: r2(c.recovered), net: r2(c.loss + c.additional - c.recovered), dom: dom ? dom[0] : '—', share: r2(c.loss / total * 100) }; }).sort(function (a, b) { return b.loss - a.loss; });
+  }
+  function devCausas() { var list = occInPeriod(); if (!list.length) return emptyBox('Sem ocorrências no período.'); var d = devCausasData(list); return '<div class="panel"><div class="ph"><h3>Causas (interna ≠ motivo Shopee)</h3></div><div class="table-wrap"><table><thead><tr><th>Causa</th><th>Casos</th><th>Perda</th><th>Custo adic.</th><th>Recuperado</th><th>Impacto líq.</th><th>Motivo dominante</th><th>% da perda</th></tr></thead><tbody>' + d.map(function (c) { return '<tr><td><b>' + esc(c.label) + '</b></td><td>' + nn(c.cases) + '</td><td>' + brl(c.loss) + '</td><td>' + brl(c.additional) + '</td><td>' + brl(c.recovered) + '</td><td><b>' + brl(c.net) + '</b></td><td>' + esc((c.dom || '—').slice(0, 28)) + '</td><td><span class="tag">' + pct(c.share) + '</span></td></tr>'; }).join('') + '</tbody></table></div><div class="footnote">Classifique a causa interna e a família da causa na ficha da ocorrência.</div></div>'; }
+
+  function devAchadosData(list) {
+    var n = list.length; var conf = n >= 30 ? 'ALTA' : n >= 10 ? 'MEDIA' : 'BAIXA'; var findings = [], notProblems = [];
+    if (!n) return { findings: findings, notProblems: notProblems, sample: 0, conf: conf };
+    var totalLoss = devLoss(list) || 1; var crit = devCriticosData(list); var top3 = crit.slice(0, 3); var top3Share = top3.reduce(function (s, x) { return s + x.loss; }, 0) / totalLoss;
+    if (top3.length && top3Share >= 0.4) findings.push({ type: 'CONCENTRACAO_SKU', title: top3.length + ' SKUs concentram ' + Math.round(top3Share * 100) + '% da perda', desc: 'Poucos SKUs respondem pela maior parte da perda — priorizar ação neles.', conf: conf, action: 'Plano de ação para os SKUs concentradores', skus: top3.map(function (t) { return t.sku; }) });
+    var causes = devCausasData(list); if (causes.length && causes[0].share >= 40) findings.push({ type: 'CONCENTRACAO_CAUSA', title: 'Causa "' + causes[0].label + '" responde por ' + causes[0].share + '% da perda', desc: 'Uma família de causa domina — atacar a raiz tende a ter alto retorno.', conf: conf, action: 'Plano de ação para a causa ' + causes[0].label, skus: [] });
+    var additional = list.reduce(function (s, o) { return s + (o.impact.additionalCostTotal || 0); }, 0); if (additional > 0) findings.push({ type: 'CUSTO_ADICIONAL', title: 'Custos adicionais somam ' + brl(r2(additional)), desc: 'Há custo além do reembolso (frete reverso/retrabalho). Reduzir erros que geram frete reverso.', conf: conf, action: 'Revisar separação/embalagem', skus: [] });
+    var disp = devDisputesData(list); if (disp.abertas > 0 && disp.respondidas === 0) findings.push({ type: 'DISPUTA_SEM_RESPOSTA', title: disp.abertas + ' disputas abertas sem resposta', desc: 'Oportunidades de recuperação não respondidas — risco de perda por prazo.', conf: conf, action: 'Responder disputas antes do prazo', skus: [] });
+    var semRetorno = list.filter(function (o) { return ['PERDIDO', 'EXTRAVIADO'].indexOf(o.merchandiseStatus) >= 0 || (o.merchandiseStatus === 'DESCONHECIDO' && occApproved(o)); }).length; if (semRetorno / n >= 0.3) findings.push({ type: 'PRODUTO_SEM_RETORNO', title: Math.round(semRetorno / n * 100) + '% das ocorrências sem retorno do produto', desc: 'Reembolso pago sem o produto voltar — avaliar exigência de retorno e recuperação na reversa.', conf: conf, action: 'Rever política de retorno e rastreio da reversa', skus: [] });
+    var mot = devMotivosData(list); var hg = mot.filter(function (m) { return m.cases >= 5 && m.giveupRate >= 40; })[0]; if (hg) findings.push({ type: 'DESISTENCIA', title: 'Motivo "' + hg.reason + '" tem ' + hg.giveupRate + '% de desistência', desc: 'Muitas solicitações desse motivo são desistidas — há espaço para retenção.', conf: conf, action: 'Fluxo de retenção para esse motivo', skus: [] });
+    if (crit.length >= 8 && (crit[0].loss / totalLoss) < 0.1) notProblems.push({ dim: 'SKU específico', note: 'A perda está pulverizada entre muitos SKUs — não há um SKU vilão claro.' });
+    if (causes.length >= 3 && causes[0].share < 35) notProblems.push({ dim: 'Causa única', note: 'Nenhuma causa domina — o problema é multifatorial, não uma causa isolada.' });
+    return { findings: findings, notProblems: notProblems, sample: n, conf: conf };
+  }
+  function devAchados() {
+    var list = occInPeriod(); var d = devAchadosData(list);
+    if (!list.length) return emptyBox('Sem ocorrências no período.');
+    return '<div class="count-line">Amostra: <b>' + nn(d.sample) + '</b> ocorrências · confiança <b>' + d.conf + '</b></div>' +
+      (d.findings.length ? d.findings.map(function (f, i) { return '<div class="panel"><div class="ph"><h3>' + esc(f.title) + '</h3><span class="tag ' + (f.conf === 'ALTA' ? 'ok' : f.conf === 'MEDIA' ? 'info' : 'warn') + '">' + f.conf + '</span></div><div class="pb"><p style="margin-top:0">' + esc(f.desc) + '</p><div style="display:flex;gap:10px;align-items:center"><span class="footnote" style="margin:0">Ação sugerida: <b>' + esc(f.action) + '</b></span><button class="btn-sm primary" data-plan="' + i + '">Criar plano de ação</button></div></div></div>'; }).join('') : '<div class="panel"><div class="empty">Nenhum achado relevante no período. 🎉</div></div>') +
+      (d.notProblems.length ? '<div class="panel"><div class="ph"><h3>O que o problema NÃO é</h3></div><div class="pb">' + d.notProblems.map(function (np) { return '<div class="fin-line"><span><b>' + esc(np.dim) + '</b></span><span class="footnote" style="margin:0">' + esc(np.note) + '</span></div>'; }).join('') + '</div></div>' : '');
+  }
+  function bindAchados() { var d = devAchadosData(occInPeriod()); app.querySelectorAll('[data-plan]').forEach(function (b) { b.onclick = function () { var f = d.findings[+b.dataset.plan]; if (!f) return; createPlan({ title: f.action, origin: 'finding', relatedFindings: [f.type], relatedSkus: f.skus || [], priority: 'ALTA' }).then(function () { toast('Plano criado', f.action); sub.posvenda = 'planos'; render(); }); }; }); }
+
+  // Plano de ação (IndexedDB) com medição antes/depois determinística.
+  function measureScope(skus) { if (!skus || !skus.length) return 0; var set = {}; skus.forEach(function (s) { set[s.toLowerCase()] = 1; }); return r2(occ.filter(function (o) { return (o.items || []).some(function (i) { return i.sku && set[i.sku.toLowerCase()]; }); }).reduce(function (s, o) { return s + occEffectiveLoss(o); }, 0)); }
+  function createPlan(dto) { var now = new Date().toISOString(); var baseline = dto.baselineValue != null ? dto.baselineValue : measureScope(dto.relatedSkus); var p = { id: 'p' + Date.now() + Math.round(Math.random() * 1e6), title: dto.title, description: dto.description || null, origin: dto.origin || 'user', status: dto.status || 'PLANNED', priority: dto.priority || 'MEDIA', ownerName: dto.ownerName || null, indicator: dto.indicator || 'Impacto líquido do escopo', baselineValue: baseline, targetValue: dto.targetValue != null ? dto.targetValue : null, relatedSkus: dto.relatedSkus || [], relatedFindings: dto.relatedFindings || [], checklist: [], implementedAt: null, createdAt: now }; plans.unshift(p); return putMany('plans', [p]); }
+  function savePlan(p) { return putMany('plans', [p]); }
+  function planMeasure(p) { var current = measureScope(p.relatedSkus); var delta = p.baselineValue != null ? r2(current - p.baselineValue) : null; return { baseline: p.baselineValue, current: current, delta: delta, improved: delta == null ? null : delta < 0, after: p.implementedAt ? current : null }; }
+  var PLAN_STATUS = { SUGGESTED: 'Sugerido', PLANNED: 'Planejado', IN_PROGRESS: 'Em andamento', IMPLEMENTED: 'Implantado', MEASURING: 'Medindo', DONE: 'Concluído', DISCARDED: 'Descartado' };
+  function devPlanos() {
+    return '<div class="importbar"><div style="flex:1;display:flex;gap:8px;flex-wrap:wrap"><input class="input sm" id="plt" style="flex:2;min-width:220px" placeholder="Nova ação (ex.: novo padrão de embalagem 80x120)"><input class="input sm" id="pls" style="flex:1;min-width:160px" placeholder="SKUs (vírgula) — escopo/medição"><button class="btn-sm primary" id="plnew">Criar plano</button></div></div>' +
+      (plans.length ? plans.map(function (p) { var m = planMeasure(p); return '<div class="panel"><div class="ph"><h3>' + esc(p.title) + '</h3><span class="tag info">' + (PLAN_STATUS[p.status] || p.status) + '</span></div><div class="pb"><div class="cards6" style="margin-bottom:10px">' + fcard('Baseline (antes)', m.baseline == null ? '—' : brl(m.baseline), '') + fcard('Atual', brl(m.current), '') + fcard('Δ (depois − antes)', m.delta == null ? '—' : brl(m.delta), m.improved ? 'green' : m.improved === false ? 'red' : '') + fcard('Desde implantação', m.after == null ? 'não implantado' : brl(m.after), '') + '</div>' + (p.relatedSkus.length ? '<div class="footnote">Escopo: ' + esc(p.relatedSkus.join(', ')) + '</div>' : '') + '<div style="margin-top:8px">' + p.checklist.map(function (it) { return '<label style="display:flex;gap:8px;align-items:center;padding:3px 0"><input type="checkbox" data-plchk="' + p.id + '|' + it.id + '"' + (it.done ? ' checked' : '') + '> <span style="text-decoration:' + (it.done ? 'line-through' : 'none') + ';color:' + (it.done ? 'var(--muted)' : 'inherit') + '">' + esc(it.text) + '</span></label>'; }).join('') + '</div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center"><input class="input sm" data-plitem="' + p.id + '" style="width:200px" placeholder="+ item do checklist"><select class="select sm" data-plstatus="' + p.id + '">' + Object.keys(PLAN_STATUS).map(function (k) { return '<option value="' + k + '"' + (p.status === k ? ' selected' : '') + '>' + PLAN_STATUS[k] + '</option>'; }).join('') + '</select><button class="btn-sm" data-pldel="' + p.id + '">Excluir</button></div></div></div>'; }).join('') : '<div class="panel"><div class="empty">Nenhum plano de ação. Crie um a partir de um Achado ou manualmente.</div></div>');
+  }
+  function bindPlanos() {
+    var nb = document.getElementById('plnew'); if (nb) nb.onclick = function () { var t = document.getElementById('plt').value.trim(); if (!t) return; var skus = (document.getElementById('pls').value || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean); createPlan({ title: t, relatedSkus: skus }).then(function () { render(); toast('Plano criado', t); }); };
+    app.querySelectorAll('[data-plchk]').forEach(function (c) { c.onchange = function () { var pr = c.dataset.plchk.split('|'); var p = plans.find(function (x) { return x.id === pr[0]; }); if (!p) return; var it = p.checklist.find(function (x) { return x.id === pr[1]; }); if (it) { it.done = c.checked; savePlan(p).then(render); } }; });
+    app.querySelectorAll('[data-plitem]').forEach(function (inp) { inp.onkeydown = function (e) { if (e.key === 'Enter' && inp.value.trim()) { var p = plans.find(function (x) { return x.id === inp.dataset.plitem; }); if (p) { p.checklist.push({ id: 'c' + Date.now() + Math.round(Math.random() * 1e6), text: inp.value.trim(), done: false }); savePlan(p).then(render); } } }; });
+    app.querySelectorAll('[data-plstatus]').forEach(function (s) { s.onchange = function () { var p = plans.find(function (x) { return x.id === s.dataset.plstatus; }); if (!p) return; p.status = s.value; if ((s.value === 'IMPLEMENTED' || s.value === 'MEASURING') && !p.implementedAt) p.implementedAt = new Date().toISOString(); savePlan(p).then(render); }; });
+    app.querySelectorAll('[data-pldel]').forEach(function (b) { b.onclick = function () { var id = b.dataset.pldel; plans = plans.filter(function (x) { return x.id !== id; }); var tx = DB.transaction('plans', 'readwrite'); tx.objectStore('plans').delete(id); tx.oncomplete = function () { render(); }; }; });
   }
   // ---- análise client-side (mesmas regras determinísticas do backend) ----
   function devLoss(list) { return list.reduce(function (s, o) { return s + occEffectiveLoss(o); }, 0); }
@@ -643,13 +696,13 @@
   // ---------- boot ----------
   document.querySelectorAll('#nav a').forEach(function (a) { a.onclick = function () { route = a.dataset.route; render(); }; });
   periodSel.onchange = function () { render(); };
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
 
   openDB().then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load()]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans')]);
   }).then(function (r) {
-    orders = r[0]; occ = r[1]; batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
+    orders = r[0]; occ = r[1]; batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); }); plans = r[4] || [];
     rebuildSkuCost();
     render();
   }).catch(function (e) { app.innerHTML = '<div class="form-err">Falha ao abrir banco local: ' + esc(e.message || e) + '</div>'; });
