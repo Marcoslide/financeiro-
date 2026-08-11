@@ -1,11 +1,12 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthUser, Role } from '@financeiro/shared';
 import { PostSaleService } from './postsale.service';
 import { OccurrenceOpsService } from './occurrence-ops.service';
 import { OccurrenceAnalyticsService } from './occurrence-analytics.service';
+import { ActionPlanService } from './action-plan.service';
 import { CurrentUser, Roles } from '../common/decorators';
-import { CommentDto, DisputeDto, FinancialEventDto, ImportPostSaleDto, ListBatchesDto, ListOccurrencesDto, PatchOccurrenceDto, PostSaleQueryDto } from './dto';
+import { ActionPlanDtoIn, ActionPlanListDto, ChecklistItemDto, ChecklistToggleDto, CommentDto, DisputeDto, FinancialEventDto, ImportPostSaleDto, ListBatchesDto, ListOccurrencesDto, PatchOccurrenceDto, PostSaleQueryDto } from './dto';
 import { PostSaleType } from './parsing/postsale-rows';
 
 function period(q: { from?: string; to?: string }) {
@@ -21,7 +22,54 @@ export class PostSaleController {
     private readonly svc: PostSaleService,
     private readonly ops: OccurrenceOpsService,
     private readonly analytics: OccurrenceAnalyticsService,
+    private readonly plans: ActionPlanService,
   ) {}
+
+  @Get('causas')
+  causas(@CurrentUser() u: AuthUser, @Query() q: PostSaleQueryDto) {
+    return this.analytics.causas(u.organizationId, q.marketplaceAccountId!, period(q));
+  }
+
+  @Get('achados')
+  achados(@CurrentUser() u: AuthUser, @Query() q: PostSaleQueryDto) {
+    return this.analytics.achados(u.organizationId, q.marketplaceAccountId!, period(q));
+  }
+
+  // --- Plano de Ação ---
+  @Get('action-plans')
+  listPlans(@CurrentUser() u: AuthUser, @Query() q: ActionPlanListDto) {
+    return this.plans.list(u.organizationId, q.marketplaceAccountId!, q.status);
+  }
+
+  @Post('action-plans')
+  @Roles(Role.ADMIN, Role.FINANCIAL)
+  createPlan(@CurrentUser() u: AuthUser, @Query('marketplaceAccountId') accountId: string, @Body() dto: ActionPlanDtoIn) {
+    return this.plans.create(u.organizationId, u.id, accountId, dto);
+  }
+
+  @Patch('action-plans/:id')
+  @Roles(Role.ADMIN, Role.FINANCIAL)
+  updatePlan(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: ActionPlanDtoIn) {
+    return this.plans.update(u.organizationId, u.id, id, dto);
+  }
+
+  @Delete('action-plans/:id')
+  @Roles(Role.ADMIN, Role.FINANCIAL)
+  removePlan(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    return this.plans.remove(u.organizationId, id);
+  }
+
+  @Post('action-plans/:id/checklist')
+  @Roles(Role.ADMIN, Role.FINANCIAL)
+  addChecklist(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: ChecklistItemDto) {
+    return this.plans.addChecklistItem(u.organizationId, id, dto.text);
+  }
+
+  @Patch('action-plans/:id/checklist')
+  @Roles(Role.ADMIN, Role.FINANCIAL)
+  toggleChecklist(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: ChecklistToggleDto) {
+    return this.plans.toggleChecklistItem(u.organizationId, id, dto.itemId, dto.done !== false);
+  }
 
   // --- Análise da Devolução (§3-§7,§20-§27) ---
   @Get('exec-overview')

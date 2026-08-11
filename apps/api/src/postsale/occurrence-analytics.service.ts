@@ -248,4 +248,83 @@ export class OccurrenceAnalyticsService {
     ].filter((i) => i.count > 0).sort((a, b) => a.priority - b.priority);
     return items;
   }
+
+  /** Causas (§5): agrupa por causa interna/família da causa (Causa Shopee ≠ Causa interna). */
+  async causas(organizationId: string, marketplaceAccountId: string, p: PeriodFilter) {
+    const occ = await this.loadOccurrences(organizationId, marketplaceAccountId, p);
+    const total = occ.reduce((s, o) => s + this.effectiveLoss(o), 0) || 1;
+    const map = new Map<string, { key: string; label: string; cases: number; loss: number; atRisk: number; additional: number; recovered: number; reasons: Record<string, number> }>();
+    for (const o of occ) {
+      const key = o.causeFamily || this.guessCause(o);
+      const cur = map.get(key) || { key, label: CAUSE_LABELS[key] || key, cases: 0, loss: 0, atRisk: 0, additional: 0, recovered: 0, reasons: {} };
+      cur.cases++; cur.loss += this.effectiveLoss(o); cur.atRisk += this.atRisk(o);
+      cur.additional += this.num(o.additionalCostTotal); cur.recovered += this.num(o.recoveredTotal);
+      const rr = (o.reason || '—').trim(); cur.reasons[rr] = (cur.reasons[rr] || 0) + 1;
+      map.set(key, cur);
+    }
+    return [...map.values()].map((c) => {
+      const dom = Object.entries(c.reasons).sort((a, b) => b[1] - a[1])[0];
+      return { key: c.key, label: c.label, cases: c.cases, loss: this.round(c.loss), atRisk: this.round(c.atRisk), additionalCost: this.round(c.additional), recovered: this.round(c.recovered), netImpact: this.round(c.loss + c.additional - c.recovered), dominantReason: dom ? dom[0] : '—', shareOfLoss: this.round(c.loss / total * 100) };
+    }).sort((a, b) => b.loss - a.loss);
+  }
+
+  /**
+   * Achados (§31) + "o que o problema NÃO é" (§32). Motor determinístico: procura
+   * padrões (concentração de SKU/causa, frete reverso, disputas não respondidas,
+   * produto sem retorno, desistências) e também DESCARTA hipóteses quando os dados
+   * mostram pulverização (evita atacar o lugar errado). Confiança pela amostra (§38).
+   */
+  async achados(organizationId: string, marketplaceAccountId: string, p: PeriodFilter) {
+    const occ = await this.loadOccurrences(organizationId, marketplaceAccountId, p);
+    const n = occ.length;
+    const conf = n >= 30 ? 'ALTA' : n >= 10 ? 'MEDIA' : 'BAIXA';
+    const findings: Array<{ type: string; title: string; description: string; confidence: string; evidence: unknown; suggestedAction: string | null }> = [];
+    const notProblems: Array<{ dimension: string; note: string }> = [];
+    if (!n) return { findings, notProblems, sampleSize: 0, confidence: conf };
+
+    const totalLoss = occ.reduce((s, o) => s + this.effectiveLoss(o), 0) || 1;
+    // 1) Concentração de SKUs.
+    const critical = this.criticalProductsFrom(occ);
+    const top3 = critical.slice(0, 3);
+    const top3Share = top3.reduce((s, x) => s + x.loss, 0) / totalLoss;
+    if (top3.length && top3Share >= 0.4) {
+      findings.push({ type: 'CONCENTRACAO_SKU', title: `${top3.length} SKUs concentram ${Math.round(top3Share * 100)}% da perda`, description: 'Poucos SKUs respondem pela maior parte da perda — priorizar investigação e ação neles.', confidence: conf, evidence: top3.map((t) => ({ sku: t.sku, loss: t.loss })), suggestedAction: 'Criar plano de ação para os SKUs concentradores' });
+    }
+    // 2) Concentração de causa.
+    const causes = this.causeBreakdown(occ);
+    if (causes.length && causes[0].shareOfLoss >= 40) {
+      findings.push({ type: 'CONCENTRACAO_CAUSA', title: `Causa "${causes[0].label}" responde por ${causes[0].shareOfLoss}% da perda`, description: 'Uma família de causa domina a perda — atacar a raiz tende a ter alto retorno.', confidence: conf, evidence: causes.slice(0, 3), suggestedAction: `Plano de ação para a causa ${causes[0].label}` });
+    }
+    // 3) Frete reverso / custos adicionais relevantes.
+    const additional = occ.reduce((s, o) => s + this.num(o.additionalCostTotal), 0);
+    if (additional > 0) {
+      const withFreight = occ.filter((o) => this.num(o.additionalCostTotal) > 0).length;
+      findings.push({ type: 'CUSTO_ADICIONAL', title: `Custos adicionais (frete reverso/retrabalho) somam ${this.round(additional).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, description: 'Há custo além do reembolso. Classificar responsabilidade e reduzir erros que geram frete reverso.', confidence: conf, evidence: { occurrencesWithAdditionalCost: withFreight }, suggestedAction: 'Revisar separação/embalagem para reduzir frete reverso' });
+    }
+    // 4) Disputas não respondidas / prazos.
+    const disp = this.disputeAggregate(occ, new Date());
+    if (disp.abertas > 0 && disp.respondidas === 0) {
+      findings.push({ type: 'DISPUTA_SEM_RESPOSTA', title: `${disp.abertas} disputas abertas sem resposta`, description: 'Oportunidades de recuperação não estão sendo respondidas — risco de perda por prazo.', confidence: conf, evidence: { abertas: disp.abertas, vencendo: disp.vencendo, vencidas: disp.vencidas }, suggestedAction: 'Responder disputas antes do prazo' });
+    }
+    // 5) Produto sem retorno (dinheiro sai, produto não volta).
+    const semRetorno = occ.filter((o) => ['PERDIDO', 'EXTRAVIADO'].includes(o.merchandiseStatus) || (o.merchandiseStatus === 'DESCONHECIDO' && this.isApproved(o))).length;
+    if (semRetorno / n >= 0.3) {
+      findings.push({ type: 'PRODUTO_SEM_RETORNO', title: `${Math.round(semRetorno / n * 100)}% das ocorrências sem retorno do produto`, description: 'Reembolso pago sem o produto voltar — avaliar exigência de retorno e recuperação na reversa.', confidence: conf, evidence: { semRetorno, total: n }, suggestedAction: 'Rever política de retorno e rastreio da reversa' });
+    }
+    // 6) Desistências altas por motivo (retenção possível).
+    const motivos = this.reasonsFrom(occ);
+    const highGiveup = motivos.filter((m) => m.cases >= 5 && m.giveupRate >= 40)[0];
+    if (highGiveup) {
+      findings.push({ type: 'DESISTENCIA', title: `Motivo "${highGiveup.reason}" tem ${highGiveup.giveupRate}% de desistência`, description: 'Muitas solicitações desse motivo são desistidas — há espaço para retenção/negociação.', confidence: conf, evidence: highGiveup, suggestedAction: 'Fluxo de retenção para esse motivo' });
+    }
+
+    // "O que o problema NÃO é" (§32): descarta hipóteses quando os dados mostram pulverização.
+    if (critical.length >= 8 && (critical[0].loss / totalLoss) < 0.1) {
+      notProblems.push({ dimension: 'SKU específico', note: 'A perda está pulverizada entre muitos SKUs — não há um SKU vilão claro.' });
+    }
+    if (causes.length >= 3 && causes[0].shareOfLoss < 35) {
+      notProblems.push({ dimension: 'Causa única', note: 'Nenhuma causa domina — o problema é multifatorial, não uma causa isolada.' });
+    }
+    return { findings, notProblems, sampleSize: n, confidence: conf };
+  }
 }

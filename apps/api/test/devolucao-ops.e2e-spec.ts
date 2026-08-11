@@ -37,6 +37,18 @@ async function seedOccurrence(externalOrderId: string, naturalKey: string): Prom
     },
     update: { status: 'Em análise' },
   });
+  // Reset para re-execução idempotente da suíte (evita acúmulo de eventos manuais).
+  await prisma.occurrenceFinancialEvent.deleteMany({ where: { occurrenceId: occ.id } });
+  await prisma.occurrenceActivity.deleteMany({ where: { occurrenceId: occ.id } });
+  await prisma.postSaleOccurrence.update({
+    where: { id: occ.id },
+    data: {
+      internalStatus: 'NOVA', priority: 'MEDIA', ownerName: null, internalCause: null, causeFamily: null,
+      responsibility: 'NAO_IDENTIFICADA', merchandiseStatus: 'DESCONHECIDO', merchandiseCondition: null, recoverableValue: null,
+      hasDispute: false, disputeStatus: 'NAO_INICIADA', disputeRecoveredAmount: null,
+      refundedTotal: '0', additionalCostTotal: '0', recoveredTotal: '0', knownNetImpact: '0', cmvAvailable: false,
+    },
+  });
   return occ.id;
 }
 
@@ -135,5 +147,49 @@ describe('Devolução — cenários de aceite operacionais (§40-§42)', () => {
     await http.get(`/api/post-sale/produtos-criticos?marketplaceAccountId=${accountId}`).set(auth()).expect(200);
     const pend = await http.get(`/api/post-sale/pendencias?marketplaceAccountId=${accountId}`).set(auth()).expect(200);
     expect(Array.isArray(pend.body)).toBe(true);
+  });
+
+  it('CAUSAS/ACHADOS: agrupam por causa e o motor de achados responde com confiança e descartes (§5/§31/§32)', async () => {
+    // Classifica causa interna em duas ocorrências para materializar uma família de causa.
+    const idA = await seedOccurrence('ACEITE-40', 'ACEITE-40');
+    await http.patch(`/api/post-sale/occurrences/${idA}`).set(auth()).send({ causeFamily: 'AVARIA' }).expect(200);
+    const causas = await http.get(`/api/post-sale/causas?marketplaceAccountId=${accountId}`).set(auth()).expect(200);
+    expect(Array.isArray(causas.body)).toBe(true);
+    const ach = await http.get(`/api/post-sale/achados?marketplaceAccountId=${accountId}`).set(auth()).expect(200);
+    expect(ach.body).toHaveProperty('findings');
+    expect(ach.body).toHaveProperty('notProblems');
+    expect(['ALTA', 'MEDIA', 'BAIXA']).toContain(ach.body.confidence);
+  });
+
+  it('PLANO DE AÇÃO: cria com baseline automático, mede antes/depois e alterna checklist (§33/§34/§69)', async () => {
+    // Garante impacto no escopo do SKU.
+    const id = await seedOccurrence('ACEITE-PLAN', 'ACEITE-PLAN');
+    await http.post(`/api/post-sale/occurrences/${id}/financial-event`).set(auth()).send({ type: 'REEMBOLSO_PAGO', amount: 500 }).expect(201);
+    // O item da ocorrência precisa ter um SKU para o escopo (idempotente na re-execução).
+    await prisma.postSaleOccurrenceItem.upsert({ where: { occurrenceId_itemKey: { occurrenceId: id, itemKey: 'sku:PLAN-SKU' } }, create: { occurrenceId: id, organizationId: orgId, itemKey: 'sku:PLAN-SKU', sku: 'PLAN-SKU' }, update: {} });
+
+    const created = await http.post(`/api/post-sale/action-plans?marketplaceAccountId=${accountId}`).set(auth())
+      .send({ title: 'Novo padrão de embalagem 80x120', origin: 'finding', priority: 'ALTA', relatedSkus: ['PLAN-SKU'], indicator: 'Impacto líquido do escopo' }).expect(201);
+    expect(created.body.id).toBeTruthy();
+    expect(Number(created.body.baselineValue)).toBeGreaterThanOrEqual(500); // baseline automático mede o escopo
+    expect(created.body.measure).toBeTruthy();
+    expect(created.body.measure.baseline).toBeGreaterThanOrEqual(500);
+
+    // Checklist
+    const withItem = await http.post(`/api/post-sale/action-plans/${created.body.id}/checklist`).set(auth()).send({ text: 'Trocar espuma interna' }).expect(201);
+    expect(withItem.body.checklist).toHaveLength(1);
+    const item = withItem.body.checklist[0];
+    const toggled = await http.patch(`/api/post-sale/action-plans/${created.body.id}/checklist`).set(auth()).send({ itemId: item.id, done: true }).expect(200);
+    expect(toggled.body.checklist[0].done).toBe(true);
+
+    // Implantação inicia a janela "depois" (§69)
+    const implemented = await http.patch(`/api/post-sale/action-plans/${created.body.id}`).set(auth()).send({ status: 'IMPLEMENTED' }).expect(200);
+    expect(implemented.body.status).toBe('IMPLEMENTED');
+    expect(implemented.body.measure.currentAfterImplementation).not.toBeNull();
+
+    const list = await http.get(`/api/post-sale/action-plans?marketplaceAccountId=${accountId}`).set(auth()).expect(200);
+    expect(list.body.some((p: { id: string }) => p.id === created.body.id)).toBe(true);
+
+    await http.delete(`/api/post-sale/action-plans/${created.body.id}`).set(auth()).expect(200);
   });
 });

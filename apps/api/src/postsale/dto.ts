@@ -71,3 +71,35 @@ export class DisputeDto {
   @IsOptional() @IsString() respondedAt?: string;
   @IsOptional() @IsString() @MaxLength(1000) note?: string;
 }
+
+// --- Plano de Ação (§33/§34/§63-§73) ---
+export class ActionPlanDtoIn {
+  @IsOptional() @IsString() @MaxLength(200) title?: string;
+  @IsOptional() @IsString() @MaxLength(2000) description?: string | null;
+  @IsOptional() @IsString() origin?: string | null;
+  @IsOptional() @IsString() status?: string;
+  @IsOptional() @IsString() priority?: string;
+  @IsOptional() @IsString() ownerName?: string | null;
+  @IsOptional() @IsString() dueDate?: string | null;
+  @IsOptional() @IsString() indicator?: string | null;
+  @IsOptional() @IsNumber() baselineValue?: number | null;
+  @IsOptional() @IsNumber() targetValue?: number | null;
+  @IsOptional() @IsNumber() financialImpact?: number | null;
+  @IsOptional() @IsString() @MaxLength(2000) notes?: string | null;
+  @IsOptional() @IsArray() relatedSkus?: string[];
+  @IsOptional() @IsArray() relatedFindings?: string[];
+  @IsOptional() @IsString() relatedCause?: string | null;
+  @IsOptional() @IsString() implementedAt?: string | null;
+  @IsOptional() @IsString() reviewAt?: string | null;
+}
+
+export class ChecklistItemDto {
+  @IsString() @MaxLength(300) text!: string;
+}
+export class ChecklistToggleDto {
+  @IsString() itemId!: string;
+  @IsOptional() done?: boolean;
+}
+export class ActionPlanListDto extends PostSaleQueryDto {
+  @IsOptional() @IsString() status?: string;
+}
