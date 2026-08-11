@@ -4006,7 +4006,16 @@ buffer/index.js:
   function occMapItems(g) { return g.map(function (r) { return { sku: r.sku, productName: r.productName, variationName: r.variationName, qty: r.quantity, unitPrice: r.unitPrice, skuLinked: !!(r.sku && skuCost[r.sku.toLowerCase()]) }; }); }
   function finalizeOcc(o) { o.exposure = S.posVenda.classify(o.status, o.requested || 0, o.compensation || 0); upsertImportEvents(o, o.exposure, o.requested || 0, o.compensation || 0); recomputeOccImpact(o); initReceipt(o); autoReceiptFromTracking(o); o.hasSellerWindow = !!o.disputeDeadline; }
   // Shopee informou conclusão do retorno → interno vira "conferir" (nunca "recebido"; a baixa é manual §41-42).
-  function autoReceiptFromTracking(o) { var ts = (o.trackingStatus || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); var concluded = /conclu|entregue ao remetente|recebid.*loja|retirada bem/.test(ts) && /devolu|retorn|conclu|retirada/.test(ts); if (concluded && ['RECEBIDO', 'PARCIAL', 'DIVERGENCIA', 'CHEGOU_CONFERIR'].indexOf(o.receiptState) < 0) { o.receiptState = 'CHEGOU_CONFERIR'; addActivity(o, 'RECEIPT', { message: 'Shopee informou conclusão do retorno — pronto para conferência (baixa manual)', userName: 'Sistema' }); } }
+  function autoReceiptFromTracking(o) {
+    var ts = (o.trackingStatus || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    var locked = ['RECEBIDO', 'PARCIAL', 'DIVERGENCIA'].indexOf(o.receiptState) >= 0; if (locked) return;
+    // §84: conclusão COMPROVADA da devolução ao vendedor → pronto para conferência (baixa manual).
+    var concluded = /devolucao conclu|conclu.*devolu|entregue ao vendedor|entregue ao remetente|recebid.* pel[oa] vendedor|entregue a loja/.test(ts);
+    // "Retirada bem-sucedida"/coleta/em trânsito = ainda a caminho — NÃO é conferência (§84).
+    var transit = /retirada bem|coletad|em transito|a caminho|preparando|postad|enviad|em rota|saiu para/.test(ts);
+    if (concluded && o.receiptState !== 'CHEGOU_CONFERIR') { o.receiptState = 'CHEGOU_CONFERIR'; addActivity(o, 'RECEIPT', { message: 'Devolução concluída na Shopee — pronto para conferência (baixa manual)', userName: 'Sistema' }); }
+    else if (transit && ['CHEGOU_CONFERIR', 'EM_TRANSITO'].indexOf(o.receiptState) < 0) { o.receiptState = 'EM_TRANSITO'; }
+  }
   function importPosVenda(type, file) {
     return file.arrayBuffer().then(function (ab) {
       var parsed = S.posVenda.parse(ab, file.name, type);
@@ -4531,10 +4540,92 @@ buffer/index.js:
       { label: 'Desde a implantação', n: obsDays || 1, post: measureIndicator(p), pre: p.baselineValue, obs: obsDays, preliminary: false },
     ];
   }
+  // Medição com DENOMINADOR explícito (§27): retorna valor + numerador (ocorrências) + denominador (pedidos).
+  function measureWindowFull(p, from, to) {
+    var list = occInRange(from, to).filter(function (o) { return planMatch(p, o); });
+    if (p.indicatorKind === 'taxa_causa') { var ord = ordersInRange(from, to); return { val: ord ? r2(list.length / ord * 100) : null, num: list.length, den: ord, isRate: true }; }
+    if (p.indicatorKind === 'disputa' || p.indicatorKind === 'recebido') { return { val: measureIndicator(p), num: list.length, den: null, isRate: true }; }
+    return { val: r2(list.reduce(function (s, o) { return s + occEffectiveLoss(o); }, 0)), num: list.length, den: null, isRate: false };
+  }
+  // Série diária do indicador em torno da implantação, para o gráfico grande (§22-23).
+  function planDailyPoints(p, fromDate, toDate, mode, smooth) {
+    var pts = []; var start = new Date(new Date(fromDate).toDateString()); var end = new Date(new Date(toDate).toDateString());
+    for (var d = new Date(start); d <= end; d = new Date(d.getTime() + 864e5)) {
+      var d1 = new Date(d), d2 = new Date(d.getTime() + 864e5);
+      var occD = occ.filter(function (o) { return !o.isDemo && o.occurredAt && new Date(o.occurredAt) >= d1 && new Date(o.occurredAt) < d2 && planMatch(p, o); });
+      var val;
+      if (mode === 'fin') val = r2(occD.reduce(function (s, o) { return s + occEffectiveLoss(o); }, 0));
+      else if (p.indicatorKind === 'taxa_causa') { var ordD = ordersInRange(d1, d2); val = ordD ? r2(occD.length / ordD * 100) : null; }
+      else val = occD.length;
+      pts.push({ date: new Date(d1), val: val });
+    }
+    if (smooth) pts = pts.map(function (pt, i) { var w = pts.slice(Math.max(0, i - 6), i + 1).map(function (x) { return x.val; }).filter(function (v) { return v != null; }); return { date: pt.date, val: w.length ? r2(w.reduce(function (s, v) { return s + v; }, 0) / w.length) : null }; });
+    return pts;
+  }
+  function svgPlanChart(p, win, mode, smooth) {
+    if (!p.implementedAt) return '<div class="footnote">Inicie a medição (defina a data de implantação) para ver o gráfico antes × depois.</div>';
+    var impl = new Date(p.implementedAt); var now = new Date(); var n = win === 'hoje' ? 1 : win === '7' ? 7 : win === '15' ? 15 : win === '30' ? 30 : null;
+    var from = n ? new Date(impl.getTime() - n * 864e5) : new Date(impl.getTime() - 30 * 864e5);
+    var to = n ? new Date(Math.min(impl.getTime() + n * 864e5, now.getTime())) : now;
+    var pts = planDailyPoints(p, from, to, mode, smooth);
+    var valid = pts.filter(function (x) { return x.val != null; });
+    if (valid.length < 2) return '<div class="footnote">Poucos dados no intervalo para desenhar o gráfico (' + valid.length + ' ponto(s)). Amplie a janela ou aguarde novas importações.</div>';
+    var W = 760, H = 260, padL = 52, padR = 20, padB = 34, padT = 18;
+    var meta = (mode !== 'fin' && p.targetValue != null) ? p.targetValue : null;
+    var vals = pts.map(function (x) { return x.val; }).filter(function (v) { return v != null; }).concat(meta != null ? [meta] : []);
+    var mn = Math.min.apply(null, vals.concat([0])), mx = Math.max.apply(null, vals); if (mx === mn) mx = mn + 1;
+    var x = function (i) { return padL + i * (W - padL - padR) / (pts.length - 1); };
+    var y = function (v) { return H - padB - (v - mn) / (mx - mn) * (H - padB - padT); };
+    var implIdx = 0; pts.forEach(function (pt, i) { if (pt.date <= impl) implIdx = i; }); var implX = x(implIdx);
+    var shadeBefore = '<rect x="' + padL + '" y="' + padT + '" width="' + (implX - padL).toFixed(1) + '" height="' + (H - padB - padT) + '" fill="#eef1f7"/>';
+    var shadeAfter = '<rect x="' + implX.toFixed(1) + '" y="' + padT + '" width="' + (W - padR - implX).toFixed(1) + '" height="' + (H - padB - padT) + '" fill="#eaf6ef"/>';
+    var implLine = '<line x1="' + implX.toFixed(1) + '" y1="' + padT + '" x2="' + implX.toFixed(1) + '" y2="' + (H - padB) + '" stroke="#0f9d6b" stroke-width="2"/><text x="' + implX.toFixed(1) + '" y="' + (padT - 4) + '" font-size="10" font-weight="700" fill="#0f9d6b" text-anchor="middle">▲ implantação ' + dbr(p.implementedAt) + '</text>';
+    var metaLine = meta != null ? '<line x1="' + padL + '" y1="' + y(meta).toFixed(1) + '" x2="' + (W - padR) + '" y2="' + y(meta).toFixed(1) + '" stroke="#e0662a" stroke-width="1.5" stroke-dasharray="5 4"/><text x="' + (W - padR) + '" y="' + (y(meta) - 4).toFixed(1) + '" font-size="10" fill="#e0662a" text-anchor="end">meta ' + fmtInd(p, meta) + '</text>' : '';
+    var segs = []; var cur = [];
+    pts.forEach(function (pt, i) { if (pt.val == null) { if (cur.length > 1) segs.push(cur); cur = []; } else cur.push(x(i).toFixed(1) + ',' + y(pt.val).toFixed(1)); });
+    if (cur.length > 1) segs.push(cur);
+    var line = segs.map(function (s) { return '<polyline points="' + s.join(' ') + '" fill="none" stroke="#2b4bd6" stroke-width="2.5"/>'; }).join('');
+    var dots = pts.map(function (pt, i) { return pt.val == null ? '' : '<circle cx="' + x(i).toFixed(1) + '" cy="' + y(pt.val).toFixed(1) + '" r="2.5" fill="#2b4bd6"><title>' + dbr(pt.date.toISOString()) + ': ' + fmtInd(p, pt.val) + '</title></circle>'; }).join('');
+    var labels = ''; var step = Math.ceil(pts.length / 7); pts.forEach(function (pt, i) { if (i % step === 0 || i === pts.length - 1) labels += '<text x="' + x(i).toFixed(1) + '" y="' + (H - 8) + '" font-size="9.5" fill="#64708a" text-anchor="middle">' + monthDayLabel(pt.date.toISOString().slice(0, 10)) + '</text>'; });
+    var yl = '<text x="6" y="' + (y(mx) + 4).toFixed(1) + '" font-size="9.5" fill="#64708a">' + fmtInd(p, mx) + '</text><text x="6" y="' + (y(mn) + 4).toFixed(1) + '" font-size="9.5" fill="#64708a">' + fmtInd(p, mn) + '</text>';
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="max-width:' + W + 'px">' + shadeBefore + shadeAfter + implLine + metaLine + line + dots + labels + yl + '</svg>';
+  }
+  function planMeasureBlock(p) {
+    var win = planWinById[p.id] || '7'; var mode = planModeById[p.id] || 'taxa'; var smooth = !!planSmoothById[p.id];
+    var impl = new Date(p.implementedAt).getTime(); var now = Date.now();
+    var obsAll = Math.max(0, Math.floor((now - impl) / 864e5));
+    var n = win === 'hoje' ? 1 : win === '7' ? 7 : win === '15' ? 15 : win === '30' ? 30 : Math.max(1, obsAll);
+    var pre = measureWindowFull(p, new Date(impl - n * 864e5), new Date(impl));
+    var to = Math.min(impl + n * 864e5, now); var post = measureWindowFull(p, new Date(impl), new Date(to));
+    var obs = Math.max(0, Math.min(n, obsAll)); var preliminary = obs < n;
+    var higher = !!INDICATOR_HIGHER[p.indicatorKind];
+    var deltaPct = (pre.val != null && post.val != null && Math.abs(pre.val) > 0.001) ? r2((higher ? (post.val - pre.val) : (pre.val - post.val)) / Math.abs(pre.val) * 100) : null;
+    var mat = planMaturity(p);
+    var winChips = [['hoje', 'Hoje'], ['7', '7 dias'], ['15', '15 dias'], ['30', '30 dias'], ['desde', 'Desde impl.']];
+    var pval = mode === 'fin' ? measureWindowFull(p, new Date(impl - n * 864e5), new Date(impl)) : pre; // fin uses money in window
+    var fmtV = function (m) { return mode === 'fin' ? brl(m.val || 0) : (m.val != null ? fmtInd(p, m.val) : '—'); };
+    var denom = function (m) { return (p.indicatorKind === 'taxa_causa') ? (nn(m.num) + ' ocorr. / ' + nn(m.den) + ' pedidos') : (nn(m.num) + ' ocorrência(s)'); };
+    var clsLabel = deltaPct == null ? 'Sem dados suficientes' : ((deltaPct > 2 ? 'Melhorando' : deltaPct < -2 ? 'Piorando' : 'Estável') + (preliminary ? ' — preliminar' : ''));
+    var clsCls = deltaPct == null ? 'neutral' : deltaPct > 2 ? 'green' : deltaPct < -2 ? 'red' : 'amber';
+    var controls = '<span class="cleg">' + winChips.map(function (c) { return '<span class="chip' + (win === c[0] ? ' chip-on' : '') + '" style="font-size:10.5px;padding:3px 8px" data-plwin="' + p.id + '|' + c[0] + '">' + c[1] + '</span>'; }).join('') +
+      ' <span class="chip' + (mode === 'taxa' ? ' chip-on' : '') + '" style="font-size:10.5px;padding:3px 8px" data-plmode="' + p.id + '|taxa">Taxa/volume</span><span class="chip' + (mode === 'fin' ? ' chip-on' : '') + '" style="font-size:10.5px;padding:3px 8px" data-plmode="' + p.id + '|fin">Financeiro</span>' +
+      ' <span class="chip' + (smooth ? ' chip-on' : '') + '" style="font-size:10.5px;padding:3px 8px" data-plsmooth="' + p.id + '">Média 7d</span></span>';
+    return '<div class="chartcard"><div class="cch"><h4>' + esc(mode === 'fin' ? 'Impacto financeiro do escopo' : p.indicator) + '</h4>' + controls + '</div>' + svgPlanChart(p, win, mode, smooth) + '</div>' +
+      '<div class="kstrip"><div class="kc"><div class="kl">Antes (' + (win === 'desde' ? obsAll + 'd' : n + 'd') + ')</div><div class="kv" style="font-size:17px">' + fmtV(mode === 'fin' ? pval : pre) + '</div><div class="ks">' + denom(pre) + '</div></div>' +
+      '<div class="kc"><div class="kl">Depois</div><div class="kv" style="font-size:17px">' + fmtV(post) + '</div><div class="ks">' + denom(post) + ' · ' + obs + '/' + n + ' dias' + (preliminary ? ' · preliminar' : '') + '</div></div>' +
+      '<div class="kc ' + (deltaPct == null ? '' : deltaPct > 0 ? 'green' : 'red') + '"><div class="kl">Variação</div><div class="kv" style="font-size:17px">' + (deltaPct == null ? '—' : (deltaPct > 0 ? '↓ ' : '↑ ') + Math.abs(deltaPct) + '%') + '</div><div class="ks">' + (higher ? 'maior é melhor' : 'menor é melhor') + '</div></div>' +
+      '<div class="kc"><div class="kl">Meta</div><div class="kv" style="font-size:17px">' + (p.targetValue != null ? fmtInd(p, p.targetValue) : '—') + '</div></div>' +
+      '<div class="kc ' + clsCls + '"><div class="kl">Classificação</div><div class="kv" style="font-size:14px">' + clsLabel + '</div><div class="ks">maturidade ' + mat + '%</div></div></div>' +
+      '<div class="fin-line"><span>Implantado em</span><span>' + dbr(p.implementedAt) + ' · marco zero da medição</span></div>';
+  }
   function planMaturity(p) { if (!p.implementedAt) return 0; var days = Math.floor((Date.now() - new Date(p.implementedAt).getTime()) / 864e5); return Math.max(0, Math.min(100, Math.round(days / (p.windowAfterDays || 30) * 100))); }
   function planResult(p) {
-    var higher = !!INDICATOR_HIGHER[p.indicatorKind]; var b = p.baselineValue, c = measureIndicator(p);
     if (!p.implementedAt) return { k: 'AGUARDANDO', label: 'Aguardando implantação', cls: 'neutral' };
+    var higher = !!INDICATOR_HIGHER[p.indicatorKind];
+    var impl = new Date(p.implementedAt).getTime(); var now = Date.now(); var obs = Math.max(1, Math.floor((now - impl) / 864e5));
+    // antes = janela imediatamente anterior à implantação (não a foto no dia da criação, §19)
+    var b = measureWindow(p, new Date(impl - obs * 864e5), new Date(impl));
+    var c = measureWindow(p, new Date(impl), new Date(now));
     if (b == null || c == null) return { k: 'INCONCLUSIVO', label: 'Inconclusivo', cls: 'neutral' };
     var rel = Math.abs(c - b) < Math.max(0.5, Math.abs(b) * 0.05);
     if (rel) return { k: 'SEM', label: 'Sem mudança relevante', cls: 'warn' };
@@ -4553,19 +4644,15 @@ buffer/index.js:
   function savePlan(p) { return putMany('plans', [p]); }
   var PLAN_STATUS = { PLANEJADO: 'Planejado', EM_EXECUCAO: 'Em execução', MEDINDO: 'Medindo', ENCERRADO: 'Encerrado' };
   var planFilter = 'todos';
+  var planWinById = {}, planModeById = {}, planSmoothById = {}; // seleção do gráfico por plano (transiente)
   function planCard(p) {
     var b = p.baselineValue, c = measureIndicator(p), res = planResult(p), mat = planMaturity(p);
     var higher = !!INDICATOR_HIGHER[p.indicatorKind];
     var deltaTxt = (b != null && c != null) ? (fmtInd(p, c) + (c === b ? '' : ' (' + (higher ? (c > b ? '↑' : '↓') : (c < b ? '↓' : '↑')) + ' de ' + fmtInd(p, b) + ')')) : '—';
     return '<div class="panel"><div class="ph"><h3>' + esc(p.title) + '</h3><span class="tag ' + (p.status === 'ENCERRADO' ? 'ok' : p.status === 'MEDINDO' ? 'info' : 'neutral') + '">' + (PLAN_STATUS[p.status] || p.status) + '</span></div><div class="pb">' +
       (p.problem ? '<div class="fin-line"><span>Problema</span><b>' + esc(p.problem) + '</b></div>' : '') +
-      '<div class="fin-line"><span>Como vamos medir?</span><span>' + esc(p.indicator) + '</span></div>' +
-      '<div class="kstrip" style="margin:10px 0"><div class="kc"><div class="kl">Antes</div><div class="kv" style="font-size:18px">' + fmtInd(p, b) + '</div></div><div class="kc"><div class="kl">Agora</div><div class="kv" style="font-size:18px">' + fmtInd(p, c) + '</div></div><div class="kc"><div class="kl">Meta</div><div class="kv" style="font-size:18px">' + (p.targetValue != null ? fmtInd(p, p.targetValue) : '—') + '</div></div><div class="kc ' + res.cls + '"><div class="kl">Resultado</div><div class="kv" style="font-size:16px">' + res.label + '</div></div></div>' +
-      (p.implementedAt ? '<div class="fin-line"><span>Implantado em</span><span>' + dbr(p.implementedAt) + '</span></div>' +
-        '<div class="footnote" style="margin:6px 0 4px">Acompanhamento (janela pós × mesma janela antes)</div>' +
-        '<div class="table-wrap"><table class="report"><thead><tr><th>Janela</th><th>Antes</th><th>Depois</th><th>Δ</th><th>Observado</th></tr></thead><tbody>' +
-        planWindows(p).map(function (w) { var higher = !!INDICATOR_HIGHER[p.indicatorKind]; var delta = (w.pre != null && w.post != null) ? (higher ? w.post - w.pre : w.pre - w.post) : null; var dcls = delta == null ? '' : delta > 0 ? 'pos' : delta < 0 ? 'neg' : ''; return '<tr><td>' + w.label + '</td><td>' + (w.pre != null ? fmtInd(p, w.pre) : '—') + '</td><td>' + (w.post != null ? fmtInd(p, w.post) : '—') + '</td><td class="' + dcls + '">' + (delta == null ? '—' : (delta > 0 ? '▼ melhora' : delta < 0 ? '▲ piora' : '=')) + '</td><td class="footnote" style="margin:0">' + (w.obs ? w.obs + 'd' + (w.preliminary ? ' · preliminar' : '') : 'sem dados') + '</td></tr>'; }).join('') + '</tbody></table></div>' +
-        '<div class="footnote" style="margin:4px 0 0">Maturidade</div><div style="height:10px;border-radius:6px;background:var(--line);overflow:hidden;margin-top:3px"><div style="height:100%;width:' + mat + '%;background:var(--info)"></div></div><div class="footnote" style="margin:2px 0 8px">' + mat + '% da janela de ' + (p.windowAfterDays || 30) + ' dias — ' + (mat < 100 ? 'resultado preliminar' : 'janela completa') + '</div>' : '') +
+      '<div class="fin-line"><span>Como vamos medir?</span><span>' + esc(p.indicator) + (p.secondary && p.secondary.length ? ' <span class="footnote">(+ ' + p.secondary.length + ' secundário' + (p.secondary.length > 1 ? 's' : '') + ')</span>' : '') + '</span></div>' +
+      (p.implementedAt ? planMeasureBlock(p) : callout('', 'Ainda não implantado', 'A medição antes × depois começa quando você registrar a data de implantação (marco zero). Clique em “Iniciar medição”.')) +
       (p.scopeSkus && p.scopeSkus.length ? '<div class="footnote">Escopo: ' + esc(p.scopeSkus.join(', ')) + '</div>' : '<div class="footnote">Escopo: operação inteira</div>') +
       '<div style="margin-top:8px">' + p.checklist.map(function (it) { return '<label style="display:flex;gap:8px;align-items:center;padding:3px 0"><input type="checkbox" data-plchk="' + p.id + '|' + it.id + '"' + (it.done ? ' checked' : '') + '> <span style="text-decoration:' + (it.done ? 'line-through' : 'none') + ';color:' + (it.done ? 'var(--muted)' : 'inherit') + '">' + esc(it.text) + '</span></label>'; }).join('') + '</div>' +
       '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center"><input class="input sm" data-plitem="' + p.id + '" style="width:180px" placeholder="+ item do checklist"><input class="input sm" data-pltarget="' + p.id + '" style="width:110px" placeholder="meta" value="' + (p.targetValue != null ? p.targetValue : '') + '"><input class="input sm" data-plowner="' + p.id + '" style="width:130px" placeholder="responsável" value="' + esc(p.ownerName || '') + '"><select class="select sm" data-plstatus="' + p.id + '">' + Object.keys(PLAN_STATUS).map(function (k) { return '<option value="' + k + '"' + (p.status === k ? ' selected' : '') + '>' + PLAN_STATUS[k] + '</option>'; }).join('') + '</select>' + (!p.implementedAt ? '<button class="btn-sm primary" data-plmeasure="' + p.id + '">Iniciar medição</button>' : '') + '<button class="btn-sm" data-pldel="' + p.id + '">Excluir</button></div></div></div>';
@@ -4595,6 +4682,9 @@ buffer/index.js:
   }
   function bindPlanos() {
     app.querySelectorAll('[data-plfilter]').forEach(function (c) { c.onclick = function () { planFilter = c.dataset.plfilter; render(); }; });
+    app.querySelectorAll('[data-plwin]').forEach(function (c) { c.onclick = function () { var pr = c.dataset.plwin.split('|'); planWinById[pr[0]] = pr[1]; render(); }; });
+    app.querySelectorAll('[data-plmode]').forEach(function (c) { c.onclick = function () { var pr = c.dataset.plmode.split('|'); planModeById[pr[0]] = pr[1]; render(); }; });
+    app.querySelectorAll('[data-plsmooth]').forEach(function (c) { c.onclick = function () { planSmoothById[c.dataset.plsmooth] = !planSmoothById[c.dataset.plsmooth]; render(); }; });
     var nb = document.getElementById('plnew'); if (nb) nb.onclick = function () { var t = document.getElementById('plt').value.trim(); if (!t) return; var skus = (document.getElementById('pls').value || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean); var m = suggestMetric(t); createPlan({ title: t, scopeSkus: skus, indicator: m.indicator, indicatorKind: m.kind, causeKey: m.causeKey }).then(function () { render(); toast('Plano criado', t); }); };
     app.querySelectorAll('[data-plapprove]').forEach(function (b) { b.onclick = function () { var p = plans.find(function (x) { return x.id === b.dataset.plapprove; }); if (!p) return; p.status = 'PLANEJADO'; p.origin = 'suggestion'; p.baselineValue = measureIndicator(p); savePlan(p).then(render); toast('Plano aprovado', p.title); }; });
     app.querySelectorAll('[data-plignore]').forEach(function (b) { b.onclick = function () { var id = b.dataset.plignore; plans = plans.filter(function (x) { return x.id !== id; }); delOne('plans', id).then(render); }; });
