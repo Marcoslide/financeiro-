@@ -45,6 +45,7 @@ export interface PostSaleRow {
   paymentMethod: string | null;
   occurredAt: Date | null;
   orderCreatedAt: Date | null;
+  returnOpenedAt: Date | null;
   // financeiro no nível da OCORRÊNCIA (repetido por linha)
   requestedRefundAmount: string | null;
   sellerCompensationAmount: string | null;
@@ -140,10 +141,18 @@ export function parsePostSale(buffer: Buffer, filename: string, type: PostSaleTy
     const occurrenceKey = type === 'RETURN_REFUND' ? (returnId ?? orderId) : orderId;
 
     const orderCreatedAt = firstDate(acc, ['Data de criação do pedido']);
+    // Data de ABERTURA da devolução (visão operacional, §21) — não confundir com a data do pedido.
+    const returnOpenedAt = firstDate(acc, [
+      'Tempo de envio de devolução', 'Data de solicitação de devolução', 'Data da solicitação', 'Hora da solicitação',
+    ]);
+    // Data de conclusão/finalização (cancelamento §24, falha de entrega §25).
+    const completedAt = firstDate(acc, [
+      'Data da Finalização do Cancelamento', 'Data de conclusão do pedido', 'Data de Conclusão', 'Data de atualização',
+    ]);
     const occurredAt =
       type === 'RETURN_REFUND'
-        ? orderCreatedAt
-        : firstDate(acc, ['Data da Finalização do Cancelamento', 'Data de criação do pedido']);
+        ? (returnOpenedAt ?? orderCreatedAt)
+        : (completedAt ?? orderCreatedAt);
     if (occurredAt) {
       if (!periodStart || occurredAt < periodStart) periodStart = occurredAt;
       if (!periodEnd || occurredAt > periodEnd) periodEnd = occurredAt;
@@ -172,6 +181,7 @@ export function parsePostSale(buffer: Buffer, filename: string, type: PostSaleTy
       paymentMethod: first(acc, ['Método de pagamento']),
       occurredAt,
       orderCreatedAt,
+      returnOpenedAt,
       requestedRefundAmount: dec(acc, ['Quantia total de reembolsos']),
       sellerCompensationAmount: dec(acc, ['Compensação ao Vendedor (Disputa bem sucedida/Ajuste em carteira)']),
       buyerPaidAmount: dec(acc, ['Valor pago pelo comprador', 'Valor Total']),
