@@ -200,3 +200,8 @@ tr.matched>td{background:#fff8e6}
 .prev{border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:var(--shadow);padding:16px;position:sticky;top:80px}
 .prev h4{margin:0 0 10px;font-size:13px}
 .prev .row{display:flex;justify-content:space-between;font-size:12.5px;padding:5px 0;border-bottom:1px dashed var(--line)}
+
+/* Devolução — layout de dois blocos e pill de status interno */
+.split2{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+@media(max-width:900px){.split2{grid-template-columns:1fr}}
+.pill.st-int{background:var(--info-bg);color:var(--info)}
