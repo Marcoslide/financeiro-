@@ -143,8 +143,10 @@
     if (p === '30d') return { from: new Date(now - 30 * 864e5) };
     if (p === 'month') return { from: new Date(now.getFullYear(), now.getMonth(), 1) };
     if (p === 'prevmonth') return { from: new Date(now.getFullYear(), now.getMonth() - 1, 1), to: new Date(now.getFullYear(), now.getMonth(), 1) };
+    if (p === 'custom') { var r = {}; if (customRange.from) r.from = new Date(customRange.from + 'T00:00:00'); if (customRange.to) r.to = new Date(customRange.to + 'T23:59:59'); return r; }
     return {};
   }
+  var customRange = { from: null, to: null };
   function inPeriod(iso) { if (!iso) return true; var r = periodRange(); var d = new Date(iso); if (r.from && d < r.from) return false; if (r.to && d > r.to) return false; return true; }
   function pedidosInPeriod() { return orders.filter(function (o) { return inPeriod(o.createdAt); }); }
   function occInPeriod() { return occ.filter(function (o) { return inPeriod(o.occurredAt); }); }
@@ -342,8 +344,7 @@
 
   function renderPosVenda() {
     var tabs = [['visao', 'Visão Geral'], ['areceber', 'A Receber'], ['conferir', 'Receber / Conferir'], ['ocorrencias', 'Ocorrências'], ['disputas', 'Disputas'], ['financeiro', 'Financeiro'], ['analises', 'Análises'], ['planos', 'Plano de Ação'], ['import', 'Importações']];
-    app.innerHTML = '<div class="page-head"><div><h2>Devolução</h2><p>Receba, confira e defenda suas devoluções — e enxergue perdas, causas e recuperação.</p></div></div>' +
-      '<div class="subtabs">' + tabs.map(function (t) { return subtab('posvenda', t[0], t[1]); }).join('') + '</div><div id="devbody"></div>';
+    app.innerHTML = '<div class="subtabs">' + tabs.map(function (t) { return subtab('posvenda', t[0], t[1]); }).join('') + '</div><div id="devbody"></div>';
     var body = document.getElementById('devbody'); var t = sub.posvenda;
     try {
       if (t === 'import') body.innerHTML = devImportacoes();
@@ -403,18 +404,17 @@
     else view = view.sort(function (a, b) { return daysWaiting(b) - daysWaiting(a); });
     var chips = [['todos', 'Todos'], ['aguardando', 'Aguardando'], ['transito', 'Em trânsito'], ['atrasados', 'Atrasados'], ['conferir', 'Falta conferir'], ['divergencia', 'Divergência'], ['naoretornou', 'Não retornaram'], ['recebidas', 'Recebidas'], ['maiorvalor', 'Maior valor']];
     var badge = function (st) { var cls = st === 'RECEBIDO' ? 'ok' : (st === 'ATRASADO' || st === 'DIVERGENCIA' || st === 'EXTRAVIADO' || st === 'NAO_RETORNOU') ? 'warn' : 'info'; return '<span class="tag ' + cls + '">' + (RECEIPT_LABELS[st] || st) + '</span>'; };
-    return '<div class="panel"><div class="pb">' +
-      '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;margin-bottom:10px">' +
-      '<div><div style="font-size:22px;font-weight:750">' + nn(total) + '</div><div class="footnote" style="margin:0">deveriam retornar</div></div>' +
-      '<div><div style="font-size:22px;font-weight:750;color:var(--ok)">' + nn(recebidas) + '</div><div class="footnote" style="margin:0">já recebidas</div></div>' +
-      '<div><div style="font-size:22px;font-weight:750;color:var(--info)">' + nn(aguardando) + '</div><div class="footnote" style="margin:0">aguardando</div></div>' +
-      '<div><div style="font-size:22px;font-weight:750;color:var(--warn)">' + nn(atrasadas) + '</div><div class="footnote" style="margin:0">atrasadas</div></div>' +
-      '<div><div style="font-size:22px;font-weight:750;color:var(--err)">' + nn(diverg) + '</div><div class="footnote" style="margin:0">com divergência</div></div>' +
-      '<div style="flex:1;min-width:200px"><div class="footnote" style="margin:0 0 4px">Recebimento · ' + confPct + '% conferido</div><div style="height:12px;border-radius:8px;background:var(--line);overflow:hidden"><div style="height:100%;width:' + confPct + '%;background:var(--ok)"></div></div></div>' +
-      '</div>' +
-      '<div class="chips">' + chips.map(function (c) { return '<span class="chip' + (arF === c[0] ? ' chip-on' : '') + '" data-arf="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
-      '</div>' +
-      '<div class="table-wrap"><table><thead><tr><th>Devolução</th><th>Pedido</th><th>Produto / SKU</th><th>Qtd</th><th>Valor</th><th>Solicitada</th><th>Status Shopee</th><th>Situação do retorno</th><th>Dias</th><th></th></tr></thead><tbody>' +
+    return secHead('RECEBIMENTO FÍSICO', 'O que ainda tem que voltar?', 'A fila do que deveria retornar para a empresa. O status da Shopee não dá baixa — a conferência é manual.') +
+      kstrip([
+        { l: 'Deveriam retornar', v: nn(total), cls: 'blue' },
+        { l: 'Já recebidas', v: nn(recebidas), cls: 'green' },
+        { l: 'Aguardando', v: nn(aguardando), cls: 'blue' },
+        { l: 'Atrasadas', v: nn(atrasadas), cls: 'amber' },
+        { l: 'Com divergência', v: nn(diverg), cls: 'red' },
+      ]) +
+      '<div class="chartcard"><div class="cch"><h4>Recebimento físico</h4><div class="cleg">' + confPct + '% recebido / conferido</div></div><div style="height:14px;border-radius:8px;background:var(--line);overflow:hidden"><div style="height:100%;width:' + confPct + '%;background:var(--ok)"></div></div></div>' +
+      '<div class="panel"><div class="chips" style="padding:12px 12px 4px">' + chips.map(function (c) { return '<span class="chip' + (arF === c[0] ? ' chip-on' : '') + '" data-arf="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
+      '<div class="table-wrap"><table class="report"><thead><tr><th>Devolução</th><th>Pedido</th><th>Produto / SKU</th><th>Qtd</th><th>Valor</th><th>Solicitada</th><th>Status Shopee</th><th>Situação do retorno</th><th>Dias</th><th></th></tr></thead><tbody>' +
       (view.length ? view.slice(0, 300).map(function (o) {
         var it = (o.items || [])[0] || {}; var qt = (o.items || []).reduce(function (s, x) { return s + (x.qty || 1); }, 0);
         return '<tr><td class="mono">' + esc(o.returnId || o.id.split(':')[1] || '—') + '</td><td class="mono">' + esc(o.orderId || '—') + '</td><td>' + esc((it.productName || '—').slice(0, 32)) + '<div class="footnote" style="margin:0">' + esc(it.sku || '—') + ((o.items || []).length > 1 ? ' +' + (o.items.length - 1) : '') + '</div></td><td>' + qt + '</td><td>' + brl(o.requested) + '</td><td class="footnote" style="margin:0">' + dbr(o.occurredAt) + '</td><td>' + esc(o.status || '—') + '</td><td>' + badge(o.receiptState) + '</td><td>' + daysWaiting(o) + '</td><td><button class="btn-sm primary" data-conf="' + esc(o.returnId || o.orderId || o.id) + '">Conferir</button></td></tr>';
@@ -432,7 +432,8 @@
     });
   }
   function devConferir() {
-    var html = '<div class="panel"><div class="pb"><div style="font-weight:750;font-size:15px;margin-bottom:8px">Receber devolução</div>' +
+    var html = secHead('RECEBIMENTO', 'Tenho uma caixa na mão', 'Busque pela devolução, confira item a item e dê a baixa manual. A conferência é sua — não do status da Shopee.') +
+      '<div class="panel"><div class="pb"><div style="font-weight:750;font-size:15px;margin-bottom:8px">Receber devolução</div>' +
       '<div style="display:flex;gap:8px;max-width:640px"><input class="input" id="confq" placeholder="Digite ID da devolução, pedido ou rastreio" style="flex:1"><button class="btn-sm primary" id="confbtn">Buscar</button></div>' +
       '<div class="footnote" style="margin-top:6px">A baixa é manual: "Concluído" na Shopee não significa que o produto chegou fisicamente aqui.</div></div></div>' +
       '<div id="confarea"></div>';
@@ -517,30 +518,33 @@
     return '<div class="subtabs">' + subs.map(function (x) { return '<div class="subtab' + (analiseSub === x[0] ? ' active' : '') + '" data-asub2="' + x[0] + '">' + x[1] + '</div>'; }).join('') + '</div><div>' + inner + '</div>';
   }
   function bindAnalises() { app.querySelectorAll('[data-asub2]').forEach(function (b) { b.onclick = function () { analiseSub = b.dataset.asub2; analiseReason = null; render(); }; }); if (analiseSub === 'achados') bindAchados(); }
-  // Evolução: gráfico único (barras = devoluções, linha = perda) por mês. Dado real de occInPeriod.
+  // Evolução por COORTE (mês do pedido). Barras = devoluções; linha = taxa % (ou perda se não houver pedidos).
   function devEvolucao() {
-    var list = occInPeriod(); if (!list.length) return emptyBox('Sem ocorrências no período.');
-    var map = {}; list.forEach(function (o) { var d = o.occurredAt ? new Date(o.occurredAt) : null; var k = d && !isNaN(d) ? d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) : 'sem data'; var m = map[k] = map[k] || { k: k, cases: 0, loss: 0 }; m.cases++; m.loss += occEffectiveLoss(o); });
-    var months = Object.values(map).filter(function (m) { return m.k !== 'sem data'; }).sort(function (a, b) { return a.k.localeCompare(b.k); });
-    if (months.length < 2) return '<div class="panel"><div class="ph"><h3>Evolução no tempo</h3></div><div class="pb"><div class="footnote">São necessários pelo menos 2 meses com data para desenhar a tendência. Meses disponíveis: ' + nn(months.length) + '.</div></div></div>';
-    var W = 720, H = 240, pad = 40; var maxCases = Math.max.apply(null, months.map(function (m) { return m.cases; })) || 1; var maxLoss = Math.max.apply(null, months.map(function (m) { return m.loss; })) || 1;
-    var bw = (W - pad * 2) / months.length * 0.6; var step = (W - pad * 2) / months.length;
-    var bars = months.map(function (m, i) { var h = (m.cases / maxCases) * (H - pad * 2); var x = pad + i * step + (step - bw) / 2; var y = H - pad - h; return '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + h.toFixed(1) + '" fill="#3b82f6" opacity="0.75"><title>' + m.k + ': ' + m.cases + ' devoluções</title></rect>'; }).join('');
-    var pts = months.map(function (m, i) { var x = pad + i * step + step / 2; var y = H - pad - (m.loss / maxLoss) * (H - pad * 2); return x.toFixed(1) + ',' + y.toFixed(1); });
-    var line = '<polyline points="' + pts.join(' ') + '" fill="none" stroke="#ef4444" stroke-width="2.5"/>' + months.map(function (m, i) { var p = pts[i].split(','); return '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="3.5" fill="#ef4444"><title>' + m.k + ': ' + brl(r2(m.loss)) + ' de perda</title></circle>'; }).join('');
-    var labels = months.map(function (m, i) { var x = pad + i * step + step / 2; return '<text x="' + x.toFixed(1) + '" y="' + (H - pad + 16) + '" font-size="11" fill="#64748b" text-anchor="middle">' + esc(m.k) + '</text>'; }).join('');
-    var first = months[0], last = months[months.length - 1]; var deltaCases = last.cases - first.cases; var deltaLoss = r2(last.loss - first.loss);
-    return '<div class="panel"><div class="ph"><h3>Estamos melhorando?</h3><span class="footnote" style="margin:0">barras = devoluções · linha = perda (R$)</span></div><div class="pb">' +
-      '<div style="overflow-x:auto"><svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="max-width:' + W + 'px"><line x1="' + pad + '" y1="' + (H - pad) + '" x2="' + (W - pad) + '" y2="' + (H - pad) + '" stroke="#e2e8f0"/>' + bars + line + labels + '</svg></div>' +
-      '<div class="cards6" style="margin-top:10px">' + fcard('Devoluções (1º→último mês)', (deltaCases > 0 ? '+' : '') + nn(deltaCases), deltaCases > 0 ? 'red' : deltaCases < 0 ? 'green' : '', first.k + ' → ' + last.k) + fcard('Perda (1º→último mês)', (deltaLoss > 0 ? '+' : '') + brl(deltaLoss), deltaLoss > 0 ? 'red' : deltaLoss < 0 ? 'green' : '') + '</div>' +
-      '</div></div>';
+    if (!occInPeriod().length) return secHead('ANÁLISE · EVOLUÇÃO', 'Estamos melhorando?', '') + emptyBox('Sem ocorrências no período.');
+    var cohort = devCohortData(); var hasTaxa = cohort.some(function (m) { return m.taxa != null; });
+    var head = secHead('ANÁLISE · EVOLUÇÃO', 'Estamos melhorando?', 'Cada devolução é atribuída ao mês do pedido que a originou — a única forma de comparar com as vendas. Barras = devoluções, linha = ' + (hasTaxa ? 'taxa de devolução' : 'perda R$') + '.');
+    if (cohort.length < 2) return head + callout('', 'Ainda não dá para desenhar a tendência', 'São necessários pelo menos 2 meses com data. Meses disponíveis: <b>' + nn(cohort.length) + '</b>. Importe mais períodos de Pedidos e Devoluções.');
+    var rows = cohort.map(function (m) { return { label: monthLabel(m.k), bar: m.occ, line: hasTaxa ? (m.taxa || 0) : m.loss }; });
+    var chart = chartCard('Volume e ' + (hasTaxa ? 'taxa' : 'perda') + ' por mês do pedido', legendSwatch([['Devoluções', '#2b4bd6'], [hasTaxa ? 'Taxa %' : 'Perda R$', '#d13b3b']]), svgBarLine(rows, { barFmt: nn, lineFmt: hasTaxa ? function (v) { return pct(v); } : function (v) { return brl(v); } }));
+    var f = cohort[0], l = cohort[cohort.length - 1];
+    var dOcc = l.occ - f.occ; var dTaxa = (hasTaxa && f.taxa != null && l.taxa != null) ? r2(l.taxa - f.taxa) : null;
+    var strip = kstrip([
+      { l: 'Devoluções (1º→último)', v: (dOcc > 0 ? '+' : '') + nn(dOcc), cls: dOcc > 0 ? 'red' : dOcc < 0 ? 'green' : '', s: monthLabel(f.k) + ' → ' + monthLabel(l.k) },
+      hasTaxa ? { l: 'Taxa (1º→último)', v: dTaxa == null ? '—' : (dTaxa > 0 ? '+' : '') + pct(dTaxa), cls: dTaxa > 0 ? 'red' : dTaxa < 0 ? 'green' : '' } : { l: 'Perda (1º→último)', v: brl(r2(l.loss - f.loss)), cls: l.loss > f.loss ? 'red' : 'green' },
+      { l: 'Meses na série', v: nn(cohort.length), cls: 'blue' },
+    ]);
+    var matur = callout('', 'Cuidado com o mês mais recente', 'O último mês tende a parecer melhor do que é: parte das devoluções daquele pedido ainda não foi aberta (a defasagem mediana costuma passar de 10 dias). Só compare meses já “fechados”.');
+    var tbl = '<div class="panel"><div class="ph"><h3>Mês a mês (por mês do pedido)</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Mês do pedido</th><th>Pedidos</th><th>Devoluções</th><th>Taxa</th><th>Perda</th></tr></thead><tbody>' +
+      cohort.map(function (m) { return '<tr><td>' + monthLabel(m.k) + '</td><td>' + (m.orders ? nn(m.orders) : '—') + '</td><td>' + nn(m.occ) + '</td><td>' + (m.taxa != null ? pct(m.taxa) : '—') + '</td><td>' + brl(m.loss) + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
+    return head + strip + chart + matur + tbl;
   }
 
   // ===================== IMPORTAÇÕES (Devolução) =====================
   function devImportacoes() {
     var TYPES = [['RETURN_REFUND', 'Devoluções / Reembolsos'], ['ORDER_CANCELLATION', 'Cancelamentos'], ['FAILED_DELIVERY', 'Falhas de Entrega']];
     var list = batches.filter(function (b) { return b.module.indexOf('Devolução') === 0 || b.module.indexOf('Pós-venda') === 0; });
-    return '<div class="cards6">' + TYPES.map(function (x) { return '<div class="fcard"><div class="lbl">' + x[1] + '</div><button class="btn-sm primary" style="margin-top:10px" data-pv="' + x[0] + '">Importar</button></div>'; }).join('') + '</div>' +
+    return secHead('DADOS', 'Importações', 'Carregue os três relatórios da Shopee. A reimportação é idempotente — nunca duplica ocorrências.') +
+      '<div class="cards6">' + TYPES.map(function (x) { return '<div class="fcard"><div class="lbl">' + x[1] + '</div><button class="btn-sm primary" style="margin-top:10px" data-pv="' + x[0] + '">Importar</button></div>'; }).join('') + '</div>' +
       '<div class="panel"><div class="ph"><h3>Histórico de importações</h3></div><div class="table-wrap"><table><thead><tr><th>Relatório</th><th>Arquivo</th><th>Ocorrências</th><th>Novas</th><th>Atualizadas</th><th>Itens</th><th>Data</th></tr></thead><tbody>' +
       (list.length ? list.map(function (b) { return '<tr><td>' + esc(b.module.replace(/^Devolução · |^Pós-venda · /, '')) + '</td><td>' + esc(b.filename) + '</td><td>' + nn(b.seen) + '</td><td>' + nn(b.novo) + '</td><td>' + nn(b.upd) + '</td><td>' + nn(b.itemsSeen || 0) + '</td><td class="footnote" style="margin:0">' + new Date(b.createdAt).toLocaleString('pt-BR') + '</td></tr>'; }).join('') : '<tr><td colspan="7" class="empty">Nenhuma importação ainda.</td></tr>') +
       '</tbody></table></div></div>' +
@@ -553,7 +557,15 @@
     list.forEach(function (o) { var key = o.causeFamily || occGuessCause(o); var c = map[key] = map[key] || { key: key, label: DEV.CAUSE_LABELS[key] || key, cases: 0, loss: 0, atRisk: 0, additional: 0, recovered: 0, reasons: {} }; c.cases++; c.loss += occEffectiveLoss(o); c.atRisk += o.exposure.atRisk; c.additional += o.impact.additionalCostTotal || 0; c.recovered += o.impact.recoveredTotal || 0; var rr = (o.reason || '—').trim(); c.reasons[rr] = (c.reasons[rr] || 0) + 1; });
     return Object.values(map).map(function (c) { var dom = Object.entries(c.reasons).sort(function (a, b) { return b[1] - a[1]; })[0]; return { key: c.key, label: c.label, cases: c.cases, loss: r2(c.loss), atRisk: r2(c.atRisk), additional: r2(c.additional), recovered: r2(c.recovered), net: r2(c.loss + c.additional - c.recovered), dom: dom ? dom[0] : '—', share: r2(c.loss / total * 100) }; }).sort(function (a, b) { return b.loss - a.loss; });
   }
-  function devCausas() { var list = occInPeriod(); if (!list.length) return emptyBox('Sem ocorrências no período.'); var d = devCausasData(list); return '<div class="panel"><div class="ph"><h3>Onde estamos errando?</h3></div><div class="table-wrap"><table><thead><tr><th>Causa</th><th>Casos</th><th>Perda</th><th>Custo adic.</th><th>Recuperado</th><th>Impacto líq.</th><th>Motivo dominante</th><th>% da perda</th></tr></thead><tbody>' + d.map(function (c) { return '<tr><td><b>' + esc(c.label) + '</b></td><td>' + nn(c.cases) + '</td><td>' + brl(c.loss) + '</td><td>' + brl(c.additional) + '</td><td>' + brl(c.recovered) + '</td><td><b>' + brl(c.net) + '</b></td><td>' + esc((c.dom || '—').slice(0, 28)) + '</td><td><span class="tag">' + pct(c.share) + '</span></td></tr>'; }).join('') + '</tbody></table></div><div class="footnote">Classifique a causa interna e a família da causa na ficha da ocorrência.</div></div>'; }
+  function devCausas() {
+    var list = occInPeriod(); if (!list.length) return secHead('ANÁLISE · CAUSAS', 'Onde estamos errando?', '') + emptyBox('Sem ocorrências no período.');
+    var d = devCausasData(list); var np = devAchadosData(list).notProblems;
+    var head = secHead('ANÁLISE · CAUSAS', 'Onde estamos errando?', 'A causa interna (nossa leitura) pode diferir do motivo declarado pelo cliente. É aqui que mora a ação.');
+    var chart = d.length ? chartCard('Perda por causa', legendSwatch([['Perda R$', '#d13b3b']]), svgHBars(d.map(function (c) { return { label: c.label, value: c.loss, color: c.key === 'AVARIA' ? '#d13b3b' : c.key === 'SEPARACAO' ? '#2b4bd6' : '#8a93a3' }; }), { fmt: function (v) { return brl(v); } })) : '';
+    var naoE = np && np.length ? callout('green', 'O que o problema NÃO é', np.map(function (x) { return '<div class="fin-line"><span><b>' + esc(x.dim) + '</b></span><span class="footnote" style="margin:0">' + esc(x.note) + '</span></div>'; }).join('')) : '';
+    return head + chart +
+      '<div class="panel"><div class="ph"><h3>Causas, uma a uma</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Causa</th><th>Casos</th><th>Perda</th><th>Custo adic.</th><th>Recuperado</th><th>Impacto líq.</th><th>Motivo dominante</th><th>% da perda</th></tr></thead><tbody>' + d.map(function (c) { return '<tr><td><b>' + esc(c.label) + '</b></td><td>' + nn(c.cases) + '</td><td>' + brl(c.loss) + '</td><td>' + brl(c.additional) + '</td><td>' + brl(c.recovered) + '</td><td><b>' + brl(c.net) + '</b></td><td>' + esc((c.dom || '—').slice(0, 28)) + '</td><td><span class="tag">' + pct(c.share) + '</span></td></tr>'; }).join('') + '</tbody></table></div><div class="footnote" style="padding:0 16px 14px">Classifique a causa interna e a família da causa na ficha da ocorrência.</div></div>' + naoE;
+  }
 
   function devAchadosData(list) {
     var n = list.length; var conf = n >= 30 ? 'ALTA' : n >= 10 ? 'MEDIA' : 'BAIXA'; var findings = [], notProblems = [];
@@ -571,8 +583,9 @@
   }
   function devAchados() {
     var list = occInPeriod(); var d = devAchadosData(list);
-    if (!list.length) return emptyBox('Sem ocorrências no período.');
-    return '<div class="count-line">Amostra: <b>' + nn(d.sample) + '</b> ocorrências · confiança <b>' + d.conf + '</b></div>' +
+    if (!list.length) return secHead('ANÁLISE · INTELIGÊNCIA', 'O que os dados estão dizendo', '') + emptyBox('Sem ocorrências no período.');
+    return secHead('ANÁLISE · INTELIGÊNCIA', 'O que os dados estão dizendo', 'Achados priorizáveis + o que o problema não é. Vire cada achado em plano de ação com um clique.') +
+      '<div class="count-line">Amostra: <b>' + nn(d.sample) + '</b> ocorrências · confiança <b>' + d.conf + '</b></div>' +
       (d.findings.length ? d.findings.map(function (f, i) { return '<div class="panel"><div class="ph"><h3>' + esc(f.title) + '</h3><span class="tag ' + (f.conf === 'ALTA' ? 'ok' : f.conf === 'MEDIA' ? 'info' : 'warn') + '">' + f.conf + '</span></div><div class="pb"><p style="margin-top:0">' + esc(f.desc) + '</p><div style="display:flex;gap:10px;align-items:center"><span class="footnote" style="margin:0">Ação sugerida: <b>' + esc(f.action) + '</b></span><button class="btn-sm primary" data-plan="' + i + '">Criar plano de ação</button></div></div></div>'; }).join('') : '<div class="panel"><div class="empty">Nenhum achado relevante no período. 🎉</div></div>') +
       (d.notProblems.length ? '<div class="panel"><div class="ph"><h3>O que o problema NÃO é</h3></div><div class="pb">' + d.notProblems.map(function (np) { return '<div class="fin-line"><span><b>' + esc(np.dim) + '</b></span><span class="footnote" style="margin:0">' + esc(np.note) + '</span></div>'; }).join('') + '</div></div>' : '');
   }
@@ -585,7 +598,8 @@
   function planMeasure(p) { var current = measureScope(p.relatedSkus); var delta = p.baselineValue != null ? r2(current - p.baselineValue) : null; return { baseline: p.baselineValue, current: current, delta: delta, improved: delta == null ? null : delta < 0, after: p.implementedAt ? current : null }; }
   var PLAN_STATUS = { SUGGESTED: 'Sugerido', PLANNED: 'Planejado', IN_PROGRESS: 'Em andamento', IMPLEMENTED: 'Implantado', MEASURING: 'Medindo', DONE: 'Concluído', DISCARDED: 'Descartado' };
   function devPlanos() {
-    return '<div class="importbar"><div style="flex:1;display:flex;gap:8px;flex-wrap:wrap"><input class="input sm" id="plt" style="flex:2;min-width:220px" placeholder="Nova ação (ex.: novo padrão de embalagem 80x120)"><input class="input sm" id="pls" style="flex:1;min-width:160px" placeholder="SKUs (vírgula) — escopo/medição"><button class="btn-sm primary" id="plnew">Criar plano</button></div></div>' +
+    return secHead('CORREÇÃO', 'Plano de ação', 'Metas em percentual (à prova de volume), medição antes/depois e checklist. Crie a partir de um Achado ou manualmente.') +
+      '<div class="importbar"><div style="flex:1;display:flex;gap:8px;flex-wrap:wrap"><input class="input sm" id="plt" style="flex:2;min-width:220px" placeholder="Nova ação (ex.: novo padrão de embalagem 80x120)"><input class="input sm" id="pls" style="flex:1;min-width:160px" placeholder="SKUs (vírgula) — escopo/medição"><button class="btn-sm primary" id="plnew">Criar plano</button></div></div>' +
       (plans.length ? plans.map(function (p) { var m = planMeasure(p); return '<div class="panel"><div class="ph"><h3>' + esc(p.title) + '</h3><span class="tag info">' + (PLAN_STATUS[p.status] || p.status) + '</span></div><div class="pb"><div class="cards6" style="margin-bottom:10px">' + fcard('Baseline (antes)', m.baseline == null ? '—' : brl(m.baseline), '') + fcard('Atual', brl(m.current), '') + fcard('Δ (depois − antes)', m.delta == null ? '—' : brl(m.delta), m.improved ? 'green' : m.improved === false ? 'red' : '') + fcard('Desde implantação', m.after == null ? 'não implantado' : brl(m.after), '') + '</div>' + (p.relatedSkus.length ? '<div class="footnote">Escopo: ' + esc(p.relatedSkus.join(', ')) + '</div>' : '') + '<div style="margin-top:8px">' + p.checklist.map(function (it) { return '<label style="display:flex;gap:8px;align-items:center;padding:3px 0"><input type="checkbox" data-plchk="' + p.id + '|' + it.id + '"' + (it.done ? ' checked' : '') + '> <span style="text-decoration:' + (it.done ? 'line-through' : 'none') + ';color:' + (it.done ? 'var(--muted)' : 'inherit') + '">' + esc(it.text) + '</span></label>'; }).join('') + '</div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center"><input class="input sm" data-plitem="' + p.id + '" style="width:200px" placeholder="+ item do checklist"><select class="select sm" data-plstatus="' + p.id + '">' + Object.keys(PLAN_STATUS).map(function (k) { return '<option value="' + k + '"' + (p.status === k ? ' selected' : '') + '>' + PLAN_STATUS[k] + '</option>'; }).join('') + '</select><button class="btn-sm" data-pldel="' + p.id + '">Excluir</button></div></div></div>'; }).join('') : '<div class="panel"><div class="empty">Nenhum plano de ação. Crie um a partir de um Achado ou manualmente.</div></div>');
   }
   function bindPlanos() {
@@ -603,8 +617,27 @@
   function devFinanceiroData(list) { var r = { refunded: 0, additional: 0, recovered: 0, compensation: 0, disputeRec: 0, confirmed: 0, atRisk: 0, net: 0 }; list.forEach(function (o) { r.refunded += o.impact.refundedTotal || 0; r.additional += o.impact.additionalCostTotal || 0; r.recovered += o.impact.recoveredTotal || 0; r.compensation += o.compensation; r.disputeRec += o.disputeRecovered || 0; r.confirmed += occEffectiveLoss(o); r.atRisk += o.exposure.atRisk; r.net += occEffectiveLoss(o); }); Object.keys(r).forEach(function (k) { r[k] = r2(r[k]); }); return r; }
   function devDisputesData(list) { var now = new Date(); var soon = new Date(now.getTime() + 3 * 864e5); var d = { possiveis: 0, abertas: 0, vencendo: 0, vencidas: 0, respondidas: 0, ganhas: 0, perdidas: 0, contestado: 0, recuperado: 0 }; list.forEach(function (o) { var st = o.disputeStatus; if (st === 'POSSIVEL') d.possiveis++; if (['POSSIVEL', 'EM_PREPARACAO', 'RESPONDIDA', 'AGUARDANDO_SHOPEE'].indexOf(st) >= 0) d.abertas++; if (['EM_PREPARACAO', 'AGUARDANDO_SHOPEE', 'POSSIVEL'].indexOf(st) >= 0 && o.disputeDeadline) { var dl = new Date(o.disputeDeadline); if (dl < now) d.vencidas++; else if (dl <= soon) d.vencendo++; } if (st === 'RESPONDIDA' || o.disputeRespondedAt) d.respondidas++; if (st === 'GANHA' || st === 'PARCIAL') d.ganhas++; if (st === 'PERDIDA') d.perdidas++; d.contestado += o.disputeContested || 0; d.recuperado += o.disputeRecovered || 0; }); var resp = d.possiveis + d.respondidas + d.ganhas + d.perdidas; d.taxaResposta = resp ? r2((d.respondidas + d.ganhas + d.perdidas) / resp * 100) : 0; d.contestado = r2(d.contestado); d.recuperado = r2(d.recuperado); return d; }
 
+  // Coorte por MÊS DO PEDIDO (playbook §4): atribui a devolução ao mês do pedido que a
+  // originou (não ao mês em que a solicitação foi aberta). Taxa = devoluções ÷ pedidos do mês.
+  function devCohortData() {
+    var ordByMonth = {}; var ordById = {};
+    orders.forEach(function (o) { ordById[o.id] = o; if (o.createdAt) { var k = o.createdAt.slice(0, 7); ordByMonth[k] = (ordByMonth[k] || 0) + 1; } });
+    var map = {};
+    occ.forEach(function (o) {
+      var ord = o.orderId ? ordById[o.orderId] : null;
+      var iso = (ord && ord.createdAt) || o.occurredAt; if (!iso) return;
+      var k = iso.slice(0, 7);
+      var m = map[k] = map[k] || { k: k, occ: 0, loss: 0 };
+      m.occ++; m.loss += occEffectiveLoss(o);
+    });
+    return Object.values(map).sort(function (a, b) { return a.k.localeCompare(b.k); }).map(function (m) {
+      var ord = ordByMonth[m.k] || 0; m.orders = ord; m.taxa = ord ? r2(m.occ / ord * 100) : null; m.loss = r2(m.loss); return m;
+    });
+  }
+  function monthLabel(k) { var p = k.split('-'); var mm = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']; return p[1] ? (mm[+p[1] - 1] + '/' + p[0].slice(2)) : k; }
+
   function devExec() {
-    var list = occInPeriod(); if (!list.length) return emptyBox('Nenhuma ocorrência. Importe os relatórios na aba Importações.');
+    var list = occInPeriod(); if (!list.length) return secHead('PANORAMA', 'Devolução', 'Receba, confira e defenda suas devoluções.') + emptyBox('Nenhuma ocorrência. Importe os relatórios na aba Importações.');
     var agg = computeOrderAgg();
     var confirmed = r2(devLoss(list)); var atRisk = r2(list.reduce(function (s, o) { return s + o.exposure.atRisk; }, 0)); var recovered = r2(list.reduce(function (s, o) { return s + (o.impact.recoveredTotal || 0); }, 0));
     var causes = devCauseBreakdown(list); var crit = devCriticosData(list).slice(0, 5); var motivos = devMotivosData(list).slice(0, 5); var disp = devDisputesData(list);
@@ -625,12 +658,31 @@
     if (conferir) todo.push(['🟡 Caixas chegaram e faltam conferir', conferir, 'areceber', 'data-arf="conferir"', 'Conferir']);
     if (semCausa) todo.push(['🟠 Devoluções sem causa definida', semCausa, 'ocorrencias', 'data-ocf="semcausa"', 'Classificar']);
     if (novas) todo.push(['⚪ Ocorrências ainda não analisadas', novas, 'ocorrencias', 'data-ocf="nova"', 'Triar']);
-    var maxCause = causes.length ? causes[0].loss : 1;
-    return '<div class="panel"><div class="ph"><h3>Como estamos?</h3></div><div class="pb"><div class="cards6">' +
-      fcard('Taxa de devolução', agg.orders ? pct(list.length / agg.orders * 100) : '—', 'blue', nn(list.length) + ' de ' + nn(agg.orders) + ' pedidos') +
-      fcard('Quanto perdemos', brl(confirmed), 'red', agg.revenue ? pct(confirmed / agg.revenue * 100) + ' do faturamento' : '') +
-      fcard('Em risco', brl(atRisk), 'amber') +
-      fcard('Recuperado', brl(recovered), 'green') + '</div></div></div>' +
+    // ----- coorte / tendência (playbook §4 e §39: um gráfico grande) -----
+    var cohort = devCohortData(); var hasTaxa = cohort.some(function (m) { return m.taxa != null; });
+    var chartRows = cohort.map(function (m) { return { label: monthLabel(m.k), bar: m.occ, line: hasTaxa ? (m.taxa || 0) : m.loss }; });
+    var trend = cohort.length >= 2 ? chartCard('Estamos melhorando? (por mês do pedido)',
+      legendSwatch([['Devoluções', '#2b4bd6'], [hasTaxa ? 'Taxa de devolução %' : 'Perda R$', '#d13b3b']]) + ' <button class="link-btn" data-go="analises" data-asub="evolucao">detalhar</button>',
+      svgBarLine(chartRows, { barFmt: nn, lineFmt: hasTaxa ? function (v) { return pct(v); } : function (v) { return brl(v); } })) : '';
+    // ----- insights clicáveis (playbook §38) -----
+    var ins = [];
+    if (causes.length) ins.push(['🔴 <b>' + esc(causes[0].label) + '</b> concentra ' + pct(causes[0].share) + ' da perda do período.', 'analises', 'data-asub="causas"']);
+    if (atRisk > 0) ins.push(['🟠 <b>' + brl(atRisk) + '</b> ainda em risco — produtos que podem não voltar ou disputas em aberto.', 'areceber', '']);
+    if (vencDisp) ins.push(['🔴 <b>' + nn(vencDisp) + '</b> disputa(s) vencendo — risco de perder por prazo.', 'disputas', 'data-disp="hoje"']);
+    if (hasTaxa) { var cf = cohort.filter(function (m) { return m.taxa != null; }); if (cf.length >= 2) { var a0 = cf[0], a1 = cf[cf.length - 1]; var dd = r2(a1.taxa - a0.taxa); ins.push([(dd > 0 ? '🔴' : '🟢') + ' Taxa ' + (dd > 0 ? 'subiu' : 'caiu') + ' de ' + pct(a0.taxa) + ' (' + monthLabel(a0.k) + ') para ' + pct(a1.taxa) + ' (' + monthLabel(a1.k) + ').', 'analises', 'data-asub="evolucao"']); } }
+    var insightsHtml = ins.length ? callout('warn', 'O que está acontecendo?', ins.map(function (x) { return '<div class="fin-line"><span>' + x[0] + '</span><button class="btn-sm" data-go="' + x[1] + '" ' + x[2] + '>ver</button></div>'; }).join('')) : '';
+    var denomWarn = !agg.orders ? callout('red', 'Denominador ausente', 'Importe os <b>Pedidos</b> para calcular a taxa real de devolução. Sem o total de pedidos, a contagem de devoluções mede volume, não qualidade.') : '';
+    var causasSvg = causes.length ? svgHBars(causes.slice(0, 6).map(function (c) { return { label: c.label, value: c.loss, color: c.key === 'AVARIA' ? '#d13b3b' : c.key === 'SEPARACAO' ? '#2b4bd6' : '#8a93a3' }; }), { fmt: function (v) { return brl(v); } }) : '';
+
+    return secHead('PANORAMA', 'Como estamos?', 'Taxa de devolução sobre pedidos, perda financeira e o que precisa de ação hoje.') +
+      kstrip([
+        { l: 'Taxa de devolução', v: agg.orders ? pct(list.length / agg.orders * 100) : '—', cls: 'blue', s: nn(list.length) + ' de ' + nn(agg.orders) + ' pedidos' },
+        { l: 'Perda confirmada', v: brl(confirmed), cls: 'red', s: agg.revenue ? pct(confirmed / agg.revenue * 100) + ' do faturamento' : '' },
+        { l: 'Em risco', v: brl(atRisk), cls: 'amber' },
+        { l: 'Recuperado', v: brl(recovered), cls: 'green' },
+        { l: 'Precisa de atenção', v: nn(todo.reduce(function (s, x) { return s + x[1]; }, 0)), cls: 'orange', s: todo.length + ' frente(s)' },
+      ]) +
+      denomWarn + insightsHtml + trend +
 
       '<div class="panel"><div class="ph"><h3>O que precisa ser feito hoje?</h3></div><div class="pb">' +
       (todo.length ? todo.map(function (x) { return '<div class="fin-line"><span>' + esc(x[0]) + '</span><span style="display:flex;gap:10px;align-items:center"><b>' + nn(x[1]) + '</b><button class="btn-sm primary" data-go="' + x[2] + '" ' + x[3] + '>' + esc(x[4]) + '</button></span></div>'; }).join('') : '<div class="footnote">Nada urgente no momento. 🎉</div>') +
@@ -644,15 +696,14 @@
       '<div class="fin-line"><span>Abertas</span><b>' + nn(disp.abertas) + '</b></div><div class="fin-line"><span>Vencendo (≤3d)</span><b style="color:' + (disp.vencendo ? 'var(--warn)' : 'inherit') + '">' + nn(disp.vencendo) + '</b></div><div class="fin-line"><span>Taxa de resposta</span><b>' + pct(disp.taxaResposta) + '</b></div><div class="fin-line total"><span>Recuperado em disputa</span><span class="pos">' + brl(disp.recuperado) + '</span></div></div></div>' +
       '</div>' +
 
-      '<div class="split2">' +
-      '<div class="panel"><div class="ph"><h3>Onde estamos errando?</h3><button class="link-btn" data-go="analises" data-asub="causas">Ver causas</button></div><div class="pb">' +
-      (causes.length ? causes.slice(0, 5).map(function (c) { return hbar(c.label, c.loss, maxCause, 'var(--err)'); }).join('') : '<div class="footnote">Sem dados.</div>') + '</div></div>' +
-      '<div class="panel"><div class="ph"><h3>Por que devolvem?</h3><button class="link-btn" data-go="analises" data-asub="motivos">Ver motivos</button></div><div class="table-wrap"><table><thead><tr><th>Motivo</th><th>Casos</th><th>Perda</th></tr></thead><tbody>' +
-      (motivos.length ? motivos.map(function (m) { return '<tr style="cursor:pointer" title="Ver produtos deste motivo" data-go="analises" data-asub="produtos" data-reason="' + esc(m.reason) + '"><td>' + esc((m.reason || '—').slice(0, 30)) + '</td><td>' + nn(m.cases) + '</td><td>' + brl(m.loss) + '</td></tr>'; }).join('') : '<tr><td colspan="3" class="empty">—</td></tr>') + '</tbody></table></div></div>' +
-      '</div>' +
+      (causasSvg ? chartCard('Onde estamos errando? (perda por causa)', '<button class="link-btn" data-go="analises" data-asub="causas">Ver causas</button>', causasSvg) : '') +
 
-      '<div class="panel"><div class="ph"><h3>Quais produtos estão dando problema?</h3><button class="link-btn" data-go="analises" data-asub="produtos">Ver produtos</button></div><div class="table-wrap"><table><thead><tr><th>Produto</th><th>SKU</th><th>Ocor.</th><th>Perda</th><th>Causa</th></tr></thead><tbody>' +
-      (crit.length ? crit.map(function (s) { return '<tr style="cursor:pointer" data-go="analises" data-asub="produtos"><td>' + esc((s.product || '—').slice(0, 40)) + '</td><td class="mono footnote" style="margin:0">' + esc(s.sku) + '</td><td>' + s.occ + '</td><td><b>' + brl(s.loss) + '</b></td><td>' + esc(s.dominant) + '</td></tr>'; }).join('') : '<tr><td colspan="5" class="empty">—</td></tr>') + '</tbody></table></div></div>';
+      '<div class="split2">' +
+      '<div class="panel"><div class="ph"><h3>Por que devolvem?</h3><button class="link-btn" data-go="analises" data-asub="motivos">Ver motivos</button></div><div class="table-wrap"><table class="report"><thead><tr><th>Motivo</th><th>Casos</th><th>Perda</th></tr></thead><tbody>' +
+      (motivos.length ? motivos.map(function (m) { return '<tr class="rowlink" title="Ver produtos deste motivo" data-go="analises" data-asub="produtos" data-reason="' + esc(m.reason) + '"><td>' + esc((m.reason || '—').slice(0, 30)) + '</td><td>' + nn(m.cases) + '</td><td>' + brl(m.loss) + '</td></tr>'; }).join('') : '<tr><td colspan="3" class="empty">—</td></tr>') + '</tbody></table></div></div>' +
+      '<div class="panel"><div class="ph"><h3>Produtos que precisam de atenção</h3><button class="link-btn" data-go="analises" data-asub="produtos">Ver produtos</button></div><div class="table-wrap"><table class="report"><thead><tr><th>Produto</th><th>SKU</th><th>Ocor.</th><th>Perda</th></tr></thead><tbody>' +
+      (crit.length ? crit.map(function (s) { return '<tr class="rowlink" data-go="analises" data-asub="produtos"><td>' + esc((s.product || '—').slice(0, 32)) + '</td><td class="mono footnote" style="margin:0">' + esc(s.sku) + '</td><td>' + s.occ + '</td><td><b>' + brl(s.loss) + '</b></td></tr>'; }).join('') : '<tr><td colspan="4" class="empty">—</td></tr>') + '</tbody></table></div></div>' +
+      '</div>';
   }
 
   var FLAG_LABELS = { semcausa: 'Sem causa', nova: 'Novas', semresp: 'Sem responsável', naovinc: 'SKU não vinculado' };
@@ -674,14 +725,15 @@
     var typeChips = [['', 'Todas'], ['RETURN_REFUND', 'Devoluções'], ['ORDER_CANCELLATION', 'Cancelamentos'], ['FAILED_DELIVERY', 'Falhas de entrega']];
     var flagChips = [['', 'Sem filtro rápido'], ['semcausa', 'Sem causa'], ['nova', 'Novas'], ['semresp', 'Sem responsável'], ['naovinc', 'SKU não vinculado']];
     var activeFilter = (devF.type || devF.flag) ? '<div class="count-line">Filtro ativo: <b>' + (devF.type ? esc(TYPE_LABELS[devF.type]) : '') + (devF.type && devF.flag ? ' · ' : '') + (devF.flag ? esc(FLAG_LABELS[devF.flag]) : '') + '</b> · <button class="link-btn" id="devclear">limpar</button></div>' : '';
-    return '<div class="chips">' + typeChips.map(function (c) { return '<span class="chip' + (devF.type === c[0] ? ' chip-on' : '') + '" data-octype="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
+    return secHead('CASOS', 'Central de ocorrências', 'Devoluções, cancelamentos e falhas de entrega num só lugar. Filtre por tipo ou por situação e abra a ficha para trabalhar o caso.') +
+      '<div class="chips">' + typeChips.map(function (c) { return '<span class="chip' + (devF.type === c[0] ? ' chip-on' : '') + '" data-octype="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
       '<div class="chips" style="margin-top:6px">' + flagChips.map(function (c) { return '<span class="chip' + (devF.flag === c[0] ? ' chip-on' : '') + '" data-ocflag="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
       '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="devq" style="width:240px" placeholder="Buscar pedido, SKU, motivo…" value="' + esc(devF.search) + '">' +
       '<select class="select sm" id="devis"><option value="">Status interno: todos</option>' + opts(DEV.INTERNAL_STATUS, devF.internalStatus) + '</select>' +
       '<select class="select sm" id="devds"><option value="">Disputa: todas</option>' + opts(DEV.DISPUTE_STATUS, devF.disputeStatus) + '</select>' +
       '<select class="select sm" id="devsort"><option value="recent"' + (devF.sort === 'recent' ? ' selected' : '') + '>Mais recentes</option><option value="impact"' + (devF.sort === 'impact' ? ' selected' : '') + '>Maior impacto</option></select></div>' +
       activeFilter + '<div class="count-line"><b>' + nn(list.length) + '</b> ocorrências</div>' +
-      '<div class="panel"><div class="table-wrap"><table><thead><tr><th>Pedido</th><th>Tipo</th><th>Produto</th><th>Motivo</th><th>Status interno</th><th>Responsável</th><th>Disputa</th><th>Impacto líq.</th><th>Situação</th><th></th></tr></thead><tbody>' +
+      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Tipo</th><th>Produto</th><th>Motivo</th><th>Status interno</th><th>Responsável</th><th>Disputa</th><th>Impacto líq.</th><th>Situação</th><th></th></tr></thead><tbody>' +
       slice.map(function (o) { var it = (o.items || [])[0] || {}; var sit = situacaoCaso(o); return '<tr><td class="mono">' + esc(o.orderId || '—') + '</td><td>' + esc(TYPE_LABELS[o.type] || '—') + '</td><td>' + esc((it.productName || '—').slice(0, 28)) + '<div class="footnote" style="margin:0">' + esc(it.sku || '—') + ((o.items || []).length > 1 ? ' +' + (o.items.length - 1) : '') + '</div></td><td>' + esc((o.reason || '—').slice(0, 24)) + '</td><td><span class="pill st-int">' + (DEV.INTERNAL_STATUS[o.internalStatus] || o.internalStatus) + '</span></td><td>' + esc(o.ownerName || '—') + '</td><td>' + (o.disputeStatus !== 'NAO_INICIADA' ? '<span class="tag info">' + DEV.DISPUTE_STATUS[o.disputeStatus] + '</span>' : '<span class="footnote">—</span>') + '</td><td>' + (o.impact && o.impact.knownNetImpact != null ? '<b>' + brl(o.impact.knownNetImpact) + '</b>' : '—') + '</td><td><span class="tag ' + sit[1] + '">' + sit[0] + '</span></td><td><button class="btn-sm" data-oc="' + esc(o.id) + '">Abrir ficha</button></td></tr>'; }).join('') +
       '</tbody></table></div></div>' + (pages > 1 ? '<div style="display:flex;gap:8px;justify-content:flex-end;align-items:center"><button class="btn-sm" id="devprev"' + (devPage <= 1 ? ' disabled' : '') + '>Anterior</button><span class="footnote" style="margin:0">página ' + devPage + ' de ' + pages + '</span><button class="btn-sm" id="devnext"' + (devPage >= pages ? ' disabled' : '') + '>Próxima</button></div>' : '');
   }
@@ -696,14 +748,35 @@
     var pv = document.getElementById('devprev'); if (pv) pv.onclick = function () { if (devPage > 1) { devPage--; render(); } };
     var nx = document.getElementById('devnext'); if (nx) nx.onclick = function () { devPage++; render(); };
   }
-  function devMotivos() { var list = occInPeriod(); if (!list.length) return emptyBox('Sem ocorrências no período.'); var d = devMotivosData(list); return '<div class="panel"><div class="ph"><h3>Por que os clientes estão devolvendo?</h3><span class="footnote" style="margin:0">clique num motivo para ver os produtos</span></div><div class="table-wrap"><table><thead><tr><th>Motivo</th><th>Casos</th><th>Aprov.</th><th>Análise</th><th>Desist.</th><th>Taxa desist.</th><th>Perda</th><th>Em risco</th><th>Ticket médio</th><th>Compensação</th><th>Retornou</th></tr></thead><tbody>' + d.map(function (r) { return '<tr style="cursor:pointer" title="Ver produtos deste motivo" data-go="analises" data-asub="produtos" data-reason="' + esc(r.reason) + '"><td><b>' + esc(r.reason) + '</b></td><td>' + nn(r.cases) + '</td><td>' + nn(r.approved) + '</td><td>' + nn(r.analyzing) + '</td><td>' + nn(r.giveups) + '</td><td>' + pct(r.giveupRate) + '</td><td>' + brl(r.loss) + '</td><td>' + brl(r.atRisk) + '</td><td>' + brl(r.avgTicket) + '</td><td>' + brl(r.compensation) + '</td><td>' + nn(r.returned) + '</td></tr>'; }).join('') + '</tbody></table></div></div>'; }
+  function devMotivos() {
+    var list = occInPeriod(); if (!list.length) return secHead('ANÁLISE · MOTIVOS', 'Por que os clientes devolvem?', '') + emptyBox('Sem ocorrências no período.');
+    var agg = computeOrderAgg(); var d = devMotivosData(list);
+    var chart = d.length ? chartCard('Perda por motivo', legendSwatch([['Perda R$', '#d13b3b']]), svgHBars(d.slice(0, 8).map(function (r) { return { label: r.reason, value: r.loss, color: '#d13b3b' }; }), { fmt: function (v) { return brl(v); } })) : '';
+    var giveups = d.reduce(function (s, r) { return s + r.giveups; }, 0); var giveRate = list.length ? r2(giveups / list.length * 100) : 0;
+    var head = secHead('ANÁLISE · MOTIVOS', 'Por que os clientes estão devolvendo?', 'Cada motivo do relatório da Shopee — casos, perda e taxa de desistência. Clique num motivo para ver os produtos.');
+    var hide = callout('', 'Custo escondido: ' + pct(giveRate) + ' desistem sozinhos', 'Um comprador que abre e depois cancela a solicitação não gera perda financeira, mas consome atendimento e reputação. São <b>' + nn(giveups) + '</b> casos no período.');
+    var thPct = agg.orders ? '<th>% dos pedidos</th>' : '';
+    return head + kstrip([
+      { l: 'Motivos distintos', v: nn(d.length), cls: 'blue' },
+      { l: 'Motivo que mais custa', v: d.length ? esc((d[0].reason || '—').slice(0, 18)) : '—', cls: 'red', s: d.length ? brl(d[0].loss) : '' },
+      { l: 'Desistência do comprador', v: pct(giveRate), cls: 'amber', s: nn(giveups) + ' casos' },
+    ]) + chart + hide +
+      '<div class="panel"><div class="ph"><h3>Motivos, um a um</h3><span class="footnote" style="margin:0">clique para ver os produtos</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Motivo</th><th>Casos</th>' + thPct + '<th>Desist.</th><th>Taxa desist.</th><th>Perda</th><th>Em risco</th><th>Ticket médio</th><th>Retornou</th></tr></thead><tbody>' +
+      d.map(function (r) { var tdPct = agg.orders ? '<td>' + pct(r2(r.cases / agg.orders * 100)) + '</td>' : ''; return '<tr class="rowlink" title="Ver produtos deste motivo" data-go="analises" data-asub="produtos" data-reason="' + esc(r.reason) + '"><td><b>' + esc(r.reason) + '</b></td><td>' + nn(r.cases) + '</td>' + tdPct + '<td>' + nn(r.giveups) + '</td><td>' + pct(r.giveupRate) + '</td><td>' + brl(r.loss) + '</td><td>' + brl(r.atRisk) + '</td><td>' + brl(r.avgTicket) + '</td><td>' + nn(r.returned) + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
+  }
   function devCriticos() {
-    var list = occInPeriod();
-    if (analiseReason) list = list.filter(function (o) { return (o.reason || '(sem motivo informado)').trim() === analiseReason; });
-    if (!occInPeriod().length) return emptyBox('Sem ocorrências no período.');
+    var full = occInPeriod();
+    if (!full.length) return secHead('ANÁLISE · PRODUTOS', 'Quais produtos dão mais problema?', '') + emptyBox('Sem ocorrências no período.');
+    var list = analiseReason ? full.filter(function (o) { return (o.reason || '(sem motivo informado)').trim() === analiseReason; }) : full;
     var d = devCriticosData(list);
-    var banner = analiseReason ? '<div class="count-line">Filtrando por motivo: <b>' + esc(analiseReason) + '</b> · <button class="link-btn" data-go="analises" data-asub="produtos" data-reason="">limpar</button></div>' : '';
-    return banner + '<div class="panel"><div class="ph"><h3>Quais produtos estão dando problema?</h3></div><div class="table-wrap"><table><thead><tr><th>Produto</th><th>SKU</th><th>Ocor.</th><th>Perda</th><th>Custo adic.</th><th>Recuperado</th><th>% da perda</th><th>Causa dominante</th></tr></thead><tbody>' + (d.length ? d.map(function (s) { return '<tr><td>' + esc((s.product || '—').slice(0, 40)) + '</td><td class="mono footnote" style="margin:0">' + esc(s.sku) + (s.linked ? '' : ' <span class="tag warn">não vinc.</span>') + '</td><td>' + nn(s.occ) + '</td><td><b>' + brl(s.loss) + '</b></td><td>' + brl(s.additional) + '</td><td>' + brl(s.recovered) + '</td><td><span class="tag">' + pct(s.share) + '</span></td><td>' + esc(s.dominant) + '</td></tr>'; }).join('') : '<tr><td colspan="8" class="empty">Nenhum produto para este filtro.</td></tr>') + '</tbody></table></div></div>';
+    var head = secHead('ANÁLISE · PRODUTOS', 'Quais produtos estão dando problema?', 'Produto e variação primeiro; o SKU é o detalhe. Perda, ocorrências e causa dominante.');
+    var banner = analiseReason ? callout('', 'Filtrando por motivo: ' + esc(analiseReason), '<button class="link-btn" data-go="analises" data-asub="produtos" data-reason="">limpar filtro</button>') : '';
+    // agrega por PRODUTO (não por SKU) para o gráfico — mais legível para o gestor
+    var byProd = {}; d.forEach(function (s) { var k = s.product || s.sku; var p = byProd[k] = byProd[k] || { label: k, value: 0 }; p.value += s.loss; });
+    var prodBars = Object.values(byProd).sort(function (a, b) { return b.value - a.value; }).slice(0, 8);
+    var chart = prodBars.length ? chartCard('Perda por produto (top ' + prodBars.length + ')', legendSwatch([['Perda R$', '#2b4bd6']]), svgHBars(prodBars, { color: '#2b4bd6', fmt: function (v) { return brl(v); } })) : '';
+    return head + banner + chart +
+      '<div class="panel"><div class="ph"><h3>Produtos & SKUs, um a um</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Produto</th><th>SKU</th><th>Ocor.</th><th>Perda</th><th>Custo adic.</th><th>Recuperado</th><th>% da perda</th><th>Causa dominante</th></tr></thead><tbody>' + (d.length ? d.map(function (s) { return '<tr><td>' + esc((s.product || '—').slice(0, 40)) + '</td><td class="mono footnote" style="margin:0">' + esc(s.sku) + (s.linked ? '' : ' <span class="tag warn">não vinc.</span>') + '</td><td>' + nn(s.occ) + '</td><td><b>' + brl(s.loss) + '</b></td><td>' + brl(s.additional) + '</td><td>' + brl(s.recovered) + '</td><td><span class="tag">' + pct(s.share) + '</span></td><td>' + esc(s.dominant) + '</td></tr>'; }).join('') : '<tr><td colspan="8" class="empty">Nenhum produto para este filtro.</td></tr>') + '</tbody></table></div></div>';
   }
   // Categorias clicáveis do Financeiro → drill-down para as ocorrências que compõem o valor.
   var FIN_CATS = {
@@ -717,12 +790,19 @@
   function devFinanceiro() {
     var list = occInPeriod(); if (!list.length) return emptyBox('Sem ocorrências no período.'); var f = devFinanceiroData(list);
     var card = function (key, valor, sub2) { return '<div class="fcard ' + FIN_CATS[key].cls + '" style="cursor:pointer' + (finDrill === key ? ';outline:2px solid var(--brand)' : '') + '" data-fin="' + key + '"><div class="lbl">' + esc(FIN_CATS[key].label) + '</div><div class="val">' + brl(valor) + '</div>' + (sub2 ? '<div class="footnote" style="margin-top:4px">' + esc(sub2) + '</div>' : '') + '<div class="footnote" style="margin-top:4px">clique p/ detalhar</div></div>'; };
-    var cards = '<div class="cards6">' + card('refunded', f.refunded) + card('additional', f.additional, 'frete reverso, retrabalho') + card('compensation', f.compensation) + card('disputeRec', f.disputeRec) + card('net', f.net) + card('atRisk', f.atRisk) + '</div>';
+    var head = secHead('FINANCEIRO', 'Quanto isso está nos custando?', 'Custos conhecidos menos recuperações conhecidas. Clique numa categoria para ver as ocorrências que a compõem.');
+    var compBars = chartCard('Composição do impacto', legendSwatch([['Custo', '#d13b3b'], ['Recuperação', '#0f9d6b']]), svgHBars([
+      { label: 'Reembolso pago', value: f.refunded, color: '#d13b3b' },
+      { label: 'Custos adicionais', value: f.additional, color: '#e0662a' },
+      { label: 'Compensação Shopee', value: f.compensation, color: '#0f9d6b' },
+      { label: 'Recuperação de disputa', value: f.disputeRec, color: '#0f9d6b' },
+    ], { fmt: function (v) { return brl(v); } }));
+    var cards = head + compBars + '<div class="cards6">' + card('refunded', f.refunded) + card('additional', f.additional, 'frete reverso, retrabalho') + card('compensation', f.compensation) + card('disputeRec', f.disputeRec) + card('net', f.net) + card('atRisk', f.atRisk) + '</div>';
     var drill = '';
     if (finDrill && FIN_CATS[finDrill]) {
       var cat = FIN_CATS[finDrill];
       var rows = list.map(function (o) { return { o: o, v: r2(cat.val(o)) }; }).filter(function (x) { return x.v > 0; }).sort(function (a, b) { return b.v - a.v; });
-      drill = '<div class="panel"><div class="ph"><h3>' + esc(cat.label) + ' — ' + nn(rows.length) + ' ocorrência' + (rows.length === 1 ? '' : 's') + ' compõe' + (rows.length === 1 ? '' : 'm') + ' ' + brl(rows.reduce(function (s, x) { return s + x.v; }, 0)) + '</h3><button class="link-btn" id="finclose">fechar</button></div><div class="table-wrap"><table><thead><tr><th>Pedido</th><th>Produto / SKU</th><th>Motivo</th><th>' + esc(cat.label) + '</th><th></th></tr></thead><tbody>' +
+      drill = '<div class="panel"><div class="ph"><h3>' + esc(cat.label) + ' — ' + nn(rows.length) + ' ocorrência' + (rows.length === 1 ? '' : 's') + ' compõe' + (rows.length === 1 ? '' : 'm') + ' ' + brl(rows.reduce(function (s, x) { return s + x.v; }, 0)) + '</h3><button class="link-btn" id="finclose">fechar</button></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Produto / SKU</th><th>Motivo</th><th>' + esc(cat.label) + '</th><th></th></tr></thead><tbody>' +
         (rows.length ? rows.slice(0, 200).map(function (x) { var it = (x.o.items || [])[0] || {}; return '<tr><td class="mono">' + esc(x.o.orderId || '—') + '</td><td>' + esc((it.productName || '—').slice(0, 30)) + '<div class="footnote" style="margin:0">' + esc(it.sku || '—') + '</div></td><td>' + esc((x.o.reason || '—').slice(0, 24)) + '</td><td><b>' + brl(x.v) + '</b></td><td><button class="btn-sm" data-oc="' + esc(x.o.id) + '">Abrir ficha</button></td></tr>'; }).join('') : '<tr><td colspan="5" class="empty">Nada nesta categoria.</td></tr>') +
         '</tbody></table></div></div>';
     }
@@ -749,9 +829,16 @@
     var count = function (k) { return list.filter(FIL[k]).length; };
     var view = list.filter(FIL[dispChip]).sort(function (a, b) { return (a.disputeDeadline || '').localeCompare(b.disputeDeadline || ''); });
     var linha = function (o) { return '<tr><td class="mono">' + esc(o.orderId || o.id) + '</td><td>' + esc((o.reason || '—').slice(0, 26)) + '</td><td>' + (DEV.DISPUTE_STATUS[o.disputeStatus] || o.disputeStatus) + '</td><td>' + (o.disputeDeadline ? dbr(o.disputeDeadline) : '—') + '</td><td>' + brl(o.requested) + '</td><td><button class="btn-sm primary" data-oc="' + esc(o.id) + '" data-focus="disputa">Trabalhar</button></td></tr>'; };
-    return '<div class="cards6">' + fcard('Abertas', nn(d.abertas), '') + fcard('Vencendo (≤3d)', nn(d.vencendo), 'amber') + fcard('Vencidas', nn(d.vencidas), 'red') + fcard('Taxa de resposta', pct(d.taxaResposta), '') + fcard('Ganhas', nn(d.ganhas), 'green') + fcard('Valor recuperado', brl(d.recuperado), 'green') + '</div>' +
-      '<div class="chips">' + chips.map(function (c) { return '<span class="chip' + (dispChip === c[0] ? ' chip-on' : '') + '" data-disp2="' + c[0] + '">' + c[1] + ' <b>' + count(c[0]) + '</b></span>'; }).join('') + '</div>' +
-      '<div class="panel" style="margin-top:8px"><div class="table-wrap"><table><thead><tr><th>Pedido</th><th>Motivo</th><th>Status</th><th>Prazo</th><th>Valor</th><th></th></tr></thead><tbody>' +
+    return secHead('DEFESA', 'Quais casos precisamos defender?', 'Cada disputa tem prazo. Onde a loja usa o canal formal a tempo, recupera; fora do prazo, perde. Priorize por vencimento.') +
+      kstrip([
+        { l: 'Abertas', v: nn(d.abertas), cls: 'blue' },
+        { l: 'Vencendo (≤3d)', v: nn(d.vencendo), cls: 'amber' },
+        { l: 'Vencidas', v: nn(d.vencidas), cls: 'red' },
+        { l: 'Taxa de resposta', v: pct(d.taxaResposta), cls: d.taxaResposta >= 50 ? 'green' : 'red' },
+        { l: 'Recuperado', v: brl(d.recuperado), cls: 'green' },
+      ]) +
+      '<div class="chips" style="padding:0 0 10px">' + chips.map(function (c) { return '<span class="chip' + (dispChip === c[0] ? ' chip-on' : '') + '" data-disp2="' + c[0] + '">' + c[1] + ' <b>' + count(c[0]) + '</b></span>'; }).join('') + '</div>' +
+      '<div class="panel" style="margin-top:8px"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Motivo</th><th>Status</th><th>Prazo</th><th>Valor</th><th></th></tr></thead><tbody>' +
       (view.length ? view.map(linha).join('') : '<tr><td colspan="6" class="empty">Nenhuma disputa neste filtro.</td></tr>') + '</tbody></table></div></div>' +
       '<div class="footnote">"Trabalhar" abre a ficha da devolução direto no bloco Disputa para registrar resposta e resultado.</div>';
   }
@@ -821,6 +908,45 @@
     if (/resultado|lucro|ganhei|faturamento|venda|receita/.test(ql)) { return { text: 'No período: venda real ' + brl(a.revenue) + ' em ' + a.orders + ' pedidos, taxas ' + brl(a.fees) + ', custo ' + brl(a.cost) + '. Resultado estimado ' + brl(a.result) + ' (margem ' + (a.revenue ? pct((a.result / a.revenue) * 100) : '—') + ').' + (a.costPending ? ' Atenção: ' + a.costPending + ' pedidos ainda têm custo pendente.' : ''), cites: 'venda ' + brl(a.revenue) + ' · resultado ' + brl(a.result) }; }
     return { text: 'Posso responder sobre venda, resultado/margem, SKUs sem custo e devoluções — sempre com base nos dados importados (veja o Preview).', cites: 'evidências no Preview' };
   }
+
+  // ---------- componentes de "relatório" (dashboards visuais) ----------
+  function secHead(eyebrow, title, sub) { return '<div class="rhead"><div class="eyebrow">' + esc(eyebrow) + '</div><h3 class="rtitle">' + esc(title) + '</h3>' + (sub ? '<p class="rsub">' + esc(sub) + '</p>' : '') + '<div class="rule"></div></div>'; }
+  function kstrip(items) { return '<div class="kstrip">' + items.map(function (k) { return '<div class="kc ' + (k.cls || '') + '"><div class="kl">' + esc(k.l) + '</div><div class="kv">' + k.v + '</div>' + (k.s ? '<div class="ks">' + esc(k.s) + '</div>' : '') + '</div>'; }).join('') + '</div>'; }
+  function callout(kind, title, bodyHtml) { return '<div class="callout ' + (kind || '') + '"><div class="ct">' + esc(title) + '</div><div class="cbody">' + bodyHtml + '</div></div>'; }
+  function chartCard(title, legendHtml, svg) { return '<div class="chartcard"><div class="cch"><h4>' + esc(title) + '</h4>' + (legendHtml ? '<div class="cleg">' + legendHtml + '</div>' : '') + '</div><div style="overflow-x:auto">' + svg + '</div></div>'; }
+  // Gráfico combinado barras + linha (barras = eixo esq., linha = eixo dir.). rows: [{label,bar,line}].
+  function svgBarLine(rows, opt) {
+    opt = opt || {}; var W = 760, H = 260, padL = 44, padR = 44, padB = 30, padT = 22;
+    var bc = opt.barColor || '#2b4bd6', lc = opt.lineColor || '#d13b3b';
+    var bf = opt.barFmt || function (v) { return nn(v); }, lf = opt.lineFmt || function (v) { return nn(v); };
+    var maxBar = Math.max.apply(null, rows.map(function (r) { return r.bar || 0; }).concat([1]));
+    var maxLine = Math.max.apply(null, rows.map(function (r) { return r.line || 0; }).concat([1]));
+    var n = rows.length, step = (W - padL - padR) / Math.max(1, n), bw = step * 0.5;
+    var y0 = H - padB, ih = H - padB - padT;
+    var bars = rows.map(function (r, i) { var h = (r.bar / maxBar) * ih; var x = padL + i * step + (step - bw) / 2; var y = y0 - h; return '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + Math.max(0, h).toFixed(1) + '" rx="3" fill="' + bc + '" opacity="0.85"><title>' + esc(r.label) + ': ' + bf(r.bar) + '</title></rect>' + '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (y - 5).toFixed(1) + '" font-size="11" font-weight="700" fill="' + bc + '" text-anchor="middle">' + bf(r.bar) + '</text>'; }).join('');
+    var pts = rows.map(function (r, i) { var x = padL + i * step + step / 2; var y = y0 - (r.line / maxLine) * ih; return [x, y]; });
+    var poly = '<polyline points="' + pts.map(function (p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' ') + '" fill="none" stroke="' + lc + '" stroke-width="2.5"/>';
+    var dots = rows.map(function (r, i) { return '<circle cx="' + pts[i][0].toFixed(1) + '" cy="' + pts[i][1].toFixed(1) + '" r="3.5" fill="' + lc + '"><title>' + esc(r.label) + ': ' + lf(r.line) + '</title></circle><text x="' + pts[i][0].toFixed(1) + '" y="' + (pts[i][1] - 8).toFixed(1) + '" font-size="10.5" font-weight="700" fill="' + lc + '" text-anchor="middle">' + lf(r.line) + '</text>'; }).join('');
+    var labels = rows.map(function (r, i) { var x = padL + i * step + step / 2; return '<text x="' + x.toFixed(1) + '" y="' + (H - 8) + '" font-size="11" fill="#64708a" text-anchor="middle">' + esc(r.label) + '</text>'; }).join('');
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="max-width:' + W + 'px"><line x1="' + padL + '" y1="' + y0 + '" x2="' + (W - padR) + '" y2="' + y0 + '" stroke="#e5e9f2"/>' + bars + poly + dots + labels + '</svg>';
+  }
+  // Barras horizontais ordenadas. rows: [{label,value,color?}].
+  function svgHBars(rows, opt) {
+    opt = opt || {}; var fmt = opt.fmt || function (v) { return nn(v); }; var W = 720, rowH = 30, padL = 170, padR = 90, padT = 6;
+    var H = padT * 2 + rows.length * rowH; var max = Math.max.apply(null, rows.map(function (r) { return r.value || 0; }).concat([1]));
+    var body = rows.map(function (r, i) { var y = padT + i * rowH; var w = (r.value / max) * (W - padL - padR); var col = r.color || opt.color || '#2b4bd6'; return '<text x="' + (padL - 8) + '" y="' + (y + rowH / 2 + 4) + '" font-size="12" fill="#1a2233" text-anchor="end">' + esc(String(r.label).slice(0, 26)) + '</text>' + '<rect x="' + padL + '" y="' + (y + 5) + '" width="' + Math.max(1, w).toFixed(1) + '" height="' + (rowH - 12) + '" rx="3" fill="' + col + '" opacity="0.85"><title>' + esc(r.label) + ': ' + fmt(r.value) + '</title></rect>' + '<text x="' + (padL + w + 6).toFixed(1) + '" y="' + (y + rowH / 2 + 4) + '" font-size="11.5" font-weight="700" fill="#1a2233">' + fmt(r.value) + '</text>'; }).join('');
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="max-width:' + W + 'px">' + body + '</svg>';
+  }
+  // Barras agrupadas (várias séries por categoria). cats:[label]; series:[{name,color,vals:[]}].
+  function svgGroupBars(cats, series, opt) {
+    opt = opt || {}; var fmt = opt.fmt || function (v) { return v; }; var W = 760, H = 260, padL = 40, padR = 20, padB = 30, padT = 20;
+    var all = []; series.forEach(function (s) { s.vals.forEach(function (v) { all.push(v || 0); }); }); var max = Math.max.apply(null, all.concat([1]));
+    var y0 = H - padB, ih = H - padB - padT, step = (W - padL - padR) / Math.max(1, cats.length), gw = step * 0.72, bw = gw / series.length;
+    var body = cats.map(function (c, ci) { var gx = padL + ci * step + (step - gw) / 2; return series.map(function (s, si) { var v = s.vals[ci] || 0; var h = (v / max) * ih; var x = gx + si * bw; var y = y0 - h; return '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + (bw - 2).toFixed(1) + '" height="' + Math.max(0, h).toFixed(1) + '" rx="2" fill="' + s.color + '"><title>' + esc(c) + ' · ' + esc(s.name) + ': ' + fmt(v) + '</title></rect>' + (h > 16 ? '<text x="' + (x + (bw - 2) / 2).toFixed(1) + '" y="' + (y - 3).toFixed(1) + '" font-size="9.5" font-weight="700" fill="' + s.color + '" text-anchor="middle">' + fmt(v) + '</text>' : ''); }).join(''); }).join('');
+    var labels = cats.map(function (c, ci) { var x = padL + ci * step + step / 2; return '<text x="' + x.toFixed(1) + '" y="' + (H - 8) + '" font-size="11" fill="#64708a" text-anchor="middle">' + esc(c) + '</text>'; }).join('');
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="max-width:' + W + 'px"><line x1="' + padL + '" y1="' + y0 + '" x2="' + (W - padR) + '" y2="' + y0 + '" stroke="#e5e9f2"/>' + body + labels + '</svg>';
+  }
+  function legendSwatch(items) { return items.map(function (it) { return '<span class="sw" style="background:' + it[1] + '"></span>' + esc(it[0]); }).join(''); }
 
   // ---------- componentes comuns ----------
   function fcard(lbl, val, cls, sub2) { return '<div class="fcard ' + (cls || '') + '"><div class="lbl">' + esc(lbl) + '</div><div class="val">' + val + '</div>' + (sub2 ? '<div class="footnote" style="margin-top:4px">' + esc(sub2) + '</div>' : '') + '</div>'; }
@@ -1040,7 +1166,14 @@
 
   // ---------- boot ----------
   document.querySelectorAll('#nav a').forEach(function (a) { a.onclick = function () { route = a.dataset.route; render(); }; });
-  periodSel.onchange = function () { render(); };
+  var dateInputs = document.getElementById('dateinputs');
+  function syncDateUI() { if (dateInputs) dateInputs.className = 'datein' + (periodSel.value === 'custom' ? ' on' : ''); }
+  periodSel.onchange = function () { syncDateUI(); if (periodSel.value === 'custom' && !customRange.from && !customRange.to) return; render(); };
+  syncDateUI();
+  (function bindDates() {
+    var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
+    if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
+  })();
   document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
 
   openDB().then(function () {

@@ -149,6 +149,40 @@
   .pill.CONCLUIDO{background:var(--ok-bg);color:var(--ok)}
   .pill.CANCELADO{background:var(--err-bg);color:var(--err)}
   .pill.OUTRO{background:var(--neutral-bg);color:var(--neutral)}
+  .chip.chip-on{background:var(--brand-2);color:#fff;border-color:var(--brand-2)}
+  /* ===== Estilo "relatório" (dashboards de Devolução) ===== */
+  .rhead{margin:2px 0 16px}
+  .rhead .eyebrow{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#e0662a}
+  .rhead h3.rtitle{margin:4px 0 2px;font-size:22px;font-weight:800;color:var(--ink);border:none;padding:0}
+  .rhead .rsub{color:var(--muted);font-size:13.5px;margin:0;max-width:760px}
+  .rhead .rule{height:3px;background:linear-gradient(90deg,#e0662a,#e0662a 120px,var(--line) 120px);border-radius:2px;margin-top:10px}
+  .kstrip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:var(--shadow);overflow:hidden;margin-bottom:16px}
+  .kstrip .kc{padding:16px 18px;border-right:1px solid var(--line)}
+  .kstrip .kc:last-child{border-right:none}
+  .kstrip .kc .kl{font-size:11px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--muted)}
+  .kstrip .kc .kv{font-size:26px;font-weight:800;margin-top:6px;line-height:1.05}
+  .kstrip .kc .ks{font-size:11.5px;color:var(--muted);margin-top:4px}
+  .kstrip .kc.red .kv{color:var(--err)}.kstrip .kc.amber .kv{color:var(--warn)}.kstrip .kc.green .kv{color:var(--ok)}.kstrip .kc.blue .kv{color:var(--brand-2)}.kstrip .kc.orange .kv{color:#e0662a}
+  @media(max-width:720px){.kstrip .kc{border-right:none;border-bottom:1px solid var(--line)}}
+  .callout{border-radius:12px;padding:14px 16px 15px;margin-bottom:16px;border-left:4px solid var(--info);background:var(--info-bg)}
+  .callout .ct{font-weight:800;font-size:13.5px;margin-bottom:5px;color:#1b4c99}
+  .callout .cbody{font-size:13px;line-height:1.5;color:var(--ink)}
+  .callout.warn{border-left-color:#e0662a;background:#fdf1e9}.callout.warn .ct{color:#b5501e}
+  .callout.red{border-left-color:var(--err);background:var(--err-bg)}.callout.red .ct{color:#a52a2a}
+  .callout.green{border-left-color:var(--ok);background:var(--ok-bg)}.callout.green .ct{color:#0b7350}
+  .chartcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:16px 18px;margin-bottom:16px}
+  .chartcard .cch{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;flex-wrap:wrap;gap:6px}
+  .chartcard .cch h4{margin:0;font-size:14.5px;font-weight:750}
+  .chartcard .cleg{font-size:11.5px;color:var(--muted)}
+  .chartcard .cleg .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin:0 4px 0 10px;vertical-align:middle}
+  table.report thead th{background:#2b3444;color:#e7ecf5;border-bottom:none}
+  table.report tbody tr:nth-child(even) td{background:#fafbfd}
+  table.report tbody tr.total td{background:#fdf1e9;font-weight:750;border-top:2px solid #f0d3bf}
+  table.report td .bad{color:var(--err);font-weight:750}
+  .rowlink{cursor:pointer}.rowlink:hover td{background:#eef3ff !important}
+  .datein{display:none;gap:6px;align-items:center}
+  .datein.on{display:inline-flex}
+  .datein input{padding:6px 8px;font-size:12px}
 </style>
 </head>
 <body>
@@ -180,7 +214,9 @@
         <option value="30d">Últimos 30 dias</option>
         <option value="month">Mês atual</option>
         <option value="prevmonth">Mês anterior</option>
+        <option value="custom">Personalizado…</option>
       </select>
+      <div class="datein" id="dateinputs"><input class="input sm" type="date" id="dfrom"><span style="color:var(--muted);font-size:12px">até</span><input class="input sm" type="date" id="dto"><button class="btn-sm primary" id="dapply">Aplicar</button></div>
       <div class="top-store"><span class="dot"></span> Loja: <b>lidermolduras</b></div>
       <div class="avatar">LM</div>
     </div>
