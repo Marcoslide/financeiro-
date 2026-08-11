@@ -175,6 +175,7 @@
       <div class="spacer"></div>
       <select class="select sm" id="period">
         <option value="all">Todo o período</option>
+        <option value="today">Hoje</option>
         <option value="7d">Últimos 7 dias</option>
         <option value="30d">Últimos 30 dias</option>
         <option value="month">Mês atual</option>
@@ -3736,7 +3737,7 @@ buffer/index.js:
   var Produtos = null;
   var sub = { pedidos: 'pedidos', posvenda: 'visao' };
   var pedTab = 'ALL';
-  var devF = { search: '', internalStatus: '', disputeStatus: '' }, devPage = 1;
+  var devF = { search: '', internalStatus: '', disputeStatus: '', type: '', flag: '' }, devPage = 1;
   var chat = [];
 
   // ---------- helpers ----------
@@ -3851,6 +3852,7 @@ buffer/index.js:
   // ---------- período ----------
   function periodRange() {
     var p = periodSel.value, now = new Date();
+    if (p === 'today') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate()) };
     if (p === '7d') return { from: new Date(now - 7 * 864e5) };
     if (p === '30d') return { from: new Date(now - 30 * 864e5) };
     if (p === 'month') return { from: new Date(now.getFullYear(), now.getMonth(), 1) };
@@ -3900,7 +3902,7 @@ buffer/index.js:
   function importPosVenda(type, file) {
     return file.arrayBuffer().then(function (ab) {
       var parsed = S.posVenda.parse(ab, file.name, type);
-      if (parsed.notRecognized) throw new Error('Relatório de pós-venda não reconhecido para o tipo selecionado.');
+      if (parsed.notRecognized) throw new Error('Relatório de devolução não reconhecido para o tipo selecionado.');
       var groups = {};
       (parsed.rows || []).forEach(function (r) { var k = r.occurrenceKey; if (!k) return; (groups[k] = groups[k] || []).push(r); });
       var byId = {}; occ.forEach(function (o) { byId[o.id] = o; });
@@ -3949,11 +3951,11 @@ buffer/index.js:
     var a = computeOrderAgg(); var o = occInPeriod(); var exposure = sumExposure(o);
     var empty = orders.length === 0 && occ.length === 0 && (!Produtos || Produtos.getData().products.length === 0);
     app.innerHTML =
-      '<div class="page-head"><div><h2>Visão geral</h2><p>Panorama de vendas e pós-venda — determinístico e auditável.</p></div></div>' +
+      '<div class="page-head"><div><h2>Visão geral</h2><p>Panorama de vendas e devoluções — números auditáveis, sem estimativas inventadas.</p></div></div>' +
       (empty ? banner('Comece importando planilhas em <b>Produtos</b>, <b>Pedidos</b> e <b>Devolução</b>. Os módulos se conectam automaticamente (SKU→família→custo e pedido↔devolução).') : '') +
-      '<div class="cards6">' + fcard('Venda real', brl(a.revenue), 'blue', nn(a.orders) + ' pedidos') + fcard('Unidades', nn(a.units), '') + fcard('Taxas marketplace', brl(a.fees), 'red') + fcard('Custo produtos', brl(a.cost), 'amber') + fcard('Resultado estimado', brl(a.result), 'green', a.costPending ? a.costPending + ' pedidos c/ custo pendente' : 'determinístico') + fcard('Margem estimada', a.revenue ? pct((a.result / a.revenue) * 100) : '—', '') + '</div>' +
-      '<div class="cards6">' + fcard('A enviar', nn(a.byStatus.A_ENVIAR || 0), 'amber') + fcard('Enviados', nn(a.byStatus.ENVIADO || 0), 'blue') + fcard('Concluídos', nn(a.byStatus.CONCLUIDO || 0), 'green') + fcard('Cancelados', nn(a.byStatus.CANCELADO || 0), 'red') + fcard('Devoluções (pós-venda)', nn(o.length), '') + fcard('Prejuízo confirmado', brl(exposure.confirmedLoss), 'red') + '</div>' +
-      '<div class="cards6">' + fcard('SKUs sem vínculo', nn(a.unlinked) + ' pedidos', 'amber') + fcard('Custo pendente', nn(a.costPending) + ' pedidos', 'amber') + fcard('Em risco (pós-venda)', brl(exposure.atRisk), 'amber') + '</div>' +
+      '<div class="cards6">' + fcard('Venda real', brl(a.revenue), 'blue', nn(a.orders) + ' pedidos') + fcard('Unidades', nn(a.units), '') + fcard('Taxas marketplace', brl(a.fees), 'red') + fcard('Custo produtos', brl(a.cost), 'amber') + fcard('Resultado estimado', brl(a.result), 'green', a.costPending ? a.costPending + ' pedidos c/ custo pendente' : 'custo completo') + fcard('Margem estimada', a.revenue ? pct((a.result / a.revenue) * 100) : '—', '') + '</div>' +
+      '<div class="cards6">' + fcard('A enviar', nn(a.byStatus.A_ENVIAR || 0), 'amber') + fcard('Enviados', nn(a.byStatus.ENVIADO || 0), 'blue') + fcard('Concluídos', nn(a.byStatus.CONCLUIDO || 0), 'green') + fcard('Cancelados', nn(a.byStatus.CANCELADO || 0), 'red') + fcard('Devoluções', nn(o.length), '') + fcard('Prejuízo confirmado', brl(exposure.confirmedLoss), 'red') + '</div>' +
+      '<div class="cards6">' + fcard('SKUs sem vínculo', nn(a.unlinked) + ' pedidos', 'amber') + fcard('Custo pendente', nn(a.costPending) + ' pedidos', 'amber') + fcard('Em risco (devolução)', brl(exposure.atRisk), 'amber') + '</div>' +
       panelImports();
   }
 
@@ -4035,6 +4037,19 @@ buffer/index.js:
   var arF = 'todos';            // filtro da fila "A Receber"
   var conf = { occId: null, matches: null, items: null, done: null }; // estado de "Receber / Conferir"
   var analiseSub = 'motivos';   // sub-aba de "Análises"
+  var dispChip = 'hoje';        // filtro operacional de "Disputas"
+  var finDrill = null;          // categoria de "Financeiro" em drill-down
+  var analiseReason = null;     // motivo selecionado no cruzamento Motivo → Produtos & SKUs
+  var TYPE_LABELS = { RETURN_REFUND: 'Devolução', ORDER_CANCELLATION: 'Cancelamento', FAILED_DELIVERY: 'Falha de entrega' };
+  // Situação do caso em linguagem do usuário (sem termos técnicos como "bucket"/"exposure").
+  function situacaoCaso(o) {
+    var b = o.exposure ? o.exposure.bucket : null;
+    if (b === 'CONFIRMED') return ['Perda confirmada', 'warn'];
+    if (b === 'AT_RISK') return ['Em risco', 'info'];
+    if (b === 'RECOVERED') return ['Recuperado', 'ok'];
+    if (b === 'CANCELLED') return ['Cancelado', 'ok'];
+    return ['Sem impacto', 'ok'];
+  }
 
   function devReceiptSituation(o) { return RECEIPT_LABELS[o.receiptState] || '—'; }
   function devReturnList() { return occInPeriod().filter(expectsReturn); }
@@ -4057,12 +4072,22 @@ buffer/index.js:
     } catch (e) { body.innerHTML = '<div class="form-err">Erro ao renderizar esta aba: ' + esc(e.message || e) + '</div>'; }
     app.querySelectorAll('[data-pv]').forEach(function (b) { b.onclick = function () { fileInput(function (f) { importPosVenda(b.dataset.pv, f).then(function (batch) { render(); toast('Importado', batch.seen + ' ocorrências · ' + batch.novo + ' novas · ' + batch.upd + ' atualizadas · ' + batch.unch + ' sem alteração'); }).catch(function (e) { toast('Falha', e.message, true); }); }); }; });
     bindSubtabs('posvenda');
-    app.querySelectorAll('[data-oc]').forEach(function (b) { b.onclick = function () { openFicha(b.dataset.oc); }; });
-    app.querySelectorAll('[data-go]').forEach(function (b) { b.onclick = function () { if (b.dataset.arf) arF = b.dataset.arf; if (b.dataset.asub) analiseSub = b.dataset.asub; sub.posvenda = b.dataset.go; render(); }; });
+    app.querySelectorAll('[data-oc]').forEach(function (b) { b.onclick = function () { openFicha(b.dataset.oc, b.dataset.focus); }; });
+    app.querySelectorAll('[data-go]').forEach(function (b) { b.onclick = function () {
+      var dest = b.dataset.go;
+      if (b.dataset.arf) arF = b.dataset.arf;
+      if (b.dataset.asub) analiseSub = b.dataset.asub;
+      if (b.dataset.disp) dispChip = b.dataset.disp;
+      if (dest === 'ocorrencias') { devF.internalStatus = ''; devF.disputeStatus = ''; devF.search = ''; devF.type = b.dataset.oct || ''; devF.flag = b.dataset.ocf || ''; devPage = 1; }
+      if (dest === 'analises') { if (b.dataset.reason != null) analiseReason = b.dataset.reason || null; }
+      sub.posvenda = dest; render();
+    }; });
     app.querySelectorAll('[data-conf]').forEach(function (b) { b.onclick = function () { conf = { occId: null, matches: null, items: null, done: null }; sub.posvenda = 'conferir'; render(); setTimeout(function () { var q = document.getElementById('confq'); if (q) { q.value = b.dataset.conf; doConfSearch(); } }, 30); }; });
     if (t === 'areceber') bindAReceber();
     if (t === 'conferir') bindConferir();
     if (t === 'ocorrencias') bindDevOcc();
+    if (t === 'disputas') bindDisputas();
+    if (t === 'financeiro') bindFinanceiro();
     if (t === 'analises') bindAnalises();
     if (t === 'planos') bindPlanos();
   }
@@ -4201,11 +4226,29 @@ buffer/index.js:
 
   // ===================== ANÁLISES (agrupa Motivos/Causas/Produtos/Achados) =====================
   function devAnalises() {
-    var subs = [['motivos', 'Motivos'], ['causas', 'Causas'], ['produtos', 'Produtos & SKUs'], ['achados', 'Achados']];
-    var inner = analiseSub === 'causas' ? devCausas() : analiseSub === 'produtos' ? devCriticos() : analiseSub === 'achados' ? devAchados() : devMotivos();
+    var subs = [['motivos', 'Motivos'], ['produtos', 'Produtos & SKUs'], ['causas', 'Causas'], ['evolucao', 'Evolução'], ['achados', 'Inteligência']];
+    var inner = analiseSub === 'causas' ? devCausas() : analiseSub === 'produtos' ? devCriticos() : analiseSub === 'evolucao' ? devEvolucao() : analiseSub === 'achados' ? devAchados() : devMotivos();
     return '<div class="subtabs">' + subs.map(function (x) { return '<div class="subtab' + (analiseSub === x[0] ? ' active' : '') + '" data-asub2="' + x[0] + '">' + x[1] + '</div>'; }).join('') + '</div><div>' + inner + '</div>';
   }
-  function bindAnalises() { app.querySelectorAll('[data-asub2]').forEach(function (b) { b.onclick = function () { analiseSub = b.dataset.asub2; render(); }; }); if (analiseSub === 'achados') bindAchados(); }
+  function bindAnalises() { app.querySelectorAll('[data-asub2]').forEach(function (b) { b.onclick = function () { analiseSub = b.dataset.asub2; analiseReason = null; render(); }; }); if (analiseSub === 'achados') bindAchados(); }
+  // Evolução: gráfico único (barras = devoluções, linha = perda) por mês. Dado real de occInPeriod.
+  function devEvolucao() {
+    var list = occInPeriod(); if (!list.length) return emptyBox('Sem ocorrências no período.');
+    var map = {}; list.forEach(function (o) { var d = o.occurredAt ? new Date(o.occurredAt) : null; var k = d && !isNaN(d) ? d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) : 'sem data'; var m = map[k] = map[k] || { k: k, cases: 0, loss: 0 }; m.cases++; m.loss += occEffectiveLoss(o); });
+    var months = Object.values(map).filter(function (m) { return m.k !== 'sem data'; }).sort(function (a, b) { return a.k.localeCompare(b.k); });
+    if (months.length < 2) return '<div class="panel"><div class="ph"><h3>Evolução no tempo</h3></div><div class="pb"><div class="footnote">São necessários pelo menos 2 meses com data para desenhar a tendência. Meses disponíveis: ' + nn(months.length) + '.</div></div></div>';
+    var W = 720, H = 240, pad = 40; var maxCases = Math.max.apply(null, months.map(function (m) { return m.cases; })) || 1; var maxLoss = Math.max.apply(null, months.map(function (m) { return m.loss; })) || 1;
+    var bw = (W - pad * 2) / months.length * 0.6; var step = (W - pad * 2) / months.length;
+    var bars = months.map(function (m, i) { var h = (m.cases / maxCases) * (H - pad * 2); var x = pad + i * step + (step - bw) / 2; var y = H - pad - h; return '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + h.toFixed(1) + '" fill="#3b82f6" opacity="0.75"><title>' + m.k + ': ' + m.cases + ' devoluções</title></rect>'; }).join('');
+    var pts = months.map(function (m, i) { var x = pad + i * step + step / 2; var y = H - pad - (m.loss / maxLoss) * (H - pad * 2); return x.toFixed(1) + ',' + y.toFixed(1); });
+    var line = '<polyline points="' + pts.join(' ') + '" fill="none" stroke="#ef4444" stroke-width="2.5"/>' + months.map(function (m, i) { var p = pts[i].split(','); return '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="3.5" fill="#ef4444"><title>' + m.k + ': ' + brl(r2(m.loss)) + ' de perda</title></circle>'; }).join('');
+    var labels = months.map(function (m, i) { var x = pad + i * step + step / 2; return '<text x="' + x.toFixed(1) + '" y="' + (H - pad + 16) + '" font-size="11" fill="#64748b" text-anchor="middle">' + esc(m.k) + '</text>'; }).join('');
+    var first = months[0], last = months[months.length - 1]; var deltaCases = last.cases - first.cases; var deltaLoss = r2(last.loss - first.loss);
+    return '<div class="panel"><div class="ph"><h3>Estamos melhorando?</h3><span class="footnote" style="margin:0">barras = devoluções · linha = perda (R$)</span></div><div class="pb">' +
+      '<div style="overflow-x:auto"><svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="max-width:' + W + 'px"><line x1="' + pad + '" y1="' + (H - pad) + '" x2="' + (W - pad) + '" y2="' + (H - pad) + '" stroke="#e2e8f0"/>' + bars + line + labels + '</svg></div>' +
+      '<div class="cards6" style="margin-top:10px">' + fcard('Devoluções (1º→último mês)', (deltaCases > 0 ? '+' : '') + nn(deltaCases), deltaCases > 0 ? 'red' : deltaCases < 0 ? 'green' : '', first.k + ' → ' + last.k) + fcard('Perda (1º→último mês)', (deltaLoss > 0 ? '+' : '') + brl(deltaLoss), deltaLoss > 0 ? 'red' : deltaLoss < 0 ? 'green' : '') + '</div>' +
+      '</div></div>';
+  }
 
   // ===================== IMPORTAÇÕES (Devolução) =====================
   function devImportacoes() {
@@ -4224,7 +4267,7 @@ buffer/index.js:
     list.forEach(function (o) { var key = o.causeFamily || occGuessCause(o); var c = map[key] = map[key] || { key: key, label: DEV.CAUSE_LABELS[key] || key, cases: 0, loss: 0, atRisk: 0, additional: 0, recovered: 0, reasons: {} }; c.cases++; c.loss += occEffectiveLoss(o); c.atRisk += o.exposure.atRisk; c.additional += o.impact.additionalCostTotal || 0; c.recovered += o.impact.recoveredTotal || 0; var rr = (o.reason || '—').trim(); c.reasons[rr] = (c.reasons[rr] || 0) + 1; });
     return Object.values(map).map(function (c) { var dom = Object.entries(c.reasons).sort(function (a, b) { return b[1] - a[1]; })[0]; return { key: c.key, label: c.label, cases: c.cases, loss: r2(c.loss), atRisk: r2(c.atRisk), additional: r2(c.additional), recovered: r2(c.recovered), net: r2(c.loss + c.additional - c.recovered), dom: dom ? dom[0] : '—', share: r2(c.loss / total * 100) }; }).sort(function (a, b) { return b.loss - a.loss; });
   }
-  function devCausas() { var list = occInPeriod(); if (!list.length) return emptyBox('Sem ocorrências no período.'); var d = devCausasData(list); return '<div class="panel"><div class="ph"><h3>Causas (interna ≠ motivo Shopee)</h3></div><div class="table-wrap"><table><thead><tr><th>Causa</th><th>Casos</th><th>Perda</th><th>Custo adic.</th><th>Recuperado</th><th>Impacto líq.</th><th>Motivo dominante</th><th>% da perda</th></tr></thead><tbody>' + d.map(function (c) { return '<tr><td><b>' + esc(c.label) + '</b></td><td>' + nn(c.cases) + '</td><td>' + brl(c.loss) + '</td><td>' + brl(c.additional) + '</td><td>' + brl(c.recovered) + '</td><td><b>' + brl(c.net) + '</b></td><td>' + esc((c.dom || '—').slice(0, 28)) + '</td><td><span class="tag">' + pct(c.share) + '</span></td></tr>'; }).join('') + '</tbody></table></div><div class="footnote">Classifique a causa interna e a família da causa na ficha da ocorrência.</div></div>'; }
+  function devCausas() { var list = occInPeriod(); if (!list.length) return emptyBox('Sem ocorrências no período.'); var d = devCausasData(list); return '<div class="panel"><div class="ph"><h3>Onde estamos errando?</h3></div><div class="table-wrap"><table><thead><tr><th>Causa</th><th>Casos</th><th>Perda</th><th>Custo adic.</th><th>Recuperado</th><th>Impacto líq.</th><th>Motivo dominante</th><th>% da perda</th></tr></thead><tbody>' + d.map(function (c) { return '<tr><td><b>' + esc(c.label) + '</b></td><td>' + nn(c.cases) + '</td><td>' + brl(c.loss) + '</td><td>' + brl(c.additional) + '</td><td>' + brl(c.recovered) + '</td><td><b>' + brl(c.net) + '</b></td><td>' + esc((c.dom || '—').slice(0, 28)) + '</td><td><span class="tag">' + pct(c.share) + '</span></td></tr>'; }).join('') + '</tbody></table></div><div class="footnote">Classifique a causa interna e a família da causa na ficha da ocorrência.</div></div>'; }
 
   function devAchadosData(list) {
     var n = list.length; var conf = n >= 30 ? 'ALTA' : n >= 10 ? 'MEDIA' : 'BAIXA'; var findings = [], notProblems = [];
@@ -4273,7 +4316,6 @@ buffer/index.js:
   function devCriticosData(list) { var map = {}; var total = devLoss(list) || 1; list.forEach(function (o) { var seen = {}; var skus = []; (o.items || []).forEach(function (i) { if (i.sku && !seen[i.sku]) { seen[i.sku] = 1; skus.push(i.sku); } }); var share = skus.length || 1; var cause = o.causeFamily || occGuessCause(o); skus.forEach(function (sku) { var item = (o.items || []).find(function (i) { return i.sku === sku; }); var c = map[sku] = map[sku] || { sku: sku, product: item ? item.productName : null, occ: 0, loss: 0, additional: 0, recovered: 0, causes: {}, linked: !!(item && item.skuLinked) }; c.occ++; c.loss += occEffectiveLoss(o) / share; c.additional += (o.impact.additionalCostTotal || 0) / share; c.recovered += (o.impact.recoveredTotal || 0) / share; c.causes[cause] = (c.causes[cause] || 0) + 1; }); }); return Object.values(map).map(function (s) { var dom = Object.entries(s.causes).sort(function (a, b) { return b[1] - a[1]; })[0]; return { sku: s.sku, product: s.product, occ: s.occ, loss: r2(s.loss), additional: r2(s.additional), recovered: r2(s.recovered), dominant: dom ? (DEV.CAUSE_LABELS[dom[0]] || dom[0]) : '—', share: r2(s.loss / total * 100), linked: s.linked }; }).sort(function (a, b) { return b.loss - a.loss || b.occ - a.occ; }).slice(0, 50); }
   function devFinanceiroData(list) { var r = { refunded: 0, additional: 0, recovered: 0, compensation: 0, disputeRec: 0, confirmed: 0, atRisk: 0, net: 0 }; list.forEach(function (o) { r.refunded += o.impact.refundedTotal || 0; r.additional += o.impact.additionalCostTotal || 0; r.recovered += o.impact.recoveredTotal || 0; r.compensation += o.compensation; r.disputeRec += o.disputeRecovered || 0; r.confirmed += occEffectiveLoss(o); r.atRisk += o.exposure.atRisk; r.net += occEffectiveLoss(o); }); Object.keys(r).forEach(function (k) { r[k] = r2(r[k]); }); return r; }
   function devDisputesData(list) { var now = new Date(); var soon = new Date(now.getTime() + 3 * 864e5); var d = { possiveis: 0, abertas: 0, vencendo: 0, vencidas: 0, respondidas: 0, ganhas: 0, perdidas: 0, contestado: 0, recuperado: 0 }; list.forEach(function (o) { var st = o.disputeStatus; if (st === 'POSSIVEL') d.possiveis++; if (['POSSIVEL', 'EM_PREPARACAO', 'RESPONDIDA', 'AGUARDANDO_SHOPEE'].indexOf(st) >= 0) d.abertas++; if (['EM_PREPARACAO', 'AGUARDANDO_SHOPEE', 'POSSIVEL'].indexOf(st) >= 0 && o.disputeDeadline) { var dl = new Date(o.disputeDeadline); if (dl < now) d.vencidas++; else if (dl <= soon) d.vencendo++; } if (st === 'RESPONDIDA' || o.disputeRespondedAt) d.respondidas++; if (st === 'GANHA' || st === 'PARCIAL') d.ganhas++; if (st === 'PERDIDA') d.perdidas++; d.contestado += o.disputeContested || 0; d.recuperado += o.disputeRecovered || 0; }); var resp = d.possiveis + d.respondidas + d.ganhas + d.perdidas; d.taxaResposta = resp ? r2((d.respondidas + d.ganhas + d.perdidas) / resp * 100) : 0; d.contestado = r2(d.contestado); d.recuperado = r2(d.recuperado); return d; }
-  function devPendingData(list) { var now = new Date(); var soon = new Date(now.getTime() + 3 * 864e5); var p = { a: 0, b: 0, c: 0, d: 0, e: 0, f: 0 }; list.forEach(function (o) { if (['EM_PREPARACAO', 'AGUARDANDO_SHOPEE', 'POSSIVEL'].indexOf(o.disputeStatus) >= 0 && o.disputeDeadline && new Date(o.disputeDeadline) <= soon) p.a++; if (o.internalStatus === 'AGUARDANDO_EVIDENCIA') p.b++; if (o.internalStatus === 'AGUARDANDO_RETORNO' || o.merchandiseStatus === 'AGUARDANDO_POSTAGEM' || o.merchandiseStatus === 'EM_TRANSITO') p.c++; if (!o.internalCause && !o.causeFamily) p.d++; if (o.internalStatus === 'NOVA') p.e++; if ((o.items || []).some(function (i) { return i.sku && !i.skuLinked; })) p.f++; }); return [['Disputas vencendo (≤3 dias)', p.a], ['Aguardando evidência', p.b], ['Produtos aguardando retorno', p.c], ['Devoluções sem causa interna', p.d], ['Ocorrências novas (sem triagem)', p.e], ['SKUs não vinculados', p.f]].filter(function (x) { return x[1] > 0; }); }
 
   function devExec() {
     var list = occInPeriod(); if (!list.length) return emptyBox('Nenhuma ocorrência. Importe os relatórios na aba Importações.');
@@ -4287,11 +4329,16 @@ buffer/index.js:
     var semCausa = list.filter(function (o) { return !o.internalCause && !o.causeFamily; }).length;
     var barra = function (pctv, color) { return '<div style="height:12px;border-radius:8px;background:var(--line);overflow:hidden;margin-top:4px"><div style="height:100%;width:' + Math.max(0, Math.min(100, pctv)) + '%;background:' + color + '"></div></div>'; };
     var hbar = function (label, val, max, color) { var w = max ? Math.round(val / max * 100) : 0; return '<div style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;font-size:12.5px"><span>' + esc(label) + '</span><b>' + brl(val) + '</b></div>' + barra(w, color) + '</div>'; };
+    var novas = list.filter(function (o) { return o.internalStatus === 'NOVA'; }).length;
+    var vencDisp = disp.vencendo + disp.vencidas;
+    // Fila contextual: substitui a antiga aba "Pendências". Cada botão leva ao destino
+    // correto JÁ FILTRADO (nunca a uma listagem genérica).
     var todo = [];
-    if (conferir) todo.push(['Caixas chegaram — falta conferir', conferir, 'areceber', 'conferir']);
-    if (aguard) todo.push(['Devoluções aguardando retorno', aguard, 'areceber', 'todos']);
-    if (disp.vencendo || disp.vencidas) todo.push(['Disputas vencendo/vencidas', disp.vencendo + disp.vencidas, 'disputas', '']);
-    if (semCausa) todo.push(['Devoluções sem causa interna', semCausa, 'ocorrencias', '']);
+    if (vencDisp) todo.push(['🔴 Disputas vencendo — defenda hoje', vencDisp, 'disputas', 'data-disp="hoje"', 'Resolver']);
+    if (aguard) todo.push(['🟠 Devoluções ainda precisam chegar', aguard, 'areceber', 'data-arf="aguardando"', 'Ver retornos']);
+    if (conferir) todo.push(['🟡 Caixas chegaram e faltam conferir', conferir, 'areceber', 'data-arf="conferir"', 'Conferir']);
+    if (semCausa) todo.push(['🟠 Devoluções sem causa definida', semCausa, 'ocorrencias', 'data-ocf="semcausa"', 'Classificar']);
+    if (novas) todo.push(['⚪ Ocorrências ainda não analisadas', novas, 'ocorrencias', 'data-ocf="nova"', 'Triar']);
     var maxCause = causes.length ? causes[0].loss : 1;
     return '<div class="panel"><div class="ph"><h3>Como estamos?</h3></div><div class="pb"><div class="cards6">' +
       fcard('Taxa de devolução', agg.orders ? pct(list.length / agg.orders * 100) : '—', 'blue', nn(list.length) + ' de ' + nn(agg.orders) + ' pedidos') +
@@ -4300,7 +4347,7 @@ buffer/index.js:
       fcard('Recuperado', brl(recovered), 'green') + '</div></div></div>' +
 
       '<div class="panel"><div class="ph"><h3>O que precisa ser feito hoje?</h3></div><div class="pb">' +
-      (todo.length ? todo.map(function (x) { return '<div class="fin-line"><span>' + esc(x[0]) + '</span><span style="display:flex;gap:10px;align-items:center"><b>' + nn(x[1]) + '</b><button class="btn-sm primary" data-go="' + x[2] + '"' + (x[3] ? ' data-arf="' + x[3] + '"' : '') + '>Abrir</button></span></div>'; }).join('') : '<div class="footnote">Nada urgente no momento. 🎉</div>') +
+      (todo.length ? todo.map(function (x) { return '<div class="fin-line"><span>' + esc(x[0]) + '</span><span style="display:flex;gap:10px;align-items:center"><b>' + nn(x[1]) + '</b><button class="btn-sm primary" data-go="' + x[2] + '" ' + x[3] + '>' + esc(x[4]) + '</button></span></div>'; }).join('') : '<div class="footnote">Nada urgente no momento. 🎉</div>') +
       '</div></div>' +
 
       '<div class="split2">' +
@@ -4315,61 +4362,117 @@ buffer/index.js:
       '<div class="panel"><div class="ph"><h3>Onde estamos errando?</h3><button class="link-btn" data-go="analises" data-asub="causas">Ver causas</button></div><div class="pb">' +
       (causes.length ? causes.slice(0, 5).map(function (c) { return hbar(c.label, c.loss, maxCause, 'var(--err)'); }).join('') : '<div class="footnote">Sem dados.</div>') + '</div></div>' +
       '<div class="panel"><div class="ph"><h3>Por que devolvem?</h3><button class="link-btn" data-go="analises" data-asub="motivos">Ver motivos</button></div><div class="table-wrap"><table><thead><tr><th>Motivo</th><th>Casos</th><th>Perda</th></tr></thead><tbody>' +
-      (motivos.length ? motivos.map(function (m) { return '<tr><td>' + esc((m.reason || '—').slice(0, 30)) + '</td><td>' + nn(m.cases) + '</td><td>' + brl(m.loss) + '</td></tr>'; }).join('') : '<tr><td colspan="3" class="empty">—</td></tr>') + '</tbody></table></div></div>' +
+      (motivos.length ? motivos.map(function (m) { return '<tr style="cursor:pointer" title="Ver produtos deste motivo" data-go="analises" data-asub="produtos" data-reason="' + esc(m.reason) + '"><td>' + esc((m.reason || '—').slice(0, 30)) + '</td><td>' + nn(m.cases) + '</td><td>' + brl(m.loss) + '</td></tr>'; }).join('') : '<tr><td colspan="3" class="empty">—</td></tr>') + '</tbody></table></div></div>' +
       '</div>' +
 
-      '<div class="panel"><div class="ph"><h3>Quais produtos estão dando problema?</h3><button class="link-btn" data-go="analises" data-asub="produtos">Ver produtos</button></div><div class="table-wrap"><table><thead><tr><th>SKU</th><th>Produto</th><th>Ocor.</th><th>Perda</th><th>Causa</th></tr></thead><tbody>' +
-      (crit.length ? crit.map(function (s) { return '<tr><td class="mono">' + esc(s.sku) + '</td><td>' + esc((s.product || '—').slice(0, 36)) + '</td><td>' + s.occ + '</td><td><b>' + brl(s.loss) + '</b></td><td>' + esc(s.dominant) + '</td></tr>'; }).join('') : '<tr><td colspan="5" class="empty">—</td></tr>') + '</tbody></table></div></div>';
+      '<div class="panel"><div class="ph"><h3>Quais produtos estão dando problema?</h3><button class="link-btn" data-go="analises" data-asub="produtos">Ver produtos</button></div><div class="table-wrap"><table><thead><tr><th>Produto</th><th>SKU</th><th>Ocor.</th><th>Perda</th><th>Causa</th></tr></thead><tbody>' +
+      (crit.length ? crit.map(function (s) { return '<tr style="cursor:pointer" data-go="analises" data-asub="produtos"><td>' + esc((s.product || '—').slice(0, 40)) + '</td><td class="mono footnote" style="margin:0">' + esc(s.sku) + '</td><td>' + s.occ + '</td><td><b>' + brl(s.loss) + '</b></td><td>' + esc(s.dominant) + '</td></tr>'; }).join('') : '<tr><td colspan="5" class="empty">—</td></tr>') + '</tbody></table></div></div>';
   }
 
+  var FLAG_LABELS = { semcausa: 'Sem causa', nova: 'Novas', semresp: 'Sem responsável', naovinc: 'SKU não vinculado' };
   function devOcc() {
     var list = occInPeriod().slice();
     if (!list.length) return emptyBox('Nenhuma ocorrência. Importe os relatórios na aba Importações.');
+    if (devF.type) list = list.filter(function (o) { return o.type === devF.type; });
+    if (devF.flag === 'semcausa') list = list.filter(function (o) { return !o.internalCause && !o.causeFamily; });
+    else if (devF.flag === 'nova') list = list.filter(function (o) { return o.internalStatus === 'NOVA'; });
+    else if (devF.flag === 'semresp') list = list.filter(function (o) { return !o.ownerName; });
+    else if (devF.flag === 'naovinc') list = list.filter(function (o) { return (o.items || []).some(function (i) { return i.sku && !i.skuLinked; }); });
     if (devF.internalStatus) list = list.filter(function (o) { return o.internalStatus === devF.internalStatus; });
     if (devF.disputeStatus) list = list.filter(function (o) { return o.disputeStatus === devF.disputeStatus; });
     if (devF.search) { var s = devF.search.toLowerCase(); list = list.filter(function (o) { return (o.orderId || '').toLowerCase().indexOf(s) >= 0 || (o.reason || '').toLowerCase().indexOf(s) >= 0 || (o.items || []).some(function (i) { return (i.sku || '').toLowerCase().indexOf(s) >= 0 || (i.productName || '').toLowerCase().indexOf(s) >= 0; }); }); }
     list.sort(devF.sort === 'impact' ? function (a, b) { return occEffectiveLoss(b) - occEffectiveLoss(a); } : function (a, b) { return (b.occurredAt || '').localeCompare(a.occurredAt || ''); });
     var pages = Math.max(1, Math.ceil(list.length / 25)); if (devPage > pages) devPage = pages;
     var slice = list.slice((devPage - 1) * 25, devPage * 25);
-    var ordSet = {}; orders.forEach(function (o) { ordSet[o.id] = true; });
     var opts = function (m, sel) { return Object.keys(m).map(function (k) { return '<option value="' + k + '"' + (sel === k ? ' selected' : '') + '>' + m[k] + '</option>'; }).join(''); };
-    return '<div class="toolbar2"><input class="input sm" id="devq" style="width:240px" placeholder="Buscar pedido, SKU, motivo…" value="' + esc(devF.search) + '">' +
+    var typeChips = [['', 'Todas'], ['RETURN_REFUND', 'Devoluções'], ['ORDER_CANCELLATION', 'Cancelamentos'], ['FAILED_DELIVERY', 'Falhas de entrega']];
+    var flagChips = [['', 'Sem filtro rápido'], ['semcausa', 'Sem causa'], ['nova', 'Novas'], ['semresp', 'Sem responsável'], ['naovinc', 'SKU não vinculado']];
+    var activeFilter = (devF.type || devF.flag) ? '<div class="count-line">Filtro ativo: <b>' + (devF.type ? esc(TYPE_LABELS[devF.type]) : '') + (devF.type && devF.flag ? ' · ' : '') + (devF.flag ? esc(FLAG_LABELS[devF.flag]) : '') + '</b> · <button class="link-btn" id="devclear">limpar</button></div>' : '';
+    return '<div class="chips">' + typeChips.map(function (c) { return '<span class="chip' + (devF.type === c[0] ? ' chip-on' : '') + '" data-octype="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
+      '<div class="chips" style="margin-top:6px">' + flagChips.map(function (c) { return '<span class="chip' + (devF.flag === c[0] ? ' chip-on' : '') + '" data-ocflag="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
+      '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="devq" style="width:240px" placeholder="Buscar pedido, SKU, motivo…" value="' + esc(devF.search) + '">' +
       '<select class="select sm" id="devis"><option value="">Status interno: todos</option>' + opts(DEV.INTERNAL_STATUS, devF.internalStatus) + '</select>' +
       '<select class="select sm" id="devds"><option value="">Disputa: todas</option>' + opts(DEV.DISPUTE_STATUS, devF.disputeStatus) + '</select>' +
       '<select class="select sm" id="devsort"><option value="recent"' + (devF.sort === 'recent' ? ' selected' : '') + '>Mais recentes</option><option value="impact"' + (devF.sort === 'impact' ? ' selected' : '') + '>Maior impacto</option></select></div>' +
-      '<div class="count-line"><b>' + nn(list.length) + '</b> ocorrências</div>' +
-      '<div class="panel"><div class="table-wrap"><table><thead><tr><th>Pedido</th><th>Motivo</th><th>Status interno</th><th>Responsável</th><th>Disputa</th><th>Impacto líq.</th><th>Exposição</th><th></th></tr></thead><tbody>' +
-      slice.map(function (o) { return '<tr><td class="mono">' + esc(o.orderId || '—') + '<div class="footnote" style="margin:0">' + esc((o.items[0] && o.items[0].sku) || '—') + ((o.items || []).length > 1 ? ' +' + (o.items.length - 1) : '') + '</div></td><td>' + esc((o.reason || '—').slice(0, 28)) + '</td><td><span class="pill st-int">' + (DEV.INTERNAL_STATUS[o.internalStatus] || o.internalStatus) + '</span></td><td>' + esc(o.ownerName || '—') + '</td><td>' + (o.disputeStatus !== 'NAO_INICIADA' ? '<span class="tag info">' + DEV.DISPUTE_STATUS[o.disputeStatus] + '</span>' : '<span class="footnote">—</span>') + '</td><td>' + (o.impact && o.impact.knownNetImpact != null ? '<b>' + brl(o.impact.knownNetImpact) + '</b>' : '—') + '</td><td><span class="tag ' + (o.exposure.bucket === 'CONFIRMED' ? 'warn' : o.exposure.bucket === 'AT_RISK' ? 'info' : 'ok') + '">' + o.exposure.bucket + '</span></td><td><button class="btn-sm" data-oc="' + esc(o.id) + '">Abrir ficha</button></td></tr>'; }).join('') +
+      activeFilter + '<div class="count-line"><b>' + nn(list.length) + '</b> ocorrências</div>' +
+      '<div class="panel"><div class="table-wrap"><table><thead><tr><th>Pedido</th><th>Tipo</th><th>Produto</th><th>Motivo</th><th>Status interno</th><th>Responsável</th><th>Disputa</th><th>Impacto líq.</th><th>Situação</th><th></th></tr></thead><tbody>' +
+      slice.map(function (o) { var it = (o.items || [])[0] || {}; var sit = situacaoCaso(o); return '<tr><td class="mono">' + esc(o.orderId || '—') + '</td><td>' + esc(TYPE_LABELS[o.type] || '—') + '</td><td>' + esc((it.productName || '—').slice(0, 28)) + '<div class="footnote" style="margin:0">' + esc(it.sku || '—') + ((o.items || []).length > 1 ? ' +' + (o.items.length - 1) : '') + '</div></td><td>' + esc((o.reason || '—').slice(0, 24)) + '</td><td><span class="pill st-int">' + (DEV.INTERNAL_STATUS[o.internalStatus] || o.internalStatus) + '</span></td><td>' + esc(o.ownerName || '—') + '</td><td>' + (o.disputeStatus !== 'NAO_INICIADA' ? '<span class="tag info">' + DEV.DISPUTE_STATUS[o.disputeStatus] + '</span>' : '<span class="footnote">—</span>') + '</td><td>' + (o.impact && o.impact.knownNetImpact != null ? '<b>' + brl(o.impact.knownNetImpact) + '</b>' : '—') + '</td><td><span class="tag ' + sit[1] + '">' + sit[0] + '</span></td><td><button class="btn-sm" data-oc="' + esc(o.id) + '">Abrir ficha</button></td></tr>'; }).join('') +
       '</tbody></table></div></div>' + (pages > 1 ? '<div style="display:flex;gap:8px;justify-content:flex-end;align-items:center"><button class="btn-sm" id="devprev"' + (devPage <= 1 ? ' disabled' : '') + '>Anterior</button><span class="footnote" style="margin:0">página ' + devPage + ' de ' + pages + '</span><button class="btn-sm" id="devnext"' + (devPage >= pages ? ' disabled' : '') + '>Próxima</button></div>' : '');
   }
   function bindDevOcc() {
     var q = document.getElementById('devq'); if (q) { var t; q.oninput = function () { clearTimeout(t); t = setTimeout(function () { var v = q.value; devF.search = v; devPage = 1; render(); var el = document.getElementById('devq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
+    app.querySelectorAll('[data-octype]').forEach(function (c) { c.onclick = function () { devF.type = c.dataset.octype; devPage = 1; render(); }; });
+    app.querySelectorAll('[data-ocflag]').forEach(function (c) { c.onclick = function () { devF.flag = c.dataset.ocflag; devPage = 1; render(); }; });
+    var cl = document.getElementById('devclear'); if (cl) cl.onclick = function () { devF.type = ''; devF.flag = ''; devPage = 1; render(); };
     var is = document.getElementById('devis'); if (is) is.onchange = function () { devF.internalStatus = is.value; devPage = 1; render(); };
     var ds = document.getElementById('devds'); if (ds) ds.onchange = function () { devF.disputeStatus = ds.value; devPage = 1; render(); };
     var so = document.getElementById('devsort'); if (so) so.onchange = function () { devF.sort = so.value; render(); };
     var pv = document.getElementById('devprev'); if (pv) pv.onclick = function () { if (devPage > 1) { devPage--; render(); } };
     var nx = document.getElementById('devnext'); if (nx) nx.onclick = function () { devPage++; render(); };
   }
-  function devMotivos() { var list = occInPeriod(); if (!list.length) return emptyBox('Sem ocorrências no período.'); var d = devMotivosData(list); return '<div class="panel"><div class="ph"><h3>Motivos, um a um</h3></div><div class="table-wrap"><table><thead><tr><th>Motivo</th><th>Casos</th><th>Aprov.</th><th>Análise</th><th>Desist.</th><th>Taxa desist.</th><th>Perda</th><th>Em risco</th><th>Ticket médio</th><th>Compensação</th><th>Retornou</th></tr></thead><tbody>' + d.map(function (r) { return '<tr><td><b>' + esc(r.reason) + '</b></td><td>' + nn(r.cases) + '</td><td>' + nn(r.approved) + '</td><td>' + nn(r.analyzing) + '</td><td>' + nn(r.giveups) + '</td><td>' + pct(r.giveupRate) + '</td><td>' + brl(r.loss) + '</td><td>' + brl(r.atRisk) + '</td><td>' + brl(r.avgTicket) + '</td><td>' + brl(r.compensation) + '</td><td>' + nn(r.returned) + '</td></tr>'; }).join('') + '</tbody></table></div></div>'; }
-  function devCriticos() { var list = occInPeriod(); if (!list.length) return emptyBox('Sem ocorrências no período.'); var d = devCriticosData(list); return '<div class="panel"><div class="ph"><h3>Produtos & SKUs críticos</h3></div><div class="table-wrap"><table><thead><tr><th>SKU</th><th>Produto</th><th>Ocor.</th><th>Perda</th><th>Custo adic.</th><th>Recuperado</th><th>% da perda</th><th>Causa dominante</th></tr></thead><tbody>' + d.map(function (s) { return '<tr><td class="mono">' + esc(s.sku) + (s.linked ? '' : ' <span class="tag warn">não vinc.</span>') + '</td><td>' + esc((s.product || '—').slice(0, 40)) + '</td><td>' + nn(s.occ) + '</td><td><b>' + brl(s.loss) + '</b></td><td>' + brl(s.additional) + '</td><td>' + brl(s.recovered) + '</td><td><span class="tag">' + pct(s.share) + '</span></td><td>' + esc(s.dominant) + '</td></tr>'; }).join('') + '</tbody></table></div></div>'; }
-  function devFinanceiro() { var list = occInPeriod(); if (!list.length) return emptyBox('Sem ocorrências no período.'); var f = devFinanceiroData(list); return '<div class="cards6">' + fcard('Reembolso pago', brl(f.refunded), 'red') + fcard('Custos adicionais', brl(f.additional), 'amber', 'frete reverso, retrabalho') + fcard('Compensação Shopee', brl(f.compensation), 'green') + fcard('Recuperação de disputa', brl(f.disputeRec), 'green') + fcard('Recuperado (total)', brl(f.recovered), 'green') + fcard('Impacto líquido conhecido', brl(f.net), 'red') + fcard('Em risco', brl(f.atRisk), 'amber') + '</div><div class="info-banner">Impacto líquido = custos conhecidos (reembolso + frete reverso + retrabalho…) − recuperações conhecidas (compensação + recuperação de disputa + valor recuperável). CMV (custo da mercadoria perdida) ainda não disponível — não é estimado.</div>'; }
+  function devMotivos() { var list = occInPeriod(); if (!list.length) return emptyBox('Sem ocorrências no período.'); var d = devMotivosData(list); return '<div class="panel"><div class="ph"><h3>Por que os clientes estão devolvendo?</h3><span class="footnote" style="margin:0">clique num motivo para ver os produtos</span></div><div class="table-wrap"><table><thead><tr><th>Motivo</th><th>Casos</th><th>Aprov.</th><th>Análise</th><th>Desist.</th><th>Taxa desist.</th><th>Perda</th><th>Em risco</th><th>Ticket médio</th><th>Compensação</th><th>Retornou</th></tr></thead><tbody>' + d.map(function (r) { return '<tr style="cursor:pointer" title="Ver produtos deste motivo" data-go="analises" data-asub="produtos" data-reason="' + esc(r.reason) + '"><td><b>' + esc(r.reason) + '</b></td><td>' + nn(r.cases) + '</td><td>' + nn(r.approved) + '</td><td>' + nn(r.analyzing) + '</td><td>' + nn(r.giveups) + '</td><td>' + pct(r.giveupRate) + '</td><td>' + brl(r.loss) + '</td><td>' + brl(r.atRisk) + '</td><td>' + brl(r.avgTicket) + '</td><td>' + brl(r.compensation) + '</td><td>' + nn(r.returned) + '</td></tr>'; }).join('') + '</tbody></table></div></div>'; }
+  function devCriticos() {
+    var list = occInPeriod();
+    if (analiseReason) list = list.filter(function (o) { return (o.reason || '(sem motivo informado)').trim() === analiseReason; });
+    if (!occInPeriod().length) return emptyBox('Sem ocorrências no período.');
+    var d = devCriticosData(list);
+    var banner = analiseReason ? '<div class="count-line">Filtrando por motivo: <b>' + esc(analiseReason) + '</b> · <button class="link-btn" data-go="analises" data-asub="produtos" data-reason="">limpar</button></div>' : '';
+    return banner + '<div class="panel"><div class="ph"><h3>Quais produtos estão dando problema?</h3></div><div class="table-wrap"><table><thead><tr><th>Produto</th><th>SKU</th><th>Ocor.</th><th>Perda</th><th>Custo adic.</th><th>Recuperado</th><th>% da perda</th><th>Causa dominante</th></tr></thead><tbody>' + (d.length ? d.map(function (s) { return '<tr><td>' + esc((s.product || '—').slice(0, 40)) + '</td><td class="mono footnote" style="margin:0">' + esc(s.sku) + (s.linked ? '' : ' <span class="tag warn">não vinc.</span>') + '</td><td>' + nn(s.occ) + '</td><td><b>' + brl(s.loss) + '</b></td><td>' + brl(s.additional) + '</td><td>' + brl(s.recovered) + '</td><td><span class="tag">' + pct(s.share) + '</span></td><td>' + esc(s.dominant) + '</td></tr>'; }).join('') : '<tr><td colspan="8" class="empty">Nenhum produto para este filtro.</td></tr>') + '</tbody></table></div></div>';
+  }
+  // Categorias clicáveis do Financeiro → drill-down para as ocorrências que compõem o valor.
+  var FIN_CATS = {
+    refunded: { label: 'Reembolso pago', cls: 'red', val: function (o) { return o.impact.refundedTotal || 0; } },
+    additional: { label: 'Custos adicionais', cls: 'amber', val: function (o) { return o.impact.additionalCostTotal || 0; } },
+    compensation: { label: 'Compensação Shopee', cls: 'green', val: function (o) { return o.compensation || 0; } },
+    disputeRec: { label: 'Recuperação de disputa', cls: 'green', val: function (o) { return o.disputeRecovered || 0; } },
+    net: { label: 'Impacto líquido conhecido', cls: 'red', val: function (o) { return occEffectiveLoss(o); } },
+    atRisk: { label: 'Em risco', cls: 'amber', val: function (o) { return o.exposure.atRisk || 0; } },
+  };
+  function devFinanceiro() {
+    var list = occInPeriod(); if (!list.length) return emptyBox('Sem ocorrências no período.'); var f = devFinanceiroData(list);
+    var card = function (key, valor, sub2) { return '<div class="fcard ' + FIN_CATS[key].cls + '" style="cursor:pointer' + (finDrill === key ? ';outline:2px solid var(--brand)' : '') + '" data-fin="' + key + '"><div class="lbl">' + esc(FIN_CATS[key].label) + '</div><div class="val">' + brl(valor) + '</div>' + (sub2 ? '<div class="footnote" style="margin-top:4px">' + esc(sub2) + '</div>' : '') + '<div class="footnote" style="margin-top:4px">clique p/ detalhar</div></div>'; };
+    var cards = '<div class="cards6">' + card('refunded', f.refunded) + card('additional', f.additional, 'frete reverso, retrabalho') + card('compensation', f.compensation) + card('disputeRec', f.disputeRec) + card('net', f.net) + card('atRisk', f.atRisk) + '</div>';
+    var drill = '';
+    if (finDrill && FIN_CATS[finDrill]) {
+      var cat = FIN_CATS[finDrill];
+      var rows = list.map(function (o) { return { o: o, v: r2(cat.val(o)) }; }).filter(function (x) { return x.v > 0; }).sort(function (a, b) { return b.v - a.v; });
+      drill = '<div class="panel"><div class="ph"><h3>' + esc(cat.label) + ' — ' + nn(rows.length) + ' ocorrência' + (rows.length === 1 ? '' : 's') + ' compõe' + (rows.length === 1 ? '' : 'm') + ' ' + brl(rows.reduce(function (s, x) { return s + x.v; }, 0)) + '</h3><button class="link-btn" id="finclose">fechar</button></div><div class="table-wrap"><table><thead><tr><th>Pedido</th><th>Produto / SKU</th><th>Motivo</th><th>' + esc(cat.label) + '</th><th></th></tr></thead><tbody>' +
+        (rows.length ? rows.slice(0, 200).map(function (x) { var it = (x.o.items || [])[0] || {}; return '<tr><td class="mono">' + esc(x.o.orderId || '—') + '</td><td>' + esc((it.productName || '—').slice(0, 30)) + '<div class="footnote" style="margin:0">' + esc(it.sku || '—') + '</div></td><td>' + esc((x.o.reason || '—').slice(0, 24)) + '</td><td><b>' + brl(x.v) + '</b></td><td><button class="btn-sm" data-oc="' + esc(x.o.id) + '">Abrir ficha</button></td></tr>'; }).join('') : '<tr><td colspan="5" class="empty">Nada nesta categoria.</td></tr>') +
+        '</tbody></table></div></div>';
+    }
+    return cards + '<div class="info-banner">Impacto líquido = custos conhecidos (reembolso + frete reverso + retrabalho…) − recuperações conhecidas (compensação + recuperação de disputa + valor recuperável). O custo da mercadoria perdida ainda não está disponível — não é estimado.</div>' + drill;
+  }
+  function bindFinanceiro() { app.querySelectorAll('[data-fin]').forEach(function (c) { c.onclick = function () { finDrill = finDrill === c.dataset.fin ? null : c.dataset.fin; render(); }; }); var cl = document.getElementById('finclose'); if (cl) cl.onclick = function () { finDrill = null; render(); }; }
   function devDisputas() {
     var list = occInPeriod(); if (!list.length) return emptyBox('Sem ocorrências no período.'); var d = devDisputesData(list);
     var now = new Date(), soon = new Date(now.getTime() + 3 * 864e5);
-    var open = list.filter(function (o) { return ['POSSIVEL', 'EM_PREPARACAO', 'RESPONDIDA', 'AGUARDANDO_SHOPEE'].indexOf(o.disputeStatus) >= 0; });
-    var venceHoje = open.filter(function (o) { return o.disputeDeadline && new Date(o.disputeDeadline).toDateString() === now.toDateString(); });
-    var vence3 = open.filter(function (o) { return o.disputeDeadline && new Date(o.disputeDeadline) > now && new Date(o.disputeDeadline) <= soon; });
-    var semResp = list.filter(function (o) { return o.disputeStatus === 'POSSIVEL'; });
-    var linha = function (o) { return '<tr><td class="mono">' + esc(o.orderId || o.id) + '</td><td>' + esc((o.reason || '—').slice(0, 26)) + '</td><td>' + (DEV.DISPUTE_STATUS[o.disputeStatus] || o.disputeStatus) + '</td><td>' + (o.disputeDeadline ? dbr(o.disputeDeadline) : '—') + '</td><td>' + brl(o.requested) + '</td><td><button class="btn-sm" data-oc="' + esc(o.id) + '">Trabalhar</button></td></tr>'; };
-    var tabela = function (title, arr, cls) { return '<div class="panel"><div class="ph"><h3>' + title + '</h3><span class="tag ' + (cls || '') + '">' + arr.length + '</span></div>' + (arr.length ? '<div class="table-wrap"><table><thead><tr><th>Pedido</th><th>Motivo</th><th>Status</th><th>Prazo</th><th>Valor</th><th></th></tr></thead><tbody>' + arr.map(linha).join('') + '</tbody></table></div>' : '<div class="pb"><div class="footnote">Nada aqui.</div></div>') + '</div>'; };
-    return '<div class="cards6">' + fcard('Abertas', nn(d.abertas), '') + fcard('Vencendo (≤3d)', nn(d.vencendo), 'amber') + fcard('Vencidas', nn(d.vencidas), 'red') + fcard('Taxa de resposta', pct(d.taxaResposta), '') + fcard('Ganhas', nn(d.ganhas), 'green') + fcard('Perdidas', nn(d.perdidas), 'red') + fcard('Valor contestado', brl(d.contestado), '') + fcard('Valor recuperado', brl(d.recuperado), 'green') + '</div>' +
-      tabela('Vence hoje — o que preciso defender', venceHoje, 'warn') + tabela('Vence em até 3 dias', vence3, 'warn') + tabela('Possível contestação (sem resposta)', semResp, 'info') +
-      '<div class="footnote">Abra a ficha (Trabalhar) para registrar a resposta e o resultado da disputa.</div>';
+    var isOpen = function (o) { return ['POSSIVEL', 'EM_PREPARACAO', 'RESPONDIDA', 'AGUARDANDO_SHOPEE'].indexOf(o.disputeStatus) >= 0; };
+    var FIL = {
+      hoje: function (o) { return isOpen(o) && o.disputeDeadline && new Date(o.disputeDeadline).toDateString() === now.toDateString(); },
+      tresdias: function (o) { return isOpen(o) && o.disputeDeadline && new Date(o.disputeDeadline) > now && new Date(o.disputeDeadline) <= soon; },
+      possivel: function (o) { return o.disputeStatus === 'POSSIVEL'; },
+      preparacao: function (o) { return o.disputeStatus === 'EM_PREPARACAO'; },
+      respondidas: function (o) { return o.disputeStatus === 'RESPONDIDA'; },
+      aguardando: function (o) { return o.disputeStatus === 'AGUARDANDO_SHOPEE'; },
+      ganhas: function (o) { return o.disputeStatus === 'GANHA' || o.disputeStatus === 'PARCIAL'; },
+      perdidas: function (o) { return o.disputeStatus === 'PERDIDA'; },
+      prazo: function (o) { return o.disputeStatus === 'PRAZO_PERDIDO' || (isOpen(o) && o.disputeDeadline && new Date(o.disputeDeadline) < now); },
+    };
+    if (!FIL[dispChip]) dispChip = 'hoje';
+    var chips = [['hoje', 'Vence hoje'], ['tresdias', 'Vence em 3 dias'], ['possivel', 'Possível contestação'], ['preparacao', 'Em preparação'], ['respondidas', 'Respondidas'], ['aguardando', 'Aguardando Shopee'], ['ganhas', 'Ganhas'], ['perdidas', 'Perdidas'], ['prazo', 'Prazo perdido']];
+    var count = function (k) { return list.filter(FIL[k]).length; };
+    var view = list.filter(FIL[dispChip]).sort(function (a, b) { return (a.disputeDeadline || '').localeCompare(b.disputeDeadline || ''); });
+    var linha = function (o) { return '<tr><td class="mono">' + esc(o.orderId || o.id) + '</td><td>' + esc((o.reason || '—').slice(0, 26)) + '</td><td>' + (DEV.DISPUTE_STATUS[o.disputeStatus] || o.disputeStatus) + '</td><td>' + (o.disputeDeadline ? dbr(o.disputeDeadline) : '—') + '</td><td>' + brl(o.requested) + '</td><td><button class="btn-sm primary" data-oc="' + esc(o.id) + '" data-focus="disputa">Trabalhar</button></td></tr>'; };
+    return '<div class="cards6">' + fcard('Abertas', nn(d.abertas), '') + fcard('Vencendo (≤3d)', nn(d.vencendo), 'amber') + fcard('Vencidas', nn(d.vencidas), 'red') + fcard('Taxa de resposta', pct(d.taxaResposta), '') + fcard('Ganhas', nn(d.ganhas), 'green') + fcard('Valor recuperado', brl(d.recuperado), 'green') + '</div>' +
+      '<div class="chips">' + chips.map(function (c) { return '<span class="chip' + (dispChip === c[0] ? ' chip-on' : '') + '" data-disp2="' + c[0] + '">' + c[1] + ' <b>' + count(c[0]) + '</b></span>'; }).join('') + '</div>' +
+      '<div class="panel" style="margin-top:8px"><div class="table-wrap"><table><thead><tr><th>Pedido</th><th>Motivo</th><th>Status</th><th>Prazo</th><th>Valor</th><th></th></tr></thead><tbody>' +
+      (view.length ? view.map(linha).join('') : '<tr><td colspan="6" class="empty">Nenhuma disputa neste filtro.</td></tr>') + '</tbody></table></div></div>' +
+      '<div class="footnote">"Trabalhar" abre a ficha da devolução direto no bloco Disputa para registrar resposta e resultado.</div>';
   }
-  function devPendencias() { var list = occInPeriod(); var p = devPendingData(list); return '<div class="panel"><div class="ph"><h3>Fila operacional — o que fazer agora</h3></div><div class="pb">' + (p.length ? p.map(function (x) { return '<div class="fin-line"><span>' + esc(x[0]) + '</span><span style="display:flex;gap:10px;align-items:center"><b>' + nn(x[1]) + '</b><button class="btn-sm" data-go="ocorrencias">Trabalhar</button></span></div>'; }).join('') : '<div class="footnote">Nada pendente. 🎉</div>') + '</div></div>'; }
+  function bindDisputas() { app.querySelectorAll('[data-disp2]').forEach(function (c) { c.onclick = function () { dispChip = c.dataset.disp2; render(); }; }); }
 
   // ---- Ficha operacional editável (§8-§19) ----
-  function openFicha(id) {
+  function openFicha(id, focusBlock) {
     var o = occ.find(function (x) { return x.id === id; }); if (!o) return;
     var d = document.createElement('div'); d.className = 'drawer drawer-wide';
     var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '940px'; panel.style.maxWidth = '97vw';
@@ -4383,13 +4486,14 @@ buffer/index.js:
       panel.innerHTML = '<div class="dh"><div><b>Ficha — ' + esc(o.orderId || o.id) + '</b> <span class="pill st-int" style="margin-left:8px">' + (DEV.INTERNAL_STATUS[o.internalStatus] || o.internalStatus) + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
         '<div class="cards6">' + fcard('Reembolso', brl(o.impact.refundedTotal), 'red') + fcard('Custos adicionais', brl(o.impact.additionalCostTotal), 'amber') + fcard('Recuperado', brl(o.impact.recoveredTotal), 'green') + fcard('Impacto líquido', o.impact.knownNetImpact == null ? '—' : brl(o.impact.knownNetImpact), 'red', o.impact.cmvAvailable ? '' : 'CMV não disponível') + '</div>' +
         '<div class="split"><div>' +
-        '<div class="panel"><div class="ph"><h3>Dados da Shopee</h3></div><div class="pb">' + kv('Motivo (original)', o.reason) + kv('Status Shopee', o.status) + kv('Reembolso solicitado', brl(o.requested)) + (ord ? kv('Pedido', ord.id + ' · ' + (S.pedidos.labels[ord.normalizedStatus] || '')) : '<div class="footnote">Pedido não importado.</div>') + '<label class="fld">Itens</label>' + (o.items || []).map(function (i) { return '<div class="ro" style="margin-bottom:4px"><span class="mono">' + esc(i.sku || '—') + '</span> ' + esc((i.productName || '').slice(0, 40)) + (i.skuLinked ? '' : ' <span class="tag warn">não vinc.</span>') + '</div>'; }).join('') + '</div></div>' +
+        '<div class="panel"><div class="ph"><h3>Produto / retorno</h3><span class="tag ' + situacaoCaso(o)[1] + '">' + situacaoCaso(o)[0] + '</span></div><div class="pb">' + kv('Motivo (cliente)', o.reason) + kv('Situação do retorno', RECEIPT_LABELS[o.receiptState] || 'Não iniciado') + '<label class="fld">Itens</label>' + (o.items || []).map(function (i) { return '<div class="ro" style="margin-bottom:4px"><span class="mono">' + esc(i.sku || '—') + '</span> ' + esc((i.productName || '').slice(0, 40)) + (i.skuLinked ? '' : ' <span class="tag warn">não vinc.</span>') + '</div>'; }).join('') + '</div></div>' +
+        '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Ver dados originais (Shopee)</summary><div class="pb">' + kv('Motivo (original)', o.reason) + kv('Status Shopee', o.status) + kv('Reembolso solicitado', brl(o.requested)) + (ord ? kv('Pedido', ord.id + ' · ' + (S.pedidos.labels[ord.normalizedStatus] || '')) : '<div class="footnote">Pedido não importado.</div>') + '</div></details>' +
         '<div class="panel"><div class="ph"><h3>Impacto financeiro</h3></div><div class="pb">' +
         '<div class="fin-line"><span>Reembolso pago</span><span class="neg">' + brl(o.impact.refundedTotal) + '</span></div><div class="fin-line"><span>Custos adicionais</span><span class="neg">' + brl(o.impact.additionalCostTotal) + '</span></div><div class="fin-line"><span>Recuperações</span><span class="pos">-' + brl(o.impact.recoveredTotal) + '</span></div><div class="fin-line total"><span>Impacto líquido conhecido</span><span class="neg">' + (o.impact.knownNetImpact == null ? '—' : brl(o.impact.knownNetImpact)) + '</span></div>' +
         '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center"><select class="select sm" id="evtype">' + Object.keys(EVENT_META).map(function (k) { return '<option value="' + k + '">' + EVENT_META[k].label + '</option>'; }).join('') + '</select><input class="input sm" id="evamt" style="width:100px" placeholder="valor"><button class="btn-sm primary" id="evadd">+ Movimentação</button></div>' +
         (o.events && o.events.length ? '<div style="margin-top:10px">' + o.events.map(function (e) { return '<div class="fin-line"><span>' + (EVENT_META[e.type] ? EVENT_META[e.type].label : e.type) + (e.note ? ' · ' + esc(e.note) : '') + '</span><span class="' + (e.direction === 'RECOVERY' ? 'pos' : 'neg') + '">' + (e.direction === 'RECOVERY' ? '-' : '') + brl(e.amount) + '</span></div>'; }).join('') + '</div>' : '') + '</div></div></div>' +
         '<div><div class="panel"><div class="ph"><h3>Controle interno</h3></div><div class="pb">' + sel('Status interno', o.internalStatus, DEV.INTERNAL_STATUS, 'internalStatus') + sel('Prioridade', o.priority, DEV.PRIORITY, 'priority') + inp('Responsável', o.ownerName, 'ownerName', 'nome do responsável') + inp('Causa interna', o.internalCause, 'internalCause', 'ex.: proteção insuficiente do vidro') + inp('Família da causa', o.causeFamily, 'causeFamily', 'ex.: Avaria / Embalagem') + sel('Responsabilidade', o.responsibility, DEV.RESPONSIBILITY, 'responsibility') + sel('Situação da mercadoria', o.merchandiseStatus, DEV.MERCH_STATUS, 'merchandiseStatus') + sel('Condição (se recebida)', o.merchandiseCondition || '', Object.assign({ '': '—' }, DEV.MERCH_COND), 'merchandiseCondition') + inp('Valor recuperável (R$)', o.recoverableValue, 'recoverableValue', '0,00') + '</div></div>' +
-        '<div class="panel"><div class="ph"><h3>Disputa</h3><span class="tag info">' + DEV.DISPUTE_STATUS[o.disputeStatus] + '</span></div><div class="pb"><select class="select" id="dispsel" style="width:100%">' + Object.keys(DEV.DISPUTE_STATUS).map(function (k) { return '<option value="' + k + '"' + (o.disputeStatus === k ? ' selected' : '') + '>' + DEV.DISPUTE_STATUS[k] + '</option>'; }).join('') + '</select><div id="dispextra"></div><button class="btn-sm primary" id="dispsave" style="margin-top:8px">Salvar disputa</button></div></div></div></div>' +
+        '<div class="panel" id="fichaDisputa"><div class="ph"><h3>Disputa</h3><span class="tag info">' + DEV.DISPUTE_STATUS[o.disputeStatus] + '</span></div><div class="pb"><select class="select" id="dispsel" style="width:100%">' + Object.keys(DEV.DISPUTE_STATUS).map(function (k) { return '<option value="' + k + '"' + (o.disputeStatus === k ? ' selected' : '') + '>' + DEV.DISPUTE_STATUS[k] + '</option>'; }).join('') + '</select><div id="dispextra"></div><button class="btn-sm primary" id="dispsave" style="margin-top:8px">Salvar disputa</button></div></div></div></div>' +
         '<div class="panel"><div class="ph"><h3>Timeline & auditoria</h3></div><div class="pb"><div style="display:flex;gap:6px;margin-bottom:10px"><input class="input sm" id="cmt" style="flex:1" placeholder="Adicionar comentário…"><button class="btn-sm" id="cmtadd">Comentar</button></div>' +
         ((o.activities || []).length ? o.activities.map(function (a) { return '<div class="fin-line"><span>' + (a.kind === 'COMMENT' ? '💬 ' + esc(a.message) : a.kind === 'FINANCIAL' ? '💰 ' + esc(a.message) : a.kind === 'DISPUTE' ? '⚖️ ' + esc(a.field || '') + ': ' + esc(a.oldValue || '∅') + ' → ' + esc(a.newValue || '∅') + (a.message ? ' · ' + esc(a.message) : '') : esc(a.field || '') + ': ' + esc(a.oldValue || '∅') + ' → ' + esc(a.newValue || '∅')) + (a.userName ? ' — ' + esc(a.userName) : '') + '</span><span class="footnote" style="margin:0">' + new Date(a.createdAt).toLocaleString('pt-BR') + '</span></div>'; }).join('') : '<div class="footnote">Sem atividade ainda.</div>') + '</div></div>' +
         '</div>';
@@ -4404,13 +4508,14 @@ buffer/index.js:
       var cmtadd = panel.querySelector('#cmtadd'); var cmt = panel.querySelector('#cmt'); cmtadd.onclick = function () { if (!cmt.value.trim()) return; addActivity(o, 'COMMENT', { message: cmt.value.trim(), userName: 'Operador' }); saveOcc(o).then(draw); }; cmt.onkeydown = function (e) { if (e.key === 'Enter' && cmt.value.trim()) { addActivity(o, 'COMMENT', { message: cmt.value.trim(), userName: 'Operador' }); saveOcc(o).then(draw); } };
     }
     draw();
+    if (focusBlock === 'disputa') { var fd = panel.querySelector('#fichaDisputa'); if (fd) fd.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
   }
 
   // ---------- INTELIGÊNCIA ----------
   function renderIA() {
     app.innerHTML =
-      '<div class="page-head"><div><h2>Inteligência</h2><p>Chat sobre os dados com <b>Preview</b> ao lado. Respostas determinísticas e auditáveis — a IA nunca inventa números nem calcula dinheiro.</p></div></div>' +
-      '<div class="aicfg"><b>Como funciona:</b> as respostas abaixo são calculadas localmente a partir dos dados importados (evidências no Preview). No sistema completo (backend), a mesma camada aciona um provedor de LLM real — com credencial cifrada no servidor, <b>nunca no navegador</b> (§46) — para gerar a narrativa; os números permanecem sempre determinísticos.</div>' +
+      '<div class="page-head"><div><h2>Inteligência</h2><p>Chat sobre os dados com <b>Preview</b> ao lado. Respostas auditáveis — a IA nunca inventa números nem calcula dinheiro.</p></div></div>' +
+      '<div class="aicfg"><b>Como funciona:</b> as respostas abaixo são calculadas localmente a partir dos dados importados (evidências no Preview). No sistema completo (backend), a mesma camada aciona um provedor de LLM real — com credencial cifrada no servidor, <b>nunca no navegador</b> (§46) — para gerar a narrativa; os números permanecem sempre calculados a partir dos seus dados.</div>' +
       '<div class="split"><div class="chatbox"><div class="chatlog" id="clog"></div>' +
       '<div class="chips">' + ['Qual meu resultado estimado?', 'Quais SKUs estão sem custo?', 'Quais produtos vendem muito e lucram pouco?', 'Quais SKUs têm mais devoluções?', 'Qual a exposição financeira?'].map(function (c) { return '<span class="chip" data-q="' + esc(c) + '">' + esc(c) + '</span>'; }).join('') + '</div>' +
       '<div class="chatin"><input class="input" id="cin" placeholder="Pergunte sobre vendas, lucro, custos, devoluções…"><button class="btn-sm primary" id="csend">Enviar</button></div></div><div class="prev" id="prev"></div></div>';
@@ -4421,12 +4526,12 @@ buffer/index.js:
   function renderChat() { var log = document.getElementById('clog'); if (!log) return; if (!chat.length) { log.innerHTML = '<div class="msg a">Olá! Pergunte sobre seus dados. Ex.: <i>"quais SKUs estão sem custo?"</i>. Vou responder com base nas evidências do Preview ao lado.</div>'; return; } log.innerHTML = chat.map(function (m) { return '<div class="msg ' + m.role + '">' + esc(m.text).replace(/\n/g, '<br>') + (m.cites ? '<div class="cites">Evidências: ' + esc(m.cites) + '</div>' : '') + '</div>'; }).join(''); log.scrollTop = log.scrollHeight; }
   function sendChat() { var inp = document.getElementById('cin'); var q = inp.value.trim(); if (!q) return; chat.push({ role: 'u', text: q }); inp.value = ''; var ans = answer(q); chat.push({ role: 'a', text: ans.text, cites: ans.cites }); renderChat(); renderPreview(); }
   function evidence() { var a = computeOrderAgg(); var o = occInPeriod(); var e = sumExposure(o); var noCost = {}; pedidosInPeriod().forEach(function (ord) { orderFinance(ord)._items.forEach(function (r, i) { var it = ord.items[i]; if (it.sku && r.costUnknown) noCost[it.sku] = (noCost[it.sku] || 0) + 1; }); }); return { a: a, o: o, e: e, noCost: noCost }; }
-  function renderPreview() { var el = document.getElementById('prev'); if (!el) return; var ev = evidence(); var a = ev.a; el.innerHTML = '<h4>Preview · evidências determinísticas</h4>' + rowline('Pedidos (período)', nn(a.orders)) + rowline('Venda real', brl(a.revenue)) + rowline('Taxas marketplace', brl(a.fees)) + rowline('Custo produtos', brl(a.cost)) + rowline('Resultado estimado', brl(a.result)) + rowline('Margem estimada', a.revenue ? pct((a.result / a.revenue) * 100) : '—') + rowline('Pedidos c/ custo pendente', nn(a.costPending)) + rowline('SKUs distintos sem custo', nn(Object.keys(ev.noCost).length)) + rowline('Ocorrências pós-venda', nn(ev.o.length)) + rowline('Prejuízo confirmado', brl(ev.e.confirmedLoss)) + rowline('Em risco', brl(ev.e.atRisk)) + '<div class="footnote" style="margin-top:10px">Estes números são a base factual das respostas do chat.</div>'; }
+  function renderPreview() { var el = document.getElementById('prev'); if (!el) return; var ev = evidence(); var a = ev.a; el.innerHTML = '<h4>Preview · evidências (cálculo local)</h4>' + rowline('Pedidos (período)', nn(a.orders)) + rowline('Venda real', brl(a.revenue)) + rowline('Taxas marketplace', brl(a.fees)) + rowline('Custo produtos', brl(a.cost)) + rowline('Resultado estimado', brl(a.result)) + rowline('Margem estimada', a.revenue ? pct((a.result / a.revenue) * 100) : '—') + rowline('Pedidos c/ custo pendente', nn(a.costPending)) + rowline('SKUs distintos sem custo', nn(Object.keys(ev.noCost).length)) + rowline('Ocorrências pós-venda', nn(ev.o.length)) + rowline('Prejuízo confirmado', brl(ev.e.confirmedLoss)) + rowline('Em risco', brl(ev.e.atRisk)) + '<div class="footnote" style="margin-top:10px">Estes números são a base factual das respostas do chat.</div>'; }
   function answer(q) {
     var ql = q.toLowerCase(); var ev = evidence(); var a = ev.a;
     if (/sem custo|nao vinculad|não vinculad|pendente/.test(ql)) { var skus = Object.keys(ev.noCost).slice(0, 15); return { text: (skus.length ? 'Há ' + Object.keys(ev.noCost).length + ' SKUs distintos sem custo cadastrado (vínculo ou custo da família ausente). Isso deixa ' + a.costPending + ' pedidos com lucro pendente. Exemplos: ' + skus.slice(0, 8).join(', ') + '. Cadastre a família e o custo em Produtos para liberar o lucro estimado.' : 'Todos os SKUs vendidos no período têm custo cadastrado.'), cites: a.costPending + ' pedidos pendentes · ' + Object.keys(ev.noCost).length + ' SKUs' }; }
     if (/margem|lucro pouco|vendem muito/.test(ql)) { var map = {}; pedidosInPeriod().forEach(function (o) { var f = orderFinance(o); o.items.forEach(function (it, i) { if (!it.sku) return; var m = map[it.sku] = map[it.sku] || { sku: it.sku, rev: 0, res: 0, hasCost: true }; m.rev += it.subtotal; var r = f._items[i]; if (r.costUnknown) m.hasCost = false; else m.res += (r.subtotal - r.allocatedFees - (r.costTotal || 0)); }); }); var arr = Object.values(map).filter(function (m) { return m.hasCost && m.rev > 0; }).map(function (m) { m.margin = (m.res / m.rev) * 100; return m; }).sort(function (x, y) { return x.margin - y.margin; }); var low = arr.slice(0, 6); return { text: low.length ? 'SKUs que vendem mas têm margem baixa (com custo cadastrado):\n' + low.map(function (m) { return '• ' + m.sku + ' — venda ' + brl(m.rev) + ', margem ' + pct(m.margin); }).join('\n') : 'Ainda não há SKUs suficientes com custo cadastrado para avaliar margem. Cadastre custos em Produtos.', cites: arr.length + ' SKUs com custo avaliados' }; }
-    if (/devolu|reembolso|pós-venda|pos-venda|perda|prejuíz|prejuiz/.test(ql)) { var skuMap = {}; ev.o.forEach(function (o) { (o.items || []).forEach(function (i) { if (i.sku) skuMap[i.sku] = (skuMap[i.sku] || 0) + 1; }); }); var top = Object.entries(skuMap).sort(function (x, y) { return y[1] - x[1]; }).slice(0, 6); return { text: 'No período há ' + ev.o.length + ' ocorrências de pós-venda. Prejuízo confirmado ' + brl(ev.e.confirmedLoss) + ', em risco ' + brl(ev.e.atRisk) + '. SKUs com mais ocorrências: ' + (top.map(function (t) { return t[0] + ' (' + t[1] + ')'; }).join(', ') || '—') + '.', cites: ev.o.length + ' ocorrências · confirmado ' + brl(ev.e.confirmedLoss) }; }
+    if (/devolu|reembolso|pós-venda|pos-venda|perda|prejuíz|prejuiz/.test(ql)) { var skuMap = {}; ev.o.forEach(function (o) { (o.items || []).forEach(function (i) { if (i.sku) skuMap[i.sku] = (skuMap[i.sku] || 0) + 1; }); }); var top = Object.entries(skuMap).sort(function (x, y) { return y[1] - x[1]; }).slice(0, 6); return { text: 'No período há ' + ev.o.length + ' ocorrências de devolução. Prejuízo confirmado ' + brl(ev.e.confirmedLoss) + ', em risco ' + brl(ev.e.atRisk) + '. SKUs com mais ocorrências: ' + (top.map(function (t) { return t[0] + ' (' + t[1] + ')'; }).join(', ') || '—') + '.', cites: ev.o.length + ' ocorrências · confirmado ' + brl(ev.e.confirmedLoss) }; }
     if (/resultado|lucro|ganhei|faturamento|venda|receita/.test(ql)) { return { text: 'No período: venda real ' + brl(a.revenue) + ' em ' + a.orders + ' pedidos, taxas ' + brl(a.fees) + ', custo ' + brl(a.cost) + '. Resultado estimado ' + brl(a.result) + ' (margem ' + (a.revenue ? pct((a.result / a.revenue) * 100) : '—') + ').' + (a.costPending ? ' Atenção: ' + a.costPending + ' pedidos ainda têm custo pendente.' : ''), cites: 'venda ' + brl(a.revenue) + ' · resultado ' + brl(a.result) }; }
     return { text: 'Posso responder sobre venda, resultado/margem, SKUs sem custo e devoluções — sempre com base nos dados importados (veja o Preview).', cites: 'evidências no Preview' };
   }
