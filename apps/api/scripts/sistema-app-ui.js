@@ -88,22 +88,39 @@
     return m;
   }
 
-  // ---------- IndexedDB (v2: adiciona stores de Produtos sem apagar dados) ----------
+  // ---------- IndexedDB (auto-curável: nunca deixa o banco em estado que quebre a importação) ----------
+  // Todos os módulos gravam no MESMO banco. Bancos criados por versões anteriores do
+  // app (com menos stores, ou com a versão reaproveitada) são curados automaticamente:
+  // abrimos SEM fixar versão (pega a versão atual do navegador — nunca dá VersionError),
+  // conferimos se todos os stores existem e, se faltar algum, reabrimos bumpando a versão
+  // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
+  // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
+  // nunca falha com "Cannot read properties of null (reading 'transaction')".
   var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id' };
-  function openDB() {
+  var DB_NAME = 'sistema_marketplace';
+  function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
+  function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
+  function rawOpen(version) {
     return new Promise(function (res, rej) {
-      var r = indexedDB.open('sistema_marketplace', 3);
-      r.onupgradeneeded = function () {
-        var db = r.result;
-        Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); });
-      };
-      r.onsuccess = function () { DB = r.result; res(); };
-      r.onerror = function () { rej(r.error); };
+      var r = version ? indexedDB.open(DB_NAME, version) : indexedDB.open(DB_NAME);
+      r.onupgradeneeded = function () { createMissingStores(r.result); };
+      r.onblocked = function () { /* outra aba mantém uma versão antiga aberta; aguarda o onsuccess */ };
+      r.onsuccess = function () { res(r.result); };
+      r.onerror = function () { rej(r.error || new Error('Falha ao abrir o banco local (IndexedDB).')); };
     });
   }
-  function getAll(store) { return new Promise(function (res, rej) { var rq = DB.transaction(store).objectStore(store).getAll(); rq.onsuccess = function () { res(rq.result || []); }; rq.onerror = function () { rej(rq.error); }; }); }
-  function putMany(store, items) { return new Promise(function (res, rej) { if (!items.length) return res(); var tx = DB.transaction(store, 'readwrite'); var os = tx.objectStore(store); items.forEach(function (it) { os.put(it); }); tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); }; }); }
-  function clearAll() { return new Promise(function (res) { var names = Object.keys(STORES); var tx = DB.transaction(names, 'readwrite'); names.forEach(function (s) { tx.objectStore(s).clear(); }); tx.oncomplete = function () { res(); }; }); }
+  function openDB() {
+    return rawOpen().then(function (db) {
+      if (!missingStores(db).length) { DB = db; return; }
+      var nextV = db.version + 1; db.close(); // força upgrade para criar os stores que faltam
+      return rawOpen(nextV).then(function (db2) { DB = db2; });
+    });
+  }
+  function ensureDB() { return DB ? Promise.resolve(DB) : openDB().then(function () { return DB; }); }
+  function getAll(store) { return ensureDB().then(function (db) { return new Promise(function (res, rej) { var rq = db.transaction(store).objectStore(store).getAll(); rq.onsuccess = function () { res(rq.result || []); }; rq.onerror = function () { rej(rq.error); }; }); }); }
+  function putMany(store, items) { if (!items || !items.length) return Promise.resolve(); return ensureDB().then(function (db) { return new Promise(function (res, rej) { var tx = db.transaction(store, 'readwrite'); var os = tx.objectStore(store); items.forEach(function (it) { os.put(it); }); tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); }; }); }); }
+  function delOne(store, id) { return ensureDB().then(function (db) { return new Promise(function (res, rej) { var tx = db.transaction(store, 'readwrite'); tx.objectStore(store).delete(id); tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); }; }); }); }
+  function clearAll() { return ensureDB().then(function (db) { return new Promise(function (res, rej) { var names = Object.keys(STORES); var tx = db.transaction(names, 'readwrite'); names.forEach(function (s) { tx.objectStore(s).clear(); }); tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); }; }); }); }
 
   // ---------- índice SKU → custo (Produtos alimenta Pedidos, §42) ----------
   function rebuildSkuCost() {
@@ -534,7 +551,7 @@
     app.querySelectorAll('[data-plchk]').forEach(function (c) { c.onchange = function () { var pr = c.dataset.plchk.split('|'); var p = plans.find(function (x) { return x.id === pr[0]; }); if (!p) return; var it = p.checklist.find(function (x) { return x.id === pr[1]; }); if (it) { it.done = c.checked; savePlan(p).then(render); } }; });
     app.querySelectorAll('[data-plitem]').forEach(function (inp) { inp.onkeydown = function (e) { if (e.key === 'Enter' && inp.value.trim()) { var p = plans.find(function (x) { return x.id === inp.dataset.plitem; }); if (p) { p.checklist.push({ id: 'c' + Date.now() + Math.round(Math.random() * 1e6), text: inp.value.trim(), done: false }); savePlan(p).then(render); } } }; });
     app.querySelectorAll('[data-plstatus]').forEach(function (s) { s.onchange = function () { var p = plans.find(function (x) { return x.id === s.dataset.plstatus; }); if (!p) return; p.status = s.value; if ((s.value === 'IMPLEMENTED' || s.value === 'MEASURING') && !p.implementedAt) p.implementedAt = new Date().toISOString(); savePlan(p).then(render); }; });
-    app.querySelectorAll('[data-pldel]').forEach(function (b) { b.onclick = function () { var id = b.dataset.pldel; plans = plans.filter(function (x) { return x.id !== id; }); var tx = DB.transaction('plans', 'readwrite'); tx.objectStore('plans').delete(id); tx.oncomplete = function () { render(); }; }; });
+    app.querySelectorAll('[data-pldel]').forEach(function (b) { b.onclick = function () { var id = b.dataset.pldel; plans = plans.filter(function (x) { return x.id !== id; }); delOne('plans', id).then(render); }; });
   }
   // ---- análise client-side (mesmas regras determinísticas do backend) ----
   function devLoss(list) { return list.reduce(function (s, o) { return s + occEffectiveLoss(o); }, 0); }
