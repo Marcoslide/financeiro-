@@ -21,6 +21,11 @@ export class ListOccurrencesDto extends PostSaleQueryDto {
   @IsOptional() @IsString() status?: string;
   @IsOptional() @IsString() search?: string;
   @IsOptional() @IsIn(['linked', 'unlinked']) linked?: 'linked' | 'unlinked';
+  @IsOptional() @IsString() internalStatus?: string;
+  @IsOptional() @IsString() responsibility?: string;
+  @IsOptional() @IsString() disputeStatus?: string;
+  @IsOptional() @IsString() reason?: string;
+  @IsOptional() @IsString() sort?: string;
   @IsOptional() @IsString() page?: string;
   @IsOptional() @IsString() pageSize?: string;
 }

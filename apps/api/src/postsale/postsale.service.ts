@@ -333,13 +333,17 @@ export class PostSaleService {
     organizationId: string,
     marketplaceAccountId: string,
     p: PeriodFilter,
-    filters: { type?: PostSaleType; status?: string; search?: string; linked?: 'linked' | 'unlinked'; page?: number; pageSize?: number },
+    filters: { type?: PostSaleType; status?: string; search?: string; linked?: 'linked' | 'unlinked'; internalStatus?: string; responsibility?: string; disputeStatus?: string; reason?: string; sort?: string; page?: number; pageSize?: number },
   ) {
     const pageSize = [25, 50, 100].includes(filters.pageSize ?? 0) ? filters.pageSize! : 25;
     const page = Math.max(1, filters.page ?? 1);
     const where: Prisma.PostSaleOccurrenceWhereInput = { organizationId, marketplaceAccountId, ...this.periodWhere(p) };
     if (filters.type) where.type = filters.type as DbOccurrenceType;
     if (filters.status) where.status = { contains: filters.status, mode: 'insensitive' };
+    if (filters.internalStatus) where.internalStatus = filters.internalStatus;
+    if (filters.responsibility) where.responsibility = filters.responsibility;
+    if (filters.disputeStatus) where.disputeStatus = filters.disputeStatus;
+    if (filters.reason) where.reason = { contains: filters.reason, mode: 'insensitive' };
     if (filters.search) {
       const s = filters.search.trim();
       where.OR = [
@@ -351,11 +355,14 @@ export class PostSaleService {
     }
     if (filters.linked === 'unlinked') where.items = { some: { skuLinked: false } };
     if (filters.linked === 'linked') where.items = { some: { skuLinked: true } };
+    const orderBy: Prisma.PostSaleOccurrenceOrderByWithRelationInput =
+      filters.sort === 'impact_desc' ? { knownNetImpact: 'desc' } :
+      filters.sort === 'oldest' ? { occurredAt: 'asc' } : { occurredAt: 'desc' };
 
     const [total, items] = await this.prisma.$transaction([
       this.prisma.postSaleOccurrence.count({ where }),
       this.prisma.postSaleOccurrence.findMany({
-        where, orderBy: { occurredAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize,
+        where, orderBy, skip: (page - 1) * pageSize, take: pageSize,
         include: { items: { select: { sku: true, productName: true, variationName: true, quantity: true, skuLinked: true } }, _count: { select: { items: true } } },
       }),
     ]);
@@ -366,6 +373,11 @@ export class PostSaleService {
         status: o.status, reason: o.reason, resolution: o.resolution, occurredAt: o.occurredAt,
         itemCount: o._count.items, requestedRefundAmount: o.requestedRefundAmount, sellerCompensationAmount: o.sellerCompensationAmount,
         exposureBucket: e.bucket, items: o.items,
+        // Estado operacional (§8/§9/§11/§16)
+        internalStatus: o.internalStatus, priority: o.priority, ownerName: o.ownerName,
+        internalCause: o.internalCause, causeFamily: o.causeFamily, responsibility: o.responsibility,
+        merchandiseStatus: o.merchandiseStatus, disputeStatus: o.disputeStatus, hasDispute: o.hasDispute,
+        knownNetImpact: o.knownNetImpact, additionalCostTotal: o.additionalCostTotal, recoveredTotal: o.recoveredTotal,
       };
     });
     return { total, page, pageSize, items: rows };

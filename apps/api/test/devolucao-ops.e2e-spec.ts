@@ -116,4 +116,24 @@ describe('Devolução — cenários de aceite operacionais (§40-§42)', () => {
     expect(change.oldValue).toBe('ANALISE');
     expect(change.newValue).toBe('RESOLVIDA');
   });
+
+  it('ANÁLISE: exec-overview/motivos/produtos-criticos/financeiro/pendências respondem e refletem a operação (§3-§7,§30)', async () => {
+    // A operação já lançou perdas/recuperações; a análise deve refletir o estado atual.
+    const ov = await http.get(`/api/post-sale/exec-overview?marketplaceAccountId=${accountId}`).set(auth()).expect(200);
+    expect(ov.body.indicators.totalOccurrences).toBeGreaterThanOrEqual(3);
+    expect(ov.body.indicators.confirmedLoss).toBeGreaterThanOrEqual(138); // ACEITE-40 líquido 138
+    expect(Array.isArray(ov.body.whereIsTheError)).toBe(true);
+    expect(Array.isArray(ov.body.criticalProducts)).toBe(true);
+    expect(ov.body.disputes).toBeTruthy();
+
+    const fin = await http.get(`/api/post-sale/financeiro?marketplaceAccountId=${accountId}`).set(auth()).expect(200);
+    expect(fin.body.additionalCostTotal).toBeGreaterThanOrEqual(83); // 38 (§40) + 45 (§42)
+    expect(fin.body.knownNetImpact).toBeGreaterThanOrEqual(138);
+    expect(fin.body.cmvAvailable).toBe(false);
+
+    await http.get(`/api/post-sale/motivos?marketplaceAccountId=${accountId}`).set(auth()).expect(200);
+    await http.get(`/api/post-sale/produtos-criticos?marketplaceAccountId=${accountId}`).set(auth()).expect(200);
+    const pend = await http.get(`/api/post-sale/pendencias?marketplaceAccountId=${accountId}`).set(auth()).expect(200);
+    expect(Array.isArray(pend.body)).toBe(true);
+  });
 });

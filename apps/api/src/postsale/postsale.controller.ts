@@ -3,6 +3,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthUser, Role } from '@financeiro/shared';
 import { PostSaleService } from './postsale.service';
 import { OccurrenceOpsService } from './occurrence-ops.service';
+import { OccurrenceAnalyticsService } from './occurrence-analytics.service';
 import { CurrentUser, Roles } from '../common/decorators';
 import { CommentDto, DisputeDto, FinancialEventDto, ImportPostSaleDto, ListBatchesDto, ListOccurrencesDto, PatchOccurrenceDto, PostSaleQueryDto } from './dto';
 import { PostSaleType } from './parsing/postsale-rows';
@@ -16,7 +17,42 @@ function period(q: { from?: string; to?: string }) {
 
 @Controller('post-sale')
 export class PostSaleController {
-  constructor(private readonly svc: PostSaleService, private readonly ops: OccurrenceOpsService) {}
+  constructor(
+    private readonly svc: PostSaleService,
+    private readonly ops: OccurrenceOpsService,
+    private readonly analytics: OccurrenceAnalyticsService,
+  ) {}
+
+  // --- Análise da Devolução (§3-§7,§20-§27) ---
+  @Get('exec-overview')
+  execOverview(@CurrentUser() u: AuthUser, @Query() q: PostSaleQueryDto) {
+    return this.analytics.overview(u.organizationId, q.marketplaceAccountId!, period(q));
+  }
+
+  @Get('motivos')
+  motivos(@CurrentUser() u: AuthUser, @Query() q: PostSaleQueryDto) {
+    return this.analytics.motivos(u.organizationId, q.marketplaceAccountId!, period(q));
+  }
+
+  @Get('produtos-criticos')
+  produtosCriticos(@CurrentUser() u: AuthUser, @Query() q: PostSaleQueryDto) {
+    return this.analytics.criticalProducts(u.organizationId, q.marketplaceAccountId!, period(q));
+  }
+
+  @Get('financeiro')
+  financeiro(@CurrentUser() u: AuthUser, @Query() q: PostSaleQueryDto) {
+    return this.analytics.financeiro(u.organizationId, q.marketplaceAccountId!, period(q));
+  }
+
+  @Get('disputas')
+  disputas(@CurrentUser() u: AuthUser, @Query() q: PostSaleQueryDto) {
+    return this.analytics.disputes(u.organizationId, q.marketplaceAccountId!, period(q));
+  }
+
+  @Get('pendencias')
+  pendencias(@CurrentUser() u: AuthUser, @Query() q: PostSaleQueryDto) {
+    return this.analytics.pendingQueue(u.organizationId, q.marketplaceAccountId!);
+  }
 
   @Get('overview')
   overview(@CurrentUser() u: AuthUser, @Query() q: PostSaleQueryDto) {
@@ -45,6 +81,11 @@ export class PostSaleController {
       status: q.status,
       search: q.search,
       linked: q.linked,
+      internalStatus: q.internalStatus,
+      responsibility: q.responsibility,
+      disputeStatus: q.disputeStatus,
+      reason: q.reason,
+      sort: q.sort,
       page: q.page ? parseInt(q.page, 10) : 1,
       pageSize: q.pageSize ? parseInt(q.pageSize, 10) : 25,
     });
