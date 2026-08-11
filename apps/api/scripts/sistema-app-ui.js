@@ -21,6 +21,10 @@
   var orders = [], occ = [], batches = [], plans = [];
   var skuCost = {}; // sku(lower) -> { linked:true, cost:number|null, familyName:string|null }
   var lastImportStamp = null; // "Atualizado com dados até…" (§31)
+  var wallet = [];            // extrato da carteira (linhas SHOPEE; reconstruídas são calculadas)
+  var walletSub = 'visao';    // sub-aba da Carteira: visao | mov | ajustes
+  var walletF = { search: '', cat: '', flow: '' }; // filtros da tabela de movimentações
+  var walletStamp = null;     // "atualizado até" da carteira
   var Produtos = null;
   var sub = { pedidos: 'pedidos', posvenda: 'visao' };
   var pedTab = 'ALL';
@@ -135,7 +139,7 @@
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -307,6 +311,7 @@
     if (route === 'dashboard') return renderDashboard();
     if (route === 'pedidos') return renderPedidos();
     if (route === 'posvenda') return renderPosVenda();
+    if (route === 'carteira') return renderCarteira();
     if (route === 'ia') return renderIA();
   }
 
@@ -1109,6 +1114,249 @@
     if (focusBlock === 'disputa') { var fd = panel.querySelector('#fichaDisputa'); if (fd) fd.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
   }
 
+  // ==================================================================================
+  // SALDO DA CARTEIRA — mostrar + medir + rastrear + reconciliar (determinístico)
+  // ==================================================================================
+  var WCAT = { RENDA: 'Renda de pedido', DEVOLUCAO: 'Devolução / Reembolso', INDENIZACAO: 'Indenização', PIX: 'Pix', SAQUE: 'Saque', ADS: 'Ads', ACELERA: 'Shopee Acelera', PAGAMENTO: 'Pagamento', AJUSTE: 'Ajuste', COMPENSACAO: 'Compensação', CREDITO: 'Crédito', TAXA: 'Taxa', SEMLINHA: 'Ajuste sem linha', OUTRO: 'Outro' };
+  function wcatLabel(c) { return WCAT[c] || c; }
+  function walletNum(v) { if (v == null) return null; var s = String(v).trim(); if (s === '' || s === '-') return null; s = s.replace(/\s/g, ''); if (s.indexOf(',') >= 0 && s.indexOf('.') >= 0) s = s.replace(/\./g, '').replace(',', '.'); else if (s.indexOf(',') >= 0) s = s.replace(',', '.'); var n = Number(s); return isNaN(n) ? null : n; }
+  function parseWalletDate(d) { var x = new Date(String(d).replace(' ', 'T')); return isNaN(x) ? null : x.toISOString(); }
+  function walletCat(tipo, desc, amount) {
+    var t = normStatus(tipo), s = normStatus(desc), entrada = amount >= 0;
+    if (/renda do pedido|renda de pedido|renda|liberacao/.test(t)) return 'RENDA';
+    if (/pix/.test(t)) return 'PIX';
+    if (/saque/.test(t)) return 'SAQUE';
+    if (/acelera/.test(t)) return 'ACELERA';
+    if (/pagamento/.test(t)) { if (/ads|anuncio|publicidade|impuls|recarga/.test(s)) return 'ADS'; return 'PAGAMENTO'; }
+    if (/ajuste/.test(t)) { if (/reembolso|devolucao|debito referente ao pedido/.test(s)) return 'DEVOLUCAO'; if (/perdido|danificado|indeniz|compensa|credito por item/.test(s)) return 'INDENIZACAO'; return entrada ? 'CREDITO' : 'AJUSTE'; }
+    if (/reembolso|devolucao/.test(s)) return 'DEVOLUCAO';
+    if (/indeniz|perdido|danificado|compensa/.test(s)) return 'INDENIZACAO';
+    if (/ads|anuncio|publicidade/.test(s)) return 'ADS';
+    if (/pix/.test(s)) return 'PIX';
+    return 'OUTRO';
+  }
+  function extractWalletOrderId(colVal, desc) { if (colVal) return colVal; var m = (desc || '').match(/#\s*([A-Za-z0-9]{6,})/) || (desc || '').match(/pedido\s+([A-Za-z0-9]{6,})/i); return m ? m[1] : ''; }
+  function walletKey(row) { return 'w:' + (row.date || row.dateRaw) + '|' + row.amount + '|' + (row.balance == null ? '' : row.balance) + '|' + (row.orderId || '') + '|' + (row.desc || '').slice(0, 48); }
+  function parseWallet(ab, filename) {
+    var res = { notRecognized: true, rows: [] };
+    var wb; try { wb = XLSX.read(new Uint8Array(ab), { type: 'array' }); } catch (e) { return res; }
+    var findCol = function (head, aliases) { for (var j = 0; j < head.length; j++) { var h = normStatus(head[j]); for (var a = 0; a < aliases.length; a++) { if (h === aliases[a] || h.indexOf(aliases[a]) >= 0) return j; } } return -1; };
+    for (var si = 0; si < wb.SheetNames.length; si++) {
+      var aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[si]], { header: 1, raw: false, defval: '' });
+      var hi = -1;
+      for (var i = 0; i < Math.min(aoa.length, 40); i++) { var hn = (aoa[i] || []).map(function (c) { return normStatus(c); }); if (hn.indexOf('data') >= 0 && hn.some(function (x) { return x.indexOf('valor') >= 0; }) && hn.some(function (x) { return x.indexOf('balanca') >= 0 || x.indexOf('saldo') >= 0; })) { hi = i; break; } }
+      if (hi < 0) continue;
+      var head = (aoa[hi] || []).map(function (c) { return String(c).trim(); });
+      var ci = { date: findCol(head, ['data']), tipo: findCol(head, ['tipo de transacao', 'tipo']), desc: findCol(head, ['descricao', 'detalhes']), order: findCol(head, ['id do pedido', 'numero do pedido', 'codigo do pedido']), dir: findCol(head, ['direcao do dinheiro', 'direcao']), val: findCol(head, ['valor']), status: findCol(head, ['status']), bal: findCol(head, ['balanca apos', 'saldo apos', 'saldo']), adj: findCol(head, ['valor a ser ajustado', 'valor a ajustar']) };
+      if (ci.date < 0 || ci.val < 0) continue;
+      for (var r = hi + 1; r < aoa.length; r++) { var row = aoa[r] || []; var d = String(row[ci.date] || '').trim(); if (!d) continue; var amount = walletNum(row[ci.val]); if (amount == null) continue; var oid = ci.order >= 0 ? String(row[ci.order] || '').trim() : ''; if (oid === '-' || oid === '') oid = ''; res.rows.push({ dateRaw: d, date: parseWalletDate(d), tipo: ci.tipo >= 0 ? String(row[ci.tipo] || '').trim() : '', desc: ci.desc >= 0 ? String(row[ci.desc] || '').trim() : '', orderId: oid, dir: ci.dir >= 0 ? String(row[ci.dir] || '').trim() : '', amount: amount, status: ci.status >= 0 ? String(row[ci.status] || '').trim() : '', balance: ci.bal >= 0 ? walletNum(row[ci.bal]) : null, adjust: ci.adj >= 0 ? walletNum(row[ci.adj]) : null }); }
+      res.notRecognized = res.rows.length === 0; break;
+    }
+    return res;
+  }
+  function importWallet(file) {
+    return file.arrayBuffer().then(function (ab) {
+      var parsed = parseWallet(ab, file.name);
+      if (parsed.notRecognized) throw new Error('Extrato da carteira não reconhecido (esperado o relatório de transações do saldo Shopee).');
+      var byId = {}; wallet.forEach(function (t) { byId[t.id] = t; });
+      var novo = 0, unch = 0, changed = []; var importedAt = new Date().toISOString();
+      var maxSeq = wallet.reduce(function (m, t) { return Math.max(m, t.seq || 0); }, 0);
+      // O extrato vem do mais NOVO para o mais antigo; invertendo obtemos a ordem cronológica real,
+      // que é a sequência autoritativa para a reconciliação (mesmo com timestamps repetidos).
+      parsed.rows.slice().reverse().forEach(function (row) { var id = walletKey(row); if (byId[id]) { unch++; return; } var cat = walletCat(row.tipo, row.desc, row.amount); var orderId = extractWalletOrderId(row.orderId, row.desc); var t = { id: id, seq: ++maxSeq, origin: 'SHOPEE', date: row.date, dateRaw: row.dateRaw, tipo: row.tipo, desc: row.desc, category: cat, orderId: orderId, dir: row.dir, amount: row.amount, balance: row.balance, adjust: row.adjust, status: row.status, fileName: file.name, importedAt: importedAt }; byId[id] = t; changed.push(t); novo++; });
+      wallet = Object.values(byId);
+      var batch = { id: 'wb' + Date.now() + Math.round(performance.now()), module: 'Carteira', filename: file.name, createdAt: importedAt, seen: parsed.rows.length, novo: novo, upd: 0, unch: unch, itemsSeen: parsed.rows.length };
+      batches.unshift(batch); walletStamp = importedAt; lastImportStamp = importedAt;
+      return Promise.all([putMany('wallet', changed), putMany('batches', [batch])]).then(function () { return batch; });
+    });
+  }
+  // Reconciliação: saldo anterior + movimentação = saldo esperado; diferença = gap → movimentação reconstruída.
+  function reconcileWallet() {
+    var chrono = wallet.slice().sort(function (a, b) { return (a.seq || 0) - (b.seq || 0) || (a.date || '').localeCompare(b.date || ''); });
+    var out = [], diffs = [], prevBal = null, prevAdj = null;
+    chrono.forEach(function (t) {
+      t.gap = null; t.expectedBalance = null;
+      if (t.balance != null && prevBal != null && t.amount != null) {
+        var expected = r2(prevBal + t.amount); var gap = r2(t.balance - expected); t.expectedBalance = expected; t.gap = gap;
+        if (Math.abs(gap) > 0.01) {
+          var adjDelta = (prevAdj != null && t.adjust != null) ? r2(t.adjust - prevAdj) : null;
+          var explained = adjDelta != null && (Math.abs(adjDelta - gap) < 0.02 || Math.abs(adjDelta + gap) < 0.02);
+          var rec = { id: 'rec:' + t.id, origin: 'SISTEMA', date: t.date, dateRaw: t.dateRaw, category: 'SEMLINHA', orderId: t.orderId, amount: gap, balance: t.balance, expectedBalance: expected, informed: t.balance, adjDelta: adjDelta, reconStatus: explained ? 'PROVAVEL' : 'DIVERGENTE', relatedId: t.id, desc: 'Diferença de saldo reconstruída pela reconciliação matemática' };
+          out.push(rec); diffs.push({ date: t.date, expected: expected, informed: t.balance, gap: gap, status: explained ? 'PROVAVEL' : 'DIVERGENTE', rec: rec, tx: t });
+        }
+      }
+      out.push(t);
+      if (t.balance != null) prevBal = t.balance;
+      if (t.adjust != null) prevAdj = t.adjust;
+    });
+    return { txs: out, diffs: diffs };
+  }
+  function walletCurrentBalance() { var withBal = wallet.filter(function (t) { return t.balance != null && t.date; }).sort(function (a, b) { return (a.date).localeCompare(b.date); }); return withBal.length ? withBal[withBal.length - 1].balance : 0; }
+  function walletCurrentAdjust() { var withAdj = wallet.filter(function (t) { return t.adjust != null && t.date; }).sort(function (a, b) { return (a.date).localeCompare(b.date); }); return withAdj.length ? withAdj[withAdj.length - 1].adjust : 0; }
+  function walletTxInPeriod(txs) { return txs.filter(function (t) { return inPeriod(t.date); }); }
+  function walletMetrics() {
+    var rec = reconcileWallet(); var inP = walletTxInPeriod(rec.txs);
+    var real = inP.filter(function (t) { return t.origin === 'SHOPEE'; });
+    var reconstructed = inP.filter(function (t) { return t.origin === 'SISTEMA'; });
+    var entradas = 0, saidas = 0, maiorEnt = 0, maiorSai = 0, entN = 0, saiN = 0;
+    real.forEach(function (t) { if (t.amount > 0) { entradas += t.amount; entN++; if (t.amount > maiorEnt) maiorEnt = t.amount; } else if (t.amount < 0) { saidas += t.amount; saiN++; if (t.amount < maiorSai) maiorSai = t.amount; } });
+    var cats = {}; real.forEach(function (t) { var c = cats[t.category] = cats[t.category] || { cat: t.category, n: 0, ent: 0, sai: 0 }; c.n++; if (t.amount > 0) c.ent += t.amount; else c.sai += t.amount; });
+    var semLinha = reconstructed.reduce(function (s, t) { return s + t.amount; }, 0);
+    if (reconstructed.length) { var c2 = cats['SEMLINHA'] = cats['SEMLINHA'] || { cat: 'SEMLINHA', n: 0, ent: 0, sai: 0 }; reconstructed.forEach(function (t) { c2.n++; if (t.amount > 0) c2.ent += t.amount; else c2.sai += t.amount; }); }
+    var devDesc = real.filter(function (t) { return t.category === 'DEVOLUCAO' && t.amount < 0; });
+    // dias com valor a ajustar (todo o histórico, snapshot)
+    var adjDays = {}; wallet.forEach(function (t) { if (t.adjust != null && Math.abs(t.adjust) > 0.01 && t.date) adjDays[t.date.slice(0, 10)] = 1; });
+    var adjVals = wallet.map(function (t) { return t.adjust; }).filter(function (v) { return v != null; });
+    var peakAdj = adjVals.length ? adjVals.reduce(function (m, v) { return Math.abs(v) > Math.abs(m) ? v : m; }, 0) : 0;
+    return {
+      entradas: r2(entradas), saidas: r2(saidas), liquido: r2(entradas + saidas), saldoAtual: r2(walletCurrentBalance()), ajusteAtual: r2(walletCurrentAdjust()), semLinha: r2(semLinha),
+      maiorEnt: r2(maiorEnt), maiorSai: r2(maiorSai), entN: entN, saiN: saiN, cats: Object.values(cats), devDesc: devDesc, devTotal: r2(devDesc.reduce(function (s, t) { return s + t.amount; }, 0)),
+      diffs: rec.diffs.filter(function (d) { return inPeriod(d.date); }), diffsAll: rec.diffs, adjDays: Object.keys(adjDays).length, peakAdj: r2(peakAdj), reconstructed: reconstructed, real: real, allTxsInP: inP,
+    };
+  }
+  // gráfico de linha simples (saldo × tempo) + 2ª linha opcional (valor a ajustar)
+  function svgWalletLine(points, opt) {
+    opt = opt || {}; var W = 760, H = 240, padL = 56, padR = 20, padB = 26, padT = 16; if (points.length < 2) return '<div class="footnote">Poucos pontos para desenhar a evolução.</div>';
+    var vals = []; points.forEach(function (p) { vals.push(p.a); if (p.b != null) vals.push(p.b); });
+    var mn = Math.min.apply(null, vals.concat([0])), mx = Math.max.apply(null, vals.concat([0])); if (mx === mn) mx = mn + 1;
+    var x = function (i) { return padL + i * (W - padL - padR) / (points.length - 1); }; var y = function (v) { return H - padB - (v - mn) / (mx - mn) * (H - padB - padT); };
+    var zero = mn < 0 && mx > 0 ? '<line x1="' + padL + '" y1="' + y(0).toFixed(1) + '" x2="' + (W - padR) + '" y2="' + y(0).toFixed(1) + '" stroke="#e2e8f0" stroke-dasharray="3 3"/>' : '';
+    var lineA = '<polyline points="' + points.map(function (p, i) { return x(i).toFixed(1) + ',' + y(p.a).toFixed(1); }).join(' ') + '" fill="none" stroke="#2b4bd6" stroke-width="2.5"/>';
+    var lineB = opt.two ? '<polyline points="' + points.map(function (p, i) { return x(i).toFixed(1) + ',' + y(p.b || 0).toFixed(1); }).join(' ') + '" fill="none" stroke="#e0662a" stroke-width="2" stroke-dasharray="4 3"/>' : '';
+    var labels = ''; var step = Math.ceil(points.length / 6); points.forEach(function (p, i) { if (i % step === 0 || i === points.length - 1) labels += '<text x="' + x(i).toFixed(1) + '" y="' + (H - 8) + '" font-size="10" fill="#64708a" text-anchor="middle">' + esc(p.label) + '</text>'; });
+    var yl = '<text x="8" y="' + (y(mx) + 4).toFixed(1) + '" font-size="10" fill="#64708a">' + brl(mx) + '</text><text x="8" y="' + (y(mn) + 4).toFixed(1) + '" font-size="10" fill="#64708a">' + brl(mn) + '</text>';
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="max-width:' + W + 'px">' + zero + lineA + lineB + labels + yl + '</svg>';
+  }
+  function walletSaldoSeries() {
+    var byDay = {}; wallet.filter(function (t) { return t.date && inPeriod(t.date); }).sort(function (a, b) { return a.date.localeCompare(b.date); }).forEach(function (t) { var d = t.date.slice(0, 10); if (!byDay[d]) byDay[d] = { label: monthDayLabel(d), a: null, b: null }; if (t.balance != null) byDay[d].a = t.balance; if (t.adjust != null) byDay[d].b = t.adjust; });
+    var arr = Object.keys(byDay).sort().map(function (k) { return byDay[k]; }); var lastA = 0, lastB = 0; arr.forEach(function (p) { if (p.a == null) p.a = lastA; else lastA = p.a; if (p.b == null) p.b = lastB; else lastB = p.b; }); return arr;
+  }
+  function monthDayLabel(d) { var p = d.split('-'); return p[2] + '/' + p[1]; }
+  var RECON_LABEL = { FECHADO: ['Fechado', 'ok'], EXPLICADO: ['Explicado', 'info'], PROVAVEL: ['Provável ajuste', 'warn'], DIVERGENTE: ['Divergente', 'warn'] };
+
+  function renderCarteira() {
+    app.innerHTML = devPeriodBar() +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0">' + [['visao', 'Visão Geral'], ['mov', 'Movimentações'], ['ajustes', 'Ajustes e Divergências']].map(function (t) { return '<div class="subtab' + (walletSub === t[0] ? ' active' : '') + '" data-wsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-wimport="1">Importar extrato</button></div><div id="wbody" style="margin-top:14px"></div>';
+    var body = document.getElementById('wbody');
+    try {
+      if (!wallet.length) body.innerHTML = secHead('SALDO DA CARTEIRA', 'Saldo da Carteira', 'Mostrar, medir, rastrear e reconciliar tudo que acontece no saldo da Shopee.') + emptyBox('Nenhum extrato importado. Clique em “Importar extrato” para carregar o relatório de transações do saldo Shopee.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="wimp">Importar extrato</button></div>';
+      else if (walletSub === 'mov') body.innerHTML = walletMov();
+      else if (walletSub === 'ajustes') body.innerHTML = walletAjustes();
+      else body.innerHTML = walletVisao();
+    } catch (e) { body.innerHTML = '<div class="form-err">Erro ao renderizar a Carteira: ' + esc(e.message || e) + '</div>'; }
+    bindDevPeriodBar();
+    app.querySelectorAll('[data-wsub]').forEach(function (b) { b.onclick = function () { walletSub = b.dataset.wsub; render(); }; });
+    var imp = function () { fileInput(function (f) { importWallet(f).then(function (b) { render(); toast('Extrato importado', b.novo + ' novas · ' + b.unch + ' já existentes'); }).catch(function (e) { toast('Falha', e.message, true); }); }); };
+    var wi = document.getElementById('wimp'); if (wi) wi.onclick = imp;
+    app.querySelectorAll('[data-wimport]').forEach(function (b) { b.onclick = imp; });
+    app.querySelectorAll('[data-wtx]').forEach(function (b) { b.onclick = function () { openWalletTx(b.dataset.wtx); }; });
+    app.querySelectorAll('[data-wcat]').forEach(function (b) { b.onclick = function () { walletF.cat = b.dataset.wcat; walletSub = 'mov'; render(); }; });
+    app.querySelectorAll('[data-wgo]').forEach(function (b) { b.onclick = function () { walletSub = b.dataset.wgo; render(); }; });
+    if (walletSub === 'mov') bindWalletMov();
+  }
+  function walletVisao() {
+    var m = walletMetrics();
+    var insights = [];
+    if (m.devTotal < 0) insights.push('🔴 <b>' + brl(Math.abs(m.devTotal)) + '</b> foram descontados por devoluções/reembolsos (' + nn(m.devDesc.length) + ' lançamentos).');
+    if (m.maiorSai < 0) insights.push('🟠 O maior débito individual foi de <b>' + brl(Math.abs(m.maiorSai)) + '</b>.');
+    if (m.adjDays) insights.push('🟡 A carteira ficou com valor a ajustar em <b>' + nn(m.adjDays) + '</b> dia(s); pico de <b>' + brl(Math.abs(m.peakAdj)) + '</b>.');
+    if (m.reconstructed.length) insights.push('🔎 Foram identificados <b>' + nn(m.reconstructed.length) + '</b> ajuste(s) sem linha explícita (líquido ' + brl(m.semLinha) + ') pela reconciliação de saldo.');
+    var series = walletSaldoSeries();
+    var catRow = function (c) { var liq = r2(c.ent + c.sai); return '<tr class="rowlink" data-wcat="' + c.cat + '"><td>' + esc(wcatLabel(c.cat)) + (c.cat === 'SEMLINHA' ? ' <span class="tag warn">sistema</span>' : '') + '</td><td>' + nn(c.n) + '</td><td>' + (c.ent ? brl(c.ent) : '—') + '</td><td>' + (c.sai ? brl(c.sai) : '—') + '</td><td class="' + (liq < 0 ? 'neg' : 'pos') + '"><b>' + brl(liq) + '</b></td></tr>'; };
+    var cats = m.cats.slice().sort(function (a, b) { return Math.abs(b.ent + b.sai) - Math.abs(a.ent + a.sai); });
+    return secHead('SALDO DA CARTEIRA', 'Visão Geral', 'Quanto tenho, quanto entrou, quanto saiu, de onde veio, para onde foi e o que ainda pode ser ajustado.') +
+      kstrip([
+        { l: 'Saldo atual', v: brl(m.saldoAtual), cls: m.saldoAtual < 0 ? 'red' : 'blue' },
+        { l: 'Entradas', v: brl(m.entradas), cls: 'green', s: nn(m.entN) + ' créditos' },
+        { l: 'Saídas', v: brl(m.saidas), cls: 'red', s: nn(m.saiN) + ' débitos' },
+        { l: 'Saldo líquido', v: brl(m.liquido), cls: m.liquido < 0 ? 'red' : 'green' },
+        { l: 'Valor a ser ajustado', v: brl(m.ajusteAtual), cls: 'amber', s: 'saldo atual (não somado)' },
+        { l: 'Ajustes sem linha', v: brl(m.semLinha), cls: 'orange', s: nn(m.reconstructed.length) + ' reconstruído(s)' },
+      ]) +
+      (insights.length ? callout('warn', 'O que aconteceu no período', insights.map(function (x) { return '<div class="fin-line"><span>' + x + '</span></div>'; }).join('')) : '') +
+      chartCard('Evolução do saldo', legendSwatch([['Saldo', '#2b4bd6'], ['Valor a ajustar', '#e0662a']]), svgWalletLine(series, { two: true })) +
+      '<div class="panel"><div class="ph"><h3>O que movimentou sua carteira</h3><button class="link-btn" data-wgo="mov">Ver movimentações</button></div><div class="table-wrap"><table class="report"><thead><tr><th>Categoria</th><th>Qtd</th><th>Entradas</th><th>Saídas</th><th>Líquido</th></tr></thead><tbody>' +
+      (cats.length ? cats.map(catRow).join('') : '<tr><td colspan="5" class="empty">Sem movimentações no período.</td></tr>') + '</tbody></table></div></div>';
+  }
+  function walletMov() {
+    var m = walletMetrics(); var txs = m.allTxsInP.slice();
+    if (walletF.cat) txs = txs.filter(function (t) { return t.category === walletF.cat; });
+    if (walletF.flow === 'ent') txs = txs.filter(function (t) { return t.amount > 0; });
+    else if (walletF.flow === 'sai') txs = txs.filter(function (t) { return t.amount < 0; });
+    else if (walletF.flow === 'recon') txs = txs.filter(function (t) { return t.origin === 'SISTEMA'; });
+    else if (walletF.flow === 'ajuste') txs = txs.filter(function (t) { return t.adjust != null && Math.abs(t.adjust) > 0.01; });
+    else if (walletF.flow === 'diverg') txs = txs.filter(function (t) { return (t.gap != null && Math.abs(t.gap) > 0.01) || t.origin === 'SISTEMA'; });
+    if (walletF.search) { var s = walletF.search.toLowerCase(); txs = txs.filter(function (t) { return (t.orderId || '').toLowerCase().indexOf(s) >= 0 || (t.desc || '').toLowerCase().indexOf(s) >= 0 || (wcatLabel(t.category)).toLowerCase().indexOf(s) >= 0 || String(Math.abs(t.amount)).indexOf(s) >= 0; }); }
+    txs.sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); });
+    var flows = [['', 'Todas'], ['ent', 'Entradas'], ['sai', 'Saídas'], ['recon', 'Reconstruídas'], ['ajuste', 'Com valor a ajustar'], ['diverg', 'Divergência']];
+    var cats = [['', 'Categoria: todas']].concat(Object.keys(WCAT).map(function (k) { return [k, wcatLabel(k)]; }));
+    var slice = txs.slice(0, 400);
+    return secHead('CARTEIRA · MOVIMENTAÇÕES', 'Movimentações', 'Rastreie cada valor: de onde veio, para onde foi, qual pedido e se o saldo fecha.') +
+      '<div class="chips">' + flows.map(function (c) { return '<span class="chip' + (walletF.flow === c[0] ? ' chip-on' : '') + '" data-wflow="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
+      '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="wq" style="width:280px" placeholder="Buscar pedido, descrição, valor ou categoria…" value="' + esc(walletF.search) + '"><select class="select sm" id="wcatsel">' + cats.map(function (c) { return '<option value="' + c[0] + '"' + (walletF.cat === c[0] ? ' selected' : '') + '>' + c[1] + '</option>'; }).join('') + '</select>' + (walletF.cat || walletF.flow || walletF.search ? '<button class="link-btn" id="wclear">limpar</button>' : '') + '</div>' +
+      '<div class="count-line"><b>' + nn(txs.length) + '</b> movimentações</div>' +
+      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Categoria</th><th>Pedido</th><th>Descrição</th><th>Entrada</th><th>Saída</th><th>Saldo após</th><th>A ajustar</th><th>Origem</th><th></th></tr></thead><tbody>' +
+      (slice.length ? slice.map(function (t) {
+        var isRec = t.origin === 'SISTEMA';
+        return '<tr' + (isRec ? ' style="background:#fff5ee"' : '') + '><td class="nowrap">' + esc(dbr(t.date)) + '</td><td>' + esc(wcatLabel(t.category)) + '</td><td class="mono">' + esc(t.orderId || '—') + '</td><td class="cell-text">' + esc(isRec ? 'Diferença de saldo reconstruída' : (t.desc || '—')) + '</td><td class="nowrap">' + (t.amount > 0 ? '<span class="pos">' + brl(t.amount) + '</span>' : '—') + '</td><td class="nowrap">' + (t.amount < 0 ? '<span class="neg">' + brl(t.amount) + '</span>' : '—') + '</td><td class="nowrap">' + (t.balance != null ? brl(t.balance) : '—') + '</td><td class="nowrap">' + (t.adjust != null && Math.abs(t.adjust) > 0.01 ? brl(t.adjust) : '—') + '</td><td>' + (isRec ? '<span class="tag warn">SISTEMA</span>' : '<span class="tag ok">SHOPEE</span>') + '</td><td><button class="btn-sm" data-wtx="' + esc(t.id) + '">Abrir</button></td></tr>';
+      }).join('') : '<tr><td colspan="10" class="empty">Nenhuma movimentação neste filtro.</td></tr>') + '</tbody></table></div></div>';
+  }
+  function bindWalletMov() {
+    var q = document.getElementById('wq'); if (q) { var tt; q.oninput = function () { clearTimeout(tt); tt = setTimeout(function () { var v = q.value; walletF.search = v; render(); var el = document.getElementById('wq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
+    app.querySelectorAll('[data-wflow]').forEach(function (c) { c.onclick = function () { walletF.flow = c.dataset.wflow; render(); }; });
+    var cs = document.getElementById('wcatsel'); if (cs) cs.onchange = function () { walletF.cat = cs.value; render(); };
+    var cl = document.getElementById('wclear'); if (cl) cl.onclick = function () { walletF.cat = ''; walletF.flow = ''; walletF.search = ''; render(); };
+  }
+  function walletAjustes() {
+    var m = walletMetrics(); var diffs = m.diffsAll.filter(function (d) { return inPeriod(d.date); });
+    var series = walletSaldoSeries();
+    var abat = m.diffsAll.filter(function (d) { return d.status === 'PROVAVEL'; }).reduce(function (s, d) { return s + Math.abs(d.gap); }, 0);
+    var divergentes = diffs.filter(function (d) { return d.status === 'DIVERGENTE'; });
+    return secHead('CARTEIRA · AJUSTES E DIVERGÊNCIAS', 'Ajustes e Divergências', 'Tudo que não fecha perfeitamente — e a tentativa de explicar cada diferença.') +
+      kstrip([
+        { l: 'Valor atual a ser ajustado', v: brl(m.ajusteAtual), cls: 'amber' },
+        { l: 'Maior valor do período', v: brl(m.peakAdj), cls: 'amber' },
+        { l: 'Dias com valor a ajustar', v: nn(m.adjDays), cls: 'blue' },
+        { l: 'Abatimentos identificados', v: brl(r2(abat)), cls: 'green' },
+        { l: 'Divergências abertas', v: nn(divergentes.length), cls: divergentes.length ? 'red' : 'green' },
+      ]) +
+      chartCard('Evolução do valor a ser ajustado (é estoque — não somar)', legendSwatch([['Valor a ajustar', '#e0662a']]), svgWalletLine(series.map(function (p) { return { label: p.label, a: p.b }; }), { two: false })) +
+      '<div class="panel"><div class="ph"><h3>Diferenças de saldo</h3><span class="footnote" style="margin:0">saldo esperado × informado pela Shopee</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Saldo esperado</th><th>Saldo informado</th><th>Diferença</th><th>Situação</th><th></th></tr></thead><tbody>' +
+      (diffs.length ? diffs.slice().sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); }).slice(0, 300).map(function (d) { var rl = RECON_LABEL[d.status] || RECON_LABEL.DIVERGENTE; return '<tr><td class="nowrap">' + esc(dbr(d.date)) + '</td><td class="nowrap">' + brl(d.expected) + '</td><td class="nowrap">' + brl(d.informed) + '</td><td class="nowrap ' + (d.gap < 0 ? 'neg' : 'pos') + '"><b>' + brl(d.gap) + '</b></td><td><span class="tag ' + rl[1] + '">' + rl[0] + '</span></td><td><button class="btn-sm" data-wtx="' + esc(d.rec.id) + '">Investigar</button></td></tr>'; }).join('') : '<tr><td colspan="6" class="empty">Nenhuma diferença de saldo no período. 🎉 A matemática bate.</td></tr>') + '</tbody></table></div>' +
+      '<div class="footnote" style="padding:0 16px 14px">Situação: <b>Fechado</b> a matemática bate · <b>Provável ajuste</b> a diferença é compatível com a variação do “Valor a Ser Ajustado” · <b>Divergente</b> ainda não explicada.</div></div>';
+  }
+  function walletExplain(t) {
+    if (t.origin === 'SISTEMA') {
+      var base = 'A movimentação registrada não fecha o saldo: o esperado era ' + brl(t.expectedBalance) + ' e a Shopee informou ' + brl(t.informed) + ', uma diferença de ' + brl(t.amount) + '. ';
+      if (t.reconStatus === 'PROVAVEL' && t.adjDelta != null) return base + 'O sistema encontrou uma variação equivalente no “Valor a Ser Ajustado” (' + brl(t.adjDelta) + '). Classificação: provável ajuste de saldo pendente — não há linha explícita da Shopee.';
+      return base + 'Ainda não foi possível relacionar essa diferença a outro evento com segurança. Precisa de investigação.';
+    }
+    var parts = ['Movimentação de ' + (t.amount >= 0 ? '+' : '') + brl(t.amount) + ' classificada como ' + wcatLabel(t.category) + '.'];
+    if (t.orderId) { var ord = orders.find(function (o) { return o.id === t.orderId; }); var oc = occ.find(function (o) { return !o.isDemo && o.orderId === t.orderId; }); parts.push('Relacionada ao pedido ' + t.orderId + (ord ? ' (status ' + (S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus || '—') + ')' : ' (não importado em Pedidos)') + '.'); if (oc) parts.push('O mesmo pedido possui uma devolução registrada no sistema (' + (statusLabel(oc.status)) + ').'); }
+    if (t.gap != null && Math.abs(t.gap) > 0.01) parts.push('Atenção: o saldo após esta movimentação não fechou exatamente — veja a diferença reconstruída próxima a esta data.'); else if (t.gap === 0) parts.push('O saldo fechou matematicamente após esta movimentação.');
+    return parts.join(' ');
+  }
+  function openWalletTx(id) {
+    var rec = reconcileWallet(); var t = rec.txs.find(function (x) { return x.id === id; }); if (!t) return;
+    var isRec = t.origin === 'SISTEMA';
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '640px'; panel.style.maxWidth = '96vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    var ord = t.orderId ? orders.find(function (o) { return o.id === t.orderId; }) : null;
+    var oc = t.orderId ? occ.find(function (o) { return !o.isDemo && o.orderId === t.orderId; }) : null;
+    var recon = (t.expectedBalance != null) ? '<div class="panel"><div class="ph"><h3>Reconciliação</h3></div><div class="pb"><div class="fin-line"><span>Saldo anterior</span><span>' + brl(r2((t.expectedBalance) - (t.amount || 0))) + '</span></div><div class="fin-line"><span>' + (t.amount >= 0 ? '+ movimentação' : '− movimentação') + '</span><span>' + brl(t.amount) + '</span></div><div class="fin-line"><span>Saldo esperado</span><span>' + brl(t.expectedBalance) + '</span></div><div class="fin-line"><span>Saldo informado</span><span>' + brl(isRec ? t.informed : t.balance) + '</span></div><div class="fin-line total"><span>Diferença</span><span class="' + ((t.gap || 0) < 0 ? 'neg' : 'pos') + '">' + brl(isRec ? 0 : (t.gap || 0)) + '</span></div></div></div>' : '';
+    var pedido = (t.orderId && ord) ? '<div class="panel"><div class="ph"><h3>Pedido relacionado</h3></div><div class="pb"><div class="fin-line"><span>Pedido ' + esc(t.orderId) + '</span><span>' + esc(S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus || '—') + '</span></div><div class="fin-line"><span>Valor</span><span>' + brl(ord.totalAmount || 0) + '</span></div><button class="btn-sm" data-goped="' + esc(t.orderId) + '">Ver pedido</button></div></div>' : (t.orderId ? '<div class="footnote">Pedido ' + esc(t.orderId) + ' não encontrado no módulo Pedidos.</div>' : '');
+    var devol = (t.orderId && oc) ? '<div class="panel"><div class="ph"><h3>Devolução relacionada</h3><span class="tag info">' + esc(statusLabel(oc.status)) + '</span></div><div class="pb"><div class="fin-line"><span>Pedido</span><span class="mono">' + esc(t.orderId) + '</span></div><div class="fin-line"><span>Motivo</span><span class="cell-text">' + esc(oc.reason || '—') + '</span></div><div class="fin-line"><span>Valor descontado da carteira</span><span class="neg">' + brl(t.amount) + '</span></div><button class="btn-sm" data-godev="' + esc(oc.id) + '">Ver devolução</button></div></div>' : '';
+    panel.innerHTML = '<div class="dh"><div><b>' + (isRec ? 'Ajuste reconstruído' : 'Movimentação') + '</b> ' + (isRec ? '<span class="tag warn" style="margin-left:6px">SISTEMA</span>' : '<span class="tag ok" style="margin-left:6px">SHOPEE</span>') + '</div><button class="x">&times;</button></div><div class="dbd">' +
+      '<div class="kstrip" style="margin-bottom:12px"><div class="kc"><div class="kl">Valor</div><div class="kv" style="font-size:20px;color:' + (t.amount < 0 ? 'var(--err)' : 'var(--ok)') + '">' + brl(t.amount) + '</div></div><div class="kc"><div class="kl">Categoria</div><div class="kv" style="font-size:15px">' + esc(wcatLabel(t.category)) + '</div></div><div class="kc"><div class="kl">Data</div><div class="kv" style="font-size:15px">' + esc(dbr(t.date)) + '</div></div></div>' +
+      callout('', '✨ Explicar', walletExplain(t)) +
+      '<div class="panel"><div class="ph"><h3>Movimentação</h3></div><div class="pb">' + kv('Tipo (Shopee)', t.tipo || (isRec ? 'Reconstruído pelo sistema' : '—')) + kv('Categoria', wcatLabel(t.category)) + kv('Saldo após', t.balance != null ? brl(t.balance) : '—') + kv('Valor a ser ajustado', t.adjust != null ? brl(t.adjust) : '—') + '</div></div>' +
+      (isRec ? '' : '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Descrição original da Shopee</summary><div class="pb"><div class="ro">' + esc(t.desc || '—') + '</div></div></details>') +
+      recon + pedido + devol + '</div>';
+    panel.querySelector('.x').onclick = function () { d.remove(); };
+    var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { d.remove(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
+    var gd = panel.querySelector('[data-godev]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev; d.remove(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
+  }
+
   // ---------- INTELIGÊNCIA ----------
   function renderIA() {
     app.innerHTML =
@@ -1399,13 +1647,14 @@
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
 
   openDB().then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet')]);
   }).then(function (r) {
     orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
+    wallet = r[5] || [];
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
     plans = (r[4] || []).map(function (p) { if (PLAN_MIGR[p.status]) p.status = PLAN_MIGR[p.status]; if (p.scopeSkus == null && p.relatedSkus) p.scopeSkus = p.relatedSkus; if (p.indicatorKind == null) p.indicatorKind = 'liquido'; return p; });
     occ = occ.filter(function (o) { return !o.isDemo; }); // higiene: nunca deixar demo no banco real
