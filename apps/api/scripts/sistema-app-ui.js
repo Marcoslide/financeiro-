@@ -203,11 +203,29 @@
     dbOpening.then(clear, clear);
     return dbOpening;
   }
-  function ensureDB() { return DB ? Promise.resolve(DB) : openDB().then(function () { return DB; }); }
-  function getAll(store) { return ensureDB().then(function (db) { return new Promise(function (res, rej) { var rq = db.transaction(store).objectStore(store).getAll(); rq.onsuccess = function () { res(rq.result || []); }; rq.onerror = function () { rej(rq.error); }; }); }); }
-  function putMany(store, items) { if (!items || !items.length) return Promise.resolve(); return ensureDB().then(function (db) { return new Promise(function (res, rej) { var tx = db.transaction(store, 'readwrite'); var os = tx.objectStore(store); items.forEach(function (it) { os.put(it); }); tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); }; }); }); }
-  function delOne(store, id) { return ensureDB().then(function (db) { return new Promise(function (res, rej) { var tx = db.transaction(store, 'readwrite'); tx.objectStore(store).delete(id); tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); }; }); }); }
-  function clearAll() { return ensureDB().then(function (db) { return new Promise(function (res, rej) { var names = Object.keys(STORES); var tx = db.transaction(names, 'readwrite'); names.forEach(function (s) { tx.objectStore(s).clear(); }); tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); }; }); }); }
+  // MODO TEMPORÁRIO (em memória): se o IndexedDB não abrir (corrompido, bloqueado, navegador
+  // privado, cota), NUNCA deixamos a tela em branco. Caímos para armazenamento em memória — o
+  // sistema todo (Produtos incluso) funciona; só não salva ao recarregar. Um aviso fica visível.
+  var DB_MEM = null; // quando ativo: { store: { id: item } }
+  function activateMemoryMode(reason) { if (DB_MEM) return; DB_MEM = {}; Object.keys(STORES).forEach(function (s) { DB_MEM[s] = {}; }); memModeReason = reason || ''; try { showMemBanner(); } catch (e) { } }
+  var memModeReason = '';
+  function ensureDB() {
+    if (DB_MEM) return Promise.reject({ __mem: true });
+    if (DB) return Promise.resolve(DB);
+    return openDB().then(function () { return DB; }).catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); return Promise.reject({ __mem: true }); });
+  }
+  function getAll(store) { return ensureDB().then(function (db) { return new Promise(function (res, rej) { var rq = db.transaction(store).objectStore(store).getAll(); rq.onsuccess = function () { res(rq.result || []); }; rq.onerror = function () { rej(rq.error); }; }); }).catch(function (e) { if (e && e.__mem) return Object.keys(DB_MEM[store] || {}).map(function (k) { return DB_MEM[store][k]; }); throw e; }); }
+  function putMany(store, items) { if (!items || !items.length) return Promise.resolve(); return ensureDB().then(function (db) { return new Promise(function (res, rej) { var tx = db.transaction(store, 'readwrite'); var os = tx.objectStore(store); items.forEach(function (it) { os.put(it); }); tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); }; }); }).catch(function (e) { if (e && e.__mem) { var key = STORES[store]; DB_MEM[store] = DB_MEM[store] || {}; items.forEach(function (it) { DB_MEM[store][it[key]] = it; }); return; } throw e; }); }
+  function delOne(store, id) { return ensureDB().then(function (db) { return new Promise(function (res, rej) { var tx = db.transaction(store, 'readwrite'); tx.objectStore(store).delete(id); tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); }; }); }).catch(function (e) { if (e && e.__mem) { if (DB_MEM[store]) delete DB_MEM[store][id]; return; } throw e; }); }
+  function clearAll() { if (DB_MEM) { Object.keys(STORES).forEach(function (s) { DB_MEM[s] = {}; }); return Promise.resolve(); } return ensureDB().then(function (db) { return new Promise(function (res, rej) { var names = Object.keys(STORES); var tx = db.transaction(names, 'readwrite'); names.forEach(function (s) { tx.objectStore(s).clear(); }); tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); }; }); }).catch(function (e) { if (e && e.__mem) { Object.keys(STORES).forEach(function (s) { DB_MEM[s] = {}; }); return; } throw e; }); }
+  function showMemBanner() {
+    if (document.getElementById('membanner')) return;
+    var el = document.createElement('div'); el.id = 'membanner';
+    el.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#7a3b00;color:#fff;padding:8px 14px;font-size:12.5px;display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap';
+    el.innerHTML = '⚠ Trabalhando em <b>modo temporário</b> — o armazenamento local não pôde ser aberto' + (memModeReason ? ' (' + esc(memModeReason) + ')' : '') + '. O sistema funciona normalmente, mas os dados <b>não serão salvos</b> ao recarregar. Feche outras abas do sistema e clique em Reparar. <button id="memrepair" style="background:#fff;color:#7a3b00;border:none;border-radius:6px;padding:4px 10px;font-weight:700;cursor:pointer">Reparar armazenamento</button>';
+    document.body.appendChild(el);
+    document.getElementById('memrepair').onclick = function () { try { indexedDB.deleteDatabase(DB_NAME); } catch (e) { } setTimeout(function () { location.reload(); }, 300); };
+  }
 
   // ---------- índice SKU → custo (Produtos alimenta Pedidos, §42) ----------
   function rebuildSkuCost() {
@@ -2963,7 +2981,9 @@
   })();
   document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
 
-  openDB().then(function () {
+  // Abre o banco; se falhar (corrompido/bloqueado/privado), ativa o modo em memória e SEGUE —
+  // o sistema sempre carrega e Produtos sempre abre (só não salva). Nunca dead-end / tela branca.
+  openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
     return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster')]);
   }).then(function (r) {
