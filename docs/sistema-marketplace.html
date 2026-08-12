@@ -3796,6 +3796,8 @@ buffer/index.js:
   var sub = { pedidos: 'pedidos', posvenda: 'visao' };
   var pedTab = 'ALL';
   var devF = { search: '', internalStatus: '', disputeStatus: '', type: '', status: '', flag: '' }, devPage = 1;
+  var devSel = {};            // seleção múltipla em Casos: id -> true (em memória)
+  var devCustomStatus = [];   // status internos personalizados pelo operador: [{key,label}]
   var chat = [];
 
   // ---------- helpers ----------
@@ -3817,6 +3819,11 @@ buffer/index.js:
     DISPUTE_STATUS: { NAO_INICIADA: 'Não iniciada', POSSIVEL: 'Possível contestação', EM_PREPARACAO: 'Em preparação', RESPONDIDA: 'Respondida', AGUARDANDO_SHOPEE: 'Aguardando Shopee', GANHA: 'Ganha', PARCIAL: 'Parcialmente ganha', PERDIDA: 'Perdida', PRAZO_PERDIDO: 'Prazo perdido', CANCELADA: 'Cancelada' },
     CAUSE_LABELS: { AVARIA: 'Avaria / quebra', SEPARACAO: 'Erro de separação', ARREPENDIMENTO: 'Arrependimento', LOGISTICA: 'Logística / extravio', QUALIDADE: 'Qualidade', SEM_MOTIVO: 'Sem motivo identificado' },
   };
+  // Status interno EFETIVO = fixos (referenciados por automações) + personalizados pelo operador (§Casos).
+  function internalStatusMap() { var m = {}; Object.keys(DEV.INTERNAL_STATUS).forEach(function (k) { m[k] = DEV.INTERNAL_STATUS[k]; }); devCustomStatus.forEach(function (s) { if (s && s.key) m[s.key] = s.label; }); return m; }
+  function istLabel(k) { return internalStatusMap()[k] || k; }
+  function istSlug(label) { return 'CUSTOM_' + normStatus(label).replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase(); }
+  function saveDevSettings() { return putMany('settings', [{ id: 'dev', customStatus: devCustomStatus }]); }
   var EVENT_META = {
     REEMBOLSO_SOLICITADO: { label: 'Reembolso solicitado', direction: 'NEUTRAL', bucket: 'none' },
     REEMBOLSO_PAGO: { label: 'Reembolso pago', direction: 'COST', bucket: 'refund' },
@@ -3906,7 +3913,7 @@ buffer/index.js:
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -4778,41 +4785,122 @@ buffer/index.js:
     else if (devF.flag === 'nova') list = list.filter(function (o) { return o.internalStatus === 'NOVA'; });
     else if (devF.flag === 'semresp') list = list.filter(function (o) { return !o.ownerName; });
     else if (devF.flag === 'naovinc') list = list.filter(function (o) { return (o.items || []).some(function (i) { return i.sku && !i.skuLinked; }); });
-    if (devF.internalStatus) list = list.filter(function (o) { return o.internalStatus === devF.internalStatus; });
+    // Filtro de status interno com MULTI-SELEÇÃO (§Casos): devF.istSet = {key:true}; compat com devF.internalStatus (único).
+    var istSet = devF.istSet || {}; var istKeys = Object.keys(istSet).filter(function (k) { return istSet[k]; });
+    if (!istKeys.length && devF.internalStatus) istKeys = [devF.internalStatus];
+    if (istKeys.length) list = list.filter(function (o) { return istKeys.indexOf(o.internalStatus) >= 0; });
     if (devF.search) { var s = devF.search.toLowerCase(); list = list.filter(function (o) { return (o.orderId || '').toLowerCase().indexOf(s) >= 0 || (o.returnId || '').toLowerCase().indexOf(s) >= 0 || (o.reason || '').toLowerCase().indexOf(s) >= 0 || (o.items || []).some(function (i) { return (i.sku || '').toLowerCase().indexOf(s) >= 0 || (i.productName || '').toLowerCase().indexOf(s) >= 0; }); }); }
     // prazo mais curto primeiro quando filtrando prazo; senão mais recentes
     if (devF.flag === 'prazo') list = list.slice().sort(function (a, b) { return (a.disputeDeadline || '9999').localeCompare(b.disputeDeadline || '9999'); });
     else list = list.slice().sort(devF.sort === 'impact' ? function (a, b) { return occEffectiveLoss(b) - occEffectiveLoss(a); } : function (a, b) { return (b.occurredAt || '').localeCompare(a.occurredAt || ''); });
     var pages = Math.max(1, Math.ceil(list.length / 25)); if (devPage > pages) devPage = pages;
     var slice = list.slice((devPage - 1) * 25, devPage * 25);
-    var opts = function (m, sel) { return Object.keys(m).map(function (k) { return '<option value="' + k + '"' + (sel === k ? ' selected' : '') + '>' + m[k] + '</option>'; }).join(''); };
+    var ISTMAP = internalStatusMap();
     var typeChips = [['', 'Todas'], ['RETURN_REFUND', 'Devoluções'], ['ORDER_CANCELLATION', 'Cancelamentos'], ['FAILED_DELIVERY', 'Falhas de entrega']];
     var demoN = typed.filter(function (o) { return o.isDemo; }).length;
     var statusRow = '<div class="chips" style="margin-top:6px"><span class="chip' + (devF.status === '' ? ' chip-on' : '') + '" data-ocstatus="">Todos</span>' + statusList.map(function (raw) { var isNew = raw !== '(sem status)' && !SHOPEE_STATUS_MAP[normStatus(raw)]; return '<span class="chip' + (devF.status === raw ? ' chip-on' : '') + '" data-ocstatus="' + esc(raw) + '" title="' + esc(raw) + '">' + esc(statusLabel(raw)) + (isNew ? ' ✦' : '') + ' <b>' + nn(statusCounts[raw]) + '</b></span>'; }).join('') + '</div>';
     var flagChips = [['', 'Sem filtro rápido'], ['prazo', '⚠️ Prazo p/ recorrer'], ['semcausa', 'Sem causa'], ['nova', 'Novas'], ['semresp', 'Sem responsável'], ['naovinc', 'SKU não vinculado']];
+    // Filtro de status interno como chips de multi-seleção (marque quantos quiser).
+    var istCounts = {}; typed.forEach(function (o) { istCounts[o.internalStatus] = (istCounts[o.internalStatus] || 0) + 1; });
+    var istOrder = Object.keys(ISTMAP).filter(function (k) { return istCounts[k]; }).sort(function (a, b) { return istCounts[b] - istCounts[a]; });
+    devCustomStatus.forEach(function (s) { if (s && s.key && istOrder.indexOf(s.key) < 0) istOrder.push(s.key); }); // status personalizados sempre visíveis como filtro
+    var istChips = '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Status interno:</span><span class="chip' + (!istKeys.length ? ' chip-on' : '') + '" data-ocist="">Todos</span>' + istOrder.map(function (k) { return '<span class="chip' + (istKeys.indexOf(k) >= 0 ? ' chip-on' : '') + '" data-ocist="' + esc(k) + '">' + esc(ISTMAP[k]) + ' <b>' + nn(istCounts[k]) + '</b></span>'; }).join('') + '<span class="chip" data-ocmanage="1" title="Criar, renomear ou remover status internos personalizados">⚙ Gerenciar status</span></div>';
     var novoNote = Object.keys(novoStatus).length ? callout('warn', 'Novo status da Shopee detectado', 'Valores nunca vistos antes (mostrados com ✦): ' + Object.keys(novoStatus).map(function (s) { return '<b>' + esc(s) + '</b>'; }).join(', ') + '. Estão preservados e visíveis; ainda não foram agrupados.') : '';
     var demoNote = demoN ? '<div class="callout warn" style="padding:8px 14px"><div class="cbody">🧪 ' + nn(demoN) + ' caso(s) demonstrativos para validação da interface — não entram em KPIs, financeiro nem análises.</div></div>' : '';
-    return secHead('CASOS', 'Casos', 'Todos os casos de devolução, cancelamento e falha de entrega em um só lugar. Localize, filtre, abra e trabalhe o caso.') +
+    // Ações em massa: aplicam sobre os casos reais selecionados (demo não é selecionável nem persistido).
+    var selIds = Object.keys(devSel).filter(function (id) { return devSel[id]; });
+    var istOpt = function (sel) { return '<option value="">— manter —</option>' + Object.keys(ISTMAP).map(function (k) { return '<option value="' + k + '"' + (sel === k ? ' selected' : '') + '>' + ISTMAP[k] + '</option>'; }).join(''); };
+    var mapOpt = function (m) { return '<option value="">— manter —</option>' + Object.keys(m).map(function (k) { return '<option value="' + k + '">' + m[k] + '</option>'; }).join(''); };
+    var bulkBar = selIds.length ? '<div class="panel" style="border:1.5px solid var(--brand);background:var(--brand-soft,#f2f5ff)"><div class="pb" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:13px">' + nn(selIds.length) + ' selecionado(s):</b>' +
+      '<select class="select sm" id="blkist">' + istOpt('') + '</select>' +
+      '<select class="select sm" id="blkresp"><option value="">Responsabilidade — manter —</option>' + Object.keys(DEV.RESPONSIBILITY).map(function (k) { return '<option value="' + k + '">' + DEV.RESPONSIBILITY[k] + '</option>'; }).join('') + '</select>' +
+      '<select class="select sm" id="blkprio"><option value="">Prioridade — manter —</option>' + Object.keys(DEV.PRIORITY).map(function (k) { return '<option value="' + k + '">' + DEV.PRIORITY[k] + '</option>'; }).join('') + '</select>' +
+      '<input class="input sm" id="blkowner" style="width:150px" placeholder="Responsável (opcional)">' +
+      '<button class="btn-sm primary" id="blkapply">Aplicar aos ' + nn(selIds.length) + '</button><button class="btn-sm" id="blkclear">Limpar seleção</button></div></div>' : '';
+    var allSelectable = slice.filter(function (o) { return !o.isDemo; });
+    var allChecked = allSelectable.length && allSelectable.every(function (o) { return devSel[o.id]; });
+    return secHead('CASOS', 'Casos', 'Todos os casos de devolução, cancelamento e falha de entrega em um só lugar. Selecione vários para ações em massa, edite o status na própria linha ou abra o caso.') +
       '<div class="chips">' + typeChips.map(function (c) { return '<span class="chip' + (devF.type === c[0] ? ' chip-on' : '') + '" data-octype="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
       statusRow +
       '<div class="chips" style="margin-top:6px">' + flagChips.map(function (c) { return '<span class="chip' + (devF.flag === c[0] ? ' chip-on' : '') + '" data-ocflag="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
+      istChips +
       '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="devq" style="width:260px" placeholder="Buscar ID da devolução, pedido, produto ou SKU…" value="' + esc(devF.search) + '">' +
-      '<select class="select sm" id="devis"><option value="">Status interno: todos</option>' + opts(DEV.INTERNAL_STATUS, devF.internalStatus) + '</select>' +
       '<select class="select sm" id="devsort"><option value="recent"' + (devF.sort === 'recent' ? ' selected' : '') + '>Mais recentes</option><option value="impact"' + (devF.sort === 'impact' ? ' selected' : '') + '>Maior impacto</option></select></div>' +
-      novoNote + demoNote + '<div class="count-line"><b>' + nn(list.length) + '</b> casos</div>' +
-      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido / Devolução</th><th>Tipo</th><th>Produto</th><th>Motivo</th><th>Status Shopee</th><th>Status interno</th><th>Recebimento</th><th>Valor</th><th>Ação</th></tr></thead><tbody>' +
-      slice.map(function (o) { var it = (o.items || [])[0] || {}; var prod = (it.productName || '—') + (it.variationName ? ' · ' + it.variationName : '') + ((o.items || []).length > 1 ? ' (+' + (o.items.length - 1) + ')' : ''); var rl = REC_LABEL[recGroup(o)]; return '<tr' + (o.isDemo ? ' style="background:#fff8ef"' : '') + '><td class="mono">' + esc(o.orderId || '—') + (o.returnId ? '<div class="footnote" style="margin:0">' + esc(o.returnId) + '</div>' : '') + '</td><td>' + esc(TYPE_LABELS[o.type] || '—') + (o.isDemo ? ' <span class="tag warn">demo</span>' : '') + '</td><td class="cell-text">' + esc(prod) + '<div class="footnote" style="margin:0">' + esc(it.sku || '—') + '</div></td><td class="cell-text">' + esc(o.reason || '—') + '</td><td class="cell-text"><span class="tag ' + (normStatus(o.status).indexOf('disputa') >= 0 ? 'info' : 'neutral') + '">' + esc(statusLabel(o.status)) + '</span>' + prazoBadge(o) + '</td><td><span class="pill st-int">' + (DEV.INTERNAL_STATUS[o.internalStatus] || o.internalStatus) + '</span></td><td><span class="tag ' + rl[1] + '">' + rl[0] + '</span></td><td class="nowrap">' + brl(o.requested) + '</td><td><button class="btn-sm primary" data-oc="' + esc(o.id) + '">Abrir</button></td></tr>'; }).join('') +
+      novoNote + demoNote + '<div class="count-line"><b>' + nn(list.length) + '</b> casos' + (selIds.length ? ' · <b>' + nn(selIds.length) + '</b> selecionado(s)' : '') + '</div>' + bulkBar +
+      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th style="width:34px"><input type="checkbox" id="devselall"' + (allChecked ? ' checked' : '') + ' title="Selecionar os desta página"></th><th>Pedido / Devolução</th><th>Tipo</th><th>Produto</th><th>Motivo</th><th>Status Shopee</th><th>Status interno</th><th>Recebimento</th><th>Valor</th><th>Ação</th></tr></thead><tbody>' +
+      slice.map(function (o) { var it = (o.items || [])[0] || {}; var prod = (it.productName || '—') + (it.variationName ? ' · ' + it.variationName : '') + ((o.items || []).length > 1 ? ' (+' + (o.items.length - 1) + ')' : ''); var rl = REC_LABEL[recGroup(o)];
+        var chk = o.isDemo ? '<span class="footnote" style="margin:0">—</span>' : '<input type="checkbox" class="devrowsel" data-selid="' + esc(o.id) + '"' + (devSel[o.id] ? ' checked' : '') + '>';
+        var istCell = o.isDemo ? '<span class="pill st-int">' + esc(istLabel(o.internalStatus)) + '</span>' : '<select class="select sm devinlinest" data-inlid="' + esc(o.id) + '" style="min-width:150px">' + Object.keys(ISTMAP).map(function (k) { return '<option value="' + k + '"' + (o.internalStatus === k ? ' selected' : '') + '>' + ISTMAP[k] + '</option>'; }).join('') + '</select>';
+        return '<tr' + (o.isDemo ? ' style="background:#fff8ef"' : (devSel[o.id] ? ' style="background:var(--brand-soft,#f2f5ff)"' : '')) + '><td>' + chk + '</td><td class="mono">' + esc(o.orderId || '—') + (o.returnId ? '<div class="footnote" style="margin:0">' + esc(o.returnId) + '</div>' : '') + '</td><td>' + esc(TYPE_LABELS[o.type] || '—') + (o.isDemo ? ' <span class="tag warn">demo</span>' : '') + '</td><td class="cell-text">' + esc(prod) + '<div class="footnote" style="margin:0">' + esc(it.sku || '—') + '</div></td><td class="cell-text">' + esc(o.reason || '—') + '</td><td class="cell-text"><span class="tag ' + (normStatus(o.status).indexOf('disputa') >= 0 ? 'info' : 'neutral') + '">' + esc(statusLabel(o.status)) + '</span>' + prazoBadge(o) + '</td><td>' + istCell + '</td><td><span class="tag ' + rl[1] + '">' + rl[0] + '</span></td><td class="nowrap">' + brl(o.requested) + '</td><td><button class="btn-sm primary" data-oc="' + esc(o.id) + '">Abrir</button></td></tr>'; }).join('') +
       '</tbody></table></div></div>' + (pages > 1 ? '<div style="display:flex;gap:8px;justify-content:flex-end;align-items:center"><button class="btn-sm" id="devprev"' + (devPage <= 1 ? ' disabled' : '') + '>Anterior</button><span class="footnote" style="margin:0">página ' + devPage + ' de ' + pages + '</span><button class="btn-sm" id="devnext"' + (devPage >= pages ? ' disabled' : '') + '>Próxima</button></div>' : '');
+  }
+  function bulkApplyDev(selIds, patch, ownerName) {
+    var changed = []; var labels = [];
+    if (patch.internalStatus) labels.push('status → ' + istLabel(patch.internalStatus));
+    if (patch.responsibility) labels.push('responsabilidade → ' + DEV.RESPONSIBILITY[patch.responsibility]);
+    if (patch.priority) labels.push('prioridade → ' + DEV.PRIORITY[patch.priority]);
+    if (ownerName) labels.push('responsável → ' + ownerName);
+    selIds.forEach(function (id) { var o = occ.find(function (x) { return x.id === id && !x.isDemo; }); if (!o) return;
+      Object.keys(patch).forEach(function (k) { if (patch[k]) o[k] = patch[k]; });
+      if (ownerName) o.ownerName = ownerName;
+      addActivity(o, 'BULK', { message: 'Edição em massa: ' + labels.join(' · '), userName: 'Operador' });
+      changed.push(o); });
+    return putMany('occ', changed).then(function () { return changed.length; });
+  }
+  function openManageStatus() {
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '520px'; panel.style.maxWidth = '96vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    function draw() {
+      var fixed = Object.keys(DEV.INTERNAL_STATUS).map(function (k) { return '<div class="fin-line"><span>' + esc(DEV.INTERNAL_STATUS[k]) + '</span><span class="footnote" style="margin:0">fixo</span></div>'; }).join('');
+      var custom = devCustomStatus.length ? devCustomStatus.map(function (s, i) { return '<div class="fin-line"><span>' + esc(s.label) + ' <span class="tag info">personalizado</span></span><button class="btn-sm" data-delst="' + i + '">Remover</button></div>'; }).join('') : '<div class="footnote">Nenhum status personalizado ainda.</div>';
+      panel.innerHTML = '<div class="dh"><div><b>Gerenciar status internos</b></div><button class="x">&times;</button></div><div class="dbd">' +
+        callout('', 'Como funciona', 'Os status <b>fixos</b> são usados por automações (recebimento, disputa) e não podem ser removidos. Crie <b>status personalizados</b> para o fluxo da sua operação — eles aparecem em Casos (linha, filtro e ações em massa) e na ficha.') +
+        '<div class="panel"><div class="ph"><h3>Status fixos</h3></div><div class="pb">' + fixed + '</div></div>' +
+        '<div class="panel"><div class="ph"><h3>Personalizados</h3></div><div class="pb">' + custom + '<div style="display:flex;gap:8px;margin-top:10px"><input class="input sm" id="newst" style="flex:1" placeholder="Nome do novo status (ex.: Aguardando NF)"><button class="btn-sm primary" id="addst">Adicionar</button></div></div></div>' +
+        '</div>';
+      panel.querySelector('.x').onclick = function () { d.remove(); };
+      panel.querySelector('#addst').onclick = function () {
+        var v = (panel.querySelector('#newst').value || '').trim(); if (!v) return;
+        var key = istSlug(v); var map = internalStatusMap();
+        if (map[key] || Object.keys(DEV.INTERNAL_STATUS).indexOf(key) >= 0) { toast('Já existe', 'Um status com esse nome já existe.', true); return; }
+        devCustomStatus.push({ key: key, label: v });
+        saveDevSettings().then(function () { draw(); render(); toast('Status criado', v); });
+      };
+      panel.querySelectorAll('[data-delst]').forEach(function (b) { b.onclick = function () {
+        var i = +b.dataset.delst; var s = devCustomStatus[i]; if (!s) return;
+        var inUse = occ.filter(function (o) { return !o.isDemo && o.internalStatus === s.key; }).length;
+        if (inUse && !confirm(inUse + ' caso(s) usam "' + s.label + '". Ao remover, eles voltam para "Nova". Continuar?')) return;
+        if (inUse) { var ch = []; occ.forEach(function (o) { if (!o.isDemo && o.internalStatus === s.key) { o.internalStatus = 'NOVA'; ch.push(o); } }); putMany('occ', ch); }
+        devCustomStatus.splice(i, 1);
+        saveDevSettings().then(function () { draw(); render(); toast('Status removido', s.label); });
+      }; });
+    }
+    draw();
   }
   function bindDevOcc() {
     var q = document.getElementById('devq'); if (q) { var t; q.oninput = function () { clearTimeout(t); t = setTimeout(function () { var v = q.value; devF.search = v; devPage = 1; render(); var el = document.getElementById('devq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
     app.querySelectorAll('[data-octype]').forEach(function (c) { c.onclick = function () { devF.type = c.dataset.octype; devF.status = ''; devPage = 1; render(); }; });
     app.querySelectorAll('[data-ocstatus]').forEach(function (c) { c.onclick = function () { devF.status = c.dataset.ocstatus; devPage = 1; render(); }; });
     app.querySelectorAll('[data-ocflag]').forEach(function (c) { c.onclick = function () { devF.flag = c.dataset.ocflag; devPage = 1; render(); }; });
-    var is = document.getElementById('devis'); if (is) is.onchange = function () { devF.internalStatus = is.value; devPage = 1; render(); };
+    app.querySelectorAll('[data-ocist]').forEach(function (c) { c.onclick = function () { var k = c.dataset.ocist; devF.internalStatus = ''; if (!k) { devF.istSet = {}; } else { devF.istSet = devF.istSet || {}; devF.istSet[k] = !devF.istSet[k]; } devPage = 1; render(); }; });
+    var mg = app.querySelector('[data-ocmanage]'); if (mg) mg.onclick = function () { openManageStatus(); };
     var so = document.getElementById('devsort'); if (so) so.onchange = function () { devF.sort = so.value; render(); };
     var pv = document.getElementById('devprev'); if (pv) pv.onclick = function () { if (devPage > 1) { devPage--; render(); } };
     var nx = document.getElementById('devnext'); if (nx) nx.onclick = function () { devPage++; render(); };
+    // seleção múltipla
+    app.querySelectorAll('.devrowsel').forEach(function (c) { c.onchange = function () { if (c.checked) devSel[c.dataset.selid] = true; else delete devSel[c.dataset.selid]; render(); }; });
+    var sa = document.getElementById('devselall'); if (sa) sa.onchange = function () { app.querySelectorAll('.devrowsel').forEach(function (c) { if (sa.checked) devSel[c.dataset.selid] = true; else delete devSel[c.dataset.selid]; }); render(); };
+    // edição inline de status interno
+    app.querySelectorAll('.devinlinest').forEach(function (s) { s.onchange = function () { var o = occ.find(function (x) { return x.id === s.dataset.inlid && !x.isDemo; }); if (!o) return; var prev = o.internalStatus; o.internalStatus = s.value; addActivity(o, 'STATUS', { field: 'internalStatus', oldValue: prev, newValue: s.value, message: 'Status interno → ' + istLabel(s.value), userName: 'Operador' }); putMany('occ', [o]).then(function () { toast('Status atualizado', istLabel(s.value)); }); }; });
+    // ações em massa
+    var ba = document.getElementById('blkapply'); if (ba) ba.onclick = function () {
+      var selIds = Object.keys(devSel).filter(function (id) { return devSel[id]; });
+      var patch = { internalStatus: (document.getElementById('blkist') || {}).value || '', responsibility: (document.getElementById('blkresp') || {}).value || '', priority: (document.getElementById('blkprio') || {}).value || '' };
+      var owner = ((document.getElementById('blkowner') || {}).value || '').trim();
+      if (!patch.internalStatus && !patch.responsibility && !patch.priority && !owner) { toast('Nada a aplicar', 'Escolha ao menos um campo para alterar.', true); return; }
+      bulkApplyDev(selIds, patch, owner).then(function (n) { devSel = {}; render(); toast('Aplicado', n + ' caso(s) atualizados'); });
+    };
+    var bc = document.getElementById('blkclear'); if (bc) bc.onclick = function () { devSel = {}; render(); };
   }
   function devMotivos() {
     var list = occInPeriod(); if (!list.length) return secHead('ANÁLISE · MOTIVOS', 'Por que os clientes devolvem?', '') + emptyBox('Sem ocorrências no período.');
@@ -4927,7 +5015,7 @@ buffer/index.js:
       var ord = orders.find(function (x) { return x.id === o.orderId; });
       var sel = function (label, val, map, field) { return '<label class="fld">' + label + '</label><select class="select" data-set="' + field + '" style="width:100%">' + Object.keys(map).map(function (k) { return '<option value="' + k + '"' + (val === k ? ' selected' : '') + '>' + map[k] + '</option>'; }).join('') + '</select>'; };
       var inp = function (label, val, field, ph) { return '<label class="fld">' + label + '</label><input class="input" data-inp="' + field + '" style="width:100%" value="' + esc(val || '') + '" placeholder="' + (ph || '') + '">'; };
-      panel.innerHTML = '<div class="dh"><div><b>Ficha — ' + esc(o.orderId || o.id) + '</b> <span class="pill st-int" style="margin-left:8px">' + (DEV.INTERNAL_STATUS[o.internalStatus] || o.internalStatus) + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
+      panel.innerHTML = '<div class="dh"><div><b>Ficha — ' + esc(o.orderId || o.id) + '</b> <span class="pill st-int" style="margin-left:8px">' + istLabel(o.internalStatus) + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
         '<div class="cards6">' + fcard('Reembolso', brl(o.impact.refundedTotal), 'red') + fcard('Custos adicionais', brl(o.impact.additionalCostTotal), 'amber') + fcard('Recuperado', brl(o.impact.recoveredTotal), 'green') + fcard('Impacto líquido', o.impact.knownNetImpact == null ? '—' : brl(o.impact.knownNetImpact), 'red', o.impact.cmvAvailable ? '' : 'CMV não disponível') + '</div>' +
         '<div class="split"><div>' +
         '<div class="panel"><div class="ph"><h3>Produto / retorno</h3><span class="tag ' + situacaoCaso(o)[1] + '">' + situacaoCaso(o)[0] + '</span></div><div class="pb">' + kv('Motivo (cliente)', o.reason) + kv('Situação do retorno', RECEIPT_LABELS[o.receiptState] || 'Não iniciado') + '<label class="fld">Itens</label>' + (o.items || []).map(function (i) { return '<div class="ro" style="margin-bottom:4px"><span class="mono">' + esc(i.sku || '—') + '</span> ' + esc(i.productName || '') + (i.variationName ? ' · ' + esc(i.variationName) : '') + (i.skuLinked ? '' : ' <span class="tag warn">não vinc.</span>') + '</div>'; }).join('') + '</div></div>' +
@@ -4943,7 +5031,7 @@ buffer/index.js:
         '<div class="fin-line"><span>Reembolso pago</span><span class="neg">' + brl(o.impact.refundedTotal) + '</span></div><div class="fin-line"><span>Custos adicionais</span><span class="neg">' + brl(o.impact.additionalCostTotal) + '</span></div><div class="fin-line"><span>Recuperações</span><span class="pos">-' + brl(o.impact.recoveredTotal) + '</span></div><div class="fin-line total"><span>Impacto líquido conhecido</span><span class="neg">' + (o.impact.knownNetImpact == null ? '—' : brl(o.impact.knownNetImpact)) + '</span></div>' +
         '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center"><select class="select sm" id="evtype">' + Object.keys(EVENT_META).map(function (k) { return '<option value="' + k + '">' + EVENT_META[k].label + '</option>'; }).join('') + '</select><input class="input sm" id="evamt" style="width:100px" placeholder="valor"><button class="btn-sm primary" id="evadd">+ Movimentação</button></div>' +
         (o.events && o.events.length ? '<div style="margin-top:10px">' + o.events.map(function (e) { return '<div class="fin-line"><span>' + (EVENT_META[e.type] ? EVENT_META[e.type].label : e.type) + (e.note ? ' · ' + esc(e.note) : '') + '</span><span class="' + (e.direction === 'RECOVERY' ? 'pos' : 'neg') + '">' + (e.direction === 'RECOVERY' ? '-' : '') + brl(e.amount) + '</span></div>'; }).join('') + '</div>' : '') + '</div></div></div>' +
-        '<div><div class="panel"><div class="ph"><h3>Controle interno</h3></div><div class="pb">' + sel('Status interno', o.internalStatus, DEV.INTERNAL_STATUS, 'internalStatus') + sel('Prioridade', o.priority, DEV.PRIORITY, 'priority') + inp('Responsável', o.ownerName, 'ownerName', 'nome do responsável') + inp('Causa interna', o.internalCause, 'internalCause', 'ex.: proteção insuficiente do vidro') + inp('Família da causa', o.causeFamily, 'causeFamily', 'ex.: Avaria / Embalagem') + sel('Responsabilidade', o.responsibility, DEV.RESPONSIBILITY, 'responsibility') + sel('Situação da mercadoria', o.merchandiseStatus, DEV.MERCH_STATUS, 'merchandiseStatus') + sel('Condição (se recebida)', o.merchandiseCondition || '', Object.assign({ '': '—' }, DEV.MERCH_COND), 'merchandiseCondition') + inp('Valor recuperável (R$)', o.recoverableValue, 'recoverableValue', '0,00') + '</div></div>' +
+        '<div><div class="panel"><div class="ph"><h3>Controle interno</h3></div><div class="pb">' + sel('Status interno', o.internalStatus, internalStatusMap(), 'internalStatus') + sel('Prioridade', o.priority, DEV.PRIORITY, 'priority') + inp('Responsável', o.ownerName, 'ownerName', 'nome do responsável') + inp('Causa interna', o.internalCause, 'internalCause', 'ex.: proteção insuficiente do vidro') + inp('Família da causa', o.causeFamily, 'causeFamily', 'ex.: Avaria / Embalagem') + sel('Responsabilidade', o.responsibility, DEV.RESPONSIBILITY, 'responsibility') + sel('Situação da mercadoria', o.merchandiseStatus, DEV.MERCH_STATUS, 'merchandiseStatus') + sel('Condição (se recebida)', o.merchandiseCondition || '', Object.assign({ '': '—' }, DEV.MERCH_COND), 'merchandiseCondition') + inp('Valor recuperável (R$)', o.recoverableValue, 'recoverableValue', '0,00') + '</div></div>' +
         '<div class="panel" id="fichaDisputa"><div class="ph"><h3>Disputa</h3><span class="tag info">' + DEV.DISPUTE_STATUS[o.disputeStatus] + '</span></div><div class="pb"><select class="select" id="dispsel" style="width:100%">' + Object.keys(DEV.DISPUTE_STATUS).map(function (k) { return '<option value="' + k + '"' + (o.disputeStatus === k ? ' selected' : '') + '>' + DEV.DISPUTE_STATUS[k] + '</option>'; }).join('') + '</select><div id="dispextra"></div><button class="btn-sm primary" id="dispsave" style="margin-top:8px">Salvar disputa</button></div></div></div></div>' +
         '<div class="panel"><div class="ph"><h3>Timeline & auditoria</h3></div><div class="pb"><div style="display:flex;gap:6px;margin-bottom:10px"><input class="input sm" id="cmt" style="flex:1" placeholder="Adicionar comentário…"><button class="btn-sm" id="cmtadd">Comentar</button></div>' +
         ((o.activities || []).length ? o.activities.map(function (a) {
@@ -5621,15 +5709,16 @@ buffer/index.js:
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; devSel = {}; devCustomStatus = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
 
   openDB().then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings')]);
   }).then(function (r) {
     orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
     wallet = r[5] || [];
     walletCls = {}; (r[6] || []).forEach(function (c) { walletCls[c.id] = c; });
+    devCustomStatus = ((r[7] || []).filter(function (x) { return x.id === 'dev'; })[0] || {}).customStatus || [];
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
     plans = (r[4] || []).map(function (p) { if (PLAN_MIGR[p.status]) p.status = PLAN_MIGR[p.status]; if (p.scopeSkus == null && p.relatedSkus) p.scopeSkus = p.relatedSkus; if (p.indicatorKind == null) p.indicatorKind = 'liquido'; return p; });
     occ = occ.filter(function (o) { return !o.isDemo; }); // higiene: nunca deixar demo no banco real
