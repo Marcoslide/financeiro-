@@ -199,6 +199,7 @@
       <a data-route="pedidos"><span class="ic">▤</span>Pedidos</a>
       <a data-route="posvenda"><span class="ic">↩</span>Devolução</a>
       <a data-route="carteira"><span class="ic">▧</span>Saldo da Carteira</a>
+      <a data-route="acelera"><span class="ic">⚡</span>Shopee Acelera</a>
       <div class="nav-group">Inteligência</div>
       <a data-route="ia"><span class="ic">✦</span>Inteligência</a>
     </nav>
@@ -3796,6 +3797,15 @@ buffer/index.js:
   var sub = { pedidos: 'pedidos', posvenda: 'visao' };
   var pedTab = 'ALL';
   var devF = { search: '', internalStatus: '', disputeStatus: '', type: '', status: '', flag: '' }, devPage = 1;
+  // Shopee Acelera / Antecipação de Recebíveis
+  var acelera = [];                 // registros pedido-a-pedido do relatório de antecipação
+  var aceleraSummary = null;        // resumo informado pela própria Shopee (para conciliar)
+  var aceleraSub = 'visao';         // sub-aba do módulo
+  var aceleraPage = 1;
+  var aceleraF = { search: '', status: '', band: '', maturity: '', flag: '' };
+  var aceleraSel = { resgate: null };
+  var aceleraCfg = { cohortDays: 60, ticketRisco: 25000, metaAntecip: 0.5, aliquotaAlvo: 0.025, limiteDevol: 0.15, capitalProprio: 0, custoOportAA: 0.12, bancoTaxaAM: 0.02, metaCobertura: 12.8, tolAliquota: 0.0015 }; // valores em centavos p/ dinheiro
+  var aceleraSim = { pct: 1, ticketMax: 0, aliquota: 'atual', capitalProprio: 0, banco: 0, bancoTaxaAM: 0.02, custoOportAA: 0.12, devol: 'hist' };
   var devSel = {};            // seleção múltipla em Casos: id -> true (em memória)
   var devCustomStatus = [];   // status internos personalizados pelo operador: [{key,label}]
   var chat = [];
@@ -3913,7 +3923,7 @@ buffer/index.js:
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -4108,16 +4118,22 @@ buffer/index.js:
   function fileInput(cb) { var inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.xlsx,.xls,.csv'; inp.onchange = function () { if (inp.files[0]) cb(inp.files[0]); }; inp.click(); }
 
   // ============================================================ RENDER (roteamento)
-  function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', ia: 'Inteligência' }[route]; }
+  function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', ia: 'Inteligência' }[route] || ''; }
   function render() {
     setActive();
-    if (route === 'produtos') { Produtos.render(); return; }
-    if (route === 'dashboard') return renderDashboard();
-    if (route === 'pedidos') return renderPedidos();
-    if (route === 'posvenda') return renderPosVenda();
-    if (route === 'carteira') return renderCarteira();
-    if (route === 'ia') return renderIA();
+    // Cada módulo é isolado: um erro em um deles mostra a mensagem no lugar de deixar a tela em branco
+    // (era isso que fazia "clico e não aparece nada"). Produtos depende do módulo carregado no boot.
+    try {
+      if (route === 'produtos') { if (!Produtos) { app.innerHTML = renderErrBox('O módulo Produtos ainda não terminou de carregar. Recarregue a página.'); return; } Produtos.render(); return; }
+      if (route === 'dashboard') return renderDashboard();
+      if (route === 'pedidos') return renderPedidos();
+      if (route === 'posvenda') return renderPosVenda();
+      if (route === 'carteira') return renderCarteira();
+      if (route === 'acelera') return renderAcelera();
+      if (route === 'ia') return renderIA();
+    } catch (e) { app.innerHTML = renderErrBox('Erro ao abrir esta tela: ' + esc(e && (e.message || e)) + '. Os dados estão salvos — recarregue a página.'); }
   }
+  function renderErrBox(msg) { return '<div class="form-err" style="max-width:640px;margin:24px auto"><b>Ops.</b><br>' + msg + '<div style="margin-top:12px"><button class="btn-sm primary" onclick="location.reload()">Recarregar</button></div></div>'; }
 
   // ---------- DASHBOARD global ----------
   function computeOrderAgg() {
@@ -5551,6 +5567,507 @@ buffer/index.js:
     var gd = panel.querySelector('[data-godev]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev; d.remove(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
   }
 
+  // ======================= SHOPEE ACELERA / ANTECIPAÇÃO DE RECEBÍVEIS =======================
+  // Motor 100% determinístico. Dinheiro sempre em CENTAVOS inteiros (evita erro de ponto flutuante).
+  // IDs longos sempre string. Nada de LLM em cálculo financeiro. Nada inventado: lacuna é declarada.
+  function brlC(c) { return brl((c || 0) / 100); }
+  function acCleanId(s) { return String(s == null ? '' : s).replace(/^\s*=?\s*"?/, '').replace(/"?\s*$/, '').trim(); }
+  function acMoneyCents(s) {
+    if (s == null) return 0; var t = String(s).replace(/^\s*=?\s*"?/, '').replace(/"?\s*$/, '').replace(/r\$/i, '').replace(/\s/g, '').trim();
+    if (t === '' || t === '-') return 0; var neg = /^-/.test(t); t = t.replace(/^-/, '');
+    if (t.indexOf(',') >= 0 && t.indexOf('.') >= 0) t = t.replace(/\./g, '').replace(',', '.'); else if (t.indexOf(',') >= 0) t = t.replace(',', '.');
+    var n = parseFloat(t); if (isNaN(n)) return 0; return Math.round(n * 100) * (neg ? -1 : 1);
+  }
+  function acPct(s) { if (s == null) return null; var t = String(s).replace('%', '').replace(',', '.').trim(); var n = parseFloat(t); return isNaN(n) ? null : n / 100; }
+  function acDays(a, b) { if (!a || !b) return null; var da = new Date(a), db = new Date(b); if (isNaN(da) || isNaN(db)) return null; return Math.round((db - da) / 864e5); }
+  function acAgeDays(d) { if (!d) return null; var x = new Date(d); if (isNaN(x)) return null; return Math.floor((Date.now() - x.getTime()) / 864e5); }
+  function acIsReemb(r) { return /reembols/.test(normStatus(r.status)); }
+  function acIsFullyPaid(r) { return normStatus(r.status).indexOf('totalmente pago') >= 0; }
+  function acIsSettled(r) { return acIsFullyPaid(r) || acIsReemb(r); }
+  function acBand(rate) { var tol = aceleraCfg.tolAliquota; if (rate === 0) return '—'; if (Math.abs(rate - 0.025) <= tol) return '2.5%'; if (Math.abs(rate - 0.035) <= tol) return '3.5%'; if (Math.abs(rate - 0.02) <= tol) return '2.0%'; return 'outra'; }
+  var AC_STATUS_LABELS = { 'antecipacao paga': 'Antecipação paga', 'totalmente pago': 'Totalmente pago', 'antecipacao parcialmente reembolsada': 'Parcialmente reembolsada', 'antecipacao totalmente reembolsada': 'Totalmente reembolsada' };
+  function acStatusLabel(s) { return AC_STATUS_LABELS[normStatus(s)] || s || '—'; }
+
+  // Parser do CSV/planilha real da Shopee (localiza cabeçalho dinamicamente; guarda o resumo da Shopee).
+  function parseAceleraText(text) {
+    var res = { notRecognized: true, rows: [], summary: null, periodDeclared: null, periodReal: null };
+    var lines = String(text).replace(/^﻿/, '').split(/\r?\n/);
+    var split = function (l) { return l.split(','); }; // formato real: sem vírgula dentro de campos (o ="..." não tem vírgula)
+    var hi = -1;
+    for (var i = 0; i < Math.min(lines.length, 40); i++) { var ln = normStatus(lines[i]); if (ln.indexOf('data do resgate') >= 0 && ln.indexOf('id do pedido') >= 0 && ln.indexOf('status') >= 0) { hi = i; break; } }
+    if (hi < 0) return res;
+    // Resumo Shopee (linhas antes do cabeçalho): pares rótulo,valor
+    var sum = {}; var declared = null;
+    for (var j = 0; j < hi; j++) {
+      var cells = split(lines[j]); for (var k = 0; k < cells.length - 1; k++) {
+        var lab = normStatus(cells[k]);
+        if (lab.indexOf('periodo') >= 0) declared = (cells[k + 1] || '').trim();
+        if (lab.indexOf('numero de resgates') >= 0) sum.nResgates = parseInt(cells[k + 1], 10) || 0;
+        if (lab === 'taxa de servico:' || (lab.indexOf('taxa de servico') >= 0 && sum.taxa == null)) sum.taxa = acMoneyCents(cells[k + 1]);
+        if (lab.indexOf('resgates rapidos reembolsados') >= 0) sum.nReembolsados = parseInt(cells[k + 1], 10) || 0;
+        if (lab.indexOf('resgates a reembolsar') >= 0) sum.nAReembolsar = parseInt(cells[k + 1], 10) || 0;
+        if (lab === 'vencido:' || lab.indexOf('vencido') === 0) sum.nVencido = parseInt(cells[k + 1], 10) || 0;
+        if (lab.indexOf('valor total dos resgates') >= 0) sum.volume = acMoneyCents(cells[k + 1]);
+        if (lab.indexOf('valor recebido') >= 0) sum.recebido = acMoneyCents(cells[k + 1]);
+        if (lab.indexOf('valor da pendencia') >= 0) sum.reembolsado = acMoneyCents(cells[k + 1]);
+        if (lab === 'valor pendente:' || (lab.indexOf('valor pendente') >= 0 && lab.indexOf('vencid') < 0)) sum.pendente = acMoneyCents(cells[k + 1]);
+        if (lab.indexOf('pendencias vencidas') >= 0) sum.vencidoValor = acMoneyCents(cells[k + 1]);
+      }
+    }
+    var rows = [], minD = null, maxD = null;
+    for (var r = hi + 1; r < lines.length; r++) {
+      var c = split(lines[r]); if (c.length < 15) continue; var data = (c[0] || '').trim(); var resg = acCleanId(c[1]); var ped = acCleanId(c[2]); if (!data || !resg || !ped) continue;
+      var rec = { data: data, resgate: resg, pedido: ped, disponivel: acMoneyCents(c[3]), pctAntecip: acPct(c[4]), antecipado: acMoneyCents(c[5]), taxa: acMoneyCents(c[6]), recebido: acMoneyCents(c[7]), restante: acMoneyCents(c[8]), reembolsado: acMoneyCents(c[9]), faturamento: acMoneyCents(c[10]), pendente: acMoneyCents(c[11]), status: (c[12] || '').trim(), ultimaTransacao: (c[13] || '').trim(), vencimento: (c[14] || '').trim() };
+      rows.push(rec); if (!minD || data < minD) minD = data; if (!maxD || data > maxD) maxD = data;
+    }
+    if (!rows.length) return res;
+    res.notRecognized = false; res.rows = rows; res.summary = sum; res.periodDeclared = declared; res.periodReal = { min: minD, max: maxD };
+    return res;
+  }
+  function importAcelera(file) {
+    return file.arrayBuffer().then(function (ab) {
+      var name = (file.name || '').toLowerCase(); var text;
+      if (name.slice(-5) === '.xlsx' || name.slice(-4) === '.xls') { var wb = XLSX.read(new Uint8Array(ab), { type: 'array' }); text = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]); }
+      else { text = new TextDecoder('utf-8').decode(ab).replace(/^﻿/, ''); }
+      var parsed = parseAceleraText(text);
+      if (parsed.notRecognized) throw new Error('Relatório do Shopee Acelera não reconhecido (esperado o CSV de antecipação de recebíveis da Shopee).');
+      var byId = {}; acelera.forEach(function (x) { byId[x.id] = x; });
+      var novo = 0, upd = 0, unch = 0, changed = []; var importedAt = new Date().toISOString();
+      parsed.rows.forEach(function (row) {
+        var id = 'default|' + row.resgate + '|' + row.pedido; var ex = byId[id];
+        if (!ex) { var rec = Object.assign({ id: id, storeId: 'default', firstImportAt: importedAt, lastImportAt: importedAt, fileName: file.name, history: [] }, row); byId[id] = rec; changed.push(rec); novo++; return; }
+        var same = ex.antecipado === row.antecipado && ex.taxa === row.taxa && ex.recebido === row.recebido && ex.reembolsado === row.reembolsado && ex.pendente === row.pendente && normStatus(ex.status) === normStatus(row.status) && ex.ultimaTransacao === row.ultimaTransacao;
+        if (same) { unch++; return; }
+        // registro evolui: preserva histórico e atualiza estado atual (§6-7)
+        ex.history = ex.history || []; ex.history.unshift({ at: importedAt, file: file.name, statusOld: ex.status, statusNew: row.status, reembOld: ex.reembolsado, reembNew: row.reembolsado, pendOld: ex.pendente, pendNew: row.pendente, ultima: row.ultimaTransacao });
+        ex.status = row.status; ex.recebido = row.recebido; ex.restante = row.restante; ex.reembolsado = row.reembolsado; ex.pendente = row.pendente; ex.faturamento = row.faturamento; ex.ultimaTransacao = row.ultimaTransacao; ex.vencimento = row.vencimento; ex.taxa = row.taxa; ex.antecipado = row.antecipado; ex.lastImportAt = importedAt;
+        changed.push(ex); upd++;
+      });
+      acelera = Object.values(byId);
+      aceleraSummary = { summary: parsed.summary, periodDeclared: parsed.periodDeclared, periodReal: parsed.periodReal, importedAt: importedAt, fileName: file.name, rowsSeen: parsed.rows.length };
+      var batch = { id: 'ac' + Date.now() + Math.round(performance.now()), module: 'Shopee Acelera', filename: file.name, createdAt: importedAt, seen: parsed.rows.length, novo: novo, upd: upd, unch: unch, itemsSeen: parsed.rows.length };
+      batches.unshift(batch); lastImportStamp = importedAt;
+      return Promise.all([putMany('acelera', changed), putMany('batches', [batch]), putMany('settings', [{ id: 'aceleraSummary', data: aceleraSummary }])]).then(function () { return { batch: batch, novo: novo, upd: upd, unch: unch }; });
+    });
+  }
+  function saveAceleraCfg() { return putMany('settings', [{ id: 'aceleraCfg', data: aceleraCfg }]); }
+
+  // ---- motor determinístico ----
+  function aceleraByResgate(recs) {
+    var map = {}; recs.forEach(function (r) { var g = map[r.resgate] = map[r.resgate] || { resgate: r.resgate, data: r.data, n: 0, antec: 0, taxa: 0, receb: 0, reemb: 0, pend: 0, maxUlt: '' }; g.n++; g.antec += r.antecipado; g.taxa += r.taxa; g.receb += r.recebido; g.reemb += r.reembolsado; g.pend += r.pendente; if (r.data < g.data) g.data = r.data; if ((r.ultimaTransacao || '') > g.maxUlt) g.maxUlt = r.ultimaTransacao; });
+    return Object.keys(map).map(function (k) { var g = map[k]; g.rate = g.antec ? g.taxa / g.antec : 0; g.band = acBand(g.rate); return g; }).sort(function (a, b) { return (a.data || '').localeCompare(b.data || ''); });
+  }
+  function aceleraMetrics(recs) {
+    var m = { n: recs.length, volume: 0, taxa: 0, receb: 0, reemb: 0, pend: 0, restante: 0, taxaReemb: 0, taxaRisco: 0 };
+    var status = {}, anomalies = [];
+    var reembF = 0, riscoF = 0;
+    recs.forEach(function (r) {
+      m.volume += r.antecipado; m.taxa += r.taxa; m.receb += r.recebido; m.reemb += r.reembolsado; m.pend += r.pendente; m.restante += r.restante;
+      status[normStatus(r.status)] = (status[normStatus(r.status)] || 0) + 1;
+      if (r.antecipado > 0) { reembF += r.taxa * r.reembolsado / r.antecipado; riscoF += r.taxa * r.pendente / r.antecipado; }
+      var an = null;
+      if (r.antecipado <= 0) an = 'Valor antecipado zero ou negativo';
+      else if (r.reembolsado > r.antecipado + 1) an = 'Reembolso maior que o antecipado';
+      else if (r.pendente > r.antecipado + 1) an = 'Pendência maior que o antecipado';
+      else if (r.taxa < 0) an = 'Taxa negativa';
+      else if (acBand(r.antecipado ? r.taxa / r.antecipado : 0) === 'outra') an = 'Alíquota fora dos padrões (investigar)';
+      if (an) anomalies.push({ r: r, type: an });
+    });
+    m.taxaReemb = Math.round(reembF); m.taxaRisco = Math.round(riscoF);
+    m.aliquota = m.volume ? m.taxa / m.volume : 0;
+    m.status = status; m.anomalies = anomalies;
+    m.byResgate = aceleraByResgate(recs);
+    // dias até liquidação
+    var diasPago = [], diasReemb = [], idadePend = [];
+    recs.forEach(function (r) { if (acIsFullyPaid(r)) { var d = acDays(r.data, r.ultimaTransacao); if (d != null && d >= 0) diasPago.push(d); } else if (acIsReemb(r)) { var d2 = acDays(r.data, r.ultimaTransacao); if (d2 != null && d2 >= 0) diasReemb.push(d2); } else { var a = acAgeDays(r.data); if (a != null) idadePend.push(a); } });
+    var avg = function (a) { return a.length ? a.reduce(function (s, x) { return s + x; }, 0) / a.length : null; };
+    var med = function (a) { if (!a.length) return null; var s = a.slice().sort(function (x, y) { return x - y; }); var mid = Math.floor(s.length / 2); return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2; };
+    m.diasPagoAvg = avg(diasPago); m.diasPagoMed = med(diasPago); m.diasReembAvg = avg(diasReemb); m.idadePendAvg = avg(idadePend); m.nPago = diasPago.length; m.nReemb = diasReemb.length; m.nPend = idadePend.length;
+    // coorte madura
+    var mad = recs.filter(function (r) { return acAgeDays(r.data) != null && acAgeDays(r.data) >= aceleraCfg.cohortDays; });
+    var madAntec = mad.reduce(function (s, r) { return s + r.antecipado; }, 0), madReemb = mad.reduce(function (s, r) { return s + r.reembolsado; }, 0);
+    m.cohortMaduraN = mad.length; m.cohortMaduraAntec = madAntec; m.cohortMaduraReemb = madReemb; m.cohortDevolRate = madAntec ? madReemb / madAntec : 0;
+    // custo equivalente anual (usa dias médios de pedidos pagos)
+    var diasEq = m.diasPagoAvg || m.diasPagoMed || null;
+    m.custoEquivAnual = (diasEq && m.aliquota < 1 && diasEq > 0) ? (Math.pow(1 / (1 - m.aliquota), 365 / diasEq) - 1) : null;
+    m.diasEq = diasEq;
+    // custo projetado 12m: média mensal da taxa * 12
+    var months = aceleraMonths(recs); m.monthsSpan = months.length || 1;
+    m.taxaMensalMedia = Math.round(m.taxa / m.monthsSpan); m.custoProj12m = m.taxaMensalMedia * 12;
+    m.volumeMensalMedio = Math.round(m.volume / m.monthsSpan);
+    // capital necessário para independência (receita realizável média/30 * prazo médio liberação)
+    var realizavelMensal = Math.round(m.volumeMensalMedio * (1 - m.cohortDevolRate));
+    var prazo = m.diasPagoMed || m.diasPagoAvg || 0;
+    m.capitalNecessario = Math.round(realizavelMensal / 30 * prazo);
+    m.prazoLiberacao = prazo; m.realizavelMensal = realizavelMensal;
+    m.capitalProprio = aceleraCfg.capitalProprio || 0;
+    m.coberturaDias = realizavelMensal ? (m.capitalProprio / (realizavelMensal / 30)) : 0;
+    return m;
+  }
+  function aceleraMonths(recs) { var mm = {}; recs.forEach(function (r) { if (r.data) mm[r.data.slice(0, 7)] = 1; }); return Object.keys(mm).sort(); }
+  function aceleraInPeriodAll() { return acelera; } // o módulo tem período próprio; não filtra por padrão (§5)
+
+  function renderAcelera() {
+    var tabs = [['visao', 'Visão Geral'], ['antecipacoes', 'Antecipações'], ['desperdicio', 'Devoluções & Desperdício'], ['aliquotas', 'Alíquotas'], ['coortes', 'Coortes'], ['capital', 'Capital & Simulador'], ['plano', 'Plano de Ação'], ['auditoria', 'Auditoria'], ['config', 'Configurações']];
+    app.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + tabs.map(function (t) { return '<div class="subtab' + (aceleraSub === t[0] ? ' active' : '') + '" data-acsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-acimport="1">Importar Shopee Acelera</button></div><div id="acbody" style="margin-top:14px"></div>';
+    var body = document.getElementById('acbody');
+    try {
+      if (!acelera.length && aceleraSub !== 'config') body.innerHTML = secHead('SHOPEE ACELERA', 'Antecipação de Recebíveis', 'Quanto antecipamos, quanto pagamos, qual a alíquota real, quanto disso virou desperdício com devolução e qual decisão de capital é mais barata.') + emptyBox('Nenhum relatório Shopee Acelera importado. Clique em “Importar Shopee Acelera” e envie o CSV de antecipação de recebíveis.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="acimp">Importar primeiro relatório</button></div>';
+      else body.innerHTML = ({ visao: aceleraVisao, antecipacoes: aceleraAntecipacoes, desperdicio: aceleraDesperdicio, aliquotas: aceleraAliquotas, coortes: aceleraCoortes, capital: aceleraCapital, plano: aceleraPlano, auditoria: aceleraAuditoria, config: aceleraConfig }[aceleraSub] || aceleraVisao)();
+    } catch (e) { body.innerHTML = '<div class="form-err">Erro ao renderizar o Shopee Acelera: ' + esc(e.message || e) + '</div>'; }
+    app.querySelectorAll('[data-acsub]').forEach(function (b) { b.onclick = function () { aceleraSub = b.dataset.acsub; aceleraPage = 1; render(); }; });
+    var imp = function () { fileInput(function (f) { importAcelera(f).then(function (b) { render(); toast('Importação concluída', b.novo + ' novos · ' + b.upd + ' atualizados · ' + b.unch + ' sem alteração'); }).catch(function (e) { toast('Falha', e.message, true); }); }); };
+    app.querySelectorAll('[data-acimport]').forEach(function (b) { b.onclick = imp; });
+    var ai = document.getElementById('acimp'); if (ai) ai.onclick = imp;
+    app.querySelectorAll('[data-acgo]').forEach(function (b) { b.onclick = function () { aceleraSub = b.dataset.acgo; if (b.dataset.acflag != null) aceleraF.flag = b.dataset.acflag; render(); }; });
+    app.querySelectorAll('[data-acresg]').forEach(function (b) { b.onclick = function () { aceleraSel.resgate = b.dataset.acresg; openAceleraResgate(b.dataset.acresg); }; });
+    app.querySelectorAll('[data-acped]').forEach(function (b) { b.onclick = function () { openAceleraPedido(b.dataset.acped); }; });
+    if (aceleraSub === 'antecipacoes') bindAceleraAntec();
+    if (aceleraSub === 'capital') bindAceleraSim();
+    if (aceleraSub === 'config') bindAceleraConfig();
+    if (aceleraSub === 'auditoria') bindAceleraAud();
+  }
+
+  function acKpiHelp(label, help) { return '<span title="' + esc(help) + '" style="cursor:help;border-bottom:1px dotted var(--muted)">' + esc(label) + '</span>'; }
+  function aceleraVisao() {
+    var m = aceleraMetrics(acelera);
+    var recon = aceleraReconcile(m);
+    var head = secHead('SHOPEE ACELERA', 'Antecipação de Recebíveis', 'Central de inteligência da antecipação: quanto pagamos, por quê, quais pedidos originaram o custo, quanto voltou, quanto está em risco e qual decisão de capital é mais barata.');
+    var strip1 = kstrip([
+      { l: 'Volume antecipado', v: brlC(m.volume), cls: 'blue', s: nn(m.n) + ' pedidos · ' + nn(m.byResgate.length) + ' resgates' },
+      { l: 'Taxa paga', v: brlC(m.taxa), cls: 'red' },
+      { l: 'Alíquota efetiva', v: pct(r2(m.aliquota * 100)), cls: 'amber', s: 'média ponderada' },
+      { l: 'Líquido recebido', v: brlC(m.receb), cls: 'green' },
+      { l: 'Reembolsado', v: brlC(m.reemb), cls: 'amber' },
+      { l: 'Pendente', v: brlC(m.pend), cls: 'blue' },
+    ]);
+    var strip2 = kstrip([
+      { l: 'Taxa vinculada a reembolsos', v: brlC(m.taxaReemb), cls: 'red', s: pct(r2(m.taxa ? m.taxaReemb / m.taxa * 100 : 0)) + ' da taxa' },
+      { l: 'Taxa em risco (pendências)', v: brlC(m.taxaRisco), cls: 'amber', s: 'não é perda realizada' },
+      { l: 'Custo projetado 12 meses', v: brlC(m.custoProj12m), cls: 'red', s: brlC(m.taxaMensalMedia) + '/mês' },
+      { l: 'Custo equivalente a.a.', v: m.custoEquivAnual == null ? 'sem base' : pct(r2(m.custoEquivAnual * 100)), cls: 'amber', s: m.diasEq ? 'p/ ' + Math.round(m.diasEq) + ' dias médios' : '' },
+      { l: 'Capital p/ independência', v: brlC(m.capitalNecessario), cls: 'blue', s: 'ver Capital & Simulador' },
+      { l: 'Devolução coorte madura', v: pct(r2(m.cohortDevolRate * 100)), cls: 'amber', s: nn(m.cohortMaduraN) + ' pedidos ≥' + aceleraCfg.cohortDays + 'd' },
+    ]);
+    // onde está vazando
+    var leaks = aceleraLeaks(m);
+    var leakRows = leaks.map(function (l, i) { return '<tr class="rowlink"' + (l.go ? ' data-acgo="' + l.go + '"' : '') + '><td>' + (i + 1) + '</td><td>' + esc(l.label) + '</td><td class="neg"><b>' + (l.money ? brlC(l.money) : esc(l.txt || '')) + '</b></td><td class="cell-text footnote" style="margin:0">' + esc(l.hint || '') + '</td></tr>'; }).join('');
+    var vaz = '<div class="panel"><div class="ph"><h3>Onde está vazando o dinheiro</h3><span class="footnote" style="margin:0">ordenado por impacto</span></div><div class="table-wrap"><table class="report"><thead><tr><th>#</th><th>Causa</th><th>Impacto</th><th>Observação</th></tr></thead><tbody>' + (leakRows || '<tr><td colspan="4" class="empty">Sem dados.</td></tr>') + '</tbody></table></div></div>';
+    // o que fazer agora
+    var acts = aceleraActions(m);
+    var doNow = acts.length ? '<div class="panel"><div class="ph"><h3>O que fazer agora?</h3></div><div class="pb">' + acts.map(function (a) { return '<div class="fin-line"><span>' + a.icon + ' ' + a.text + '</span>' + (a.go ? '<button class="btn-sm" data-acgo="' + a.go + '">abrir</button>' : '') + '</div>'; }).join('') + '</div></div>' : '';
+    return head + recon + strip1 + strip2 + vaz + doNow;
+  }
+  function aceleraReconcile(m) {
+    if (!aceleraSummary || !aceleraSummary.summary) return '';
+    var s = aceleraSummary.summary; var rows = [];
+    var cmp = function (label, sys, shopee) { if (shopee == null) return; var diff = sys - shopee; rows.push({ label: label, sys: sys, shopee: shopee, diff: diff }); };
+    cmp('Volume antecipado', m.volume, s.volume); cmp('Taxa de serviço', m.taxa, s.taxa); cmp('Recebido', m.receb, s.recebido); cmp('Reembolsado', m.reemb, s.reembolsado); cmp('Pendente', m.pend, s.pendente);
+    var maxDiff = rows.reduce(function (mx, r) { return Math.max(mx, Math.abs(r.diff)); }, 0);
+    var ok = maxDiff <= 100; // até R$1,00 de arredondamento
+    var pr = aceleraSummary.periodReal || {}; var audit = '';
+    if (aceleraSummary.periodDeclared && pr.min && (pr.min < (aceleraSummary.periodDeclared.split(' - ')[0] || ''))) audit = ' O período declarado pela Shopee (' + esc(aceleraSummary.periodDeclared) + ') começa depois do registro mais antigo (' + esc(pr.min) + ') — normal quando reembolsos trazem pedidos antigos de volta; nenhum registro foi descartado.';
+    var body = '<div class="table-wrap"><table class="report"><thead><tr><th>Indicador</th><th>Sistema</th><th>Shopee (resumo)</th><th>Diferença</th></tr></thead><tbody>' + rows.map(function (r) { return '<tr><td>' + esc(r.label) + '</td><td class="nowrap">' + brlC(r.sys) + '</td><td class="nowrap">' + brlC(r.shopee) + '</td><td class="nowrap ' + (Math.abs(r.diff) > 100 ? 'neg' : '') + '">' + (r.diff === 0 ? 'R$ 0,00' : brlC(r.diff)) + '</td></tr>'; }).join('') + '</tbody></table></div>';
+    return callout(ok ? 'green' : 'warn', ok ? '✓ Conciliado com o resumo da Shopee' : '⚠ Divergência com o resumo da Shopee', 'Comparação entre o que o sistema somou linha a linha e o resumo que a própria Shopee escreveu no arquivo.' + audit + body);
+  }
+  function aceleraLeaks(m) {
+    var leaks = [];
+    if (m.taxaReemb > 0) leaks.push({ label: 'Taxa paga em pedidos que depois devolveram', money: m.taxaReemb, go: 'desperdicio', hint: 'antecipamos e pagamos taxa, mas o pedido voltou' });
+    // impacto de alíquota (3.5 vs 2.5)
+    var band35 = m.byResgate.filter(function (g) { return g.band === '3.5%'; }); var vol35 = band35.reduce(function (s, g) { return s + g.antec; }, 0);
+    if (vol35 > 0) { var econ = Math.round(vol35 * (0.035 - 0.025)); leaks.push({ label: 'Alíquota a 3,5% (vs 2,5%) sobre ' + brlC(vol35), money: econ, go: 'aliquotas', hint: 'diferença de alíquota no volume já antecipado a 3,5%' }); }
+    if (m.taxaRisco > 0) leaks.push({ label: 'Taxa em risco por pendências em aberto', money: m.taxaRisco, go: 'desperdicio', hint: 'ainda não é perda — depende do desfecho' });
+    return leaks.sort(function (a, b) { return (b.money || 0) - (a.money || 0); }).slice(0, 6);
+  }
+  function aceleraActions(m) {
+    var a = [];
+    var band35 = m.byResgate.filter(function (g) { return g.band === '3.5%'; }); var vol35 = band35.reduce(function (s, g) { return s + g.antec; }, 0);
+    if (vol35 > 0) a.push({ icon: '🔴', text: 'A alíquota atual inclui 3,5%. Voltar a 2,5% no volume atual economizaria ~' + brlC(Math.round(vol35 * (0.035 - 0.025))) + ' no período.', go: 'aliquotas' });
+    if (m.taxaReemb > 0) a.push({ icon: '🟠', text: brlC(m.taxaReemb) + ' de taxa foram pagos em pedidos que depois devolveram. Ver os piores produtos/faixas.', go: 'desperdicio' });
+    if (m.capitalProprio > 0 && m.capitalNecessario > 0 && m.capitalProprio < m.capitalNecessario) a.push({ icon: '🟢', text: 'Faltam ' + brlC(m.capitalNecessario - m.capitalProprio) + ' de colchão para reduzir a dependência da antecipação.', go: 'capital' });
+    a.push({ icon: '🔎', text: 'Simular cenários de corte de antecipação e comparar com capital próprio/bancário.', go: 'capital' });
+    return a;
+  }
+
+  function aceleraAntecipacoes() {
+    var gs = aceleraByResgate(acelera).sort(function (a, b) { return (b.data || '').localeCompare(a.data || ''); });
+    if (aceleraF.band) gs = gs.filter(function (g) { return g.band === aceleraF.band; });
+    if (aceleraF.search) { var q = aceleraF.search.toLowerCase(); gs = gs.filter(function (g) { return g.resgate.toLowerCase().indexOf(q) >= 0; }); }
+    var pages = Math.max(1, Math.ceil(gs.length / 25)); if (aceleraPage > pages) aceleraPage = pages; var slice = gs.slice((aceleraPage - 1) * 25, aceleraPage * 25);
+    var bands = [['', 'Todas'], ['2.5%', '2,5%'], ['3.5%', '3,5%'], ['outra', 'Outra / investigar']];
+    var head = secHead('ACELERA · ANTECIPAÇÕES', 'Auditoria por resgate', 'Cada lote de antecipação: valor, taxa, alíquota efetiva, líquido, reembolsado e pendente. Clique para ver os pedidos.');
+    var rows = slice.map(function (g) { return '<tr class="rowlink" data-acresg="' + esc(g.resgate) + '"><td class="nowrap">' + esc(dbr(g.data)) + '</td><td class="mono">' + esc(g.resgate) + '</td><td>' + nn(g.n) + '</td><td class="nowrap">' + brlC(g.antec) + '</td><td class="nowrap">' + brlC(g.taxa) + '</td><td><span class="tag ' + (g.band === 'outra' ? 'warn' : 'neutral') + '">' + pct(r2(g.rate * 100)) + (g.band !== 'outra' && g.band !== '—' ? ' (' + g.band + ')' : '') + '</span></td><td class="nowrap">' + brlC(g.receb) + '</td><td class="nowrap ' + (g.reemb ? 'neg' : '') + '">' + brlC(g.reemb) + '</td><td class="nowrap">' + brlC(g.pend) + '</td><td><button class="btn-sm" data-acresg="' + esc(g.resgate) + '">Abrir</button></td></tr>'; }).join('');
+    return head +
+      '<div class="chips">' + bands.map(function (c) { return '<span class="chip' + (aceleraF.band === c[0] ? ' chip-on' : '') + '" data-acband="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
+      '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="acq" style="width:280px" placeholder="Buscar ID do resgate…" value="' + esc(aceleraF.search) + '"></div>' +
+      '<div class="count-line"><b>' + nn(gs.length) + '</b> resgates</div>' +
+      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>ID resgate</th><th>Pedidos</th><th>Antecipado</th><th>Taxa</th><th>Alíquota</th><th>Recebido</th><th>Reembolsado</th><th>Pendente</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="10" class="empty">Nenhum resgate neste filtro.</td></tr>') + '</tbody></table></div></div>' +
+      (pages > 1 ? '<div style="display:flex;gap:8px;justify-content:flex-end;align-items:center"><button class="btn-sm" id="acprev"' + (aceleraPage <= 1 ? ' disabled' : '') + '>Anterior</button><span class="footnote" style="margin:0">página ' + aceleraPage + ' de ' + pages + '</span><button class="btn-sm" id="acnext"' + (aceleraPage >= pages ? ' disabled' : '') + '>Próxima</button></div>' : '');
+  }
+  function bindAceleraAntec() {
+    app.querySelectorAll('[data-acband]').forEach(function (c) { c.onclick = function () { aceleraF.band = c.dataset.acband; aceleraPage = 1; render(); }; });
+    var q = document.getElementById('acq'); if (q) { var t; q.oninput = function () { clearTimeout(t); t = setTimeout(function () { var v = q.value; aceleraF.search = v; aceleraPage = 1; render(); var el = document.getElementById('acq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
+    var pv = document.getElementById('acprev'); if (pv) pv.onclick = function () { if (aceleraPage > 1) { aceleraPage--; render(); } };
+    var nx = document.getElementById('acnext'); if (nx) nx.onclick = function () { aceleraPage++; render(); };
+  }
+  function openAceleraResgate(rid) {
+    var recs = acelera.filter(function (r) { return r.resgate === rid; });
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '820px'; panel.style.maxWidth = '97vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    var g = aceleraByResgate(recs)[0] || { antec: 0, taxa: 0, rate: 0, receb: 0, reemb: 0, pend: 0 };
+    var rows = recs.sort(function (a, b) { return b.antecipado - a.antecipado; }).slice(0, 400).map(function (r) { return '<tr class="rowlink" data-acped="' + esc(r.pedido) + '"><td class="mono">' + esc(r.pedido) + '</td><td class="nowrap">' + brlC(r.antecipado) + '</td><td class="nowrap">' + brlC(r.taxa) + '</td><td class="nowrap">' + brlC(r.recebido) + '</td><td class="nowrap ' + (r.reembolsado ? 'neg' : '') + '">' + brlC(r.reembolsado) + '</td><td class="nowrap">' + brlC(r.pendente) + '</td><td><span class="tag ' + (acIsReemb(r) ? 'warn' : acIsFullyPaid(r) ? 'ok' : 'neutral') + '">' + esc(acStatusLabel(r.status)) + '</span></td></tr>'; }).join('');
+    panel.innerHTML = '<div class="dh"><div><b>Resgate ' + esc(rid) + '</b> <span class="tag ' + (g.band === 'outra' ? 'warn' : 'neutral') + '" style="margin-left:6px">alíquota ' + pct(r2(g.rate * 100)) + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
+      '<div class="kstrip" style="margin-bottom:12px"><div class="kc"><div class="kl">Antecipado</div><div class="kv" style="font-size:16px">' + brlC(g.antec) + '</div></div><div class="kc"><div class="kl">Taxa</div><div class="kv" style="font-size:16px">' + brlC(g.taxa) + '</div></div><div class="kc"><div class="kl">Recebido</div><div class="kv" style="font-size:16px">' + brlC(g.receb) + '</div></div><div class="kc"><div class="kl">Reembolsado</div><div class="kv" style="font-size:16px">' + brlC(g.reemb) + '</div></div></div>' +
+      '<div class="panel"><div class="ph"><h3>' + nn(recs.length) + ' pedidos neste resgate</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Antecipado</th><th>Taxa</th><th>Recebido</th><th>Reembolsado</th><th>Pendente</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div></div></div>';
+    panel.querySelector('.x').onclick = function () { d.remove(); };
+    panel.querySelectorAll('[data-acped]').forEach(function (b) { b.onclick = function () { openAceleraPedido(b.dataset.acped); }; });
+  }
+  function openAceleraPedido(pid) {
+    var recs = acelera.filter(function (r) { return r.pedido === pid; }); if (!recs.length) return; var r = recs[0];
+    var ord = orders.find(function (o) { return o.id === pid; }); var oc = occ.find(function (o) { return !o.isDemo && o.orderId === pid; });
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '640px'; panel.style.maxWidth = '96vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    var taxaReemb = r.antecipado ? Math.round(r.taxa * r.reembolsado / r.antecipado) : 0; var taxaRisco = r.antecipado ? Math.round(r.taxa * r.pendente / r.antecipado) : 0;
+    var it = ord ? (ord.items || [])[0] || {} : {};
+    var pedBlock = ord ? '<div class="panel"><div class="ph"><h3>Pedido (do módulo Pedidos)</h3></div><div class="pb">' + kv('Produto', it.productName || '—') + kv('SKU', it.sku || '—') + kv('Status', S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus || '—') + kv('Valor', brl(ord.totalAmount || 0)) + '<button class="btn-sm" data-goped="' + esc(pid) + '">Ver pedido</button></div></div>' : '<div class="footnote">Pedido ' + esc(pid) + ' não importado no módulo Pedidos — SKU/produto indisponíveis.</div>';
+    var devBlock = oc ? '<div class="panel"><div class="ph"><h3>Devolução vinculada</h3><span class="tag info">' + esc(statusLabel(oc.status)) + '</span></div><div class="pb">' + kv('Motivo', oc.reason || '—') + kv('Responsabilidade', (DEV.RESPONSIBILITY[oc.responsibility] || '—')) + '<button class="btn-sm" data-godev="' + esc(oc.id) + '">Ver devolução</button></div></div>' : '';
+    var hist = (r.history && r.history.length) ? '<div class="panel"><div class="ph"><h3>Linha do tempo financeira</h3></div><div class="pb">' + [{ at: r.firstImportAt, txt: 'Importado — ' + acStatusLabel(r.status) }].concat(r.history.map(function (h) { return { at: h.at, txt: acStatusLabel(h.statusOld) + ' → ' + acStatusLabel(h.statusNew) + (h.reembNew !== h.reembOld ? ' · reembolso ' + brlC(h.reembOld) + '→' + brlC(h.reembNew) : '') }; })).map(function (e) { return '<div class="fin-line"><span>' + esc(e.txt) + '</span><span class="footnote" style="margin:0">' + (e.at ? new Date(e.at).toLocaleDateString('pt-BR') : '') + '</span></div>'; }).join('') + '</div></div>' : '';
+    panel.innerHTML = '<div class="dh"><div><b>Pedido ' + esc(pid) + '</b> <span class="tag ' + (acIsReemb(r) ? 'warn' : acIsFullyPaid(r) ? 'ok' : 'neutral') + '" style="margin-left:6px">' + esc(acStatusLabel(r.status)) + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
+      '<div class="panel"><div class="ph"><h3>Antecipação</h3></div><div class="pb">' + kv('Resgate', r.resgate) + kv('Data', dbr(r.data)) + kv('Disponível', brlC(r.disponivel)) + kv('% antecipado', r.pctAntecip != null ? pct(r.pctAntecip * 100) : '—') + kv('Valor antecipado', brlC(r.antecipado)) + kv('Taxa', brlC(r.taxa)) + kv('Alíquota', pct(r2((r.antecipado ? r.taxa / r.antecipado : 0) * 100))) + kv('Líquido recebido', brlC(r.recebido)) + '</div></div>' +
+      '<div class="panel"><div class="ph"><h3>Depois da antecipação</h3></div><div class="pb">' + kv('Reembolsado', brlC(r.reembolsado)) + kv('Pendente', brlC(r.pendente)) + kv('Última transação', dbr(r.ultimaTransacao)) + kv('Vencimento', dbr(r.vencimento)) + '</div></div>' +
+      '<div class="panel"><div class="ph"><h3>Impacto financeiro</h3></div><div class="pb">' + kv('Taxa vinculada ao reembolso', brlC(taxaReemb)) + kv('Taxa em risco (pendência)', brlC(taxaRisco)) + kv('Dias antecipado', (acDays(r.data, r.ultimaTransacao) != null ? acDays(r.data, r.ultimaTransacao) + ' dias' : (acAgeDays(r.data) + ' dias (em aberto)'))) + '</div></div>' +
+      pedBlock + devBlock + hist + '</div>';
+    panel.querySelector('.x').onclick = function () { d.remove(); };
+    var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { d.remove(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
+    var gd = panel.querySelector('[data-godev]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev; d.remove(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
+  }
+
+  function aceleraDesperdicio() {
+    var m = aceleraMetrics(acelera);
+    var head = secHead('ACELERA · DEVOLUÇÕES & DESPERDÍCIO', 'Taxa que virou desperdício', 'Taxa de antecipação paga em pedidos que depois foram reembolsados — calculada pedido a pedido. Separamos perda realizada de risco em aberto.');
+    var strip = kstrip([
+      { l: 'Antecipado que voltou (reembolso)', v: brlC(m.reemb), cls: 'amber' },
+      { l: 'Taxa desperdiçada (realizada)', v: brlC(m.taxaReemb), cls: 'red', s: 'perda já concretizada' },
+      { l: 'Taxa em risco (pendências)', v: brlC(m.taxaRisco), cls: 'amber', s: 'ainda não é perda' },
+      { l: 'Pedidos reembolsados', v: nn(m.status['antecipacao totalmente reembolsada'] || 0) + ' / ' + nn(m.status['antecipacao parcialmente reembolsada'] || 0), cls: 'blue', s: 'total / parcial' },
+    ]);
+    // faixas de ticket (por valor antecipado do pedido)
+    var faixas = [[0, 5000, 'até R$50'], [5000, 10000, 'R$50–100'], [10000, 15000, 'R$100–150'], [15000, 25000, 'R$150–250'], [25000, 40000, 'R$250–400'], [40000, Infinity, 'acima de R$400']];
+    var fd = faixas.map(function (f) { return { label: f[2], min: f[0], max: f[1], n: 0, antec: 0, reemb: 0, taxaW: 0, pend: 0 }; });
+    acelera.forEach(function (r) { var t = r.antecipado; var fx = fd.find(function (f) { return t >= f.min && t < f.max; }); if (!fx) return; fx.n++; fx.antec += r.antecipado; fx.reemb += r.reembolsado; fx.pend += r.pendente; if (r.antecipado > 0) fx.taxaW += r.taxa * r.reembolsado / r.antecipado; });
+    var totAntec = m.volume || 1;
+    var frows = fd.map(function (f) { return '<tr><td>' + esc(f.label) + '</td><td>' + nn(f.n) + '</td><td class="nowrap">' + brlC(f.antec) + '</td><td>' + pct(r2(f.antec / totAntec * 100)) + '</td><td class="nowrap ' + (f.reemb ? 'neg' : '') + '">' + brlC(f.reemb) + '</td><td>' + pct(r2(f.antec ? f.reemb / f.antec * 100 : 0)) + '</td><td class="nowrap"><b>' + brlC(Math.round(f.taxaW)) + '</b></td><td class="nowrap">' + brlC(f.pend) + '</td></tr>'; }).join('');
+    var faixaTable = '<div class="panel"><div class="ph"><h3>Por faixa de ticket</h3><span class="footnote" style="margin:0">taxa desperdiçada calculada pedido a pedido</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Faixa</th><th>Pedidos</th><th>Antecipado</th><th>% do volume</th><th>Reembolsado</th><th>% reemb.</th><th>Taxa desperdiçada</th><th>Pendente</th></tr></thead><tbody>' + frows + '</tbody></table></div></div>';
+    // integração com devoluções por responsabilidade (por ID do pedido)
+    var byResp = {}; var semOcc = { n: 0, taxaW: 0 };
+    acelera.forEach(function (r) { if (r.reembolsado <= 0) return; var taxaW = r.antecipado ? r.taxa * r.reembolsado / r.antecipado : 0; var oc = occ.find(function (o) { return !o.isDemo && o.orderId === r.pedido; }); if (oc) { var key = oc.responsibility || 'NAO_IDENTIFICADA'; var g = byResp[key] = byResp[key] || { n: 0, taxaW: 0 }; g.n++; g.taxaW += taxaW; } else { semOcc.n++; semOcc.taxaW += taxaW; } });
+    var respRows = Object.keys(byResp).sort(function (a, b) { return byResp[b].taxaW - byResp[a].taxaW; }).map(function (k) { return '<tr><td>' + esc(DEV.RESPONSIBILITY[k] || k) + '</td><td>' + nn(byResp[k].n) + '</td><td class="nowrap"><b>' + brlC(Math.round(byResp[k].taxaW)) + '</b></td></tr>'; }).join('');
+    var respTable = '<div class="panel"><div class="ph"><h3>Taxa desperdiçada por responsabilidade da devolução</h3><span class="footnote" style="margin:0">cruzando o módulo Devoluções por ID do pedido</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Responsabilidade</th><th>Pedidos</th><th>Taxa desperdiçada</th></tr></thead><tbody>' + (respRows || '') + (semOcc.n ? '<tr><td>Sem devolução importada</td><td>' + nn(semOcc.n) + '</td><td class="nowrap">' + brlC(Math.round(semOcc.taxaW)) + '</td></tr>' : '') + (respRows || semOcc.n ? '' : '<tr><td colspan="3" class="empty">Nenhum pedido reembolsado encontrado nas devoluções. Importe o módulo Devoluções para cruzar responsabilidade.</td></tr>') + '</tbody></table></div></div>';
+    var sep = callout('', 'Perda realizada × risco (não confundir)', '<b>' + brlC(m.taxaReemb) + '</b> já é desperdício concretizado (o pedido devolveu). <b>' + brlC(m.taxaRisco) + '</b> é apenas <b>risco</b> associado a valores ainda pendentes — pode ou não virar perda. Nunca somamos os dois como "dinheiro perdido".');
+    return head + strip + sep + faixaTable + respTable;
+  }
+
+  function aceleraAliquotas() {
+    var m = aceleraMetrics(acelera); var gs = m.byResgate;
+    var head = secHead('ACELERA · ALÍQUOTAS', 'Qual taxa está sendo cobrada — e quando mudou', 'A alíquota é calculada (Taxa ÷ Valor antecipado), por resgate. Pequenas variações por arredondamento são agrupadas nas faixas contratuais.');
+    var bmap = {}; gs.forEach(function (g) { var b = bmap[g.band] = bmap[g.band] || { band: g.band, n: 0, antec: 0, taxa: 0 }; b.n++; b.antec += g.antec; b.taxa += g.taxa; });
+    var bands = Object.values(bmap).sort(function (a, b) { return a.band.localeCompare(b.band); });
+    var strip = kstrip(bands.map(function (b) { return { l: 'Faixa ' + b.band, v: nn(b.n) + ' resgates', cls: b.band === 'outra' ? 'red' : 'blue', s: brlC(b.antec) + ' · taxa ' + brlC(b.taxa) }; }));
+    // timeline de mudança de alíquota
+    var tl = gs.slice().sort(function (a, b) { return (a.data || '').localeCompare(b.data || ''); });
+    var segs = [], cur = null;
+    tl.forEach(function (g) { if (!cur || cur.band !== g.band) { cur = { band: g.band, from: g.data, to: g.data, antec: 0, taxa: 0 }; segs.push(cur); } cur.to = g.data; cur.antec += g.antec; cur.taxa += g.taxa; });
+    var tlRows = segs.map(function (s) { return '<tr><td><span class="tag ' + (s.band === 'outra' ? 'warn' : 'neutral') + '">' + esc(s.band) + '</span></td><td class="nowrap">' + esc(dbr(s.from)) + ' → ' + esc(dbr(s.to)) + '</td><td class="nowrap">' + brlC(s.antec) + '</td><td class="nowrap">' + brlC(s.taxa) + '</td></tr>'; }).join('');
+    // evento de mudança
+    var changeNote = '';
+    for (var i = 1; i < segs.length; i++) { if (segs[i].band !== segs[i - 1].band && segs[i].band !== '—' && segs[i - 1].band !== '—') { var prev = parseFloat(segs[i - 1].band), now = parseFloat(segs[i].band); if (!isNaN(prev) && !isNaN(now) && now > prev) { var impactoMes = Math.round(m.volumeMensalMedio * (now - prev) / 100); changeNote = callout('warn', '🔴 Alíquota aumentou: ' + segs[i - 1].band + ' → ' + segs[i].band, 'Considerando seu volume médio de ' + brlC(m.volumeMensalMedio) + '/mês, essa mudança adiciona aproximadamente <b>' + brlC(impactoMes) + '/mês</b> (~' + brlC(impactoMes * 12) + '/ano) ao custo de antecipação.'); } } }
+    var chart = chartCard('Volume antecipado por faixa de alíquota', legendSwatch([['Antecipado', '#2b4bd6']]), svgHBars(bands.map(function (b) { return { label: 'Faixa ' + b.band, value: b.antec / 100 }; }), { fmt: function (v) { return brl(v); } }));
+    return head + strip + changeNote + chart + '<div class="panel"><div class="ph"><h3>Linha do tempo da alíquota</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Faixa</th><th>Período</th><th>Antecipado</th><th>Taxa</th></tr></thead><tbody>' + tlRows + '</tbody></table></div></div>';
+  }
+
+  function aceleraCoortes() {
+    var head = secHead('ACELERA · COORTES', 'Devolução por coorte (maturação de ' + aceleraCfg.cohortDays + ' dias)', 'Não medimos devolução recente como se estivesse encerrada. Coortes com menos de ' + aceleraCfg.cohortDays + ' dias ainda estão maturando — o percentual delas não deve ser usado isoladamente.');
+    var mm = {}; acelera.forEach(function (r) { var k = (r.data || '').slice(0, 7); if (!k) return; var g = mm[k] = mm[k] || { month: k, antec: 0, reemb: 0, n: 0, madN: 0 }; g.antec += r.antecipado; g.reemb += r.reembolsado; g.n++; if (acAgeDays(r.data) != null && acAgeDays(r.data) >= aceleraCfg.cohortDays) g.madN++; });
+    var months = Object.keys(mm).sort();
+    var rows = months.map(function (k) { var g = mm[k]; var rate = g.antec ? g.reemb / g.antec : 0; var madura = g.n && g.madN / g.n >= 0.9; return '<tr><td>' + esc(k) + '</td><td class="nowrap">' + brlC(g.antec) + '</td><td class="nowrap ' + (g.reemb ? 'neg' : '') + '">' + brlC(g.reemb) + '</td><td>' + pct(r2(rate * 100)) + '</td><td><span class="tag ' + (madura ? 'ok' : 'warn') + '">' + (madura ? 'Madura' : 'Em maturação') + '</span></td></tr>'; }).join('');
+    var m = aceleraMetrics(acelera);
+    var strip = kstrip([
+      { l: 'Coorte madura (≥' + aceleraCfg.cohortDays + 'd)', v: nn(m.cohortMaduraN) + ' pedidos', cls: 'blue', s: brlC(m.cohortMaduraAntec) + ' antecipados' },
+      { l: 'Devolução observada (madura)', v: pct(r2(m.cohortDevolRate * 100)), cls: 'amber', s: 'dado realizado' },
+      { l: 'Reembolsado (madura)', v: brlC(m.cohortMaduraReemb), cls: 'red' },
+    ]);
+    var chart = months.length ? chartCard('Antecipado × Reembolsado por coorte (mês)', legendSwatch([['Antecipado', '#2b4bd6'], ['Reembolsado', '#d13b3b']]), svgGroupBars(months, [{ name: 'Antecipado', color: '#2b4bd6', vals: months.map(function (k) { return mm[k].antec / 100; }) }, { name: 'Reembolsado', color: '#d13b3b', vals: months.map(function (k) { return mm[k].reemb / 100; }) }], { fmt: function (v) { return brl(v); } })) : '';
+    var warn = callout('warn', 'Coortes recentes ainda não maturaram', 'Meses marcados como <b>Em maturação</b> tendem a mostrar devolução artificialmente baixa porque o ciclo ainda não se completou. Use a coorte madura para projeções — nunca a mais recente isoladamente.');
+    return head + strip + chart + warn + '<div class="panel"><div class="ph"><h3>Coortes por mês de antecipação</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Coorte</th><th>Antecipado</th><th>Reembolsado</th><th>% devolução</th><th>Maturidade</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+  }
+
+  function aceleraCapital() {
+    var m = aceleraMetrics(acelera);
+    var head = secHead('ACELERA · CAPITAL & SIMULADOR', 'Antecipar com a Shopee ou usar capital próprio/bancário?', 'Comparação de custo, capital necessário para reduzir a dependência e simulador de cenários. Premissas editáveis em Configurações — nada de taxas fixas escondidas.');
+    // dias / custo equivalente
+    var custoEq = m.custoEquivAnual == null ? '—' : pct(r2(m.custoEquivAnual * 100));
+    // comparador (anualizado)
+    var custoShopeeAno = m.custoProj12m; // R$/ano projetado
+    var bancoAA = Math.pow(1 + aceleraCfg.bancoTaxaAM, 12) - 1;
+    var externoNecessario = Math.max(0, m.capitalNecessario - (aceleraCfg.capitalProprio || 0));
+    var custoBancoAno = Math.round(externoNecessario * bancoAA);
+    var custoProprioAno = Math.round(Math.min(m.capitalNecessario, aceleraCfg.capitalProprio || 0) * aceleraCfg.custoOportAA) + Math.round(externoNecessario * bancoAA);
+    var strip = kstrip([
+      { l: 'Custo Acelera (12m proj.)', v: brlC(custoShopeeAno), cls: 'red', s: 'taxa média × 12' },
+      { l: 'Custo equivalente a.a.', v: custoEq, cls: 'amber', s: m.diasEq ? 'p/ ' + Math.round(m.diasEq) + ' dias' : '' },
+      { l: 'Capital p/ independência', v: brlC(m.capitalNecessario), cls: 'blue', s: Math.round(m.prazoLiberacao) + ' dias de liberação' },
+      { l: 'Capital próprio', v: brlC(aceleraCfg.capitalProprio || 0), cls: 'green' },
+      { l: 'Falta de colchão', v: brlC(Math.max(0, m.capitalNecessario - (aceleraCfg.capitalProprio || 0))), cls: 'amber' },
+    ]);
+    // cobertura
+    var meta = m.capitalNecessario || 1; var covPct = Math.min(100, Math.round((aceleraCfg.capitalProprio || 0) / meta * 100));
+    var cobertura = '<div class="chartcard"><div class="cch"><h4>Cobertura de capital</h4><div class="cleg">' + covPct + '% da necessidade</div></div><div style="height:16px;border-radius:8px;background:var(--line);overflow:hidden"><div style="height:100%;width:' + covPct + '%;background:' + (covPct >= 100 ? 'var(--ok)' : 'var(--brand)') + '"></div></div><div class="footnote" style="margin-top:8px">Capital próprio ' + brlC(aceleraCfg.capitalProprio || 0) + ' · necessidade ' + brlC(m.capitalNecessario) + (covPct >= 100 ? ' · 🟢 já é possível operar reduzindo a antecipação recorrente (apenas indicativo).' : ' · falta ' + brlC(m.capitalNecessario - (aceleraCfg.capitalProprio || 0))) + '</div></div>';
+    var comp = '<div class="panel"><div class="ph"><h3>Comparador de custo do dinheiro</h3></div><div class="pb">' +
+      '<div class="fin-line"><span>Shopee Acelera (projeção 12m)</span><b class="neg">' + brlC(custoShopeeAno) + '/ano</b></div>' +
+      '<div class="fin-line"><span>Linha bancária (' + pct(r2(aceleraCfg.bancoTaxaAM * 100)) + ' a.m. ≈ ' + pct(r2(bancoAA * 100)) + ' a.a.) sobre ' + brlC(externoNecessario) + '</span><b>' + brlC(custoBancoAno) + '/ano</b></div>' +
+      '<div class="fin-line"><span>Capital próprio (custo de oportunidade ' + pct(r2(aceleraCfg.custoOportAA * 100)) + ' a.a.)</span><b>' + brlC(custoProprioAno) + '/ano</b></div>' +
+      '<div class="fin-line total"><span>Economia potencial trocando o Acelera pela alternativa mais barata</span><b class="pos">' + brlC(Math.max(0, custoShopeeAno - Math.min(custoBancoAno, custoProprioAno))) + '/ano</b></div>' +
+      '<div class="footnote" style="margin-top:6px">Comparação indicativa. Não é rendimento — é despesa evitada / custo de oportunidade. Ajuste as taxas em Configurações.</div></div></div>';
+    return head + strip + cobertura + comp + aceleraSimulador(m);
+  }
+  function aceleraSimulador(m) {
+    // decisão pedido a pedido: corta por teto de ticket e por percentual (corta os maiores até restar pct do volume)
+    var recs = acelera.slice(); var ticketMax = aceleraSim.ticketMax || 0;
+    var kept = [], cut = [];
+    recs.forEach(function (r) { if (ticketMax > 0 && r.antecipado > ticketMax) cut.push(r); else kept.push(r); });
+    // aplica percentual sobre o que restou: corta os de maior ticket até restar pct do volume total
+    var volTotal = m.volume; var alvo = Math.round(volTotal * aceleraSim.pct);
+    kept.sort(function (a, b) { return b.antecipado - a.antecipado; });
+    var keptVol = kept.reduce(function (s, r) { return s + r.antecipado; }, 0);
+    while (keptVol > alvo && kept.length) { var rr = kept.shift(); cut.push(rr); keptVol -= rr.antecipado; }
+    var volAntecSim = keptVol; var volCortado = volTotal - volAntecSim;
+    var aliq = aceleraSim.aliquota === 'atual' ? m.aliquota : parseFloat(aceleraSim.aliquota);
+    var taxaShopeeSim = Math.round(volAntecSim * aliq); var taxaShopeeSimAno = Math.round(taxaShopeeSim / m.monthsSpan * 12);
+    // capital para cobrir o volume cortado (que deixaria de ser antecipado)
+    var externo = Math.max(0, volCortado - (aceleraSim.capitalProprio || 0));
+    var bancoAA = Math.pow(1 + (aceleraSim.bancoTaxaAM || 0), 12) - 1;
+    var custoBancoAno = Math.round(externo / m.monthsSpan * 12 * 0 + externo * bancoAA); // custo anual do capital externo alocado
+    var custoProprioAno = Math.round(Math.min(volCortado, aceleraSim.capitalProprio || 0) * (aceleraSim.custoOportAA || 0));
+    var custoTotalAno = taxaShopeeSimAno + custoBancoAno + custoProprioAno;
+    var custoAtualAno = m.custoProj12m; var economiaAno = custoAtualAno - custoTotalAno;
+    var devolHist = m.cohortDevolRate; var reembEvitado = Math.round(volCortado * devolHist); var taxaDesperdEvit = Math.round(volCortado * aliq * devolHist);
+    var out = kstrip([
+      { l: 'Continuaria antecipado', v: brlC(volAntecSim), cls: 'blue', s: pct(r2(volTotal ? volAntecSim / volTotal * 100 : 0)) + ' do volume' },
+      { l: 'Deixaria de antecipar', v: brlC(volCortado), cls: 'amber', s: nn(cut.length) + ' pedidos' },
+      { l: 'Taxa Shopee (ano)', v: brlC(taxaShopeeSimAno), cls: 'red' },
+      { l: 'Custo do capital (ano)', v: brlC(custoBancoAno + custoProprioAno), cls: 'amber' },
+      { l: 'Custo total (ano)', v: brlC(custoTotalAno), cls: 'red' },
+      { l: 'Economia vs hoje (ano)', v: brlC(economiaAno), cls: economiaAno >= 0 ? 'green' : 'red' },
+    ]);
+    var aliqOpts = [['atual', 'Atual (' + pct(r2(m.aliquota * 100)) + ')'], ['0.02', '2,0%'], ['0.025', '2,5%'], ['0.035', '3,5%']];
+    var ctrl = '<div class="panel"><div class="ph"><h3>Simulador</h3><span class="footnote" style="margin:0">recalcula pedido a pedido</span></div><div class="pb">' +
+      '<label class="fld">% do volume a antecipar: <b id="acsimpctv">' + Math.round(aceleraSim.pct * 100) + '%</b></label><input type="range" min="0" max="100" value="' + Math.round(aceleraSim.pct * 100) + '" id="acsimpct" style="width:100%">' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">' +
+      '<div><label class="fld">Não antecipar acima de (R$)</label><input class="input sm" id="acsimticket" value="' + (aceleraSim.ticketMax ? (aceleraSim.ticketMax / 100) : '') + '" placeholder="sem teto" style="width:130px"></div>' +
+      '<div><label class="fld">Alíquota</label><select class="select sm" id="acsimaliq">' + aliqOpts.map(function (o) { return '<option value="' + o[0] + '"' + (String(aceleraSim.aliquota) === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
+      '<div><label class="fld">Capital próprio (R$)</label><input class="input sm" id="acsimcap" value="' + (aceleraSim.capitalProprio ? aceleraSim.capitalProprio / 100 : '') + '" style="width:120px"></div>' +
+      '<div><label class="fld">Taxa banco (% a.m.)</label><input class="input sm" id="acsimbanco" value="' + (aceleraSim.bancoTaxaAM * 100) + '" style="width:90px"></div>' +
+      '<div><label class="fld">Custo oport. (% a.a.)</label><input class="input sm" id="acsimopp" value="' + (aceleraSim.custoOportAA * 100) + '" style="width:90px"></div>' +
+      '</div></div></div>';
+    var extra = callout('', 'Efeito colateral do corte', 'Cortar ' + brlC(volCortado) + ' de antecipação evitaria pagar taxa sobre pedidos que historicamente devolvem: ~<b>' + brlC(taxaDesperdEvit) + '/período</b> de taxa desperdiçada evitada (usando a devolução da coorte madura, ' + pct(r2(devolHist * 100)) + '). Isso exige colchão de caixa para o volume que deixa de ser antecipado.');
+    return '<div style="margin-top:10px">' + ctrl + out + extra + '</div>';
+  }
+  function bindAceleraSim() {
+    var sync = function () { render(); };
+    var pct2 = document.getElementById('acsimpct'); if (pct2) { pct2.oninput = function () { document.getElementById('acsimpctv').textContent = pct2.value + '%'; }; pct2.onchange = function () { aceleraSim.pct = (+pct2.value) / 100; sync(); }; }
+    var tk = document.getElementById('acsimticket'); if (tk) tk.onchange = function () { aceleraSim.ticketMax = tk.value ? Math.round(parseFloat(tk.value.replace(',', '.')) * 100) : 0; sync(); };
+    var al = document.getElementById('acsimaliq'); if (al) al.onchange = function () { aceleraSim.aliquota = al.value; sync(); };
+    var cp = document.getElementById('acsimcap'); if (cp) cp.onchange = function () { aceleraSim.capitalProprio = cp.value ? Math.round(parseFloat(cp.value.replace(',', '.')) * 100) : 0; sync(); };
+    var bk = document.getElementById('acsimbanco'); if (bk) bk.onchange = function () { aceleraSim.bancoTaxaAM = (parseFloat(bk.value.replace(',', '.')) || 0) / 100; sync(); };
+    var op = document.getElementById('acsimopp'); if (op) op.onchange = function () { aceleraSim.custoOportAA = (parseFloat(op.value.replace(',', '.')) || 0) / 100; sync(); };
+  }
+
+  function aceleraPlano() {
+    var m = aceleraMetrics(acelera);
+    var head = secHead('ACELERA · PLANO DE AÇÃO', 'Reduzir o custo da antecipação', 'Metas dinâmicas calculadas sobre os dados reais. Edite as metas em Configurações.');
+    var band35 = m.byResgate.filter(function (g) { return g.band === '3.5%'; }); var vol35 = band35.reduce(function (s, g) { return s + g.antec; }, 0);
+    var indicators = [
+      { l: 'Alíquota efetiva', atual: pct(r2(m.aliquota * 100)), meta: pct(r2(aceleraCfg.aliquotaAlvo * 100)) },
+      { l: 'Volume antecipado (mês)', atual: brlC(m.volumeMensalMedio), meta: brlC(Math.round(m.volumeMensalMedio * aceleraCfg.metaAntecip)) },
+      { l: 'Taxa vinculada a reembolso', atual: brlC(m.taxaReemb), meta: '↓ reduzir' },
+      { l: 'Devolução coorte madura', atual: pct(r2(m.cohortDevolRate * 100)), meta: '≤ ' + pct(r2(aceleraCfg.limiteDevol * 100)) },
+      { l: 'Dias de cobertura de caixa', atual: r2(m.coberturaDias) + 'd', meta: aceleraCfg.metaCobertura + 'd' },
+    ];
+    var indRows = indicators.map(function (i) { return '<tr><td>' + esc(i.l) + '</td><td class="nowrap"><b>' + i.atual + '</b></td><td class="nowrap">' + i.meta + '</td></tr>'; }).join('');
+    var fases = [
+      { f: 'Fase 1 — Medir', d: 'Importar todos os relatórios, conciliar com o resumo da Shopee, mapear alíquotas e coortes.', done: acelera.length > 0 },
+      { f: 'Fase 2 — Reduzir automatismo', d: 'Parar de antecipar 100% cegamente; aplicar teto de ticket e cortar faixas de maior risco (ver Simulador).', done: false },
+      { f: 'Fase 3 — Atingir o alvo', d: 'Reduzir antecipação para ' + pct(r2(aceleraCfg.metaAntecip * 100)) + ' do volume com colchão de caixa e/ou linha bancária mais barata.', done: false },
+    ];
+    var faseRows = fases.map(function (x) { return '<div class="fin-line"><span>' + (x.done ? '✅ ' : '⬜ ') + '<b>' + esc(x.f) + '</b> — ' + esc(x.d) + '</span></div>'; }).join('');
+    var alvoAno = brlC(Math.round(m.custoProj12m * aceleraCfg.metaAntecip));
+    return head + callout('', 'Meta financeira', 'Situação atual: <b>' + brlC(m.custoProj12m) + '/ano</b> de custo projetado. Meta (' + pct(r2(aceleraCfg.metaAntecip * 100)) + ' do volume): <b>' + alvoAno + '/ano</b>. Economia alvo: <b>' + brlC(m.custoProj12m - Math.round(m.custoProj12m * aceleraCfg.metaAntecip)) + '/ano</b>.') +
+      '<div class="panel"><div class="ph"><h3>Indicadores permanentes — atual × meta</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Indicador</th><th>Atual</th><th>Meta</th></tr></thead><tbody>' + indRows + '</tbody></table></div></div>' +
+      '<div class="panel"><div class="ph"><h3>Fases</h3></div><div class="pb">' + faseRows + '</div></div>';
+  }
+
+  function aceleraAuditoria() {
+    var m = aceleraMetrics(acelera);
+    var subhead = secHead('ACELERA · AUDITORIA', 'Rastreabilidade e qualidade dos dados', 'Resumo Shopee × sistema, importações, anomalias e a base histórica do estudo para comparação.');
+    // qualidade / anomalias
+    var an = m.anomalies;
+    var anRows = an.slice(0, 200).map(function (x) { return '<tr><td class="mono">' + esc(x.r.pedido) + '</td><td class="cell-text">' + esc(x.type) + '</td><td class="nowrap">' + brlC(x.r.antecipado) + '</td><td class="nowrap">' + brlC(x.r.reembolsado) + '</td><td class="nowrap">' + brlC(x.r.pendente) + '</td><td><button class="btn-sm" data-acped="' + esc(x.r.pedido) + '">Abrir</button></td></tr>'; }).join('');
+    var qual = '<div class="panel"><div class="ph"><h3>Qualidade dos dados — anomalias</h3><span class="footnote" style="margin:0">' + nn(an.length) + ' registro(s) marcados · nunca descartados</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Anomalia</th><th>Antecipado</th><th>Reembolsado</th><th>Pendente</th><th></th></tr></thead><tbody>' + (anRows || '<tr><td colspan="6" class="empty">Nenhuma anomalia detectada. 🎉</td></tr>') + '</tbody></table></div></div>';
+    // importações
+    var imps = batches.filter(function (b) { return b.module === 'Shopee Acelera'; });
+    var impRows = imps.slice(0, 30).map(function (b) { return '<tr><td class="nowrap">' + new Date(b.createdAt).toLocaleString('pt-BR') + '</td><td class="cell-text">' + esc(b.filename) + '</td><td>' + nn(b.seen) + '</td><td>' + nn(b.novo) + '</td><td>' + nn(b.upd) + '</td><td>' + nn(b.unch) + '</td></tr>'; }).join('');
+    var impTable = '<div class="panel"><div class="ph"><h3>Histórico de importações</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Quando</th><th>Arquivo</th><th>Linhas</th><th>Novos</th><th>Atualizados</th><th>Sem alteração</th></tr></thead><tbody>' + (impRows || '<tr><td colspan="6" class="empty">Sem importações.</td></tr>') + '</tbody></table></div></div>';
+    // período de auditoria
+    var pr = aceleraSummary ? aceleraSummary.periodReal : null;
+    var periodo = aceleraSummary ? callout('', 'Auditoria de período', 'Declarado pela Shopee: <b>' + esc(aceleraSummary.periodDeclared || '—') + '</b> · Registros de <b>' + esc((pr && pr.min) || '—') + '</b> a <b>' + esc((pr && pr.max) || '—') + '</b> · Importado em ' + new Date(aceleraSummary.importedAt).toLocaleString('pt-BR') + '. Nenhum registro foi descartado por causa do período do cabeçalho.') : '';
+    // base histórica do estudo (estático, claramente rotulado)
+    var estudo = '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Base histórica — Estudo Ago/2026 (referência) × Atual (dados reais)</summary><div class="table-wrap"><table class="report"><thead><tr><th>Indicador</th><th>Estudo (ref.)</th><th>Atual (importado)</th></tr></thead><tbody>' +
+      '<tr><td>Alíquota efetiva</td><td>3,5%</td><td>' + pct(r2(m.aliquota * 100)) + '</td></tr>' +
+      '<tr><td>Devolução coorte madura</td><td>17,3%</td><td>' + pct(r2(m.cohortDevolRate * 100)) + '</td></tr>' +
+      '<tr><td>Dias até liquidação (pago)</td><td>12,8 dias</td><td>' + (m.diasPagoMed != null ? Math.round(m.diasPagoMed) + ' dias' : '—') + '</td></tr>' +
+      '<tr><td>Dias até liquidação (devolvido)</td><td>45,9 dias</td><td>' + (m.diasReembAvg != null ? Math.round(m.diasReembAvg) + ' dias' : '—') + '</td></tr>' +
+      '<tr><td>Volume antecipado (mês)</td><td>~R$352 mil</td><td>' + brlC(m.volumeMensalMedio) + '</td></tr>' +
+      '</tbody></table></div><div class="footnote" style="padding:0 16px 12px">Coluna “Estudo” é referência fixa do PDF; “Atual” é sempre recalculada dos dados importados.</div></details>';
+    return subhead + periodo + qual + impTable + estudo;
+  }
+
+  function aceleraConfig() {
+    var head = secHead('ACELERA · CONFIGURAÇÕES', 'Premissas do módulo', 'Nada é fixo escondido. Ajuste as premissas — tudo é recalculado a partir dos dados importados.');
+    var f = function (id, label, val, help) { return '<div><label class="fld">' + esc(label) + (help ? ' <span title="' + esc(help) + '" style="cursor:help">ⓘ</span>' : '') + '</label><input class="input sm" id="' + id + '" value="' + esc(val) + '" style="width:160px"></div>'; };
+    return head + '<div class="panel"><div class="pb"><div style="display:flex;gap:14px;flex-wrap:wrap">' +
+      f('cfgcohort', 'Coorte madura (dias)', aceleraCfg.cohortDays, 'Idade mínima para considerar o ciclo de devolução encerrado.') +
+      f('cfgticket', 'Ticket de risco (R$)', (aceleraCfg.ticketRisco / 100), 'Acima disso o pedido é considerado de maior risco.') +
+      f('cfgmeta', 'Meta de antecipação (%)', r2(aceleraCfg.metaAntecip * 100), 'Percentual alvo do volume a antecipar.') +
+      f('cfgalvo', 'Alíquota alvo (%)', r2(aceleraCfg.aliquotaAlvo * 100)) +
+      f('cfglimdev', 'Limite de devolução (%)', r2(aceleraCfg.limiteDevol * 100)) +
+      f('cfgcapital', 'Capital próprio (R$)', (aceleraCfg.capitalProprio / 100)) +
+      f('cfgopp', 'Custo de oportunidade (% a.a.)', r2(aceleraCfg.custoOportAA * 100)) +
+      f('cfgbanco', 'Taxa bancária (% a.m.)', r2(aceleraCfg.bancoTaxaAM * 100)) +
+      f('cfgcob', 'Meta de cobertura (dias)', aceleraCfg.metaCobertura) +
+      f('cfgtol', 'Tolerância de alíquota (%)', r2(aceleraCfg.tolAliquota * 100)) +
+      '</div><div style="margin-top:12px"><button class="btn-sm primary" id="cfgsave">Salvar configurações</button></div>' +
+      '<div class="footnote" style="margin-top:8px">As configurações persistem no navegador e alimentam Coortes, Capital, Simulador e Plano de Ação.</div></div></div>';
+  }
+  function bindAceleraConfig() {
+    var s = document.getElementById('cfgsave'); if (!s) return;
+    s.onclick = function () {
+      var g = function (id) { var el = document.getElementById(id); return el ? parseFloat((el.value || '').replace(',', '.')) : null; };
+      var v;
+      if ((v = g('cfgcohort')) != null && !isNaN(v)) aceleraCfg.cohortDays = Math.round(v);
+      if ((v = g('cfgticket')) != null && !isNaN(v)) aceleraCfg.ticketRisco = Math.round(v * 100);
+      if ((v = g('cfgmeta')) != null && !isNaN(v)) aceleraCfg.metaAntecip = v / 100;
+      if ((v = g('cfgalvo')) != null && !isNaN(v)) aceleraCfg.aliquotaAlvo = v / 100;
+      if ((v = g('cfglimdev')) != null && !isNaN(v)) aceleraCfg.limiteDevol = v / 100;
+      if ((v = g('cfgcapital')) != null && !isNaN(v)) aceleraCfg.capitalProprio = Math.round(v * 100);
+      if ((v = g('cfgopp')) != null && !isNaN(v)) aceleraCfg.custoOportAA = v / 100;
+      if ((v = g('cfgbanco')) != null && !isNaN(v)) aceleraCfg.bancoTaxaAM = v / 100;
+      if ((v = g('cfgcob')) != null && !isNaN(v)) aceleraCfg.metaCobertura = v;
+      if ((v = g('cfgtol')) != null && !isNaN(v)) aceleraCfg.tolAliquota = v / 100;
+      saveAceleraCfg().then(function () { render(); toast('Configurações salvas', ''); });
+    };
+  }
+  function bindAceleraAud() { /* handlers de anomalia usam data-acped, já ligados no render */ }
+
   // ---------- INTELIGÊNCIA ----------
   function renderIA() {
     app.innerHTML =
@@ -5841,16 +6358,20 @@ buffer/index.js:
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; devSel = {}; devCustomStatus = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
 
   openDB().then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera')]);
   }).then(function (r) {
     orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
     wallet = r[5] || [];
     walletCls = {}; (r[6] || []).forEach(function (c) { walletCls[c.id] = c; });
-    devCustomStatus = ((r[7] || []).filter(function (x) { return x.id === 'dev'; })[0] || {}).customStatus || [];
+    var settings = r[7] || [];
+    devCustomStatus = (settings.filter(function (x) { return x.id === 'dev'; })[0] || {}).customStatus || [];
+    acelera = r[8] || [];
+    var acSum = settings.filter(function (x) { return x.id === 'aceleraSummary'; })[0]; if (acSum) aceleraSummary = acSum.data;
+    var acCfg = settings.filter(function (x) { return x.id === 'aceleraCfg'; })[0]; if (acCfg && acCfg.data) Object.keys(acCfg.data).forEach(function (k) { aceleraCfg[k] = acCfg.data[k]; });
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
     plans = (r[4] || []).map(function (p) { if (PLAN_MIGR[p.status]) p.status = PLAN_MIGR[p.status]; if (p.scopeSkus == null && p.relatedSkus) p.scopeSkus = p.relatedSkus; if (p.indicatorKind == null) p.indicatorKind = 'liquido'; return p; });
     occ = occ.filter(function (o) { return !o.isDemo; }); // higiene: nunca deixar demo no banco real
