@@ -200,6 +200,7 @@
       <a data-route="posvenda"><span class="ic">↩</span>Devolução</a>
       <a data-route="carteira"><span class="ic">▧</span>Saldo da Carteira</a>
       <a data-route="acelera"><span class="ic">⚡</span>Shopee Acelera</a>
+      <a data-route="afiliados"><span class="ic">🤝</span>Afiliados</a>
       <div class="nav-group">Inteligência</div>
       <a data-route="ia"><span class="ic">✦</span>Inteligência</a>
     </nav>
@@ -3806,6 +3807,12 @@ buffer/index.js:
   var aceleraSel = { resgate: null };
   var aceleraCfg = { cohortDays: 60, ticketRisco: 25000, metaAntecip: 0.5, aliquotaAlvo: 0.025, limiteDevol: 0.15, capitalProprio: 0, custoOportAA: 0.12, bancoTaxaAM: 0.02, metaCobertura: 12.8, tolAliquota: 0.0015 }; // valores em centavos p/ dinheiro
   var aceleraSim = { pct: 1, ticketMax: 0, aliquota: 'atual', capitalProprio: 0, banco: 0, bancoTaxaAM: 0.02, custoOportAA: 0.12, devol: 'hist' };
+  // Afiliados
+  var affConv = [], affRpa = [], affVb = [], affMaster = {};
+  var affSub = 'visao', affPage = 1;
+  var affF = { search: '', channel: '', status: '', ded: '', region: '', basis: 'venda', rateMin: null };
+  var affSel = null;
+  var affCfg = { rateAlert: 0.15, tolConcil: 100, minPedidos: 5, margemBoa: 0.15, margemAperta: 0.05 };
   var devSel = {};            // seleção múltipla em Casos: id -> true (em memória)
   var devCustomStatus = [];   // status internos personalizados pelo operador: [{key,label}]
   var chat = [];
@@ -3923,7 +3930,7 @@ buffer/index.js:
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -4118,7 +4125,7 @@ buffer/index.js:
   function fileInput(cb) { var inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.xlsx,.xls,.csv'; inp.onchange = function () { if (inp.files[0]) cb(inp.files[0]); }; inp.click(); }
 
   // ============================================================ RENDER (roteamento)
-  function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', ia: 'Inteligência' }[route] || ''; }
+  function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', ia: 'Inteligência' }[route] || ''; }
   function render() {
     setActive();
     // Cada módulo é isolado: um erro em um deles mostra a mensagem no lugar de deixar a tela em branco
@@ -4130,6 +4137,7 @@ buffer/index.js:
       if (route === 'posvenda') return renderPosVenda();
       if (route === 'carteira') return renderCarteira();
       if (route === 'acelera') return renderAcelera();
+      if (route === 'afiliados') return renderAfiliados();
       if (route === 'ia') return renderIA();
     } catch (e) { app.innerHTML = renderErrBox('Erro ao abrir esta tela: ' + esc(e && (e.message || e)) + '. Os dados estão salvos — recarregue a página.'); }
   }
@@ -6068,6 +6076,369 @@ buffer/index.js:
   }
   function bindAceleraAud() { /* handlers de anomalia usam data-acped, já ligados no render */ }
 
+  // ============================= AFILIADOS =============================
+  // Motor determinístico. Dinheiro em DÉCIMOS DE MILÉSIMO (u4 = R$ ×10000) para não perder precisão
+  // das comissões com 4 casas (ex.: 29,7555). Nada de LLM em cálculo. Dado ausente ≠ R$ 0.
+  function brlU(u) { return brl((u || 0) / 10000); }
+  function affNum(s) { if (s == null) return 0; var t = String(s).replace(/^\s*=?\s*"?/, '').replace(/"?\s*$/, '').replace(/r\$/i, '').replace(/\s/g, '').trim(); if (t === '' || t === '-') return 0; if (t.indexOf(',') >= 0 && t.indexOf('.') >= 0) t = t.replace(/\./g, '').replace(',', '.'); else if (t.indexOf(',') >= 0) t = t.replace(',', '.'); var n = parseFloat(t); return isNaN(n) ? 0 : n; }
+  function affU4(s) { return Math.round(affNum(s) * 10000); }
+  function affPctVal(s) { if (s == null || s === '') return null; var t = String(s).replace('%', '').replace(',', '.').trim(); var n = parseFloat(t); return isNaN(n) ? null : n / 100; }
+  function affCleanId(s) { return String(s == null ? '' : s).replace(/^\s*=?\s*"?/, '').replace(/"?\s*$/, '').trim(); }
+  // parser CSV robusto (aspas, vírgulas internas, "" e o idioma ="..." da Shopee)
+  function parseCSVText(text) {
+    text = String(text).replace(/^﻿/, ''); var rows = [], row = [], f = '', q = false;
+    for (var i = 0; i < text.length; i++) { var c = text[i];
+      if (q) { if (c === '"') { if (text[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += c; }
+      else { if (c === '"') q = true; else if (c === ',') { row.push(f); f = ''; } else if (c === '\n') { row.push(f); rows.push(row); row = []; f = ''; } else if (c === '\r') { } else f += c; } }
+    if (f !== '' || row.length) { row.push(f); rows.push(row); } return rows;
+  }
+  var UF_REGIAO = { AC: 'Norte', AM: 'Norte', AP: 'Norte', PA: 'Norte', RO: 'Norte', RR: 'Norte', TO: 'Norte', AL: 'Nordeste', BA: 'Nordeste', CE: 'Nordeste', MA: 'Nordeste', PB: 'Nordeste', PE: 'Nordeste', PI: 'Nordeste', RN: 'Nordeste', SE: 'Nordeste', DF: 'Centro-Oeste', GO: 'Centro-Oeste', MT: 'Centro-Oeste', MS: 'Centro-Oeste', ES: 'Sudeste', MG: 'Sudeste', RJ: 'Sudeste', SP: 'Sudeste', PR: 'Sul', RS: 'Sul', SC: 'Sul' };
+  function affDetectType(headerNorm) {
+    var has = function (s) { return headerNorm.some(function (h) { return h.indexOf(s) >= 0; }); };
+    if (has('id do pedido') && has('nome do afiliado') && has('id de atribuicao da comissao')) return 'conversion';
+    if (has('id do afiliado') && has('comissao') && has('mes de conclusao')) return 'rpa';
+    if (has('id de validacao') && has('despesa mensal')) return 'validationbill';
+    return null;
+  }
+  function affParse(text) {
+    var rows = parseCSVText(text); if (!rows.length) return { type: null };
+    var header = rows[0].map(function (h) { return h.replace(/^﻿/, '').trim(); });
+    var hn = header.map(function (h) { return normStatus(h); });
+    var type = affDetectType(hn); if (!type) return { type: null };
+    var idx = {}; hn.forEach(function (h, i) { if (!(h in idx)) idx[h] = i; });
+    var g = function (r, label) { var i = idx[normStatus(label)]; return i == null ? '' : (r[i] == null ? '' : r[i]); };
+    var out = [];
+    for (var k = 1; k < rows.length; k++) {
+      var r = rows[k]; if (!r || r.length < 3) continue;
+      if (type === 'conversion') {
+        var orderId = affCleanId(g(r, 'ID do pedido')); if (!orderId) continue;
+        out.push({ orderId: orderId, orderStatus: g(r, 'Status do Pedido'), statusVerif: g(r, 'Status verificado'), orderTime: g(r, 'Horário do pedido'), completion: g(r, 'Período de Conclusão do Pedido'), productId: affCleanId(g(r, 'ID do Produto')), productName: g(r, 'Nome do Produto'), modelId: affCleanId(g(r, 'ID do modelo')), catL1: g(r, 'Categoria Global L1'), catL2: g(r, 'Categoria Global L2'), catL3: g(r, 'Categoria Global L3'), price: affU4(g(r, 'Preço(R$)')), qty: parseInt(g(r, 'Qtd'), 10) || 0, affName: (g(r, 'Nome do afiliado') || '').trim(), affUser: (g(r, 'Nome de usuário do afiliado') || '').trim(), attrId: affCleanId(g(r, 'Id de atribuição da comissão')), campaign: g(r, 'Campanha do parceiro'), campaignType: g(r, 'Tipo de Campanha'), purchase: affU4(g(r, 'Valor da Compra(R$)')), refund: affU4(g(r, 'Valor do reembolso(R$)')), orderType: g(r, 'Tipo de Pedido'), comItemAff: affU4(g(r, 'Comissão do item da marca para o Afiliado(R$)')), rateItemAff: affPctVal(g(r, 'Taxa de Comissão do item da marca para o Afiliado')), comOrderAff: affU4(g(r, 'Comissão do pedido da marca para o Afiliado(R$)')), channel: (g(r, 'Canal') || '').trim(), svcPct: affPctVal(g(r, '% da taxa de serviço de Afiliados do Vendedor')), svcFee: affU4(g(r, 'Taxa de serviço de Afiliados do Vendedor(R$)')), despesaStated: affU4(g(r, 'despesas(R$)')), despesaHas: (g(r, 'despesas(R$)') || '').trim() !== '', dedState: (g(r, 'Estado de dedução') || '').trim(), dedMethod: (g(r, 'Método de dedução') || '').trim(), chargePeriod: g(r, 'Período de cobrança da comissão') });
+      } else if (type === 'rpa') {
+        var affId = affCleanId(g(r, 'ID do Afiliado')); if (!affId) continue;
+        out.push({ month: (g(r, 'Mês de conclusão') || '').trim(), legalName: (g(r, 'Nome completo do afiliado') || '').trim(), affId: affId, gross: affU4(g(r, 'Comissão  bruta') || g(r, 'Comissão bruta')), cpf: g(r, 'CPF'), email: g(r, 'Email'), phone: g(r, 'Telefone'), birth: g(r, 'Data de nascimento'), address: g(r, 'Endereço') });
+      } else {
+        var vid = affCleanId(g(r, 'ID de Validação')); if (!vid) continue;
+        out.push({ validationId: vid, month: (g(r, 'Mês de Validade') || '').trim(), monthlyExpense: affU4(g(r, 'Despesa Mensal(R$)')), status: (g(r, 'Status Deduzido') || '').trim(), totalDeducted: affU4(g(r, 'Quantia Total Deduzida(R$)')), amsCredit: affU4(g(r, 'AMS Credit Deducted Amount(R$)')), totalPending: affU4(g(r, 'Quantia Total Pendente(R$)')) });
+      }
+    }
+    return { type: type, rows: out };
+  }
+  function importAfiliados(file) {
+    return file.arrayBuffer().then(function (ab) {
+      var name = (file.name || '').toLowerCase(); var text;
+      if (name.slice(-5) === '.xlsx' || name.slice(-4) === '.xls') { var wb = XLSX.read(new Uint8Array(ab), { type: 'array' }); text = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]); }
+      else text = new TextDecoder('utf-8').decode(ab).replace(/^﻿/, '');
+      var parsed = affParse(text);
+      if (!parsed.type) throw new Error('Relatório de afiliados não reconhecido (esperado Conversão de Pedidos, RPA ou Validation Bill da Shopee).');
+      var importedAt = new Date().toISOString(); var novo = 0, upd = 0, unch = 0, changed = []; var store, typeLabel;
+      if (parsed.type === 'conversion') {
+        store = 'affconv'; typeLabel = 'Afiliados — Conversão de Pedidos'; var byId = {}; affConv.forEach(function (x) { byId[x.id] = x; });
+        parsed.rows.forEach(function (row) { var id = row.orderId + '|' + row.productId + '|' + row.modelId + '|' + row.attrId + '|' + row.orderTime; var ex = byId[id];
+          if (!ex) { var rec = Object.assign({ id: id, firstImportAt: importedAt, lastImportAt: importedAt, fileName: file.name, history: [] }, row); byId[id] = rec; changed.push(rec); novo++; return; }
+          var same = ex.orderStatus === row.orderStatus && ex.dedState === row.dedState && ex.comItemAff === row.comItemAff && ex.svcFee === row.svcFee && ex.refund === row.refund && ex.chargePeriod === row.chargePeriod;
+          if (same) { unch++; return; }
+          ex.history = ex.history || []; ex.history.unshift({ at: importedAt, statusOld: ex.orderStatus, statusNew: row.orderStatus, dedOld: ex.dedState, dedNew: row.dedState });
+          ex.orderStatus = row.orderStatus; ex.statusVerif = row.statusVerif; ex.completion = row.completion; ex.dedState = row.dedState; ex.dedMethod = row.dedMethod; ex.chargePeriod = row.chargePeriod; ex.refund = row.refund; ex.comItemAff = row.comItemAff; ex.svcFee = row.svcFee; ex.despesaStated = row.despesaStated; ex.lastImportAt = importedAt; changed.push(ex); upd++; });
+        affConv = Object.values(byId);
+      } else if (parsed.type === 'rpa') {
+        store = 'affrpa'; typeLabel = 'Afiliados — RPA / Fechamento Mensal'; var byId2 = {}; affRpa.forEach(function (x) { byId2[x.id] = x; });
+        parsed.rows.forEach(function (row) { var id = row.month + '|' + row.affId; var ex = byId2[id];
+          if (!ex) { var rec = Object.assign({ id: id, firstImportAt: importedAt, lastImportAt: importedAt, fileName: file.name, history: [] }, row); byId2[id] = rec; changed.push(rec); novo++; return; }
+          if (ex.gross === row.gross && ex.legalName === row.legalName) { unch++; return; }
+          ex.history = ex.history || []; ex.history.unshift({ at: importedAt, grossOld: ex.gross, grossNew: row.gross }); ex.gross = row.gross; ex.legalName = row.legalName; ex.lastImportAt = importedAt; changed.push(ex); upd++; });
+        affRpa = Object.values(byId2);
+      } else {
+        store = 'affvb'; typeLabel = 'Afiliados — Comissão Extra / Validation Bill'; var byId3 = {}; affVb.forEach(function (x) { byId3[x.id] = x; });
+        parsed.rows.forEach(function (row) { var id = row.validationId; var ex = byId3[id];
+          if (!ex) { var rec = Object.assign({ id: id, firstImportAt: importedAt, lastImportAt: importedAt, fileName: file.name, history: [] }, row); byId3[id] = rec; changed.push(rec); novo++; return; }
+          if (ex.totalDeducted === row.totalDeducted && ex.totalPending === row.totalPending && ex.status === row.status) { unch++; return; }
+          ex.history = ex.history || []; ex.history.unshift({ at: importedAt, dedOld: ex.totalDeducted, dedNew: row.totalDeducted }); ex.monthlyExpense = row.monthlyExpense; ex.status = row.status; ex.totalDeducted = row.totalDeducted; ex.amsCredit = row.amsCredit; ex.totalPending = row.totalPending; ex.lastImportAt = importedAt; changed.push(ex); upd++; });
+        affVb = Object.values(byId3);
+      }
+      var batch = { id: 'af' + Date.now() + Math.round(performance.now()), module: 'Afiliados', filename: file.name, typeLabel: typeLabel, createdAt: importedAt, seen: parsed.rows.length, novo: novo, upd: upd, unch: unch, itemsSeen: parsed.rows.length };
+      batches.unshift(batch); lastImportStamp = importedAt;
+      return Promise.all([putMany(store, changed), putMany('batches', [batch])]).then(function () { return { batch: batch, type: parsed.type, typeLabel: typeLabel, novo: novo, upd: upd, unch: unch }; });
+    });
+  }
+
+  // ---- motor determinístico Afiliados ----
+  function affOrderUF(orderId) { var o = orders.find(function (x) { return x.id === orderId; }); return o ? (o.uf || null) : null; }
+  function affAliceStatus(s) { var n = normStatus(s); if (n.indexOf('cancel') >= 0) return 'cancelado'; if (n.indexOf('conclu') >= 0) return 'concluido'; if (n.indexOf('pendente') >= 0) return 'pendente'; if (n.indexOf('nao pago') >= 0) return 'naopago'; return 'outro'; }
+  function affKey(rec) { return (rec.affUser || normStatus(rec.affName) || '—'); }
+  function affEngine() {
+    var conv = affConv;
+    // consolida ITENS → PEDIDOS (comissão do afiliado = soma dos itens do pedido, §3)
+    var orderMap = {};
+    conv.forEach(function (r) { var o = orderMap[r.orderId]; if (!o) { o = orderMap[r.orderId] = { orderId: r.orderId, items: [], affUser: affKey(r), affName: r.affName, channel: r.channel, campaign: r.campaign, campaignType: r.campaignType, status: r.orderStatus, dedState: r.dedState, dedMethod: r.dedMethod, chargePeriod: r.chargePeriod, orderTime: r.orderTime, completion: r.completion, purchase: 0, comAff: 0, svcFee: 0, despesaStated: 0, despesaHas: false, refund: 0, rateSum: 0, rateN: 0 }; } o.items.push(r); o.purchase += r.purchase; o.comAff += r.comItemAff; o.svcFee += r.svcFee; o.despesaStated += r.despesaStated; if (r.despesaHas) o.despesaHas = true; o.refund += r.refund; if (r.rateItemAff != null) { o.rateSum += r.rateItemAff; o.rateN++; } });
+    var ordersArr = Object.keys(orderMap).map(function (k) { return orderMap[k]; });
+    ordersArr.forEach(function (o) { o.despesaRecon = o.comAff + o.svcFee; o.uf = affOrderUF(o.orderId); o.region = o.uf ? (UF_REGIAO[o.uf] || 'Outra') : null; o.st = affAliceStatus(o.status); });
+    // por afiliado
+    var affMap = {};
+    ordersArr.forEach(function (o) { var a = affMap[o.affUser]; if (!a) a = affMap[o.affUser] = { user: o.affUser, name: o.affName, orders: 0, sales: 0, comAff: 0, svcFee: 0, despesa: 0, units: 0, cancelled: 0, refund: 0, concluded: 0, channels: {}, dedDeduzido: 0, dedPendente: 0 }; a.orders++; a.sales += o.purchase; a.comAff += o.comAff; a.svcFee += o.svcFee; a.despesa += (o.despesaHas ? o.despesaStated : o.despesaRecon); a.refund += o.refund; o.items.forEach(function (it) { a.units += it.qty; }); if (o.st === 'cancelado') a.cancelled++; if (o.st === 'concluido') a.concluded++; a.channels[o.channel || '—'] = (a.channels[o.channel || '—'] || 0) + 1; var nd = normStatus(o.dedState); if (nd.indexOf('deduzido') >= 0) a.dedDeduzido += (o.despesaHas ? o.despesaStated : o.despesaRecon); else if (nd.indexOf('pendente') >= 0) a.dedPendente += (o.despesaHas ? o.despesaStated : o.despesaRecon); });
+    var affs = Object.values(affMap).map(function (a) { a.rateAvg = a.sales ? a.comAff / a.sales : 0; a.cancelRate = a.orders ? a.cancelled / a.orders : 0; a.custoReceita = a.sales ? a.despesa / a.sales : 0; a.ticket = a.orders ? a.sales / a.orders : 0; return a; });
+    // totais
+    var tot = { orders: ordersArr.length, sales: 0, comAff: 0, svcFee: 0, despesa: 0, despesaStated: 0, refund: 0, cancelled: 0, concluded: 0, deduzido: 0, pendente: 0, units: 0 };
+    ordersArr.forEach(function (o) { tot.sales += o.purchase; tot.comAff += o.comAff; tot.svcFee += o.svcFee; tot.despesa += (o.despesaHas ? o.despesaStated : o.despesaRecon); tot.despesaStated += o.despesaStated; tot.refund += o.refund; if (o.st === 'cancelado') tot.cancelled++; if (o.st === 'concluido') tot.concluded++; o.items.forEach(function (it) { tot.units += it.qty; }); var nd = normStatus(o.dedState); if (nd.indexOf('deduzido') >= 0) tot.deduzido += (o.despesaHas ? o.despesaStated : o.despesaRecon); else if (nd.indexOf('pendente') >= 0) tot.pendente += (o.despesaHas ? o.despesaStated : o.despesaRecon); });
+    tot.despesaRecon = tot.comAff + tot.svcFee;
+    return { orderMap: orderMap, ordersArr: ordersArr, affs: affs, tot: tot };
+  }
+  function affLucroPedido(o) {
+    // lucro real do pedido: usa financeiro do módulo Pedidos quando o pedido existe; senão indisponível
+    var ord = orders.find(function (x) { return x.id === o.orderId; }); if (!ord) return { known: false };
+    var f = orderFinance(ord); if (f.costPending) return { known: false, partial: true, ord: ord, f: f };
+    var custoAff = (o.despesaHas ? o.despesaStated : o.despesaRecon) / 10000;
+    var lucro = (f.estimatedResult || 0) - custoAff; // resultado do pedido já desconta taxas marketplace e custo produto
+    return { known: true, lucro: Math.round(lucro * 10000), margem: o.purchase ? (lucro / (o.purchase / 10000)) : 0, ord: ord, f: f };
+  }
+
+  function renderAfiliados() {
+    var tabs = [['visao', 'Visão Geral'], ['afiliados', 'Afiliados'], ['pedidos', 'Pedidos / Conversões'], ['financeiro', 'Financeiro & Conciliação'], ['extra', 'Comissão Extra'], ['devolucoes', 'Devoluções & Estornos'], ['ia', 'Inteligência']];
+    app.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + tabs.map(function (t) { return '<div class="subtab' + (affSub === t[0] ? ' active' : '') + '" data-affsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-affimport="1">Importar relatório de afiliados</button></div><div id="affbody" style="margin-top:14px"></div>';
+    var body = document.getElementById('affbody');
+    try {
+      if (!affConv.length && !affRpa.length && !affVb.length) body.innerHTML = secHead('AFILIADOS', 'Afiliados', 'Aquisição, performance, rentabilidade, financeiro, conciliação e auditoria das vendas por afiliados.') + emptyBox('Nenhum relatório de afiliados importado. Envie a Conversão de Pedidos, o RPA (fechamento mensal) e/ou a Comissão Extra (Validation Bill) — o tipo é detectado pelo cabeçalho.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="affimp">Importar primeiro relatório</button></div>';
+      else body.innerHTML = ({ visao: affVisao, afiliados: affAfiliados, pedidos: affPedidos, financeiro: affFinanceiro, extra: affExtra, devolucoes: affDevolucoes, ia: affIA }[affSub] || affVisao)();
+    } catch (e) { body.innerHTML = '<div class="form-err">Erro ao renderizar Afiliados: ' + esc(e.message || e) + '</div>'; }
+    app.querySelectorAll('[data-affsub]').forEach(function (b) { b.onclick = function () { affSub = b.dataset.affsub; affPage = 1; render(); }; });
+    var imp = function () { fileInput(function (f) { importAfiliados(f).then(function (b) { render(); toast(b.typeLabel + ' importado', b.novo + ' novos · ' + b.upd + ' atualizados · ' + b.unch + ' sem alteração'); }).catch(function (e) { toast('Falha', e.message, true); }); }); };
+    app.querySelectorAll('[data-affimport]').forEach(function (b) { b.onclick = imp; });
+    var ai = document.getElementById('affimp'); if (ai) ai.onclick = imp;
+    app.querySelectorAll('[data-affgo]').forEach(function (b) { b.onclick = function () { affSub = b.dataset.affgo; if (b.dataset.afffilter) { try { var f = JSON.parse(b.dataset.afffilter); Object.keys(f).forEach(function (k) { affF[k] = f[k]; }); } catch (e) { } } affPage = 1; render(); }; });
+    app.querySelectorAll('[data-affprof]').forEach(function (b) { b.onclick = function () { openAffProfile(b.dataset.affprof); }; });
+    app.querySelectorAll('[data-affped]').forEach(function (b) { b.onclick = function () { openAffPedido(b.dataset.affped); }; });
+    if (affSub === 'pedidos') bindAffPedidos();
+  }
+
+  function affVisao() {
+    var e = affEngine(); var t = e.tot;
+    var head = secHead('AFILIADOS', 'Visão Geral', 'Quanto vendemos com afiliados, quanto pagamos, quanto a Shopee ainda vai descontar, quem vende, quem custa, quem dá lucro — e onde há divergência.');
+    var custoTotal = t.despesa; var lucroKnown = 0, lucroN = 0; e.ordersArr.forEach(function (o) { var l = affLucroPedido(o); if (l.known) { lucroKnown += l.lucro; lucroN++; } });
+    var strip1 = kstrip([
+      { l: 'Vendas atribuídas', v: brlU(t.sales), cls: 'blue', s: nn(t.orders) + ' pedidos · ' + nn(e.affs.length) + ' afiliados' },
+      { l: 'Comissão gerada', v: brlU(t.comAff), cls: 'red', s: 'nível do item' },
+      { l: 'Taxa serviço afiliados', v: brlU(t.svcFee), cls: 'amber' },
+      { l: 'Despesa total afiliados', v: brlU(t.despesa), cls: 'red', s: 'custo/receita ' + pct(r2(t.sales ? t.despesa / t.sales * 100 : 0)) },
+      { l: 'Já deduzido', v: brlU(t.deduzido), cls: 'green' },
+      { l: 'Pendente de dedução', v: brlU(t.pendente), cls: 'amber' },
+    ]);
+    var strip2 = kstrip([
+      { l: 'Pedidos cancelados', v: nn(t.cancelled), cls: 'amber', s: pct(r2(t.orders ? t.cancelled / t.orders * 100 : 0)) },
+      { l: 'Reembolso', v: brlU(t.refund), cls: 'red' },
+      { l: 'Concluídos', v: nn(t.concluded), cls: 'green' },
+      { l: 'Lucro real (pedidos c/ custo)', v: lucroN ? brlU(lucroKnown) : 'sem base', cls: lucroKnown >= 0 ? 'green' : 'red', s: lucroN ? nn(lucroN) + ' pedidos' : 'importe custos em Produtos' },
+      { l: 'Comissão média/pedido', v: brlU(t.orders ? Math.round(t.comAff / t.orders) : 0), cls: 'blue' },
+      { l: 'Taxa média ponderada', v: pct(r2(t.sales ? t.comAff / t.sales * 100 : 0)), cls: 'amber' },
+    ]);
+    // top afiliados
+    var topSales = e.affs.slice().sort(function (a, b) { return b.sales - a.sales; }).slice(0, 10);
+    var topChart = topSales.length ? chartCard('Top afiliados por vendas', legendSwatch([['Vendas', '#2b4bd6']]), svgHBars(topSales.map(function (a) { return { label: a.user, value: a.sales / 10000 }; }), { fmt: function (v) { return brl(v); } })) : '';
+    // canais
+    var chMap = {}; e.ordersArr.forEach(function (o) { var c = o.channel || '—'; var g = chMap[c] = chMap[c] || { c: c, sales: 0, orders: 0, com: 0 }; g.sales += o.purchase; g.orders++; g.com += o.comAff; });
+    var chans = Object.values(chMap).sort(function (a, b) { return b.sales - a.sales; });
+    var chChart = chans.length ? chartCard('Vendas por canal', legendSwatch([['Vendas', '#0f9d6b']]), svgHBars(chans.slice(0, 10).map(function (c) { return { label: c.c, value: c.sales / 10000, color: '#0f9d6b' }; }), { fmt: function (v) { return brl(v); } })) : '';
+    // taxas
+    var rateMap = {}; affConv.forEach(function (r) { if (r.rateItemAff == null) return; var k = (r2(r.rateItemAff * 100)) + '%'; var g = rateMap[k] = rateMap[k] || { k: k, rate: r.rateItemAff, sales: 0, com: 0, n: 0 }; g.sales += r.purchase; g.com += r.comItemAff; g.n++; });
+    var rates = Object.values(rateMap).sort(function (a, b) { return b.rate - a.rate; });
+    var altas = rates.filter(function (x) { return x.rate >= affCfg.rateAlert; }); var altasSales = altas.reduce(function (s, x) { return s + x.sales; }, 0);
+    var rateRows = rates.map(function (x) { return '<tr' + (x.rate >= affCfg.rateAlert ? ' style="background:#fdf1e9"' : '') + '><td>' + esc(x.k) + (x.rate >= affCfg.rateAlert ? ' <span class="tag warn">alta</span>' : '') + '</td><td>' + nn(x.n) + '</td><td class="nowrap">' + brlU(x.sales) + '</td><td class="nowrap">' + brlU(x.com) + '</td></tr>'; }).join('');
+    var rateTable = '<div class="panel"><div class="ph"><h3>Distribuição das vendas por taxa de comissão</h3>' + (altasSales > 0 ? '<span class="tag warn">' + brlU(altasSales) + ' em vendas com taxa ≥ ' + pct(r2(affCfg.rateAlert * 100)) + '</span>' : '') + '</div><div class="table-wrap"><table class="report"><thead><tr><th>Taxa</th><th>Itens</th><th>Vendas</th><th>Comissão</th></tr></thead><tbody>' + rateRows + '</tbody></table></div></div>';
+    // regiões
+    var regChart = affRegionPanel(e);
+    // divergência despesa
+    var difDesp = t.despesaStated - t.despesaRecon;
+    var recon = Math.abs(difDesp) > affCfg.tolConcil ? callout('warn', '⚠ Despesa informada × reconstruída difere', 'A Shopee informou <b>' + brlU(t.despesaStated) + '</b> em despesas; a soma dos componentes conhecidos (comissão do afiliado + taxa de serviço) é <b>' + brlU(t.despesaRecon) + '</b> — diferença de <b>' + brlU(difDesp) + '</b>. Mostrada para conciliação; nada foi corrigido automaticamente.') : callout('green', '✓ Despesa informada bate com a reconstruída', 'Despesa Shopee ' + brlU(t.despesaStated) + ' ≈ componentes conhecidos ' + brlU(t.despesaRecon) + '.');
+    return head + strip1 + strip2 + recon + topChart + chChart + rateTable + regChart;
+  }
+  function affRegionPanel(e) {
+    var regMap = {}, semReg = { sales: 0, orders: 0 };
+    e.ordersArr.forEach(function (o) { if (!o.region) { semReg.sales += o.purchase; semReg.orders++; return; } var g = regMap[o.region] = regMap[o.region] || { region: o.region, sales: 0, orders: 0, com: 0 }; g.sales += o.purchase; g.orders++; g.com += o.comAff; });
+    var regs = Object.values(regMap).sort(function (a, b) { return b.sales - a.sales; });
+    if (!regs.length && semReg.orders) return callout('', 'Regiões das vendas', 'Nenhum pedido de afiliado foi encontrado no módulo Pedidos para identificar a região de entrega. Importe os Pedidos correspondentes para ver vendas por região. <b>' + nn(semReg.orders) + '</b> pedidos sem região identificada.');
+    var chart = chartCard('Vendas de afiliados por região (via endereço de entrega do Pedido)', legendSwatch([['Vendas', '#2b4bd6']]), svgHBars(regs.map(function (r) { return { label: r.region, value: r.sales / 10000 }; }), { fmt: function (v) { return brl(v); } }));
+    var note = semReg.orders ? '<div class="footnote" style="margin-top:-6px">' + nn(semReg.orders) + ' pedidos sem pedido correspondente em Pedidos → região não identificada (' + brlU(semReg.sales) + ').</div>' : '';
+    return chart + note;
+  }
+
+  function affAfiliados() {
+    var e = affEngine(); var affs = e.affs.slice();
+    if (affF.search) { var q = affF.search.toLowerCase(); affs = affs.filter(function (a) { return (a.user || '').toLowerCase().indexOf(q) >= 0 || (a.name || '').toLowerCase().indexOf(q) >= 0; }); }
+    affs.sort(function (a, b) { return b.sales - a.sales; });
+    var head = secHead('AFILIADOS · LISTA', 'Afiliados', 'Quem vende, quem custa e quem realmente dá lucro. Clique para abrir o perfil.');
+    // concentração
+    var totSales = e.tot.sales || 1; var acc = function (n) { return e.affs.slice().sort(function (a, b) { return b.sales - a.sales; }).slice(0, n).reduce(function (s, a) { return s + a.sales; }, 0); };
+    var conc = kstrip([
+      { l: 'Afiliados ativos', v: nn(e.affs.length), cls: 'blue' },
+      { l: 'Concentração Top 1', v: pct(r2(acc(1) / totSales * 100)), cls: 'amber' },
+      { l: 'Top 3', v: pct(r2(acc(3) / totSales * 100)), cls: 'amber' },
+      { l: 'Top 5', v: pct(r2(acc(5) / totSales * 100)), cls: 'amber' },
+      { l: 'Top 10', v: pct(r2(acc(10) / totSales * 100)), cls: 'amber' },
+    ]);
+    var rows = affs.slice(0, 300).map(function (a) { var cls = affClassify(a, e); return '<tr class="rowlink" data-affprof="' + esc(a.user) + '"><td class="cell-text"><b>' + esc(a.user) + '</b><div class="footnote" style="margin:0">' + esc(a.name || '') + '</div></td><td>' + nn(a.orders) + '</td><td class="nowrap">' + brlU(a.sales) + '</td><td class="nowrap">' + brlU(a.despesa) + '</td><td>' + pct(r2(a.custoReceita * 100)) + '</td><td>' + pct(r2(a.rateAvg * 100)) + '</td><td>' + nn(a.cancelled) + ' (' + pct(r2(a.cancelRate * 100)) + ')</td><td><span class="tag ' + cls.tag + '">' + cls.label + '</span></td><td><button class="btn-sm" data-affprof="' + esc(a.user) + '">Perfil</button></td></tr>'; }).join('');
+    return head + conc +
+      '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="affq" style="width:280px" placeholder="Buscar afiliado ou username…" value="' + esc(affF.search) + '"></div>' +
+      '<div class="count-line"><b>' + nn(affs.length) + '</b> afiliados</div>' +
+      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Afiliado</th><th>Pedidos</th><th>Vendas</th><th>Despesa</th><th>Custo/Rec.</th><th>Taxa média</th><th>Cancel.</th><th>Classe</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="9" class="empty">Nenhum afiliado.</td></tr>') + '</tbody></table></div></div>';
+  }
+  function affClassify(a, e) {
+    var l = affAffLucro(a, e); if (l.known == null || l.n === 0) return { tag: 'neutral', label: 'sem custo' };
+    var margem = l.sales ? l.lucro / l.sales : 0;
+    if (margem < 0) return { tag: 'warn', label: 'Prejuízo' };
+    if (margem < affCfg.margemAperta) return { tag: 'warn', label: 'Margem apertada' };
+    if (margem < affCfg.margemBoa) return { tag: 'info', label: 'Rentável' };
+    return { tag: 'ok', label: 'Muito rentável' };
+  }
+  function affAffLucro(a, e) {
+    var lucro = 0, sales = 0, n = 0, known = false;
+    e.ordersArr.forEach(function (o) { if (o.affUser !== a.user) return; var l = affLucroPedido(o); if (l.known) { lucro += l.lucro / 10000; sales += o.purchase / 10000; n++; known = true; } });
+    return { known: known ? true : null, lucro: lucro, sales: sales, n: n };
+  }
+  function openAffProfile(user) {
+    var e = affEngine(); var a = e.affs.find(function (x) { return x.user === user; }); if (!a) return;
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '780px'; panel.style.maxWidth = '97vw';
+    d.appendChild(panel); d.onclick = function (ev) { if (ev.target === d) d.remove(); }; document.body.appendChild(d);
+    var l = affAffLucro(a, e); var rpaMatch = affRpa.filter(function (r) { return normStatus(r.legalName) === normStatus(a.name); });
+    var myOrders = e.ordersArr.filter(function (o) { return o.affUser === user; });
+    var prods = {}; myOrders.forEach(function (o) { o.items.forEach(function (it) { var g = prods[it.productName || '—'] = prods[it.productName || '—'] || { name: it.productName, sales: 0, com: 0 }; g.sales += it.purchase; g.com += it.comItemAff; }); });
+    var topProds = Object.values(prods).sort(function (x, y) { return y.sales - x.sales; }).slice(0, 6);
+    var chMap = {}; myOrders.forEach(function (o) { chMap[o.channel || '—'] = (chMap[o.channel || '—'] || 0) + 1; });
+    panel.innerHTML = '<div class="dh"><div><b>' + esc(a.user) + '</b> <span class="footnote" style="margin-left:6px">' + esc(a.name || '') + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
+      '<div class="kstrip" style="margin-bottom:12px"><div class="kc"><div class="kl">Vendas</div><div class="kv" style="font-size:16px">' + brlU(a.sales) + '</div></div><div class="kc"><div class="kl">Pedidos</div><div class="kv" style="font-size:16px">' + nn(a.orders) + '</div></div><div class="kc"><div class="kl">Despesa</div><div class="kv" style="font-size:16px">' + brlU(a.despesa) + '</div></div><div class="kc"><div class="kl">Taxa média</div><div class="kv" style="font-size:16px">' + pct(r2(a.rateAvg * 100)) + '</div></div></div>' +
+      kstrip([{ l: 'Ticket médio', v: brlU(Math.round(a.ticket)), cls: 'blue' }, { l: 'Cancelados', v: nn(a.cancelled) + ' (' + pct(r2(a.cancelRate * 100)) + ')', cls: 'amber' }, { l: 'Reembolso', v: brlU(a.refund), cls: 'red' }, { l: 'Lucro (c/ custo)', v: l.n ? brl(l.lucro) : 'sem base', cls: l.lucro >= 0 ? 'green' : 'red', s: l.n ? nn(l.n) + ' pedidos' : '' }, { l: 'Deduzido', v: brlU(a.dedDeduzido), cls: 'green' }, { l: 'Pendente', v: brlU(a.dedPendente), cls: 'amber' }]) +
+      '<div class="split2"><div class="panel"><div class="ph"><h3>Melhores produtos</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Produto</th><th>Vendas</th><th>Comissão</th></tr></thead><tbody>' + topProds.map(function (p) { return '<tr><td class="cell-text">' + esc((p.name || '—').slice(0, 40)) + '</td><td class="nowrap">' + brlU(p.sales) + '</td><td class="nowrap">' + brlU(p.com) + '</td></tr>'; }).join('') + '</tbody></table></div></div>' +
+      '<div class="panel"><div class="ph"><h3>Canais</h3></div><div class="pb">' + Object.keys(chMap).sort(function (x, y) { return chMap[y] - chMap[x]; }).map(function (c) { return '<div class="fin-line"><span>' + esc(c) + '</span><b>' + nn(chMap[c]) + ' pedidos</b></div>'; }).join('') + '</div></div></div>' +
+      '<div class="panel"><div class="ph"><h3>Conciliação com RPA</h3></div><div class="pb">' + (rpaMatch.length ? rpaMatch.map(function (r) { return '<div class="fin-line"><span>' + esc(r.month) + ' · RPA reconhece</span><b>' + brlU(r.gross) + '</b></div>'; }).join('') + '<div class="footnote">Comparação por nome; para vínculo firme use ID do afiliado (RPA) confirmado manualmente.</div>' : '<div class="footnote">Nenhum registro de RPA com este nome. Pode ser diferença de grafia — vincule a identidade manualmente quando houver o RPA.</div>') + '</div></div>' +
+      '<div style="margin-top:8px"><button class="btn-sm" data-affgoped="' + esc(user) + '">Ver pedidos deste afiliado</button></div></div>';
+    panel.querySelector('.x').onclick = function () { d.remove(); };
+    var gp = panel.querySelector('[data-affgoped]'); if (gp) gp.onclick = function () { d.remove(); affF.search = user; affSub = 'pedidos'; render(); };
+  }
+
+  function affPedidos() {
+    var e = affEngine(); var list = e.ordersArr.slice();
+    if (affF.channel) list = list.filter(function (o) { return (o.channel || '—') === affF.channel; });
+    if (affF.status) list = list.filter(function (o) { return o.st === affF.status; });
+    if (affF.ded) list = list.filter(function (o) { return normStatus(o.dedState).indexOf(affF.ded) >= 0; });
+    if (affF.region) list = list.filter(function (o) { return o.region === affF.region; });
+    if (affF.search) { var q = affF.search.toLowerCase(); list = list.filter(function (o) { return (o.orderId || '').toLowerCase().indexOf(q) >= 0 || (o.affUser || '').toLowerCase().indexOf(q) >= 0 || (o.affName || '').toLowerCase().indexOf(q) >= 0; }); }
+    list.sort(function (a, b) { return (b.orderTime || '').localeCompare(a.orderTime || ''); });
+    var pages = Math.max(1, Math.ceil(list.length / 25)); if (affPage > pages) affPage = pages; var slice = list.slice((affPage - 1) * 25, affPage * 25);
+    var channels = [''].concat(Object.keys(e.ordersArr.reduce(function (m, o) { m[o.channel || '—'] = 1; return m; }, {})));
+    var head = secHead('AFILIADOS · PEDIDOS / CONVERSÕES', 'Pedidos / Conversões', 'Cada pedido atribuído a afiliado com comissão consolidada por item. Clique para ver a composição e o pedido original.');
+    var rows = slice.map(function (o) { var st = o.st; var stTag = st === 'concluido' ? 'ok' : st === 'cancelado' ? 'warn' : 'neutral'; return '<tr class="rowlink" data-affped="' + esc(o.orderId) + '"><td class="mono">' + esc(o.orderId) + '</td><td class="nowrap">' + esc((o.orderTime || '').slice(0, 10)) + '</td><td class="cell-text">' + esc(o.affUser) + '</td><td>' + nn(o.items.length) + '</td><td class="nowrap">' + brlU(o.purchase) + '</td><td class="nowrap">' + brlU(o.comAff) + '</td><td>' + pct(r2(o.rateN ? o.rateSum / o.rateN * 100 : 0)) + '</td><td class="cell-text">' + esc(o.channel || '—') + '</td><td><span class="tag ' + stTag + '">' + esc(o.status) + '</span></td><td class="cell-text">' + esc(o.dedState || '—') + '</td><td><button class="btn-sm" data-affped="' + esc(o.orderId) + '">Abrir</button></td></tr>'; }).join('');
+    return head +
+      '<div class="chips">' + channels.map(function (c) { return '<span class="chip' + (affF.channel === c ? ' chip-on' : '') + '" data-affchan="' + esc(c) + '">' + (c === '' ? 'Todos os canais' : esc(c)) + '</span>'; }).join('') + '</div>' +
+      '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="affpq" style="width:260px" placeholder="Buscar pedido ou afiliado…" value="' + esc(affF.search) + '"><select class="select sm" id="affstatus"><option value="">Status: todos</option>' + [['pendente', 'Pendente'], ['concluido', 'Concluído'], ['cancelado', 'Cancelado'], ['naopago', 'Não pago']].map(function (s) { return '<option value="' + s[0] + '"' + (affF.status === s[0] ? ' selected' : '') + '>' + s[1] + '</option>'; }).join('') + '</select><select class="select sm" id="affded"><option value="">Dedução: todas</option><option value="deduzido"' + (affF.ded === 'deduzido' ? ' selected' : '') + '>Deduzido</option><option value="pendente"' + (affF.ded === 'pendente' ? ' selected' : '') + '>Pendente</option></select>' + (affF.channel || affF.status || affF.ded || affF.search || affF.region ? '<button class="link-btn" id="affclear">limpar</button>' : '') + '</div>' +
+      '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos</div>' +
+      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Data</th><th>Afiliado</th><th>Itens</th><th>Compra</th><th>Comissão</th><th>Taxa</th><th>Canal</th><th>Status</th><th>Dedução</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="11" class="empty">Nenhum pedido neste filtro.</td></tr>') + '</tbody></table></div></div>' +
+      (pages > 1 ? '<div style="display:flex;gap:8px;justify-content:flex-end;align-items:center"><button class="btn-sm" id="affprev"' + (affPage <= 1 ? ' disabled' : '') + '>Anterior</button><span class="footnote" style="margin:0">página ' + affPage + ' de ' + pages + '</span><button class="btn-sm" id="affnext"' + (affPage >= pages ? ' disabled' : '') + '>Próxima</button></div>' : '');
+  }
+  function bindAffPedidos() {
+    app.querySelectorAll('[data-affchan]').forEach(function (c) { c.onclick = function () { affF.channel = c.dataset.affchan; affPage = 1; render(); }; });
+    var q = document.getElementById('affpq'); if (q) { var t; q.oninput = function () { clearTimeout(t); t = setTimeout(function () { var v = q.value; affF.search = v; affPage = 1; render(); var el = document.getElementById('affpq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
+    var st = document.getElementById('affstatus'); if (st) st.onchange = function () { affF.status = st.value; affPage = 1; render(); };
+    var dd = document.getElementById('affded'); if (dd) dd.onchange = function () { affF.ded = dd.value; affPage = 1; render(); };
+    var cl = document.getElementById('affclear'); if (cl) cl.onclick = function () { affF = { search: '', channel: '', status: '', ded: '', region: '', basis: 'venda', rateMin: null }; render(); };
+    var pv = document.getElementById('affprev'); if (pv) pv.onclick = function () { if (affPage > 1) { affPage--; render(); } };
+    var nx = document.getElementById('affnext'); if (nx) nx.onclick = function () { affPage++; render(); };
+  }
+  function openAffPedido(orderId) {
+    var e = affEngine(); var o = e.orderMap[orderId]; if (!o) return;
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '680px'; panel.style.maxWidth = '96vw';
+    d.appendChild(panel); d.onclick = function (ev) { if (ev.target === d) d.remove(); }; document.body.appendChild(d);
+    var ord = orders.find(function (x) { return x.id === orderId; }); var oc = occ.find(function (x) { return !x.isDemo && x.orderId === orderId; });
+    var l = affLucroPedido(o);
+    var itemRows = o.items.map(function (it) { return '<tr><td class="cell-text">' + esc((it.productName || '—').slice(0, 40)) + '</td><td>' + nn(it.qty) + '</td><td class="nowrap">' + brlU(it.purchase) + '</td><td class="nowrap">' + brlU(it.comItemAff) + '</td><td>' + (it.rateItemAff != null ? pct(r2(it.rateItemAff * 100)) : '—') + '</td></tr>'; }).join('');
+    var comp = '<div class="panel"><div class="ph"><h3>Composição da despesa (auditoria)</h3></div><div class="pb">' + kv('Comissão do afiliado (Σ itens)', brlU(o.comAff)) + kv('Taxa de serviço afiliados', brlU(o.svcFee)) + kv('Despesa reconstruída', brlU(o.despesaRecon)) + kv('Despesa informada (Shopee)', o.despesaHas ? brlU(o.despesaStated) : '<span class="tag warn">não informado</span>') + (o.despesaHas && Math.abs(o.despesaStated - o.despesaRecon) > affCfg.tolConcil ? '<div class="footnote neg">diferença ' + brlU(o.despesaStated - o.despesaRecon) + '</div>' : '') + '</div></div>';
+    var pedBlock = ord ? '<div class="panel"><div class="ph"><h3>Pedido (módulo Pedidos)</h3></div><div class="pb">' + kv('Status', S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus || '—') + kv('Valor', brl(ord.totalAmount || 0)) + kv('Cidade/UF', (ord.city || '—') + '/' + (ord.uf || '—')) + kv('Lucro real do pedido (após afiliado)', l.known ? brlU(l.lucro) : (l.partial ? 'custo do produto pendente' : 'indisponível')) + '<button class="btn-sm" data-goped="' + esc(orderId) + '">Ver pedido</button></div></div>' : '<div class="footnote">Pedido não importado no módulo Pedidos — região e lucro real indisponíveis.</div>';
+    var devBlock = oc ? '<div class="panel"><div class="ph"><h3>Devolução vinculada</h3><span class="tag info">' + esc(statusLabel(oc.status)) + '</span></div><div class="pb">' + kv('Motivo', oc.reason || '—') + '<button class="btn-sm" data-godev="' + esc(oc.id) + '">Ver devolução</button></div></div>' : '';
+    panel.innerHTML = '<div class="dh"><div><b>Pedido ' + esc(orderId) + '</b> <span class="tag ' + (o.st === 'concluido' ? 'ok' : o.st === 'cancelado' ? 'warn' : 'neutral') + '" style="margin-left:6px">' + esc(o.status) + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
+      '<div class="panel"><div class="ph"><h3>Afiliado</h3></div><div class="pb">' + kv('Afiliado', o.affUser) + kv('Nome', o.affName || '—') + kv('Canal', o.channel || '—') + kv('Campanha', o.campaign || '—') + kv('Tipo de conversão', o.campaignType || o.items[0].orderType || '—') + kv('Estado da dedução', o.dedState || '—') + kv('Método', o.dedMethod || '—') + kv('Cobrança', o.chargePeriod || '—') + '</div></div>' +
+      '<div class="panel"><div class="ph"><h3>Itens (' + nn(o.items.length) + ')</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Produto</th><th>Qtd</th><th>Compra</th><th>Comissão</th><th>Taxa</th></tr></thead><tbody>' + itemRows + '</tbody></table></div></div>' +
+      comp + pedBlock + devBlock + '</div>';
+    panel.querySelector('.x').onclick = function () { d.remove(); };
+    var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { d.remove(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
+    var gd = panel.querySelector('[data-godev]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev; d.remove(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
+  }
+
+  function affFinanceiro() {
+    var e = affEngine(); var t = e.tot;
+    var head = secHead('AFILIADOS · FINANCEIRO & CONCILIAÇÃO', 'As quatro visões financeiras + conciliação', 'Comissão gerada, taxa de serviço, despesa total e valor efetivamente deduzido — mais a conciliação com o RPA. Sem dupla contagem, sem correção silenciosa.');
+    var quatro = kstrip([
+      { l: 'Comissão gerada', v: brlU(t.comAff), cls: 'blue', s: 'pelas vendas' },
+      { l: 'Taxa de serviço afiliados', v: brlU(t.svcFee), cls: 'amber', s: 'cobrada pela Shopee' },
+      { l: 'Despesa total afiliados', v: brlU(t.despesa), cls: 'red' },
+      { l: 'Efetivamente deduzido', v: brlU(t.deduzido), cls: 'green' },
+      { l: 'Pendente de dedução', v: brlU(t.pendente), cls: 'amber' },
+    ]);
+    var doubleWarn = callout('', 'Sem dupla contagem', 'Comissão gerada, RPA e Comissão Extra (Validation Bill) NÃO são somados como despesas independentes — podem ser o mesmo dinheiro em fechamentos diferentes. Cada um é conciliado separadamente e a origem é rastreada.');
+    // conciliação por afiliado × RPA (mês do RPA)
+    var rpaByName = {}; affRpa.forEach(function (r) { var k = normStatus(r.legalName); (rpaByName[k] = rpaByName[k] || { gross: 0, months: {} }); rpaByName[k].gross += r.gross; });
+    var rows = e.affs.slice().sort(function (a, b) { return b.comAff - a.comAff; }).slice(0, 300).map(function (a) {
+      var rpa = rpaByName[normStatus(a.name)]; var rpaV = rpa ? rpa.gross : null; var dif = rpaV != null ? (a.comAff - rpaV) : null;
+      var status = rpaV == null ? ['⚪ Sem vínculo', 'neutral'] : (Math.abs(dif) <= affCfg.tolConcil ? ['🟢 Conciliado', 'ok'] : ['🔴 Divergência', 'warn']);
+      return '<tr><td class="cell-text">' + esc(a.user) + '<div class="footnote" style="margin:0">' + esc(a.name || '') + '</div></td><td class="nowrap">' + brlU(a.comAff) + '</td><td class="nowrap">' + (rpaV != null ? brlU(rpaV) : '—') + '</td><td class="nowrap ' + (dif && Math.abs(dif) > affCfg.tolConcil ? 'neg' : '') + '">' + (dif != null ? brlU(dif) : '—') + '</td><td><span class="tag ' + status[1] + '">' + status[0] + '</span></td></tr>';
+    }).join('');
+    var totRpa = affRpa.reduce(function (s, r) { return s + r.gross; }, 0);
+    var rpaHead = affRpa.length ? kstrip([{ l: 'RPA — comissão bruta total', v: brlU(totRpa), cls: 'blue', s: nn(affRpa.length) + ' registros' }, { l: 'Comissão calculada (pedidos)', v: brlU(t.comAff), cls: 'blue' }, { l: 'Diferença', v: brlU(t.comAff - totRpa), cls: Math.abs(t.comAff - totRpa) > affCfg.tolConcil ? 'red' : 'green', s: 'não é erro automático — investigar' }]) : callout('', 'RPA não importado', 'Importe o relatório RPA (fechamento mensal) para conciliar o que a Shopee reconheceu por afiliado com o calculado pelos pedidos.');
+    var conciTable = affRpa.length ? '<div class="panel"><div class="ph"><h3>Conciliação por afiliado — comissão calculada × RPA</h3><span class="footnote" style="margin:0">vínculo por nome; confirme identidade quando necessário</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Afiliado</th><th>Calculada (pedidos)</th><th>RPA</th><th>Diferença</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>' : '';
+    return head + quatro + doubleWarn + rpaHead + conciTable;
+  }
+
+  function affExtra() {
+    var head = secHead('AFILIADOS · COMISSÃO EXTRA', 'Comissão Extra / Validation Bill', 'Fechamentos mensais de dedução. Relacionados aos pedidos cujo método de dedução é “Crédito Comissão Extra” — sem rateio artificial.');
+    if (!affVb.length) return head + emptyBox('Nenhum Validation Bill importado. Envie o relatório de Comissão Extra da Shopee.');
+    var vb = affVb.slice().sort(function (a, b) { return (b.month || '').localeCompare(a.month || ''); });
+    var totDesp = vb.reduce(function (s, r) { return s + r.monthlyExpense; }, 0), totDed = vb.reduce(function (s, r) { return s + r.totalDeducted; }, 0), totPend = vb.reduce(function (s, r) { return s + r.totalPending; }, 0), totAms = vb.reduce(function (s, r) { return s + r.amsCredit; }, 0);
+    var strip = kstrip([
+      { l: 'Despesa mensal (Σ)', v: brlU(totDesp), cls: 'red', s: nn(vb.length) + ' meses' },
+      { l: 'Total deduzido', v: brlU(totDed), cls: 'green' },
+      { l: 'Crédito AMS utilizado', v: brlU(totAms), cls: 'blue' },
+      { l: 'Pendente', v: brlU(totPend), cls: totPend ? 'amber' : 'green' },
+    ]);
+    var chart = chartCard('Comissão Extra por mês', legendSwatch([['Despesa', '#d13b3b'], ['Deduzido', '#0f9d6b']]), svgGroupBars(vb.slice().reverse().map(function (r) { return r.month; }), [{ name: 'Despesa', color: '#d13b3b', vals: vb.slice().reverse().map(function (r) { return r.monthlyExpense / 10000; }) }, { name: 'Deduzido', color: '#0f9d6b', vals: vb.slice().reverse().map(function (r) { return r.totalDeducted / 10000; }) }], { fmt: function (v) { return brl(v); } }));
+    var rows = vb.map(function (r, i) { var prev = vb[i + 1]; var varr = prev && prev.monthlyExpense ? (r.monthlyExpense - prev.monthlyExpense) / prev.monthlyExpense : null; return '<tr><td>' + esc(r.month) + '</td><td class="mono">' + esc(r.validationId) + '</td><td class="nowrap">' + brlU(r.monthlyExpense) + '</td><td class="nowrap">' + brlU(r.totalDeducted) + '</td><td class="nowrap">' + brlU(r.amsCredit) + '</td><td class="nowrap ' + (r.totalPending ? 'neg' : '') + '">' + brlU(r.totalPending) + '</td><td><span class="tag ' + (normStatus(r.status).indexOf('complet') >= 0 ? 'ok' : 'warn') + '">' + esc(r.status) + '</span></td><td>' + (varr == null ? '—' : (varr >= 0 ? '+' : '') + pct(r2(varr * 100))) + '</td></tr>'; }).join('');
+    // pedidos com método Crédito Comissão Extra
+    var creditOrders = affConv.filter(function (r) { return normStatus(r.dedMethod).indexOf('credito comissao extra') >= 0; });
+    var creditNote = callout('', 'Ligação com pedidos', creditOrders.length ? '<b>' + nn(creditOrders.length) + '</b> linha(s) de conversão têm método de dedução <b>Crédito Comissão Extra</b> — essas são as candidatas a compor os fechamentos acima. Não fazemos rateio artificial de um valor mensal entre pedidos sem chave comprovada.' : 'Nenhuma linha de conversão com método “Crédito Comissão Extra” foi encontrada nos dados atuais.');
+    return head + strip + chart + creditNote + '<div class="panel"><div class="ph"><h3>Histórico mensal</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Mês</th><th>ID validação</th><th>Despesa</th><th>Deduzido</th><th>Crédito AMS</th><th>Pendente</th><th>Status</th><th>Var. vs mês ant.</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+  }
+
+  function affDevolucoes() {
+    var e = affEngine();
+    var head = secHead('AFILIADOS · DEVOLUÇÕES & ESTORNOS', 'Comissão em pedidos cancelados/devolvidos', 'Pedidos de afiliados que cancelaram, devolveram ou reembolsaram — e se a comissão/taxa foi recuperada. Nunca afirmamos um estorno sem evidência da fonte.');
+    var affected = e.ordersArr.filter(function (o) { return o.st === 'cancelado' || o.refund > 0 || occ.find(function (x) { return !x.isDemo && x.orderId === o.orderId; }); });
+    var comReemb = 0, svcReemb = 0, salesReemb = 0; affected.forEach(function (o) { comReemb += o.comAff; svcReemb += o.svcFee; salesReemb += o.purchase; });
+    var strip = kstrip([
+      { l: 'Pedidos afetados', v: nn(affected.length), cls: 'amber', s: 'cancelado / devolvido / reembolso' },
+      { l: 'Vendas envolvidas', v: brlU(salesReemb), cls: 'blue' },
+      { l: 'Comissão relacionada', v: brlU(comReemb), cls: 'red' },
+      { l: 'Taxa serviço relacionada', v: brlU(svcReemb), cls: 'amber' },
+    ]);
+    var honest = callout('warn', 'Estorno de comissão — requer conciliação', 'Os relatórios de afiliados não trazem uma coluna que confirme o estorno da comissão após a devolução. Marcamos esses valores como <b>potencialmente não recuperados</b> — candidatos a crédito no extrato da carteira — mas <b>não afirmamos</b> que a Shopee "deve" um valor sem a regra/fonte. Classificação: <span class="tag warn">potencial divergência / requer conciliação</span>.');
+    var rows = affected.sort(function (a, b) { return b.comAff - a.comAff; }).slice(0, 300).map(function (o) { var hasOcc = occ.find(function (x) { return !x.isDemo && x.orderId === o.orderId; }); return '<tr class="rowlink" data-affped="' + esc(o.orderId) + '"><td class="mono">' + esc(o.orderId) + '</td><td class="cell-text">' + esc(o.affUser) + '</td><td class="nowrap">' + brlU(o.purchase) + '</td><td class="nowrap">' + brlU(o.refund) + '</td><td class="nowrap">' + brlU(o.comAff) + '</td><td><span class="tag ' + (o.st === 'cancelado' ? 'warn' : 'neutral') + '">' + esc(o.status) + '</span>' + (hasOcc ? ' <span class="tag info">devolução</span>' : '') + '</td><td><span class="tag warn">estorno a conciliar</span></td></tr>'; }).join('');
+    // ranking afiliados por devolução (com mínimo de pedidos)
+    var byAff = {}; e.ordersArr.forEach(function (o) { var a = byAff[o.affUser] = byAff[o.affUser] || { user: o.affUser, orders: 0, dev: 0 }; a.orders++; if (o.st === 'cancelado' || o.refund > 0) a.dev++; });
+    var ranking = Object.values(byAff).filter(function (a) { return a.orders >= affCfg.minPedidos; }).map(function (a) { a.rate = a.dev / a.orders; return a; }).sort(function (a, b) { return b.rate - a.rate; }).slice(0, 10);
+    var rankTable = '<div class="panel"><div class="ph"><h3>Afiliados com maior taxa de devolução/cancelamento</h3><span class="footnote" style="margin:0">mínimo ' + affCfg.minPedidos + ' pedidos para comparação justa</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Afiliado</th><th>Pedidos</th><th>Cancel./Devol.</th><th>Taxa</th></tr></thead><tbody>' + ranking.map(function (a) { return '<tr class="rowlink" data-affprof="' + esc(a.user) + '"><td>' + esc(a.user) + '</td><td>' + nn(a.orders) + '</td><td>' + nn(a.dev) + '</td><td>' + pct(r2(a.rate * 100)) + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
+    return head + strip + honest + '<div class="panel"><div class="ph"><h3>Pedidos afetados</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Afiliado</th><th>Venda</th><th>Reembolso</th><th>Comissão</th><th>Status</th><th>Estorno</th></tr></thead><tbody>' + (rows || '<tr><td colspan="7" class="empty">Nenhum pedido afetado.</td></tr>') + '</tbody></table></div></div>' + rankTable;
+  }
+
+  function affIA() {
+    var e = affEngine(); var t = e.tot;
+    var head = secHead('AFILIADOS · INTELIGÊNCIA', 'Leitura dos números (calculados pelo sistema)', 'Interpretação determinística sobre os valores já calculados — a IA nunca inventa números.');
+    var ins = [];
+    var top3 = e.affs.slice().sort(function (a, b) { return b.sales - a.sales; }).slice(0, 3); var top3Sales = top3.reduce(function (s, a) { return s + a.sales; }, 0);
+    if (t.sales) ins.push('Os 3 afiliados com maior faturamento representam <b>' + pct(r2(top3Sales / t.sales * 100)) + '</b> das vendas de afiliados (' + top3.map(function (a) { return esc(a.user); }).join(', ') + ').');
+    var chMap = {}; e.ordersArr.forEach(function (o) { var g = chMap[o.channel || '—'] = chMap[o.channel || '—'] || { sales: 0 }; g.sales += o.purchase; }); var topCh = Object.keys(chMap).sort(function (a, b) { return chMap[b].sales - chMap[a].sales; })[0];
+    if (topCh) ins.push('O canal <b>' + esc(topCh) + '</b> concentra ' + pct(r2(chMap[topCh].sales / (t.sales || 1) * 100)) + ' das vendas atribuídas a afiliados.');
+    var altas = affConv.filter(function (r) { return r.rateItemAff != null && r.rateItemAff >= affCfg.rateAlert; }); var altasSales = altas.reduce(function (s, r) { return s + r.purchase; }, 0);
+    if (altasSales > 0) ins.push('<b>' + brlU(altasSales) + '</b> em vendas foram feitas com comissão ≥ ' + pct(r2(affCfg.rateAlert * 100)) + ' — revise se a taxa se justifica.');
+    var difDesp = t.despesaStated - t.despesaRecon; if (Math.abs(difDesp) > affCfg.tolConcil) ins.push('Há diferença de <b>' + brlU(difDesp) + '</b> entre a despesa informada pela Shopee e a reconstruída pelos componentes conhecidos — vale conciliar.');
+    var totRpa = affRpa.reduce(function (s, r) { return s + r.gross; }, 0); if (affRpa.length && Math.abs(t.comAff - totRpa) > affCfg.tolConcil) ins.push('Divergência de <b>' + brlU(t.comAff - totRpa) + '</b> entre a comissão calculada pelos pedidos e o total reconhecido no RPA.');
+    var affected = e.ordersArr.filter(function (o) { return o.st === 'cancelado' || o.refund > 0; }); var comAfet = affected.reduce(function (s, o) { return s + o.comAff; }, 0); if (comAfet > 0) ins.push('Existem <b>' + brlU(comAfet) + '</b> de comissão ligados a pedidos cancelados/reembolsados cujo estorno ainda não foi localizado — requer conciliação com a carteira.');
+    var body = ins.length ? '<div class="panel"><div class="pb">' + ins.map(function (x) { return '<div class="fin-line"><span>• ' + x + '</span></div>'; }).join('') + '</div></div>' : emptyBox('Importe os relatórios para gerar leituras.');
+    return head + body + callout('', 'Como isto é gerado', 'Cada frase acima usa apenas números calculados pelo motor determinístico (somas, percentuais, diferenças). Nenhum valor foi estimado pela IA.');
+  }
+
   // ---------- INTELIGÊNCIA ----------
   function renderIA() {
     app.innerHTML =
@@ -6358,11 +6729,11 @@ buffer/index.js:
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
 
   openDB().then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster')]);
   }).then(function (r) {
     orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
     wallet = r[5] || [];
@@ -6372,6 +6743,7 @@ buffer/index.js:
     acelera = r[8] || [];
     var acSum = settings.filter(function (x) { return x.id === 'aceleraSummary'; })[0]; if (acSum) aceleraSummary = acSum.data;
     var acCfg = settings.filter(function (x) { return x.id === 'aceleraCfg'; })[0]; if (acCfg && acCfg.data) Object.keys(acCfg.data).forEach(function (k) { aceleraCfg[k] = acCfg.data[k]; });
+    affConv = r[9] || []; affRpa = r[10] || []; affVb = r[11] || []; affMaster = {}; (r[12] || []).forEach(function (mm) { affMaster[mm.id] = mm; });
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
     plans = (r[4] || []).map(function (p) { if (PLAN_MIGR[p.status]) p.status = PLAN_MIGR[p.status]; if (p.scopeSkus == null && p.relatedSkus) p.scopeSkus = p.relatedSkus; if (p.indicatorKind == null) p.indicatorKind = 'liquido'; return p; });
     occ = occ.filter(function (o) { return !o.isDemo; }); // higiene: nunca deixar demo no banco real
