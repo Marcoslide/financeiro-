@@ -3917,21 +3917,42 @@ buffer/index.js:
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
+  // Toda conexão bem-sucedida ganha onversionchange: se OUTRA aba precisar bumpar a versão
+  // (ex.: para criar um store novo), esta aba fecha a conexão na hora — assim o upgrade nunca
+  // fica bloqueado por uma aba antiga (era isso que travava a tela e a importação em silêncio).
+  function attachHandlers(db) {
+    db.onversionchange = function () { try { db.close(); } catch (e) { } if (DB === db) DB = null; };
+    db.onclose = function () { if (DB === db) DB = null; };
+    return db;
+  }
   function rawOpen(version) {
     return new Promise(function (res, rej) {
       var r = version ? indexedDB.open(DB_NAME, version) : indexedDB.open(DB_NAME);
+      var blockedTimer = null;
       r.onupgradeneeded = function () { createMissingStores(r.result); };
-      r.onblocked = function () { /* outra aba mantém uma versão antiga aberta; aguarda o onsuccess */ };
-      r.onsuccess = function () { res(r.result); };
-      r.onerror = function () { rej(r.error || new Error('Falha ao abrir o banco local (IndexedDB).')); };
+      r.onblocked = function () {
+        // outra conexão (outra aba) segura a versão anterior. As abas atualizadas fecham sozinhas
+        // (onversionchange); se mesmo assim não liberar em alguns segundos, falha com aviso claro
+        // em vez de travar para sempre — a importação então mostra a mensagem no lugar do silêncio.
+        if (blockedTimer) return;
+        blockedTimer = setTimeout(function () { rej(new Error('Há outra aba deste sistema aberta com uma versão anterior. Feche as outras abas e recarregue esta página.')); }, 8000);
+      };
+      r.onsuccess = function () { if (blockedTimer) clearTimeout(blockedTimer); res(attachHandlers(r.result)); };
+      r.onerror = function () { if (blockedTimer) clearTimeout(blockedTimer); rej(r.error || new Error('Falha ao abrir o banco local (IndexedDB).')); };
     });
   }
+  var dbOpening = null; // serializa aberturas concorrentes (evita dois upgrades disputando)
   function openDB() {
-    return rawOpen().then(function (db) {
+    if (DB) return Promise.resolve();
+    if (dbOpening) return dbOpening;
+    dbOpening = rawOpen().then(function (db) {
       if (!missingStores(db).length) { DB = db; return; }
       var nextV = db.version + 1; db.close(); // força upgrade para criar os stores que faltam
       return rawOpen(nextV).then(function (db2) { DB = db2; });
     });
+    var clear = function () { dbOpening = null; };
+    dbOpening.then(clear, clear);
+    return dbOpening;
   }
   function ensureDB() { return DB ? Promise.resolve(DB) : openDB().then(function () { return DB; }); }
   function getAll(store) { return ensureDB().then(function (db) { return new Promise(function (res, rej) { var rq = db.transaction(store).objectStore(store).getAll(); rq.onsuccess = function () { res(rq.result || []); }; rq.onerror = function () { rej(rq.error); }; }); }); }
@@ -5838,7 +5859,7 @@ buffer/index.js:
     occ = occ.concat(DEMO_CASES()); // injeta demo apenas em memória (§10-11), depois de persistir os reais
     rebuildSkuCost();
     render();
-  }).catch(function (e) { app.innerHTML = '<div class="form-err">Falha ao abrir banco local: ' + esc(e.message || e) + '</div>'; });
+  }).catch(function (e) { app.innerHTML = '<div class="form-err" style="max-width:640px;margin:24px auto"><b>Não foi possível abrir o banco de dados local.</b><br>' + esc(e.message || e) + '<div style="margin-top:12px"><button class="btn-sm primary" onclick="location.reload()">Recarregar</button></div></div>'; });
 })();
 
 </script>
