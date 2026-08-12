@@ -201,6 +201,7 @@
       <a data-route="carteira"><span class="ic">▧</span>Saldo da Carteira</a>
       <a data-route="acelera"><span class="ic">⚡</span>Shopee Acelera</a>
       <a data-route="afiliados"><span class="ic">🤝</span>Afiliados</a>
+      <a data-route="minharenda"><span class="ic">💰</span>Minha Renda</a>
       <div class="nav-group">Inteligência</div>
       <a data-route="ia"><span class="ic">✦</span>Inteligência</a>
     </nav>
@@ -3813,6 +3814,9 @@ buffer/index.js:
   var affF = { search: '', channel: '', status: '', ded: '', region: '', basis: 'venda', rateMin: null };
   var affSel = null;
   var affCfg = { rateAlert: 0.15, tolConcil: 100, minPedidos: 5, margemBoa: 0.15, margemAperta: 0.05 };
+  // Minha Renda
+  var mrRenda = [], mrShip = [], mrAdj = [], mrSvc = [], mrPdf = [], mrSummary = null;
+  var mrSub = 'visao', mrPage = 1, mrF = { search: '', motivo: '', invest: '' };
   var devSel = {};            // seleção múltipla em Casos: id -> true (em memória)
   var devCustomStatus = [];   // status internos personalizados pelo operador: [{key,label}]
   var chat = [];
@@ -3930,7 +3934,7 @@ buffer/index.js:
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -4143,7 +4147,7 @@ buffer/index.js:
   function fileInput(cb) { var inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.xlsx,.xls,.csv'; inp.onchange = function () { if (inp.files[0]) cb(inp.files[0]); }; inp.click(); }
 
   // ============================================================ RENDER (roteamento)
-  function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', ia: 'Inteligência' }[route] || ''; }
+  function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', minharenda: 'Minha Renda', ia: 'Inteligência' }[route] || ''; }
   function render() {
     setActive();
     // Cada módulo é isolado: um erro em um deles mostra a mensagem no lugar de deixar a tela em branco
@@ -4156,6 +4160,7 @@ buffer/index.js:
       if (route === 'carteira') return renderCarteira();
       if (route === 'acelera') return renderAcelera();
       if (route === 'afiliados') return renderAfiliados();
+      if (route === 'minharenda') return renderMinhaRenda();
       if (route === 'ia') return renderIA();
     } catch (e) { app.innerHTML = renderErrBox('Erro ao abrir esta tela: ' + esc(e && (e.message || e)) + '. Os dados estão salvos — recarregue a página.'); }
   }
@@ -6457,6 +6462,306 @@ buffer/index.js:
     return head + body + callout('', 'Como isto é gerado', 'Cada frase acima usa apenas números calculados pelo motor determinístico (somas, percentuais, diferenças). Nenhum valor foi estimado pela IA.');
   }
 
+  // ============================= MINHA RENDA =============================
+  // Camada de consolidação financeira do Income Shopee (XLSX detalhado) + Declaração (PDF).
+  // Dinheiro em CENTAVOS. Regra ORDER×SKU: financeiro só das linhas "Order" (SKU não re-soma). §5
+  // Aceita US (316,638.35) e BR (1.677,86): o separador que aparece por ÚLTIMO é o decimal.
+  function mrCents(s) {
+    if (s == null) return 0; var t = String(s).replace(/r\$/i, '').replace(/[−–]/g, '-').replace(/\s/g, '').trim(); if (t === '' || t === '-') return 0;
+    var neg = /^-/.test(t); t = t.replace(/^-/, ''); var lc = t.lastIndexOf(','), ld = t.lastIndexOf('.');
+    if (lc >= 0 && ld >= 0) { if (lc > ld) t = t.replace(/\./g, '').replace(',', '.'); else t = t.replace(/,/g, ''); }
+    else if (lc >= 0) { t = (t.length - lc - 1 === 2) ? t.replace(',', '.') : t.replace(/,/g, ''); }
+    var n = parseFloat(t); return isNaN(n) ? 0 : Math.round(n * 100) * (neg ? -1 : 1);
+  }
+  function mrIsIncome(wb) { var n = wb.SheetNames.map(function (x) { return normStatus(x); }); return n.indexOf('renda') >= 0 || n.some(function (x) { return x.indexOf('shipping fee') >= 0; }) || n.some(function (x) { return x.indexOf('service fee') >= 0; }); }
+  function mrAoa(wb, name) { var sn = wb.SheetNames.filter(function (x) { return normStatus(x) === normStatus(name) || normStatus(x).indexOf(normStatus(name)) >= 0; })[0]; return sn ? XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: false, defval: '' }) : null; }
+  function mrParseIncome(ab, filename) {
+    var wb = XLSX.read(new Uint8Array(ab), { type: 'array' }); if (!mrIsIncome(wb)) return { notRecognized: true };
+    var out = { notRecognized: false, renda: [], ship: [], adj: [], svc: [], summary: {}, period: {} };
+    // Summary (totais declarados pela Shopee)
+    var sm = mrAoa(wb, 'Summary'); if (sm) { sm.forEach(function (r) { var lab = normStatus(r[0]); var val = null; for (var c = 1; c < r.length; c++) { if (String(r[c]).trim() !== '') { val = r[c]; } } if (lab.indexOf('receita total') >= 0) out.summary.receita = mrCents(r[1]); if (lab.indexOf('quantidade total liberada') >= 0) out.summary.liberado = mrCents(val); if (lab.indexOf('despesas totais') >= 0) out.summary.despesas = mrCents(val); if (lab === 'de') out.period.from = String(r[1]).trim(); if (lab === 'para') out.period.to = String(r[1]).trim(); }); }
+    // Renda
+    var rd = mrAoa(wb, 'Renda'); if (rd) { var hi = rd.findIndex(function (r) { return normStatus(r[2]) === 'id do pedido'; }); if (hi >= 0) { for (var i = hi + 1; i < rd.length; i++) { var r = rd[i]; var oid = String(r[2] || '').trim(); if (!oid) continue; var ver = /sku/i.test(String(r[1])) ? 'Sku' : 'Order'; out.renda.push({ ver: ver, orderId: oid, refundId: String(r[3] || '').trim(), sku: String(r[4] || '').trim(), produto: String(r[5] || '').trim(), dataCriacao: String(r[6] || '').trim(), dataConclusao: String(r[7] || '').trim(), canal: String(r[8] || '').trim(), tipoPedido: String(r[9] || '').trim(), liberado: mrCents(r[11]), preco: mrCents(r[12]), reembolso: mrCents(r[13]), pix: mrCents(r[14]), cupom: mrCents(r[15]), fretePagoComprador: mrCents(r[16]), freteParceiro: mrCents(r[17]), descontoFrete: mrCents(r[18]), envioReverso: mrCents(r[19]), comissao: mrCents(r[27]), servico: mrCents(r[28]), transacao: mrCents(r[29]), afiliado: mrCents(r[30]), comissaoBruta: mrCents(r[43]), servicoBruta: mrCents(r[44]) }); } } }
+    // Shipping Fee Discrepancy
+    var sh = mrAoa(wb, 'Shipping Fee Discrepancy'); if (sh) { var shi = sh.findIndex(function (r) { return normStatus(r[0]) === 'id do pedido'; }); if (shi >= 0) { for (var j = shi + 1; j < sh.length; j++) { var s2 = sh[j]; var oid2 = String(s2[0] || '').trim(); if (!oid2) continue; out.ship.push({ orderId: oid2, esperado: mrCents(s2[1]), real: mrCents(s2[2]), motivo: String(s2[3] || '').trim() }); } } }
+    // Adjustment
+    var ad = mrAoa(wb, 'Adjustment'); if (ad) { var ahi = ad.findIndex(function (r) { return normStatus(r[0]).indexOf('id do pedido') >= 0 || normStatus(r[0]).indexOf('data') >= 0 && r.length > 3; }); ad.forEach(function (r, idx) { var v = null; for (var c = 0; c < r.length; c++) { if (/-?\d+[.,]\d/.test(String(r[c]))) v = r[c]; } var oid3 = ''; r.forEach(function (c) { if (/^\d{6,}[A-Z0-9]+$/.test(String(c).trim())) oid3 = String(c).trim(); }); if (v != null && (oid3 || normStatus(r[0]).indexOf('valor total') >= 0)) { out.adj.push({ seq: idx, orderId: oid3, desc: r.filter(function (x) { return String(x).trim() && !/^-?\d+[.,]\d+$/.test(String(x).trim()); }).join(' ').slice(0, 80), valor: mrCents(v) }); } }); }
+    // Service Fee Details
+    var sv = mrAoa(wb, 'Service Fee Details'); if (sv) { var vhi = sv.findIndex(function (r) { return normStatus(r[1]) === 'id do pedido'; }); if (vhi >= 0) { for (var k = vhi + 1; k < sv.length; k++) { var v2 = sv[k]; var oid4 = String(v2[1] || '').trim(); if (!oid4) continue; out.svc.push({ seq: k, orderId: oid4, afiliadosVendedor: mrCents(v2[2]), transacao: mrCents(v2[3]), porItem: mrCents(v2[4]) }); } } }
+    return out;
+  }
+  function importMinhaRenda(file) {
+    return file.arrayBuffer().then(function (ab) {
+      var name = (file.name || '').toLowerCase();
+      if (name.slice(-4) === '.pdf') return mrImportPDF(ab, file.name);
+      var p = mrParseIncome(ab, file.name);
+      if (p.notRecognized) throw new Error('Arquivo não reconhecido como relatório Income da Shopee (esperado abas Renda / Shipping Fee Discrepancy / Adjustment).');
+      var importedAt = new Date().toISOString(); var stats = { renda: 0, ship: 0, adj: 0, svc: 0 };
+      // Renda (idempotente)
+      var byR = {}; mrRenda.forEach(function (x) { byR[x.id] = x; }); var chR = [];
+      p.renda.forEach(function (row, i) { var id = row.orderId + '|' + row.ver + '|' + (row.sku || '') + '|' + (row.refundId || '') + '|' + i; if (!byR[id]) { var rec = Object.assign({ id: id, fileName: file.name, importedAt: importedAt }, row); byR[id] = rec; chR.push(rec); stats.renda++; } });
+      mrRenda = Object.values(byR);
+      // Shipping (preserva investigação manual §21)
+      var byS = {}; mrShip.forEach(function (x) { byS[x.id] = x; }); var chS = [];
+      p.ship.forEach(function (row) { var id = row.orderId; var ex = byS[id]; if (!ex) { byS[id] = Object.assign({ id: id, invStatus: 'NAO_ANALISADO', invNote: '', invResp: '', importedAt: importedAt, fileName: file.name }, row); chS.push(byS[id]); stats.ship++; } else { ex.esperado = row.esperado; ex.real = row.real; ex.motivo = row.motivo; chS.push(ex); } });
+      mrShip = Object.values(byS);
+      // Adjustment
+      var byA = {}; mrAdj.forEach(function (x) { byA[x.id] = x; }); var chA = [];
+      p.adj.forEach(function (row) { var id = (row.orderId || 'sem') + '|' + row.valor + '|' + row.seq; if (!byA[id]) { byA[id] = Object.assign({ id: id, importedAt: importedAt }, row); chA.push(byA[id]); stats.adj++; } });
+      mrAdj = Object.values(byA);
+      // Service Fee
+      var byV = {}; mrSvc.forEach(function (x) { byV[x.id] = x; }); var chV = [];
+      p.svc.forEach(function (row) { var id = row.orderId + '|' + row.seq; if (!byV[id]) { byV[id] = Object.assign({ id: id, importedAt: importedAt }, row); chV.push(byV[id]); stats.svc++; } });
+      mrSvc = Object.values(byV);
+      mrSummary = { summary: p.summary, period: p.period, importedAt: importedAt, fileName: file.name };
+      var batch = { id: 'mr' + Date.now() + Math.round(performance.now()), module: 'Minha Renda', filename: file.name, createdAt: importedAt, seen: p.renda.length, novo: stats.renda, upd: 0, unch: p.renda.length - stats.renda, itemsSeen: p.renda.length };
+      batches.unshift(batch); lastImportStamp = importedAt;
+      // persiste em segundo plano (não bloqueia a UI); a memória já está atualizada, então a tela reflete na hora
+      putMany('mrrenda', chR); putMany('mrship', chS); putMany('mradj', chA); putMany('mrsvc', chV); putMany('settings', [{ id: 'mrSummary', data: mrSummary }]); putMany('batches', [batch]);
+      return { batch: batch, stats: stats, kind: 'xlsx' };
+    });
+  }
+  // ---- PDF: leitura real via DecompressionStream (zlib) + ToUnicode CMap, sem CDN ----
+  function mrInflateFmt(u8, fmt) {
+    return new Promise(function (res, rej) {
+      try { var ds = new DecompressionStream(fmt); var w = ds.writable.getWriter(); w.write(u8).catch(function () { }); w.close().catch(function () { }); new Response(ds.readable).arrayBuffer().then(function (a) { res(new Uint8Array(a)); }, function (e) { rej(e); }); }
+      catch (e) { rej(e); }
+    });
+  }
+  function mrInflate(u8) {
+    // FlateDecode do PDF é zlib ('deflate'); alguns geradores usam raw ('deflate-raw'). Tenta ambos; se falhar, retorna cru.
+    return mrInflateFmt(u8, 'deflate').catch(function () { return mrInflateFmt(u8, 'deflate-raw'); }).catch(function () { return u8; });
+  }
+  function mrParseCMap(txt) { var map = {}; var m = txt.match(/beginbfrange([\s\S]*?)endbfrange/); if (!m) return map; var rng = m[1].match(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*\[([\s\S]*?)\]/); if (rng) { var lo = parseInt(rng[1], 16); var arr = rng[3].match(/<([0-9A-Fa-f]+)>/g) || []; arr.forEach(function (x, i) { map[lo + i] = String.fromCharCode(parseInt(x.replace(/[<>]/g, ''), 16)); }); } return map; }
+  function mrImportPDF(ab, filename) {
+    var bytes = new Uint8Array(ab); var latin = ''; for (var i = 0; i < bytes.length; i++) latin += String.fromCharCode(bytes[i]);
+    // localizar streams (offsets em bytes)
+    var streams = []; var re = /stream\r?\n/g, m;
+    while ((m = re.exec(latin))) { var start = m.index + m[0].length; var end = latin.indexOf('endstream', start); if (end < 0) continue; var e2 = end; if (latin.charCodeAt(e2 - 1) === 10) e2--; if (latin.charCodeAt(e2 - 1) === 13) e2--; streams.push(bytes.slice(start, e2)); }
+    return Promise.all(streams.map(mrInflate)).then(function (infl) {
+      var texts = infl.map(function (u) { var s = ''; for (var i = 0; i < u.length; i++) s += String.fromCharCode(u[i]); return s; });
+      var cmaps = texts.filter(function (t) { return t.indexOf('beginbfrange') >= 0; }).map(mrParseCMap);
+      var content = texts.filter(function (t) { return t.indexOf('Tj') >= 0 && t.indexOf('Tf') >= 0; });
+      // nomes de fonte usados (ex.: F10, F11), na ordem de aparição
+      var fontNames = []; content.forEach(function (t) { (t.match(/\/(F\d+)\s+[-\d.]+\s+Tf/g) || []).forEach(function (x) { var n = x.match(/\/(F\d+)/)[1]; if (fontNames.indexOf(n) < 0) fontNames.push(n); }); });
+      // decodifica com um mapa nome->cmapIndex
+      // NÃO inserir espaço a cada avanço de glifo (Td) — os espaços reais vêm de glifos de espaço.
+      // Só separamos em quebras de bloco/linha (Tm/T*), que marcam nova célula/linha do documento.
+      function decodeAll(map) { return content.map(function (t) { var out = ''; var cur = cmaps[0]; var tok = /\/(F\d+)\s+[-\d.]+\s+Tf|<([0-9A-Fa-f]+)>\s*Tj|(T\*|Tm)/g, mm; while ((mm = tok.exec(t))) { if (mm[1]) { cur = cmaps[map[mm[1]] != null ? map[mm[1]] : 0]; } else if (mm[2] != null) { var g = parseInt(mm[2], 16); out += (cur && cur[g] != null) ? cur[g] : ''; } else { out += ' '; } } return out; }).join(' ').replace(/\s+/g, ' '); }
+      function score(txt) { var s = 0; ['Pagamento', 'liberado', 'Reembolso', 'Subtotal', 'Cupom', 'Taxa', 'comiss', 'servi', 'Afiliad', 'Ajuste', 'mercadoria', 'produto'].forEach(function (k) { if (txt.indexOf(k) >= 0) s++; }); return s; }
+      // tenta todas as permutações simples de nome->cmap (poucos fontes) e escolhe a de maior score
+      var best = '', bestScore = -1;
+      var perms = mrCmapPermutations(fontNames, cmaps.length);
+      perms.forEach(function (map) { var txt = decodeAll(map); var sc = score(txt); if (sc > bestScore) { bestScore = sc; best = txt; } });
+      if (!best) best = decodeAll({});
+      return mrFinishPDF(best, filename, streams.length);
+    });
+  }
+  // Descobre, para cada /Fx, qual cmap (por ordem de aparição dos ToUnicode) usar.
+  function mrFontCmapIndex(latin, texts) {
+    var map = {};
+    // objetos ToUnicode na ordem em que aparecem
+    var tuOrder = []; var re = /\/ToUnicode\s+(\d+)\s+0\s+R/g, m; while ((m = re.exec(latin))) tuOrder.push(parseInt(m[1], 10));
+    // ordem dos cmaps decodificados = ordem dos streams com beginbfrange; assumimos a mesma ordem de tuOrder
+    // /Font << /F10 A 0 R /F11 B 0 R >> ; cada fonte A tem /ToUnicode -> obj; casar
+    var fontObj = {}; var fr = latin.match(/\/Font\s*<<([\s\S]*?)>>/g) || []; fr.forEach(function (b) { var r2 = /\/(F\d+)\s+(\d+)\s+0\s+R/g, mm; while ((mm = r2.exec(b))) fontObj[mm[1]] = parseInt(mm[2], 10); });
+    Object.keys(fontObj).forEach(function (nm) { var on = fontObj[nm]; var om = latin.match(new RegExp('(?:^|[^0-9])' + on + ' 0 obj([\\s\\S]*?)endobj')); if (om) { var tu = om[1].match(/\/ToUnicode\s+(\d+)\s+0\s+R/); if (tu) { var idx = tuOrder.indexOf(parseInt(tu[1], 10)); map[nm] = idx >= 0 ? idx : 0; } } });
+    return map;
+  }
+  // gera atribuições nome-de-fonte → índice de cmap (poucos fontes/cmaps); limita a combinatória
+  function mrCmapPermutations(names, nCmaps) {
+    if (!names.length || !nCmaps) return [{}];
+    var combos = Math.pow(nCmaps, names.length);
+    if (combos > 24) { var m = {}; names.forEach(function (n, i) { m[n] = Math.min(i, nCmaps - 1); }); return [m]; }
+    var out = [];
+    for (var c = 0; c < combos; c++) { var map = {}, x = c; names.forEach(function (n) { map[n] = x % nCmaps; x = Math.floor(x / nCmaps); }); out.push(map); }
+    return out;
+  }
+  function mrFinishPDF(full, filename, nStreams) {
+    var importedAt = new Date().toISOString();
+    var NUMRE = /[-−]?\s*R?\$?\s*[-−]?\d[\d.,]*[.,]\d{2}(?!\d)/;
+    var grab = function (labels) { for (var i = 0; i < labels.length; i++) { var idx = full.toLowerCase().indexOf(labels[i].toLowerCase()); if (idx >= 0) { var seg = full.slice(idx + labels[i].length, idx + labels[i].length + 60); var mm = seg.match(NUMRE); if (mm) return mrCents(mm[0]); } } return null; };
+    var per = full.match(/\d{2}\/\d{2}\/\d{4}\s*[-a]{1,3}\s*\d{2}\/\d{2}\/\d{4}/) || full.match(/\d{4}-\d{2}-\d{2}/g);
+    // Total liberado = valor prefixado por R$ (positivo). Ajustes = valor prefixado por -R$ (negativo).
+    var mLib = full.match(/(?:^|[^−\-])R\$\s*([\d.,]+[.,]\d{2})/); var mAju = full.match(/[−\-]\s*R\$\s*([\d.,]+[.,]\d{2})/);
+    // Subtotal de mercadoria = primeiro número após a LINHA de total ("Pagamento total liberado 256,513.62 …").
+    var merc = null; var rowIdx = full.lastIndexOf('Pagamento total liberado'); if (rowIdx >= 0) { var segM = full.slice(rowIdx + 24, rowIdx + 90).match(NUMRE); if (segM) merc = mrCents(segM[0]); }
+    var decl = {
+      liberado: mLib ? mrCents(mLib[1]) : grab(['Pagamento total liberado', 'total liberado']),
+      mercadoria: merc != null ? merc : grab(['Subtotal de mercadoria', 'Subtotal dos Produtos']),
+      produto: grab(['Preço do produto', 'Preço original do produto']),
+      reembolso: grab(['Valor do Reembolso', 'Reembolso']),
+      pix: grab(['Ajuste por pagamento via PIX', 'Ajuste PIX', 'PIX']),
+      cupom: grab(['Cupom']),
+      frete: grab(['Subtotal do Frete', 'Subtotal de Envio']),
+      taxas: grab(['Taxas e Encargos', 'Taxas']),
+      comissao: grab(['Taxa de comissão líquida']),
+      servico: grab(['Taxa de serviço líquida', 'Taxa de serviço']),
+      afiliados: grab(['Afiliados do Vendedor', 'Afiliados', 'Taxa de comissão Afiliados']),
+      ajustes: mAju ? -Math.abs(mrCents(mAju[1])) : grab(['Valor total de ajuste', 'Valor total do ajuste'])
+    };
+    var rec = { id: (per && per[0]) || filename, period: (per && per[0]) || '', decl: decl, importedAt: importedAt, fileName: filename, rawLen: full.length, ok: decl.liberado != null };
+    var byId = {}; mrPdf.forEach(function (x) { byId[x.id] = x; }); byId[rec.id] = rec; mrPdf = Object.values(byId);
+    var batch = { id: 'mrp' + Date.now() + Math.round(performance.now()), module: 'Minha Renda', filename: filename, createdAt: importedAt, seen: 1, novo: 1, upd: 0, unch: 0 };
+    batches.unshift(batch);
+    return Promise.all([putMany('mrpdf', [rec]), putMany('batches', [batch])]).then(function () { return { kind: 'pdf', decl: decl, ok: rec.ok }; });
+  }
+
+  // ---- motor Minha Renda (ORDER×SKU: financeiro só das linhas Order) ----
+  function mrEngine() {
+    var orders2 = mrRenda.filter(function (r) { return r.ver === 'Order'; });
+    var skuRows = mrRenda.filter(function (r) { return r.ver === 'Sku'; });
+    var skuByOrder = {}; skuRows.forEach(function (r) { (skuByOrder[r.orderId] = skuByOrder[r.orderId] || []).push(r); });
+    var tot = { liberado: 0, preco: 0, reembolso: 0, pix: 0, cupom: 0, comissao: 0, servico: 0, transacao: 0, afiliado: 0, freteParceiro: 0, descontoFrete: 0, envioReverso: 0, n: orders2.length };
+    orders2.forEach(function (o) { tot.liberado += o.liberado; tot.preco += o.preco; tot.reembolso += o.reembolso; tot.pix += o.pix; tot.cupom += o.cupom; tot.comissao += o.comissao; tot.servico += o.servico; tot.transacao += o.transacao; tot.afiliado += o.afiliado; tot.freteParceiro += o.freteParceiro; tot.descontoFrete += o.descontoFrete; tot.envioReverso += o.envioReverso; });
+    // shipping por SKU
+    var shipTot = { esperado: 0, real: 0, n: mrShip.length }; mrShip.forEach(function (s) { shipTot.esperado += s.esperado; shipTot.real += s.real; }); shipTot.diff = shipTot.real - shipTot.esperado;
+    var bySku = {}; mrShip.forEach(function (s) { var sk = skuByOrder[s.orderId]; var key = sk && sk[0] ? sk[0].sku : '(sem sku)'; var prod = sk && sk[0] ? sk[0].produto : ''; var g = bySku[key] = bySku[key] || { sku: key, produto: prod, n: 0, esperado: 0, real: 0, diff: 0, multi: sk && sk.length > 1 }; g.n++; g.esperado += s.esperado; g.real += s.real; g.diff += (s.real - s.esperado); });
+    var skuList = Object.values(bySku).sort(function (a, b) { return b.diff - a.diff; });
+    var adjTot = mrAdj.reduce(function (s, a) { return s + a.valor; }, 0);
+    return { orders: orders2, skuByOrder: skuByOrder, tot: tot, shipTot: shipTot, skuList: skuList, adjTot: adjTot };
+  }
+
+  function renderMinhaRenda() {
+    var tabs = [['visao', 'Visão Geral'], ['frete', 'Frete & Divergências'], ['taxas', 'Taxas'], ['ajustes', 'Ajustes'], ['produto', 'Renda por Produto'], ['conciliacao', 'Conciliação Declaração'], ['auditoria', 'Auditoria']];
+    app.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + tabs.map(function (t) { return '<div class="subtab' + (mrSub === t[0] ? ' active' : '') + '" data-mrsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-mrimport="1">Importar Income / Declaração</button></div><div id="mrbody" style="margin-top:14px"></div>';
+    var body = document.getElementById('mrbody');
+    try {
+      if (!mrRenda.length && !mrShip.length && !mrPdf.length) body.innerHTML = secHead('MINHA RENDA', 'Consolidação Financeira Shopee', 'Quanto vendemos, quanto foi descontado, para onde foi o dinheiro e quanto a Shopee liberou — do agregado até o pedido.') + emptyBox('Nenhum relatório importado. Envie o Income (XLSX) e/ou a Declaração de Renda (PDF) da Shopee. O tipo é detectado automaticamente.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="mrimp">Importar primeiro relatório</button></div>';
+      else body.innerHTML = ({ visao: mrVisao, frete: mrFrete, taxas: mrTaxas, ajustes: mrAjustes, produto: mrProduto, conciliacao: mrConciliacao, auditoria: mrAuditoria }[mrSub] || mrVisao)();
+    } catch (e) { body.innerHTML = '<div class="form-err">Erro ao renderizar Minha Renda: ' + esc(e.message || e) + '</div>'; }
+    app.querySelectorAll('[data-mrsub]').forEach(function (b) { b.onclick = function () { mrSub = b.dataset.mrsub; mrPage = 1; render(); }; });
+    var imp = function () { fileInput(function (f) { importMinhaRenda(f).then(function (b) { render(); if (b.kind === 'pdf') toast(b.ok ? 'Declaração PDF lida' : 'PDF processado parcialmente', b.ok ? 'Pagamento liberado ' + brlC(b.decl.liberado) : 'Não foi possível reconhecer todos os campos do PDF'); else toast('Income importado', b.stats.renda + ' linhas de renda · ' + b.stats.ship + ' fretes · ' + b.stats.adj + ' ajustes'); }).catch(function (e) { toast('Falha', e.message, true); }); }); };
+    app.querySelectorAll('[data-mrimport]').forEach(function (b) { b.onclick = imp; });
+    var mi = document.getElementById('mrimp'); if (mi) mi.onclick = imp;
+    app.querySelectorAll('[data-mrgo]').forEach(function (b) { b.onclick = function () { mrSub = b.dataset.mrgo; render(); }; });
+    app.querySelectorAll('[data-mrsku]').forEach(function (b) { b.onclick = function () { openMrSku(b.dataset.mrsku); }; });
+    app.querySelectorAll('[data-mrped]').forEach(function (b) { b.onclick = function () { openMrPedido(b.dataset.mrped); }; });
+    if (mrSub === 'frete') bindMrFrete();
+  }
+  function mrWaterfall(t) {
+    // do preço (bruto) até o liberado
+    var steps = [['Preço do produto', t.preco, 'base'], ['Reembolso', t.reembolso, 'neg'], ['PIX', t.pix, 'neg'], ['Cupom', t.cupom, 'neg'], ['Comissão', t.comissao, 'neg'], ['Serviço', t.servico, 'neg'], ['Afiliados', t.afiliado, 'neg'], ['Frete parceiro', t.freteParceiro, 'neg'], ['Desconto frete (Shopee)', t.descontoFrete, 'pos'], ['Envio reverso', t.envioReverso, 'neg']];
+    var rows = steps.map(function (s) { return '<tr class="rowlink"><td>' + esc(s[0]) + '</td><td class="nowrap ' + (s[1] < 0 ? 'neg' : s[1] > 0 ? 'pos' : '') + '">' + brlC(s[1]) + '</td></tr>'; }).join('');
+    return '<div class="panel"><div class="ph"><h3>Para onde foi o dinheiro</h3><span class="footnote" style="margin:0">do preço do produto ao pagamento liberado</span></div><div class="table-wrap"><table class="report"><tbody>' + rows + '<tr style="border-top:2px solid var(--line)"><td><b>Pagamento liberado</b></td><td class="nowrap"><b>' + brlC(t.liberado) + '</b></td></tr></tbody></table></div></div>';
+  }
+  function mrVisao() {
+    var e = mrEngine(); var t = e.tot;
+    var head = secHead('MINHA RENDA', 'Visão Geral', 'Pagamento liberado = renda líquida Shopee (não é lucro). ' + (mrSummary && mrSummary.period ? 'Período ' + esc(mrSummary.period.from || '') + ' a ' + esc(mrSummary.period.to || '') + '.' : ''));
+    var strip = kstrip([
+      { l: 'Preço do produto', v: brlC(t.preco), cls: 'blue', s: nn(t.n) + ' pedidos' },
+      { l: 'Reembolsos', v: brlC(t.reembolso), cls: 'red' },
+      { l: 'Cupons/PIX', v: brlC(t.cupom + t.pix), cls: 'amber' },
+      { l: 'Taxas (com+serv+transação)', v: brlC(t.comissao + t.servico + t.transacao), cls: 'red' },
+      { l: 'Afiliados', v: brlC(t.afiliado), cls: 'amber' },
+      { l: 'Pagamento liberado', v: brlC(t.liberado), cls: 'green', s: 'renda líquida Shopee' },
+    ]);
+    // conciliação interna com Summary
+    var conf = '';
+    if (mrSummary && mrSummary.summary && mrSummary.summary.liberado != null) { var dif = t.liberado - mrSummary.summary.liberado; conf = callout(Math.abs(dif) <= 100 ? 'green' : 'warn', Math.abs(dif) <= 100 ? '✓ Bate com o resumo da Shopee' : '⚠ Diferença com o resumo', 'Soma das linhas Order (financeiro): <b>' + brlC(t.liberado) + '</b> · Resumo Shopee "Quantidade Total Liberada": <b>' + brlC(mrSummary.summary.liberado) + '</b> · diferença <b>' + brlC(dif) + '</b>. As linhas SKU <b>não</b> são somadas de novo (evita dupla contagem).'); }
+    var dedup = callout('', 'ORDER × SKU (sem dupla contagem)', mrRenda.length ? 'Importadas <b>' + nn(e.orders.length) + '</b> linhas Order (financeiro) e <b>' + nn(mrRenda.length - e.orders.length) + '</b> linhas SKU (atribuição de produto). Os valores financeiros vêm só das linhas Order.' : '');
+    // frete resumo
+    var ship = e.shipTot; var shipBox = ship.n ? callout('warn', 'Frete acima do esperado: ' + brlC(ship.diff), '<b>' + nn(ship.n) + '</b> pedidos · esperado ' + brlC(ship.esperado) + ' · real ' + brlC(ship.real) + '. <button class="btn-sm" data-mrgo="frete">Investigar</button>') : '';
+    return head + strip + conf + dedup + mrWaterfall(t) + shipBox;
+  }
+  function mrFrete() {
+    var e = mrEngine(); var head = secHead('MINHA RENDA · FRETE & DIVERGÊNCIAS', 'Frete cobrado acima do esperado', 'Diferença entre frete real e esperado, por pedido e por SKU. Não é automaticamente "erro da Shopee" — classifique cada caso.');
+    if (!mrShip.length) return head + emptyBox('Sem divergências de frete importadas.');
+    var s = e.shipTot;
+    var top3 = e.skuList.slice(0, 3).reduce(function (a, x) { return a + x.diff; }, 0); var conc = s.diff ? r2(top3 / s.diff * 100) : 0;
+    var strip = kstrip([
+      { l: 'Pedidos', v: nn(s.n), cls: 'blue' },
+      { l: 'Frete esperado', v: brlC(s.esperado), cls: 'blue' },
+      { l: 'Frete real', v: brlC(s.real), cls: 'amber' },
+      { l: 'Diferença', v: brlC(s.diff), cls: 'red' },
+      { l: 'Concentração Top 3 SKUs', v: pct(conc), cls: 'amber', s: brlC(top3) },
+    ]);
+    var alert = conc >= 50 ? callout('warn', 'Concentração detectada', '3 SKUs concentram <b>' + pct(conc) + '</b> das divergências de frete (' + brlC(top3) + ' de ' + brlC(s.diff) + ').') : '';
+    // motivos
+    var mot = {}; mrShip.forEach(function (x) { var k = /peso|dimens/i.test(x.motivo) ? 'Peso/dimensões' : /transportadora|ajuste/i.test(x.motivo) ? 'Ajuste da transportadora' : 'Outro'; var g = mot[k] = mot[k] || { k: k, n: 0, v: 0 }; g.n++; g.v += (x.real - x.esperado); });
+    var motRows = Object.values(mot).map(function (m2) { return '<tr><td>' + esc(m2.k) + '</td><td>' + nn(m2.n) + '</td><td class="nowrap">' + brlC(m2.v) + '</td></tr>'; }).join('');
+    var skuRows = e.skuList.map(function (x) { return '<tr class="rowlink" data-mrsku="' + esc(x.sku) + '"><td class="mono">' + esc(x.sku) + (x.multi ? ' <span class="tag warn">multi-sku</span>' : '') + '</td><td class="cell-text">' + esc((x.produto || '—').slice(0, 34)) + '</td><td>' + nn(x.n) + '</td><td class="nowrap">' + brlC(x.esperado) + '</td><td class="nowrap">' + brlC(x.real) + '</td><td class="nowrap neg"><b>' + brlC(x.diff) + '</b></td><td>' + pct(s.diff ? r2(x.diff / s.diff * 100) : 0) + '</td></tr>'; }).join('');
+    return head + strip + alert +
+      '<div class="split2"><div class="panel"><div class="ph"><h3>Motivos (da própria Shopee)</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Motivo</th><th>Pedidos</th><th>Diferença</th></tr></thead><tbody>' + motRows + '</tbody></table></div></div><div class="panel"><div class="ph"><h3>Resumo</h3></div><div class="pb"><div class="fin-line"><span>Total de divergência</span><b class="neg">' + brlC(s.diff) + '</b></div><div class="fin-line"><span>Média por pedido</span><span>' + brlC(s.n ? Math.round(s.diff / s.n) : 0) + '</span></div></div></div></div>' +
+      '<div class="panel"><div class="ph"><h3>Divergência por SKU (clique para ver pedidos)</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>SKU</th><th>Produto</th><th>Pedidos</th><th>Esperado</th><th>Real</th><th>Diferença</th><th>% do total</th></tr></thead><tbody>' + skuRows + '</tbody></table></div></div>';
+  }
+  function bindMrFrete() { }
+  function openMrSku(sku) {
+    var e = mrEngine(); var orders2 = mrShip.filter(function (s) { var sk = e.skuByOrder[s.orderId]; return (sk && sk[0] ? sk[0].sku : '(sem sku)') === sku; });
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '760px'; panel.style.maxWidth = '97vw';
+    d.appendChild(panel); d.onclick = function (ev) { if (ev.target === d) d.remove(); }; document.body.appendChild(d);
+    var INV = { NAO_ANALISADO: 'Não analisado', VERIFICAR_CADASTRO: 'Verificar cadastro', PESO_INCORRETO: 'Peso incorreto', DIMENSAO_INCORRETA: 'Dimensão incorreta', AJUSTE_LEGITIMO: 'Ajuste legítimo transportadora', COBRANCA_INDEVIDA: 'Possível cobrança indevida', CONTESTACAO: 'Contestação aberta', AGUARDANDO_SHOPEE: 'Aguardando Shopee', REEMBOLSADO: 'Shopee reembolsou', NAO_RECUPERAVEL: 'Não recuperável', RESOLVIDO: 'Resolvido' };
+    var rows = orders2.map(function (s) { return '<tr><td class="mono">' + esc(s.orderId) + '</td><td class="nowrap">' + brlC(s.esperado) + '</td><td class="nowrap">' + brlC(s.real) + '</td><td class="nowrap neg">' + brlC(s.real - s.esperado) + '</td><td><select class="select sm mrinv" data-oid="' + esc(s.orderId) + '">' + Object.keys(INV).map(function (k) { return '<option value="' + k + '"' + (s.invStatus === k ? ' selected' : '') + '>' + INV[k] + '</option>'; }).join('') + '</select></td></tr>'; }).join('');
+    panel.innerHTML = '<div class="dh"><div><b>SKU ' + esc(sku) + '</b> · ' + nn(orders2.length) + ' pedidos com divergência</div><button class="x">&times;</button></div><div class="dbd"><div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Esperado</th><th>Real</th><th>Diferença</th><th>Investigação</th></tr></thead><tbody>' + rows + '</tbody></table></div></div><div class="footnote">A classificação de investigação é interna e preservada em novas importações.</div></div>';
+    panel.querySelector('.x').onclick = function () { d.remove(); };
+    panel.querySelectorAll('.mrinv').forEach(function (sel) { sel.onchange = function () { var rec = mrShip.find(function (x) { return x.id === sel.dataset.oid; }); if (rec) { rec.invStatus = sel.value; putMany('mrship', [rec]).then(function () { toast('Investigação atualizada', INV[sel.value]); }); } }; });
+  }
+  function openMrPedido(orderId) {
+    var e = mrEngine(); var o = e.orders.find(function (x) { return x.orderId === orderId; }); if (!o) { toast('Não encontrado', orderId, true); return; }
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '620px'; panel.style.maxWidth = '96vw';
+    d.appendChild(panel); d.onclick = function (ev) { if (ev.target === d) d.remove(); }; document.body.appendChild(d);
+    var ord = orders.find(function (x) { return x.id === orderId; }); var oc = occ.find(function (x) { return !x.isDemo && x.orderId === orderId; }); var ship = mrShip.find(function (x) { return x.id === orderId; });
+    var svc = mrSvc.filter(function (x) { return x.orderId === orderId; });
+    panel.innerHTML = '<div class="dh"><div><b>Pedido ' + esc(orderId) + '</b> <span class="footnote">Extrato financeiro</span></div><button class="x">&times;</button></div><div class="dbd">' +
+      '<div class="panel"><div class="ph"><h3>Renda (Income)</h3></div><div class="pb">' + kv('Preço do produto', brlC(o.preco)) + kv('Reembolso', brlC(o.reembolso)) + kv('PIX', brlC(o.pix)) + kv('Cupom', brlC(o.cupom)) + kv('Comissão', brlC(o.comissao)) + kv('Serviço', brlC(o.servico)) + kv('Afiliado', brlC(o.afiliado)) + kv('Frete parceiro', brlC(o.freteParceiro)) + kv('Pagamento liberado', brlC(o.liberado)) + '</div></div>' +
+      (svc.length ? '<div class="panel"><div class="ph"><h3>Composição da taxa de serviço</h3></div><div class="pb">' + svc.map(function (v) { return kv('Afiliados vendedor', brlC(v.afiliadosVendedor)) + kv('Transação', brlC(v.transacao)) + kv('Por item vendido', brlC(v.porItem)); }).join('') + '</div></div>' : '') +
+      (ship ? '<div class="panel"><div class="ph"><h3>Frete</h3></div><div class="pb">' + kv('Esperado', brlC(ship.esperado)) + kv('Real', brlC(ship.real)) + kv('Diferença', brlC(ship.real - ship.esperado)) + '</div></div>' : '') +
+      (ord ? '<button class="btn-sm" data-goped="' + esc(orderId) + '">Abrir em Pedidos</button> ' : '') + (oc ? '<button class="btn-sm" data-godev="' + esc(oc.id) + '">Abrir em Devoluções</button>' : '') + '</div>';
+    panel.querySelector('.x').onclick = function () { d.remove(); };
+    var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { d.remove(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
+    var gd = panel.querySelector('[data-godev]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev; d.remove(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
+  }
+  function mrTaxas() {
+    var e = mrEngine(); var t = e.tot; var head = secHead('MINHA RENDA · TAXAS', 'Taxas e encargos', 'Componentes reais das abas Renda e Service Fee Details. O total contábil não é somado às subtaxas — elas explicam o total.');
+    var svcTot = { afil: 0, trans: 0, item: 0 }; mrSvc.forEach(function (v) { svcTot.afil += v.afiliadosVendedor; svcTot.trans += v.transacao; svcTot.item += v.porItem; });
+    var strip = kstrip([
+      { l: 'Comissão líquida', v: brlC(t.comissao), cls: 'red' },
+      { l: 'Taxa de serviço líquida', v: brlC(t.servico), cls: 'red' },
+      { l: 'Taxa de transação', v: brlC(t.transacao), cls: 'amber' },
+      { l: 'Afiliados', v: brlC(t.afiliado), cls: 'amber' },
+      { l: 'Taxas / Receita', v: pct(t.preco ? r2(Math.abs(t.comissao + t.servico + t.transacao) / t.preco * 100) : 0), cls: 'blue' },
+    ]);
+    var svcBox = mrSvc.length ? callout('', 'Composição da taxa de serviço (Service Fee Details)', 'Componentes somam: taxa de serviço afiliados ' + brlC(svcTot.afil) + ' · transação ' + brlC(svcTot.trans) + ' · por item vendido ' + brlC(svcTot.item) + '. Estes explicam a taxa de serviço — não são somados por cima dela.') : '';
+    var chart = chartCard('Composição das taxas', legendSwatch([['Valor', '#d13b3b']]), svgHBars([{ label: 'Comissão', value: Math.abs(t.comissao) / 100, color: '#d13b3b' }, { label: 'Serviço', value: Math.abs(t.servico) / 100, color: '#e0662a' }, { label: 'Transação', value: Math.abs(t.transacao) / 100, color: '#c99a00' }, { label: 'Afiliados', value: Math.abs(t.afiliado) / 100, color: '#2b4bd6' }], { fmt: function (v) { return brl(v); } }));
+    return head + strip + svcBox + chart;
+  }
+  function mrAjustes() {
+    var head = secHead('MINHA RENDA · AJUSTES', 'Ajustes financeiros', 'Aba Adjustment. Um ajuste de hoje pode se referir a um pedido antigo — a data financeira do ajuste é separada da data do pedido.');
+    if (!mrAdj.length) return head + emptyBox('Sem ajustes importados.');
+    var tot = mrAdj.reduce(function (s, a) { return s + a.valor; }, 0); var pos = mrAdj.filter(function (a) { return a.valor > 0; }).reduce(function (s, a) { return s + a.valor; }, 0); var neg = mrAdj.filter(function (a) { return a.valor < 0; }).reduce(function (s, a) { return s + a.valor; }, 0);
+    var strip = kstrip([{ l: 'Total de ajustes', v: brlC(tot), cls: tot < 0 ? 'red' : 'green' }, { l: 'Créditos', v: brlC(pos), cls: 'green' }, { l: 'Débitos', v: brlC(neg), cls: 'red' }, { l: 'Lançamentos', v: nn(mrAdj.length), cls: 'blue' }]);
+    var rows = mrAdj.slice().sort(function (a, b) { return a.valor - b.valor; }).slice(0, 300).map(function (a) { return '<tr' + (a.orderId ? ' class="rowlink" data-mrped="' + esc(a.orderId) + '"' : '') + '><td class="mono">' + esc(a.orderId || '—') + '</td><td class="cell-text">' + esc(a.desc || '—') + '</td><td class="nowrap ' + (a.valor < 0 ? 'neg' : 'pos') + '"><b>' + brlC(a.valor) + '</b></td></tr>'; }).join('');
+    return head + strip + '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Descrição (original Shopee)</th><th>Valor</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+  }
+  function mrProduto() {
+    var e = mrEngine(); var head = secHead('MINHA RENDA · RENDA POR PRODUTO', 'Renda por SKU / produto', 'Consolidação por SKU (atribuição via linhas SKU do Income), cruzando com o frete e o custo de Produtos quando disponível.');
+    // agrega por sku via skuByOrder → soma financeiro do pedido no primeiro sku (evita dupla contagem por múltiplos sku)
+    var bySku = {};
+    e.orders.forEach(function (o) { var sk = e.skuByOrder[o.orderId]; var key = sk && sk[0] ? sk[0].sku : '(sem sku)'; var prod = sk && sk[0] ? sk[0].produto : ''; var g = bySku[key] = bySku[key] || { sku: key, produto: prod, n: 0, liberado: 0, preco: 0, reembolso: 0, comissao: 0, servico: 0, afiliado: 0, multi: sk && sk.length > 1 }; g.n++; g.liberado += o.liberado; g.preco += o.preco; g.reembolso += o.reembolso; g.comissao += o.comissao; g.servico += o.servico; g.afiliado += o.afiliado; });
+    var list = Object.values(bySku).sort(function (a, b) { return b.liberado - a.liberado; }).slice(0, 300);
+    var rows = list.map(function (x) { return '<tr><td class="mono">' + esc((x.sku || '—')) + (x.multi ? ' <span class="tag warn">multi</span>' : '') + '</td><td class="cell-text">' + esc((x.produto || '—').slice(0, 34)) + '</td><td>' + nn(x.n) + '</td><td class="nowrap">' + brlC(x.preco) + '</td><td class="nowrap">' + brlC(x.reembolso) + '</td><td class="nowrap">' + brlC(x.comissao + x.servico) + '</td><td class="nowrap">' + brlC(x.afiliado) + '</td><td class="nowrap"><b>' + brlC(x.liberado) + '</b></td></tr>'; }).join('');
+    return head + '<div class="panel"><div class="ph"><h3>Por SKU</h3><span class="footnote" style="margin:0">financeiro do pedido atribuído ao SKU principal (sem dupla contagem)</span></div><div class="table-wrap"><table class="report"><thead><tr><th>SKU</th><th>Produto</th><th>Pedidos</th><th>Preço</th><th>Reembolso</th><th>Taxas</th><th>Afiliado</th><th>Liberado</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+  }
+  function mrConciliacao() {
+    var e = mrEngine(); var t = e.tot; var head = secHead('MINHA RENDA · CONCILIAÇÃO DA DECLARAÇÃO', 'XLSX × Declaração (PDF)', 'Compara o que o sistema somou do Income com a Declaração oficial da Shopee (PDF). Períodos diferentes são sinalizados — não forçamos R$ 0.');
+    if (!mrPdf.length) return head + callout('warn', 'Importe a Declaração (PDF)', 'Envie o PDF da Declaração de Renda da Shopee para conciliar com o XLSX. A leitura do PDF é feita no próprio navegador (sem enviar a lugar nenhum).');
+    var pdf = mrPdf[0]; var d = pdf.decl;
+    var xlsxPeriod = mrSummary && mrSummary.period ? (mrSummary.period.from + ' a ' + mrSummary.period.to) : '—';
+    var periodMismatch = pdf.period && mrSummary && mrSummary.period && (pdf.period.indexOf('07') >= 0);
+    var cmp = function (label, sys, decl) { if (decl == null) return '<tr><td>' + esc(label) + '</td><td class="nowrap">' + brlC(sys) + '</td><td class="nowrap">—</td><td><span class="tag neutral">sem no PDF</span></td></tr>'; var dif = sys - decl; var st = Math.abs(dif) <= 100 ? ['✅ Conciliado', 'ok'] : Math.abs(dif) <= Math.abs(decl) * 0.02 ? ['🟡 Pequena diferença', 'warn'] : ['🔴 Divergência', 'warn']; return '<tr><td>' + esc(label) + '</td><td class="nowrap">' + brlC(sys) + '</td><td class="nowrap">' + brlC(decl) + '</td><td class="nowrap ' + (Math.abs(dif) > 100 ? 'neg' : '') + '">' + brlC(dif) + ' <span class="tag ' + st[1] + '">' + st[0] + '</span></td></tr>'; };
+    var note = periodMismatch ? callout('warn', '⚠ Períodos diferentes', 'O XLSX Income cobre <b>' + esc(xlsxPeriod) + '</b> e a Declaração PDF é de <b>' + esc(pdf.period || 'julho/2026') + '</b>. Como os períodos não coincidem, as diferenças abaixo são <b>esperadas</b> — não são erro. Para conciliar exatamente, importe o Income do mesmo mês da Declaração.') : '';
+    var rows = cmp('Pagamento liberado', t.liberado, d.liberado) + cmp('Preço do produto', t.preco, d.produto) + cmp('Reembolso', -Math.abs(t.reembolso), d.reembolso) + cmp('PIX', -Math.abs(t.pix), d.pix) + cmp('Cupom', -Math.abs(t.cupom), d.cupom) + cmp('Comissão', -Math.abs(t.comissao), d.comissao) + cmp('Serviço', -Math.abs(t.servico), d.servico) + cmp('Afiliados', -Math.abs(t.afiliado), d.afiliados);
+    return head + note + '<div class="panel"><div class="ph"><h3>Declaração Shopee (PDF) × Sistema (XLSX)</h3><span class="footnote" style="margin:0">PDF: ' + esc(pdf.fileName) + '</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Componente</th><th>Sistema (XLSX)</th><th>Declaração (PDF)</th><th>Diferença</th></tr></thead><tbody>' + rows + '</tbody></table></div>' + (pdf.ok ? '' : '<div class="footnote" style="padding:0 16px 12px">⚠ Alguns campos do PDF não foram reconhecidos automaticamente (layout diferente). Os que foram lidos estão acima.</div>') + '</div>';
+  }
+  function mrAuditoria() {
+    var head = secHead('MINHA RENDA · AUDITORIA', 'Proveniência e importações', 'Cada número tem origem rastreável: arquivo, aba, tipo, pedido.');
+    var imps = batches.filter(function (b) { return b.module === 'Minha Renda'; });
+    var impRows = imps.slice(0, 30).map(function (b) { return '<tr><td class="nowrap">' + new Date(b.createdAt).toLocaleString('pt-BR') + '</td><td class="cell-text">' + esc(b.filename) + '</td><td>' + nn(b.seen) + '</td><td>' + nn(b.novo) + '</td></tr>'; }).join('');
+    var e = mrEngine();
+    var counts = kstrip([{ l: 'Linhas Order', v: nn(e.orders.length), cls: 'blue' }, { l: 'Linhas SKU', v: nn(mrRenda.length - e.orders.length), cls: 'blue' }, { l: 'Divergências de frete', v: nn(mrShip.length), cls: 'amber' }, { l: 'Ajustes', v: nn(mrAdj.length), cls: 'amber' }, { l: 'Service Fee (linhas)', v: nn(mrSvc.length), cls: 'blue' }, { l: 'Declarações PDF', v: nn(mrPdf.length), cls: 'green' }]);
+    return head + counts + '<div class="panel"><div class="ph"><h3>Importações</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Quando</th><th>Arquivo</th><th>Linhas</th><th>Novos</th></tr></thead><tbody>' + (impRows || '<tr><td colspan="4" class="empty">—</td></tr>') + '</tbody></table></div></div>';
+  }
+
   // ---------- INTELIGÊNCIA ----------
   function renderIA() {
     app.innerHTML =
@@ -6747,13 +7052,13 @@ buffer/index.js:
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
 
   // Abre o banco; se falhar (corrompido/bloqueado/privado), ativa o modo em memória e SEGUE —
   // o sistema sempre carrega e Produtos sempre abre (só não salva). Nunca dead-end / tela branca.
   openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf')]);
   }).then(function (r) {
     orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
     wallet = r[5] || [];
@@ -6764,6 +7069,8 @@ buffer/index.js:
     var acSum = settings.filter(function (x) { return x.id === 'aceleraSummary'; })[0]; if (acSum) aceleraSummary = acSum.data;
     var acCfg = settings.filter(function (x) { return x.id === 'aceleraCfg'; })[0]; if (acCfg && acCfg.data) Object.keys(acCfg.data).forEach(function (k) { aceleraCfg[k] = acCfg.data[k]; });
     affConv = r[9] || []; affRpa = r[10] || []; affVb = r[11] || []; affMaster = {}; (r[12] || []).forEach(function (mm) { affMaster[mm.id] = mm; });
+    mrRenda = r[13] || []; mrShip = r[14] || []; mrAdj = r[15] || []; mrSvc = r[16] || []; mrPdf = r[17] || [];
+    var mrS = settings.filter(function (x) { return x.id === 'mrSummary'; })[0]; if (mrS) mrSummary = mrS.data;
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
     plans = (r[4] || []).map(function (p) { if (PLAN_MIGR[p.status]) p.status = PLAN_MIGR[p.status]; if (p.scopeSkus == null && p.relatedSkus) p.scopeSkus = p.relatedSkus; if (p.indicatorKind == null) p.indicatorKind = 'liquido'; return p; });
     occ = occ.filter(function (o) { return !o.isDemo; }); // higiene: nunca deixar demo no banco real
