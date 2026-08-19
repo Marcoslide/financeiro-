@@ -25,6 +25,7 @@ export interface OrderItemRow {
   trackingNumber: string | null;
   shippingOption: string | null;
   shippingMethod: string | null;
+  isFbs: string | null;
   orderCreatedAt: Date | null;
   paidAt: Date | null;
   shipByDate: Date | null;
@@ -189,6 +190,7 @@ export function parseOrders(buffer: Buffer, filename: string): ParsedOrders {
       trackingNumber: first(acc, ['Número de rastreamento']),
       shippingOption: first(acc, ['Opção de envio']),
       shippingMethod: first(acc, ['Método de envio']),
+      isFbs: first(acc, ['Pedido FBS']),
       orderCreatedAt,
       paidAt: firstDate(acc, ['Hora do pagamento do pedido']),
       shipByDate: firstDate(acc, ['Data prevista de envio']),

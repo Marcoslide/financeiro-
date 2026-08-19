@@ -3464,6 +3464,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         trackingNumber: first(acc, ["N\xFAmero de rastreamento"]),
         shippingOption: first(acc, ["Op\xE7\xE3o de envio"]),
         shippingMethod: first(acc, ["M\xE9todo de envio"]),
+        isFbs: first(acc, ["Pedido FBS"]),
         orderCreatedAt,
         paidAt: firstDate(acc, ["Hora do pagamento do pedido"]),
         shipByDate: firstDate(acc, ["Data prevista de envio"]),
@@ -3827,7 +3828,10 @@ buffer/index.js:
   var mrTaxasSort = 'valor'; // ordenação da tabela de Taxas Shopee (§6 do prompt de alterações pontuais)
   // Expedição / Bipe (Pedidos): registro de saída física, chave = ID do pedido (idempotente).
   var shipBip = {};   // orderId -> { id, orderId, bipedAt, bipedBy, note, history: [] }
-  var pedExpF = { search: '', status: '' };
+  // §33: Full/FBS é logística da própria Shopee — por padrão NÃO entra na fila de expedição própria
+  // (evita confundir "precisa sair fisicamente daqui" com pedidos que o centro de distribuição da
+  // Shopee já resolve). "Incluir Full" liga de volta quando for útil analisar tudo junto.
+  var pedExpF = { search: '', status: '', includeFull: false };
   var devSel = {};            // seleção múltipla em Casos: id -> true (em memória)
   var devCustomStatus = [];   // status internos personalizados pelo operador: [{key,label}]
   var chat = [];
@@ -4078,7 +4082,11 @@ buffer/index.js:
       Object.keys(groups).forEach(function (id) {
         var g = groups[id]; var rep = g.find(function (r) { return r.orderStatus; }) || g[0]; itemsSeen += g.length;
         var items = g.map(function (r) { var qty = r.quantity || 1; var subtotal = r.productSubtotal != null ? num(r.productSubtotal) : num(r.agreedPrice) * qty; return { sku: r.sku, productName: r.productName, variationName: r.variationName, qty: qty, originalPrice: num(r.originalPrice), agreedPrice: num(r.agreedPrice), subtotal: subtotal }; });
-        var next = { id: id, orderStatus: rep.orderStatus, normalizedStatus: S.pedidos.normalizeStatus(rep.orderStatus), tracking: rep.trackingNumber, createdAt: rep.orderCreatedAt ? new Date(rep.orderCreatedAt).toISOString() : null, returnRefundStatus: rep.returnRefundStatus, cancelReason: rep.cancelReason, city: rep.city, uf: rep.uf, recipientName: rep.recipientName, buyerUsername: rep.buyerUsername, shippingOption: rep.shippingOption, shippingMethod: rep.shippingMethod, totalAmount: num(rep.totalAmount), grandTotal: num(rep.grandTotal), commissionNet: num(rep.commissionNet), serviceFeeNet: num(rep.serviceFeeNet), transactionFee: num(rep.transactionFee), reverseShippingFee: num(rep.reverseShippingFee), estimatedShipping: num(rep.estimatedShipping), buyerPaidShipping: num(rep.buyerPaidShipping), unitsTotal: rep.unitsTotal || items.reduce(function (s, i) { return s + i.qty; }, 0), items: items };
+        var toIso = function (d) { return d ? new Date(d).toISOString() : null; };
+        var next = { id: id, orderStatus: rep.orderStatus, normalizedStatus: S.pedidos.normalizeStatus(rep.orderStatus), tracking: rep.trackingNumber, createdAt: toIso(rep.orderCreatedAt), returnRefundStatus: rep.returnRefundStatus, cancelReason: rep.cancelReason, city: rep.city, uf: rep.uf, recipientName: rep.recipientName, buyerUsername: rep.buyerUsername, shippingOption: rep.shippingOption, shippingMethod: rep.shippingMethod, isFbs: /^\s*(yes|sim|true)\s*$/i.test(rep.isFbs || '') || rep.shippingOption === 'Full', totalAmount: num(rep.totalAmount), grandTotal: num(rep.grandTotal), commissionNet: num(rep.commissionNet), serviceFeeNet: num(rep.serviceFeeNet), transactionFee: num(rep.transactionFee), reverseShippingFee: num(rep.reverseShippingFee), estimatedShipping: num(rep.estimatedShipping), buyerPaidShipping: num(rep.buyerPaidShipping), unitsTotal: rep.unitsTotal || items.reduce(function (s, i) { return s + i.qty; }, 0), items: items,
+          // §9-33 do prompt "Alterações — Sistema Marketplace Líder": pagamento/prazo/envio efetivo,
+          // usados no Dashboard (pedidos feitos × pagos) e na aba Tempo de Envio.
+          paidAt: toIso(rep.paidAt), shipByDate: toIso(rep.shipByDate), shippedAt: toIso(rep.shippedAt), deliveredAt: toIso(rep.deliveredAt), completedAt: toIso(rep.completedAt), cancelledAt: toIso(rep.cancelledAt) };
         var ex = byId[id];
         if (!ex) { novo++; byId[id] = next; } else { var diff = ex.orderStatus !== next.orderStatus || ex.tracking !== next.tracking || ex.totalAmount !== next.totalAmount; if (diff) upd++; else unch++; byId[id] = next; }
         changed.push(next);
@@ -4188,12 +4196,17 @@ buffer/index.js:
   function renderErrBox(msg) { return '<div class="form-err" style="max-width:640px;margin:24px auto"><b>Ops.</b><br>' + msg + '<div style="margin-top:12px"><button class="btn-sm primary" onclick="location.reload()">Recarregar</button></div></div>'; }
 
   // ---------- DASHBOARD global ----------
-  function computeOrderAgg() {
-    var list = pedidosInPeriod();
+  function computeOrderAgg(list) {
+    list = list || pedidosInPeriod();
     var agg = { orders: list.length, units: 0, revenue: 0, fees: 0, cost: 0, result: 0, costPending: 0, unlinked: 0, byStatus: {} };
     list.forEach(function (o) { var f = orderFinance(o); agg.units += o.items.reduce(function (s, i) { return s + i.qty; }, 0); agg.revenue += f.revenue; agg.fees += f.marketplaceFeesTotal; agg.cost += f.productCostTotal; if (f.estimatedResult != null) agg.result += f.estimatedResult; else agg.costPending++; if (f._items.some(function (i) { return !i.linked; })) agg.unlinked++; agg.byStatus[o.normalizedStatus] = (agg.byStatus[o.normalizedStatus] || 0) + 1; });
     return agg;
   }
+  // §12-18: "pedidos feitos" (Data de criação) ≠ "pedidos pagos" (Hora do pagamento) — pedido sem
+  // pagamento real ("-" na planilha) nunca conta como pago. As duas métricas ficam sempre visíveis
+  // juntas; o toggle de base temporal só decide qual delas alimenta os cards que precisam de UMA base.
+  var pedDashBasis = 'criacao'; // 'criacao' | 'pagamento'
+  function pedidosPagosInPeriod() { return orders.filter(function (o) { return o.paidAt && inPeriod(o.paidAt); }); }
   function renderDashboard() {
     var a = computeOrderAgg(); var o = occInPeriod(); var exposure = sumExposure(o);
     var empty = orders.length === 0 && occ.length === 0 && (!Produtos || Produtos.getData().products.length === 0);
@@ -4212,23 +4225,44 @@ buffer/index.js:
       '<div class="page-head"><div><h2>Pedidos</h2><p>Núcleo transacional. Importação idempotente (upsert), sem duplicar vendas.</p></div>' +
       '<button class="btn-sm primary" id="imp-ped">Importar planilha de pedidos</button></div>' +
       devPeriodBar() +
-      '<div class="subtabs">' + subtab('pedidos', 'pedidos', 'Pedidos') + subtab('pedidos', 'expedicao', 'Expedição') + subtab('pedidos', 'dashboard', 'Dashboard') + subtab('pedidos', 'import', 'Importações') + '</div>' +
-      (sub.pedidos === 'dashboard' ? pedidosDashboard() : sub.pedidos === 'import' ? importsFor('Pedidos') : sub.pedidos === 'expedicao' ? pedidosExpedicao() : pedidosList());
+      '<div class="subtabs">' + subtab('pedidos', 'pedidos', 'Pedidos') + subtab('pedidos', 'expedicao', 'Expedição') + subtab('pedidos', 'tempoenvio', 'Tempo de Envio') + subtab('pedidos', 'dashboard', 'Dashboard') + subtab('pedidos', 'import', 'Importações') + '</div>' +
+      (sub.pedidos === 'dashboard' ? pedidosDashboard() : sub.pedidos === 'import' ? importsFor('Pedidos') : sub.pedidos === 'expedicao' ? pedidosExpedicao() : sub.pedidos === 'tempoenvio' ? pedidosTempoEnvio() : pedidosList());
     document.getElementById('imp-ped').onclick = function () { fileInput(function (f) { importPedidos(f).then(function (b) { render(); toast('Pedidos importados', b.seen + ' pedidos · ' + b.novo + ' novos · ' + b.upd + ' atualizados · ' + b.unch + ' sem alteração'); }).catch(function (e) { toast('Falha', e.message, true); }); }); };
     bindSubtabs('pedidos');
     bindDevPeriodBar();
     if (sub.pedidos === 'pedidos') bindPedidosList();
     if (sub.pedidos === 'expedicao') bindPedidosExpedicao();
+    if (sub.pedidos === 'dashboard') bindPedidosDashboard();
+    if (sub.pedidos === 'tempoenvio') bindPedidosTempoEnvio();
   }
+  function bindPedidosDashboard() { var s = document.getElementById('peddashbasis'); if (s) s.onchange = function () { pedDashBasis = s.value; render(); }; }
   // ---------- Expedição / Bipe (§1 do prompt de reorganização): "vendido" ≠ "expedido" ----------
   // Bipe = leitor de código de barras USB/Bluetooth (emite como teclado) ou digitação manual do ID.
   // Leitura por câmera exigiria uma biblioteca de decodificação de código de barras não empacotada
   // neste HTML autônomo — não implementada agora para não fingir uma funcionalidade não testada.
-  function bipRegister(orderId, note) {
-    orderId = (orderId || '').trim(); if (!orderId) return Promise.reject(new Error('Informe o ID do pedido.'));
+  // §9-11 do prompt "Alterações — Sistema Marketplace Líder": a etiqueta bipada traz o BR
+  // (rastreamento), não o ID do pedido — a resolução precisa ser segura: 1 pedido encontrado
+  // associa automaticamente; 0 ou mais de 1 NUNCA associa silenciosamente.
+  function findOrdersByBR(br) {
+    var q = (br || '').trim().toUpperCase(); if (!q) return [];
+    return orders.filter(function (o) { return (o.tracking || '').trim().toUpperCase() === q; });
+  }
+  function resolveBipeInput(raw) {
+    var v = (raw || '').trim(); if (!v) return { ok: false, reason: 'VAZIO', message: 'Informe o ID do pedido ou o BR (rastreamento).' };
+    var direct = orders.find(function (o) { return o.id === v; });
+    if (direct) return { ok: true, order: direct, via: 'ID' };
+    var byBR = findOrdersByBR(v);
+    if (byBR.length === 1) return { ok: true, order: byBR[0], via: 'BR' };
+    if (byBR.length > 1) return { ok: false, reason: 'AMBIGUO', message: 'Rastreamento associado a mais de um pedido — revisar.', matches: byBR };
+    return { ok: false, reason: 'NAO_LOCALIZADO', message: 'BR não localizado nos pedidos importados.' };
+  }
+  function bipRegister(rawInput, note) {
+    var res = resolveBipeInput(rawInput);
+    if (!res.ok) return Promise.reject(new Error(res.message));
+    var orderId = res.order.id;
     var now = new Date().toISOString(); var ex = shipBip[orderId];
     if (ex) { ex.history = ex.history || []; ex.history.unshift({ at: now, note: note || '' }); ex.lastScanAt = now; if (note) ex.note = note; }
-    else { ex = shipBip[orderId] = { id: orderId, orderId: orderId, bipedAt: now, lastScanAt: now, bipedBy: 'Operador', note: note || '', history: [] }; }
+    else { ex = shipBip[orderId] = { id: orderId, orderId: orderId, bipedAt: now, lastScanAt: now, bipedBy: 'Operador', note: note || '', scannedVia: res.via, scannedValue: rawInput, history: [] }; }
     return putMany('shipbip', [ex]).then(function () { return ex; });
   }
   function pedIsExpedido(orderId) { return !!shipBip[orderId]; }
@@ -4263,46 +4297,56 @@ buffer/index.js:
       { l: 'Expedidos sem conferência', v: nn(semConf), cls: semConf ? 'amber' : 'green' },
       { l: 'Expedidos com divergência', v: nn(comDiverg), cls: comDiverg ? 'red' : 'green' },
     ]);
-    var bipe = '<div class="panel"><div class="ph"><h3>Bipar etiqueta</h3><span class="footnote" style="margin:0">leitor USB/Bluetooth (emite como teclado) ou digite o ID e pressione Enter</span></div><div class="pb"><div style="display:flex;gap:8px;max-width:480px"><input class="input" id="bipinput" placeholder="ID do pedido" autofocus style="flex:1"><button class="btn-sm primary" id="bipbtn">Registrar saída</button></div><div class="footnote" style="margin-top:8px">Leitura por câmera não está implementada nesta versão — exigiria uma biblioteca de decodificação de código de barras, que não incluímos para não declarar um recurso não testado.</div></div></div>';
+    var bipe = '<div class="panel"><div class="ph"><h3>Bipar etiqueta</h3><span class="footnote" style="margin:0">leitor USB/Bluetooth (emite como teclado) ou digite o BR/ID e pressione Enter</span></div><div class="pb"><div style="display:flex;gap:8px;max-width:480px"><input class="input" id="bipinput" placeholder="BR (rastreamento) ou ID do pedido" autofocus style="flex:1"><button class="btn-sm primary" id="bipbtn">Registrar saída</button></div><div class="footnote" style="margin-top:8px">Aceita o BR da etiqueta (resolvido para o pedido pelo rastreamento) ou o ID do pedido digitado direto. Se o BR não for encontrado, ou aparecer em mais de um pedido, nada é registrado automaticamente — você revisa antes. Leitura por câmera não está implementada nesta versão — exigiria uma biblioteca de decodificação de código de barras, que não incluímos para não declarar um recurso não testado.</div></div></div>';
     if (!orders.length) return head + bipe + emptyBox('Importe os Pedidos para começar a controlar a expedição.');
     var q = pedExpF.search.toLowerCase();
-    var list = orders.filter(function (o) { if (pedExpF.status === 'expedido' && !pedIsExpedido(o.id)) return false; if (pedExpF.status === 'pendente' && (pedIsExpedido(o.id) || o.normalizedStatus === 'CANCELADO')) return false; if (q && o.id.toLowerCase().indexOf(q) < 0) return false; return true; }).sort(function (a, b) { var ba = shipBip[a.id], bb = shipBip[b.id]; if (ba && bb) return bb.bipedAt.localeCompare(ba.bipedAt); if (ba) return -1; if (bb) return 1; return (b.createdAt || '').localeCompare(a.createdAt || ''); });
+    var fullCount = orders.filter(function (o) { return o.isFbs; }).length;
+    var list = orders.filter(function (o) { if (!pedExpF.includeFull && o.isFbs) return false; if (pedExpF.status === 'expedido' && !pedIsExpedido(o.id)) return false; if (pedExpF.status === 'pendente' && (pedIsExpedido(o.id) || o.normalizedStatus === 'CANCELADO')) return false; if (q && o.id.toLowerCase().indexOf(q) < 0 && (o.tracking || '').toLowerCase().indexOf(q) < 0) return false; return true; }).sort(function (a, b) { var ba = shipBip[a.id], bb = shipBip[b.id]; if (ba && bb) return bb.bipedAt.localeCompare(ba.bipedAt); if (ba) return -1; if (bb) return 1; return (b.createdAt || '').localeCompare(a.createdAt || ''); });
     var chips = [['', 'Todos'], ['expedido', 'Expedidos'], ['pendente', 'Pendentes']];
-    var rows = list.slice(0, 200).map(function (o) { var b = shipBip[o.id]; var st = b ? pedidoConciliacaoStatus(o.id) : null; return '<tr' + (b ? '' : ' style="background:#fff8ef"') + '><td class="mono">' + esc(o.id) + '</td><td class="nowrap">' + dbr(o.createdAt) + '</td><td><span class="pill ' + o.normalizedStatus + '">' + esc(S.pedidos.labels[o.normalizedStatus] || o.normalizedStatus) + '</span></td><td>' + (b ? '<span class="tag ok">expedido</span> <span class="footnote" style="margin:0">' + new Date(b.bipedAt).toLocaleString('pt-BR') + '</span>' : '<span class="tag warn">pendente</span>') + '</td><td>' + (st ? '<span class="tag">' + esc(st.label) + '</span>' : '—') + '</td><td><button class="btn-sm" data-goped360="' + esc(o.id) + '">Ficha 360º</button></td></tr>'; }).join('');
+    var rows = list.slice(0, 200).map(function (o) { var b = shipBip[o.id]; var st = b ? pedidoConciliacaoStatus(o.id) : null; return '<tr' + (b ? '' : ' style="background:#fff8ef"') + '><td class="mono">' + esc(o.id) + '</td><td class="mono">' + esc(o.tracking || '—') + '</td><td class="nowrap">' + dbr(o.createdAt) + '</td><td><span class="pill ' + o.normalizedStatus + '">' + esc(S.pedidos.labels[o.normalizedStatus] || o.normalizedStatus) + '</span></td><td>' + (b ? '<span class="tag ok">expedido</span> <span class="footnote" style="margin:0">' + new Date(b.bipedAt).toLocaleString('pt-BR') + '</span>' : '<span class="tag warn">pendente</span>') + '</td><td>' + (st ? '<span class="tag">' + esc(st.label) + '</span>' : '—') + '</td><td><button class="btn-sm" data-goped360="' + esc(o.id) + '">Ficha 360º</button></td></tr>'; }).join('');
     return head + strip + bipe +
-      '<div class="chips">' + chips.map(function (c) { return '<span class="chip' + (pedExpF.status === c[0] ? ' chip-on' : '') + '" data-expst="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
-      '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="expq" style="width:260px" placeholder="Buscar ID do pedido…" value="' + esc(pedExpF.search) + '"></div>' +
-      '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos</div>' +
-      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Data venda</th><th>Status</th><th>Expedição</th><th>Conciliação</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="empty">Nenhum pedido neste filtro.</td></tr>') + '</tbody></table></div></div>';
+      '<div class="chips">' + chips.map(function (c) { return '<span class="chip' + (pedExpF.status === c[0] ? ' chip-on' : '') + '" data-expst="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '<span class="chip' + (pedExpF.includeFull ? ' chip-on' : '') + '" data-expfull="1" title="Full/FBS é despachado pelo centro de distribuição da Shopee — por padrão fica fora desta fila própria">Incluir Full (' + nn(fullCount) + ')</span></div>' +
+      '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="expq" style="width:260px" placeholder="Buscar ID do pedido ou BR…" value="' + esc(pedExpF.search) + '"></div>' +
+      '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos' + (!pedExpF.includeFull && fullCount ? ' <span class="footnote">(' + nn(fullCount) + ' Full/FBS fora da fila — expedidos pela Shopee)</span>' : '') + '</div>' +
+      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>BR</th><th>Data venda</th><th>Status</th><th>Expedição</th><th>Conciliação</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="7" class="empty">Nenhum pedido neste filtro.</td></tr>') + '</tbody></table></div></div>';
   }
   function bindPedidosExpedicao() {
     var bi = document.getElementById('bipinput'); var doRegister = function () { var v = bi.value; bipRegister(v).then(function (rec) { bi.value = ''; render(); var el = document.getElementById('bipinput'); if (el) el.focus(); toast('Expedição registrada', rec.orderId); }).catch(function (e) { toast('Falha', e.message, true); }); };
     if (bi) bi.onkeydown = function (e) { if (e.key === 'Enter') doRegister(); };
     var bb = document.getElementById('bipbtn'); if (bb) bb.onclick = doRegister;
     app.querySelectorAll('[data-expst]').forEach(function (c) { c.onclick = function () { pedExpF.status = c.dataset.expst; render(); }; });
+    var ef = app.querySelector('[data-expfull]'); if (ef) ef.onclick = function () { pedExpF.includeFull = !pedExpF.includeFull; render(); };
     var q = document.getElementById('expq'); if (q) { var t; q.oninput = function () { clearTimeout(t); t = setTimeout(function () { var v = q.value; pedExpF.search = v; render(); var el = document.getElementById('expq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
     app.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.goped360); }; });
   }
+  // §5-7: "Retornos e Pedidos Cancelados" não pode depender só do texto "Cancelado" — usa também
+  // Status da Devolução/Reembolso (Solicitação aprovada, Devolução em Andamento/Concluída) e o
+  // motivo de cancelamento, sem sobrescrever o status original da Shopee (§6).
+  function pedidoIsRetornoCancelado(o) { return o.normalizedStatus === 'CANCELADO' || !!(o.returnRefundStatus && o.returnRefundStatus.trim()) || !!(o.cancelReason && o.cancelReason.trim()); }
   function pedidosList() {
     var occByOrder = {}; occ.forEach(function (o) { if (o.orderId) occByOrder[o.orderId] = true; });
     var all = pedidosInPeriod();
+    // §2/§12: contadores SEMPRE por ID de pedido único — "orders" já é 1 registro por pedido
+    // (agrupado na importação), nunca por linha/item da planilha.
     var counts = { ALL: all.length };
-    ['NAO_PAGO', 'A_ENVIAR', 'ENVIADO', 'CONCLUIDO', 'CANCELADO'].forEach(function (k) { counts[k] = all.filter(function (o) { return o.normalizedStatus === k; }).length; });
-    var tabs = S.pedidos.tabs.map(function (t) { return '<div class="tab ' + (pedTab === t.key ? 'active' : '') + '" data-ptab="' + t.key + '">' + t.label + ' <span class="tag">' + nn(counts[t.key] || 0) + '</span></div>'; }).join('');
-    var list = pedTab === 'ALL' ? all : all.filter(function (o) { return o.normalizedStatus === pedTab; });
+    ['NAO_PAGO', 'A_ENVIAR', 'ENVIADO', 'CONCLUIDO'].forEach(function (k) { counts[k] = all.filter(function (o) { return o.normalizedStatus === k; }).length; });
+    counts.CANCELADO = all.filter(pedidoIsRetornoCancelado).length;
+    var TAB_DEFS = S.pedidos.tabs.map(function (t) { return t.key === 'CANCELADO' ? { key: 'CANCELADO', label: 'Retornos e Pedidos Cancelados' } : t; });
+    var tabs = TAB_DEFS.map(function (t) { return '<div class="tab ' + (pedTab === t.key ? 'active' : '') + '" data-ptab="' + t.key + '">' + t.label + ' <span class="tag">' + nn(counts[t.key] || 0) + '</span></div>'; }).join('');
+    var list = pedTab === 'ALL' ? all : pedTab === 'CANCELADO' ? all.filter(pedidoIsRetornoCancelado) : all.filter(function (o) { return o.normalizedStatus === pedTab; });
     var qel = document.getElementById('ped-q'); var q = qel ? qel.value : '';
     if (q) { var ql = q.toLowerCase(); list = list.filter(function (o) { return (o.id || '').toLowerCase().indexOf(ql) >= 0 || (o.tracking || '').toLowerCase().indexOf(ql) >= 0 || o.items.some(function (i) { return (i.sku || '').toLowerCase().indexOf(ql) >= 0 || (i.productName || '').toLowerCase().indexOf(ql) >= 0; }); }); }
     if (!all.length) return emptyBox('Nenhum pedido. Importe a planilha "Order.all…" da Shopee.');
     var rows = list.slice(0, 300).map(function (o) {
       var f = orderFinance(o); var prod = o.items.length > 1 ? o.items.length + ' produtos' : (o.items[0] ? esc((o.items[0].productName || '').slice(0, 40)) : '—');
-      return '<tr><td class="mono">' + esc(o.id) + '</td><td>' + dbr(o.createdAt) + '</td><td><span class="pill ' + o.normalizedStatus + '">' + esc(S.pedidos.labels[o.normalizedStatus] || o.normalizedStatus) + '</span></td>' +
-        '<td>' + prod + (o.items.length > 1 ? ' <span class="tag">multi</span>' : '') + '</td><td>' + brl(f.revenue) + '</td><td style="color:var(--err)">' + brl(f.marketplaceFeesTotal) + '</td>' +
+      return '<tr><td class="mono">' + esc(o.id) + '</td><td class="mono">' + esc(o.tracking || '—') + '</td><td>' + dbr(o.createdAt) + '</td><td><span class="pill ' + o.normalizedStatus + '">' + esc(S.pedidos.labels[o.normalizedStatus] || o.normalizedStatus) + '</span></td>' +
+        '<td>' + prod + (o.items.length > 1 ? ' <span class="tag">multi</span>' : '') + '</td><td>' + (o.isFbs ? '<span class="tag info">Full</span>' : esc(o.shippingOption || '—')) + '</td><td>' + brl(f.revenue) + '</td><td style="color:var(--err)">' + brl(f.marketplaceFeesTotal) + '</td>' +
         '<td>' + (f.estimatedResult == null ? '<span class="tag warn">pendente</span>' : '<b style="color:var(--ok)">' + brl(f.estimatedResult) + '</b>') + '</td><td>' + (f.estimatedMarginPct == null ? '—' : pct(f.estimatedMarginPct)) + '</td>' +
         '<td>' + (occByOrder[o.id] ? '<span class="tag warn">devolução</span>' : '') + '</td><td><button class="btn-sm" data-open="' + esc(o.id) + '">Abrir</button></td></tr>';
     }).join('');
-    return '<div class="tabs">' + tabs + '</div><div class="toolbar2"><input class="input sm" id="ped-q" style="width:280px" placeholder="Buscar ID, SKU, produto, rastreamento…" value="' + esc(q) + '"></div>' +
+    return '<div class="tabs">' + tabs + '</div><div class="toolbar2"><input class="input sm" id="ped-q" style="width:280px" placeholder="Buscar ID, BR, SKU, produto…" value="' + esc(q) + '"></div>' +
       '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos' + (list.length > 300 ? ' (mostrando 300)' : '') + '</div>' +
-      '<div class="panel"><div class="table-wrap"><table><thead><tr><th>Pedido</th><th>Data</th><th>Status</th><th>Produto</th><th>Venda</th><th>Taxas</th><th>Lucro est.</th><th>Margem</th><th>Devolução</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+      '<div class="panel"><div class="table-wrap"><table><thead><tr><th>Pedido</th><th>BR</th><th>Data</th><th>Status</th><th>Produto</th><th>Modalidade</th><th>Venda</th><th>Taxas</th><th>Lucro est.</th><th>Margem</th><th>Devolução</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
   }
   function bindPedidosList() {
     app.querySelectorAll('[data-ptab]').forEach(function (t) { t.onclick = function () { pedTab = t.dataset.ptab; render(); }; });
@@ -4310,8 +4354,45 @@ buffer/index.js:
     app.querySelectorAll('[data-open]').forEach(function (b) { b.onclick = function () { openOrder(b.dataset.open); }; });
   }
   function pedidosDashboard() {
-    var a = computeOrderAgg(); var ticket = a.orders ? a.revenue / a.orders : 0;
-    return '<div class="cards6">' + fcard('Venda real', brl(a.revenue), 'blue', nn(a.orders) + ' pedidos') + fcard('Ticket médio', brl(ticket), '') + fcard('Unidades vendidas', nn(a.units), '') + fcard('Taxas marketplace', brl(a.fees), 'red') + fcard('Custo produtos', brl(a.cost), 'amber') + fcard('Resultado estimado', brl(a.result), 'green') + fcard('Margem estimada', a.revenue ? pct((a.result / a.revenue) * 100) : '—', '') + fcard('A enviar', nn(a.byStatus.A_ENVIAR || 0), 'amber') + fcard('Enviados', nn(a.byStatus.ENVIADO || 0), 'blue') + fcard('Concluídos', nn(a.byStatus.CONCLUIDO || 0), 'green') + fcard('Cancelados', nn(a.byStatus.CANCELADO || 0), 'red') + fcard('SKUs sem custo', nn(a.costPending) + ' pedidos', 'amber') + '</div>' + topSkusPanel();
+    var feitos = pedidosInPeriod(); var pagos = pedidosPagosInPeriod();
+    var aBase = computeOrderAgg(pedDashBasis === 'pagamento' ? pagos : feitos);
+    var aFeitos = computeOrderAgg(feitos); var aPagos = computeOrderAgg(pagos);
+    var ticket = aBase.orders ? aBase.revenue / aBase.orders : 0;
+    var conversao = feitos.length ? r2(pagos.length / feitos.length * 100) : 0;
+    var naoPagos = feitos.length - pagos.length;
+    var expedidos = feitos.filter(function (o) { return pedIsExpedido(o.id); }).length;
+    var cancelados = feitos.filter(pedidoIsRetornoCancelado).length;
+    var basisSel = '<div class="panel"><div class="pb" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b style="font-size:12.5px;color:var(--muted)">Base temporal para venda/margem:</b><select class="select sm" id="peddashbasis"><option value="criacao"' + (pedDashBasis === 'criacao' ? ' selected' : '') + '>Pela criação do pedido</option><option value="pagamento"' + (pedDashBasis === 'pagamento' ? ' selected' : '') + '>Pelo pagamento</option></select><span class="footnote">"Pedidos feitos" e "Pedidos pagos" sempre usam sua própria data — o seletor só decide a base de Venda/Margem/Ticket abaixo.</span></div></div>';
+    return basisSel + '<div class="cards6">' +
+      fcard('Pedidos feitos', nn(aFeitos.orders), 'blue', 'pela data de criação') +
+      fcard('Pedidos pagos', nn(aPagos.orders), 'green', 'pela hora do pagamento') +
+      fcard('Taxa de conversão em pagamento', pct(conversao), 'blue', 'pagos ÷ feitos') +
+      fcard('Valor dos pedidos feitos', brl(aFeitos.revenue), '', 'todos, pagos ou não') +
+      fcard('Venda paga (real)', brl(aPagos.revenue), 'green', 'só pedidos efetivamente pagos') +
+      fcard('Não pagos', nn(naoPagos), naoPagos ? 'amber' : 'green') +
+      '</div>' +
+      '<div class="cards6">' + fcard('Ticket médio', brl(ticket), '') + fcard('Unidades vendidas', nn(aBase.units), '') + fcard('Taxas marketplace', brl(aBase.fees), 'red') + fcard('Custo produtos', brl(aBase.cost), 'amber') + fcard('Resultado estimado', brl(aBase.result), 'green') + fcard('Margem estimada', aBase.revenue ? pct((aBase.result / aBase.revenue) * 100) : '—', '') + '</div>' +
+      '<div class="cards6">' + fcard('A enviar', nn(aFeitos.byStatus.A_ENVIAR || 0), 'amber') + fcard('Expedidos (bipados)', nn(expedidos), 'blue') + fcard('Enviados', nn(aFeitos.byStatus.ENVIADO || 0), 'blue') + fcard('Concluídos', nn(aFeitos.byStatus.CONCLUIDO || 0), 'green') + fcard('Retornos e cancelados', nn(cancelados), 'red') + fcard('SKUs sem custo', nn(aBase.costPending) + ' pedidos', 'amber') + '</div>' +
+      pedidosFullPanel(feitos) + pedidosModalidadesPanel(feitos) + topSkusPanel();
+  }
+  // §29-33: Full/FBS precisa de visibilidade própria (duas formas de identificar na planilha:
+  // "Pedido FBS = Yes" e "Opção de envio = Full" — já combinadas em o.isFbs na importação) e as
+  // modalidades da operação (dinâmicas — nunca hardcode a lista, novas modalidades aparecem sozinhas).
+  function pedidosFullPanel(list) {
+    var occByOrder = {}; occ.forEach(function (o) { if (o.orderId) occByOrder[o.orderId] = true; });
+    function agg(l) { var units = 0, revenue = 0, pagos = 0, concl = 0, devol = 0; l.forEach(function (o) { units += o.items.reduce(function (s, i) { return s + i.qty; }, 0); revenue += orderFinance(o).revenue; if (o.paidAt) pagos++; if (o.normalizedStatus === 'CONCLUIDO') concl++; if (occByOrder[o.id]) devol++; }); return { n: l.length, units: units, revenue: revenue, pagos: pagos, concl: concl, devol: devol }; }
+    var full = list.filter(function (o) { return o.isFbs; }); var outros = list.filter(function (o) { return !o.isFbs; });
+    var aFull = agg(full), aOut = agg(outros); var total = list.length;
+    var row = function (label, x) { return '<tr><td><b>' + esc(label) + '</b></td><td>' + nn(x.n) + '</td><td>' + pct(total ? r2(x.n / total * 100) : 0) + '</td><td>' + nn(x.units) + '</td><td class="nowrap">' + brl(x.revenue) + '</td><td>' + nn(x.pagos) + '</td><td>' + nn(x.concl) + '</td><td>' + nn(x.devol) + '</td></tr>'; };
+    return '<div class="panel"><div class="ph"><h3>Full/FBS × demais modalidades</h3><span class="footnote" style="margin:0">pedidos únicos, no período (pedidos feitos)</span></div><div class="table-wrap"><table class="report"><thead><tr><th></th><th>Pedidos</th><th>% do total</th><th>Unidades</th><th>Faturamento</th><th>Pagos</th><th>Concluídos</th><th>Devoluções</th></tr></thead><tbody>' + row('Full/FBS', aFull) + row('Demais modalidades', aOut) + '</tbody></table></div></div>';
+  }
+  function pedidosModalidadesPanel(list) {
+    var occByOrder = {}; occ.forEach(function (o) { if (o.orderId) occByOrder[o.orderId] = true; });
+    var map = {};
+    list.forEach(function (o) { var k = o.shippingOption || '(sem modalidade)'; var g = map[k] = map[k] || { k: k, n: 0, units: 0, revenue: 0, pagos: 0, concluidos: 0, devol: 0 }; g.n++; g.units += o.items.reduce(function (s, i) { return s + i.qty; }, 0); g.revenue += orderFinance(o).revenue; if (o.paidAt) g.pagos++; if (o.normalizedStatus === 'CONCLUIDO') g.concluidos++; if (occByOrder[o.id]) g.devol++; });
+    var rows = Object.values(map).sort(function (a, b) { return b.n - a.n; }); var total = list.length;
+    var trs = rows.map(function (g) { return '<tr><td>' + esc(g.k) + '</td><td>' + nn(g.n) + '</td><td>' + pct(total ? r2(g.n / total * 100) : 0) + '</td><td>' + nn(g.units) + '</td><td class="nowrap">' + brl(g.revenue) + '</td><td>' + nn(g.pagos) + '</td><td>' + nn(g.concluidos) + '</td><td>' + nn(g.devol) + '</td></tr>'; }).join('');
+    return '<div class="panel"><div class="ph"><h3>Pedidos por modalidade</h3><span class="footnote" style="margin:0">pedidos únicos, no período</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Modalidade</th><th>Pedidos</th><th>% do total</th><th>Unidades</th><th>Faturamento</th><th>Pagos</th><th>Concluídos</th><th>Devoluções</th></tr></thead><tbody>' + (trs || '<tr><td colspan="8" class="empty">—</td></tr>') + '</tbody></table></div></div>';
   }
   function topSkusPanel() {
     var map = {};
@@ -4319,6 +4400,94 @@ buffer/index.js:
     var top = Object.values(map).sort(function (a, b) { return b.revenue - a.revenue; }).slice(0, 15);
     if (!top.length) return '';
     return '<div class="panel"><div class="ph"><h3>Top SKUs por venda</h3></div><div class="table-wrap"><table><thead><tr><th>SKU</th><th>Produto</th><th>Unid.</th><th>Venda</th><th>Lucro est.</th></tr></thead><tbody>' + top.map(function (m) { return '<tr><td class="mono">' + esc(m.sku) + '</td><td>' + esc((m.product || '').slice(0, 46)) + '</td><td>' + nn(m.units) + '</td><td>' + brl(m.revenue) + '</td><td>' + brl(m.result) + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
+  }
+
+  // ---------- PEDIDOS · TEMPO DE ENVIO (§21-28) ----------
+  // Evita pedidos atrasados e penalização da Shopee. A data-limite real (Data prevista de envio)
+  // sempre vem da planilha — os limites visuais (2h/hoje/48h) são só classificação de exibição.
+  var TE_LABELS = { ATRASADO: ['🔴 Atrasado', 'warn'], VENCE_MUITO_EM_BREVE: ['🔴 Vence muito em breve', 'warn'], VENCE_HOJE: ['🟠 Vence hoje', 'warn'], PROXIMO_DO_PRAZO: ['🟡 Próximo do prazo', 'warn'], DENTRO_DO_PRAZO: ['🟢 Dentro do prazo', 'ok'], ENVIADO_NO_PRAZO: ['✅ Enviado no prazo', 'ok'], ENVIADO_ATRASADO: ['⚠️ Enviado atrasado', 'warn'], SEM_PRAZO: ['— sem prazo informado', 'neutral'] };
+  function teClassifica(o) {
+    if (!o.shipByDate) return 'SEM_PRAZO';
+    var prazo = new Date(o.shipByDate);
+    if (o.shippedAt) { return new Date(o.shippedAt) <= prazo ? 'ENVIADO_NO_PRAZO' : 'ENVIADO_ATRASADO'; }
+    var now = new Date(); var diffMs = prazo - now; var diffH = diffMs / 36e5;
+    if (diffMs < 0) return 'ATRASADO';
+    if (diffH <= 2) return 'VENCE_MUITO_EM_BREVE';
+    if (prazo.toDateString() === now.toDateString()) return 'VENCE_HOJE';
+    if (diffH <= 48) return 'PROXIMO_DO_PRAZO';
+    return 'DENTRO_DO_PRAZO';
+  }
+  function teCountdownTxt(o) {
+    if (!o.shipByDate || o.shippedAt) return '—';
+    var ms = new Date(o.shipByDate) - new Date(); var neg = ms < 0; ms = Math.abs(ms);
+    var h = Math.floor(ms / 36e5), m = Math.floor((ms % 36e5) / 6e4);
+    return (neg ? '-' : '') + h + 'h' + (m < 10 ? '0' : '') + m + 'min';
+  }
+  // Fila operacional: só pedidos com prazo de envio informado e ainda não cancelados/devolvidos.
+  function teQueue() { return pedidosInPeriod().filter(function (o) { return o.shipByDate && !pedidoIsRetornoCancelado(o); }); }
+  var teF = { classe: '', preset: '', full: '', modalidade: '', search: '', sort: 'prazo' };
+  function pedidosTempoEnvio() {
+    var head = secHead('PEDIDOS · TEMPO DE ENVIO', 'Evitar atraso e penalização da Shopee', 'Prazo real vem da planilha (Data prevista de envio). Ordena por padrão quem vence primeiro.');
+    var base = teQueue();
+    if (!base.length) return head + emptyBox('Nenhum pedido com prazo de envio informado no período. Importe/atualize a planilha de Pedidos.');
+    var now = new Date();
+    var list = base;
+    if (teF.preset === 'hoje') list = list.filter(function (o) { return new Date(o.shipByDate).toDateString() === now.toDateString(); });
+    else if (teF.preset === 'amanha') { var amanha = new Date(now.getTime() + 864e5); list = list.filter(function (o) { return new Date(o.shipByDate).toDateString() === amanha.toDateString(); }); }
+    else if (teF.preset === '24h') list = list.filter(function (o) { var d = new Date(o.shipByDate) - now; return d >= 0 && d <= 24 * 36e5; });
+    else if (teF.preset === '48h') list = list.filter(function (o) { var d = new Date(o.shipByDate) - now; return d >= 0 && d <= 48 * 36e5; });
+    if (teF.classe) list = list.filter(function (o) { return teClassifica(o) === teF.classe; });
+    if (teF.full === 'full') list = list.filter(function (o) { return o.isFbs; });
+    else if (teF.full === 'nfull') list = list.filter(function (o) { return !o.isFbs; });
+    if (teF.modalidade) list = list.filter(function (o) { return o.shippingOption === teF.modalidade; });
+    if (teF.search) { var q = teF.search.toLowerCase(); list = list.filter(function (o) { return o.id.toLowerCase().indexOf(q) >= 0 || (o.tracking || '').toLowerCase().indexOf(q) >= 0 || o.items.some(function (i) { return (i.sku || '').toLowerCase().indexOf(q) >= 0 || (i.productName || '').toLowerCase().indexOf(q) >= 0; }); }); }
+    var SORTS = {
+      prazo: function (a, b) { return new Date(a.shipByDate) - new Date(b.shipByDate); },
+      pagamento: function (a, b) { return (a.paidAt || '').localeCompare(b.paidAt || ''); },
+      produto: function (a, b) { return ((a.items[0] && a.items[0].productName) || '').localeCompare((b.items[0] && b.items[0].productName) || ''); },
+      modalidade: function (a, b) { return (a.shippingOption || '').localeCompare(b.shippingOption || ''); },
+      full: function (a, b) { return (b.isFbs ? 1 : 0) - (a.isFbs ? 1 : 0); },
+      status: function (a, b) { return (a.normalizedStatus || '').localeCompare(b.normalizedStatus || ''); },
+    };
+    list = list.slice().sort(SORTS[teF.sort] || SORTS.prazo);
+    // cards
+    var counts = {}; base.forEach(function (o) { var c = teClassifica(o); counts[c] = (counts[c] || 0) + 1; });
+    var pendentes = base.filter(function (o) { return !o.shippedAt; });
+    var enviadosNoPrazo = counts.ENVIADO_NO_PRAZO || 0, enviadosAtrasado = counts.ENVIADO_ATRASADO || 0;
+    var pctPrazo = (enviadosNoPrazo + enviadosAtrasado) ? r2(enviadosNoPrazo / (enviadosNoPrazo + enviadosAtrasado) * 100) : null;
+    var strip = kstrip([
+      { l: 'A enviar (com prazo)', v: nn(pendentes.length), cls: 'blue' },
+      { l: 'Atrasados', v: nn(counts.ATRASADO || 0), cls: (counts.ATRASADO ? 'red' : 'green') },
+      { l: 'Vencem hoje', v: nn(counts.VENCE_HOJE || 0), cls: (counts.VENCE_HOJE ? 'amber' : 'green') },
+      { l: 'Próximos do vencimento', v: nn(counts.PROXIMO_DO_PRAZO || 0), cls: 'amber' },
+      { l: 'Enviados no prazo', v: nn(enviadosNoPrazo), cls: 'green' },
+      { l: 'Enviados atrasados', v: nn(enviadosAtrasado), cls: (enviadosAtrasado ? 'red' : 'green') },
+      { l: '% enviados no prazo', v: pctPrazo != null ? pct(pctPrazo) : '—', cls: 'blue' },
+    ]);
+    var classeChips = '<div class="chips"><span class="chip' + (!teF.classe ? ' chip-on' : '') + '" data-teclasse="">Todas</span>' + Object.keys(TE_LABELS).filter(function (k) { return counts[k]; }).map(function (k) { return '<span class="chip' + (teF.classe === k ? ' chip-on' : '') + '" data-teclasse="' + k + '">' + TE_LABELS[k][0] + ' <b>' + nn(counts[k]) + '</b></span>'; }).join('') + '</div>';
+    var presetChips = [['', 'Todos'], ['hoje', 'Hoje'], ['amanha', 'Amanhã'], ['24h', 'Próximas 24h'], ['48h', 'Próximas 48h']];
+    var modOptions = {}; base.forEach(function (o) { if (o.shippingOption) modOptions[o.shippingOption] = 1; });
+    var rows = list.slice(0, 300).map(function (o) {
+      var it = (o.items || [])[0] || {}; var cl = teClassifica(o); var lb = TE_LABELS[cl];
+      return '<tr class="rowlink" data-open="' + esc(o.id) + '"><td class="mono">' + esc(o.id) + '</td><td class="mono">' + esc(o.tracking || '—') + '</td><td class="cell-text">' + esc((it.productName || '—').slice(0, 30)) + '</td><td class="mono">' + esc(it.sku || '—') + '</td><td class="nowrap">' + (o.paidAt ? dbr(o.paidAt) : '—') + '</td><td class="nowrap">' + (o.shipByDate ? new Date(o.shipByDate).toLocaleString('pt-BR') : '—') + '</td><td class="nowrap">' + (o.shippedAt ? new Date(o.shippedAt).toLocaleString('pt-BR') : teCountdownTxt(o)) + '</td><td>' + esc(o.shippingOption || '—') + '</td><td>' + (o.isFbs ? '<span class="tag info">Full</span>' : '—') + '</td><td class="cell-text">' + esc(S.pedidos.labels[o.normalizedStatus] || o.orderStatus || '—') + '</td><td><span class="tag ' + lb[1] + '">' + lb[0] + '</span></td></tr>';
+    }).join('');
+    return head + strip + classeChips +
+      '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Janela:</span>' + presetChips.map(function (c) { return '<span class="chip' + (teF.preset === c[0] ? ' chip-on' : '') + '" data-tepreset="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
+      '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="teq" style="width:240px" placeholder="Buscar pedido, BR, SKU, produto…" value="' + esc(teF.search) + '">' +
+      '<select class="select sm" id="tefull"><option value=""' + (!teF.full ? ' selected' : '') + '>Full e não Full</option><option value="full"' + (teF.full === 'full' ? ' selected' : '') + '>Só Full</option><option value="nfull"' + (teF.full === 'nfull' ? ' selected' : '') + '>Só não Full</option></select>' +
+      '<select class="select sm" id="temod"><option value="">Todas as modalidades</option>' + Object.keys(modOptions).map(function (m) { return '<option value="' + esc(m) + '"' + (teF.modalidade === m ? ' selected' : '') + '>' + esc(m) + '</option>'; }).join('') + '</select>' +
+      '<select class="select sm" id="tesort"><option value="prazo"' + (teF.sort === 'prazo' ? ' selected' : '') + '>Quem vence primeiro</option><option value="pagamento"' + (teF.sort === 'pagamento' ? ' selected' : '') + '>Pagamento mais antigo</option><option value="produto"' + (teF.sort === 'produto' ? ' selected' : '') + '>Produto</option><option value="modalidade"' + (teF.sort === 'modalidade' ? ' selected' : '') + '>Modalidade</option><option value="full"' + (teF.sort === 'full' ? ' selected' : '') + '>Full primeiro</option><option value="status"' + (teF.sort === 'status' ? ' selected' : '') + '>Status</option></select></div>' +
+      '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos' + (list.length > 300 ? ' (mostrando 300)' : '') + '</div>' +
+      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>BR</th><th>Produto</th><th>SKU</th><th>Pagamento</th><th>Prazo de envio</th><th>Enviado / restante</th><th>Modalidade</th><th>Full?</th><th>Status Shopee</th><th>Situação do prazo</th></tr></thead><tbody>' + (rows || '<tr><td colspan="11" class="empty">Nenhum pedido neste filtro.</td></tr>') + '</tbody></table></div></div>';
+  }
+  function bindPedidosTempoEnvio() {
+    app.querySelectorAll('[data-teclasse]').forEach(function (c) { c.onclick = function () { teF.classe = c.dataset.teclasse; render(); }; });
+    app.querySelectorAll('[data-tepreset]').forEach(function (c) { c.onclick = function () { teF.preset = c.dataset.tepreset; render(); }; });
+    var fu = document.getElementById('tefull'); if (fu) fu.onchange = function () { teF.full = fu.value; render(); };
+    var md = document.getElementById('temod'); if (md) md.onchange = function () { teF.modalidade = md.value; render(); };
+    var so = document.getElementById('tesort'); if (so) so.onchange = function () { teF.sort = so.value; render(); };
+    var q = document.getElementById('teq'); if (q) { var deb; q.oninput = function () { clearTimeout(deb); deb = setTimeout(function () { var v = q.value; teF.search = v; render(); var el = document.getElementById('teq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 200); }; }
+    app.querySelectorAll('[data-open]').forEach(function (b) { b.onclick = function () { openOrder(b.dataset.open); }; });
   }
   function openOrder(id) {
     var o = orders.find(function (x) { return x.id === id; }); if (!o) return;
@@ -4337,7 +4506,7 @@ buffer/index.js:
       '<div class="cards6">' + fcard('Venda real', brl(f.revenue), 'blue') + fcard('Valor Total', brl(o.totalAmount), '') + fcard('Taxas marketplace', brl(f.marketplaceFeesTotal), 'red') + fcard('Custo produtos', f.costPending ? '—' : brl(f.productCostTotal), 'amber') + fcard('Lucro estimado', f.estimatedResult == null ? 'pendente' : brl(f.estimatedResult), 'green') + fcard('Margem', f.estimatedMarginPct == null ? '—' : pct(f.estimatedMarginPct), '') + '</div>' +
       '<div class="split"><div><div class="panel"><div class="ph"><h3>Itens do pedido</h3><span class="footnote" style="margin:0">' + o.items.length + '</span></div><div class="pb">' + itemsHtml + '</div></div></div>' +
       '<div><div class="panel"><div class="ph"><h3>Composição financeira</h3></div><div class="pb">' + finLine('Venda real (Σ preço acordado)', f.revenue) + finLine('Valor Total (Shopee)', o.totalAmount) + finLine('Comissão líquida', -o.commissionNet, true) + finLine('Taxa de serviço líquida', -o.serviceFeeNet, true) + finLine('Taxa de transação', -o.transactionFee, true) + finLine('Frete reverso', -o.reverseShippingFee, true) + finLine('Custo produtos', f.costPending ? null : -f.productCostTotal, true) + '<div class="fin-line total"><span>Resultado estimado</span><span class="' + (f.estimatedResult >= 0 ? 'pos' : 'neg') + '">' + (f.estimatedResult == null ? 'pendente (custo)' : brl(f.estimatedResult)) + '</span></div></div></div>' +
-      '<div class="panel"><div class="ph"><h3>Logística & cliente</h3></div><div class="pb">' + kv('Status Shopee', o.orderStatus) + kv('Rastreamento', o.tracking) + kv('Envio', (o.shippingOption || '') + ' ' + (o.shippingMethod || '')) + kv('Cidade/UF', (o.city || '—') + '/' + (o.uf || '—')) + kv('Devolução', o.returnRefundStatus || '—') + '</div></div>' +
+      '<div class="panel"><div class="ph"><h3>Logística & cliente</h3></div><div class="pb">' + kv('Status Shopee', o.orderStatus) + kv('BR / Rastreamento', o.tracking) + kv('Envio', (o.shippingOption || '') + ' ' + (o.shippingMethod || '')) + (o.isFbs ? kv('Full/FBS', 'Sim') : '') + kv('Pagamento', o.paidAt ? new Date(o.paidAt).toLocaleString('pt-BR') : 'não pago') + kv('Prazo de envio', dbr(o.shipByDate)) + kv('Enviado em', o.shippedAt ? new Date(o.shippedAt).toLocaleString('pt-BR') : '—') + kv('Cidade/UF', (o.city || '—') + '/' + (o.uf || '—')) + kv('Devolução', o.returnRefundStatus || '—') + '</div></div>' +
       (occs.length ? '<div class="panel"><div class="ph"><h3>Devolução vinculada</h3></div><div class="pb">' + occs.map(function (x) { return '<div class="ro" style="margin-bottom:6px">' + esc(x.type) + ' · ' + esc(x.status || '—') + ' · ' + brl(x.requested) + ' <span class="tag">' + x.exposure.bucket + '</span></div>'; }).join('') + '</div></div>' : '') +
       '</div></div></div></div>';
     d.onclick = function (e) { if (e.target === d) d.remove(); }; d.querySelector('.x').onclick = function () { d.remove(); };
@@ -4432,7 +4601,7 @@ buffer/index.js:
     var margemPct = (resultadoC != null && receitaC) ? r2(resultadoC / receitaC * 100) : null;
     var taxasConf = mrRow ? conferencia(mrRow.liberado, mrRow.preco + taxasSomaC) : '';
 
-    var idBlock = '<div class="panel"><div class="ph"><h3>Identificação</h3></div><div class="pb">' + kv('Pedido', orderId) + kv('Data da venda', ord ? dbr(ord.createdAt) : '—') + kv('Data de conclusão (Minha Renda)', mrRow ? dbr(mrRow.dataConclusao) : '—') + kv('Data de expedição (bipe)', bip ? new Date(bip.bipedAt).toLocaleString('pt-BR') : 'ainda não expedido') + kv('Status', ord ? (S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus) : '—') + '</div></div>';
+    var idBlock = '<div class="panel"><div class="ph"><h3>Identificação</h3></div><div class="pb">' + kv('Pedido', orderId) + kv('BR / Rastreamento', ord ? ord.tracking : '—') + kv('Data da venda', ord ? dbr(ord.createdAt) : '—') + kv('Data de conclusão (Minha Renda)', mrRow ? dbr(mrRow.dataConclusao) : '—') + kv('Data de expedição (bipe)', bip ? new Date(bip.bipedAt).toLocaleString('pt-BR') : 'ainda não expedido') + kv('Status', ord ? (S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus) : '—') + (ord && ord.isFbs ? kv('Full/FBS', 'Sim') : '') + '</div></div>';
 
     panel.innerHTML = '<div class="dh"><div><b>Ficha Financeira 360º</b> — <span class="mono">' + esc(orderId) + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
       '<div class="kstrip" style="margin-bottom:12px">' +
@@ -6086,12 +6255,16 @@ buffer/index.js:
   function aceleraInPeriod() { return acelera.filter(function (r) { return inPeriod(r.data); }); }
 
   function renderAcelera() {
-    var tabs = [['visao', 'Visão Geral'], ['antecipacoes', 'Antecipações'], ['bipados', 'Pedidos Expedidos × Acelera'], ['desperdicio', 'Devoluções & Desperdício'], ['aliquotas', 'Alíquotas'], ['coortes', 'Coortes'], ['plano', 'Plano de Ação'], ['auditoria', 'Auditoria'], ['config', 'Configurações']];
+    // §34-35 do prompt "Alterações — Sistema Marketplace Líder": Coortes e Plano de Ação saem da
+    // navegação (junto com Capital/Simulador, já removidos antes) — módulo fica focado em
+    // Visão Geral, Antecipações/Conferência (Pedidos Expedidos × Acelera), Divergências
+    // (Devoluções & Desperdício / Alíquotas), Auditoria e Configurações/Importações.
+    var tabs = [['visao', 'Visão Geral'], ['antecipacoes', 'Antecipações'], ['bipados', 'Pedidos Expedidos × Acelera'], ['desperdicio', 'Devoluções & Desperdício'], ['aliquotas', 'Alíquotas'], ['auditoria', 'Auditoria'], ['config', 'Configurações']];
     app.innerHTML = devPeriodBar() + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + tabs.map(function (t) { return '<div class="subtab' + (aceleraSub === t[0] ? ' active' : '') + '" data-acsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-acimport="1">Importar Shopee Acelera</button></div><div id="acbody" style="margin-top:14px"></div>';
     var body = document.getElementById('acbody');
     try {
       if (!acelera.length && aceleraSub !== 'config' && aceleraSub !== 'bipados') body.innerHTML = secHead('SHOPEE ACELERA', 'Antecipação de Recebíveis', 'Quanto antecipamos, quanto pagamos, qual a alíquota real, quanto disso virou desperdício com devolução — e a conferência entre pedido expedido e antecipação.') + emptyBox('Nenhum relatório Shopee Acelera importado. Clique em “Importar Shopee Acelera” e envie o CSV de antecipação de recebíveis.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="acimp">Importar primeiro relatório</button></div>';
-      else body.innerHTML = ({ visao: aceleraVisao, antecipacoes: aceleraAntecipacoes, bipados: aceleraBipados, desperdicio: aceleraDesperdicio, aliquotas: aceleraAliquotas, coortes: aceleraCoortes, plano: aceleraPlano, auditoria: aceleraAuditoria, config: aceleraConfig }[aceleraSub] || aceleraVisao)();
+      else body.innerHTML = ({ visao: aceleraVisao, antecipacoes: aceleraAntecipacoes, bipados: aceleraBipados, desperdicio: aceleraDesperdicio, aliquotas: aceleraAliquotas, auditoria: aceleraAuditoria, config: aceleraConfig }[aceleraSub] || aceleraVisao)();
     } catch (e) { body.innerHTML = '<div class="form-err">Erro ao renderizar o Shopee Acelera: ' + esc(e.message || e) + '</div>'; }
     bindDevPeriodBar();
     app.querySelectorAll('[data-acsub]').forEach(function (b) { b.onclick = function () { aceleraSub = b.dataset.acsub; aceleraPage = 1; render(); }; });
@@ -6262,45 +6435,6 @@ buffer/index.js:
     return head + strip + changeNote + chart + '<div class="panel"><div class="ph"><h3>Linha do tempo da alíquota</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Faixa</th><th>Período</th><th>Antecipado</th><th>Taxa</th></tr></thead><tbody>' + tlRows + '</tbody></table></div></div>';
   }
 
-  function aceleraCoortes() {
-    var head = secHead('ACELERA · COORTES', 'Devolução por coorte (maturação de ' + aceleraCfg.cohortDays + ' dias)', 'Não medimos devolução recente como se estivesse encerrada. Coortes com menos de ' + aceleraCfg.cohortDays + ' dias ainda estão maturando — o percentual delas não deve ser usado isoladamente.');
-    var mm = {}; acelera.forEach(function (r) { var k = (r.data || '').slice(0, 7); if (!k) return; var g = mm[k] = mm[k] || { month: k, antec: 0, reemb: 0, n: 0, madN: 0 }; g.antec += r.antecipado; g.reemb += r.reembolsado; g.n++; if (acAgeDays(r.data) != null && acAgeDays(r.data) >= aceleraCfg.cohortDays) g.madN++; });
-    var months = Object.keys(mm).sort();
-    var rows = months.map(function (k) { var g = mm[k]; var rate = g.antec ? g.reemb / g.antec : 0; var madura = g.n && g.madN / g.n >= 0.9; return '<tr><td>' + esc(k) + '</td><td class="nowrap">' + brlC(g.antec) + '</td><td class="nowrap ' + (g.reemb ? 'neg' : '') + '">' + brlC(g.reemb) + '</td><td>' + pct(r2(rate * 100)) + '</td><td><span class="tag ' + (madura ? 'ok' : 'warn') + '">' + (madura ? 'Madura' : 'Em maturação') + '</span></td></tr>'; }).join('');
-    var m = aceleraMetrics(aceleraInPeriod());
-    var strip = kstrip([
-      { l: 'Coorte madura (≥' + aceleraCfg.cohortDays + 'd)', v: nn(m.cohortMaduraN) + ' pedidos', cls: 'blue', s: brlC(m.cohortMaduraAntec) + ' antecipados' },
-      { l: 'Devolução observada (madura)', v: pct(r2(m.cohortDevolRate * 100)), cls: 'amber', s: 'dado realizado' },
-      { l: 'Reembolsado (madura)', v: brlC(m.cohortMaduraReemb), cls: 'red' },
-    ]);
-    var chart = months.length ? chartCard('Antecipado × Reembolsado por coorte (mês)', legendSwatch([['Antecipado', '#2b4bd6'], ['Reembolsado', '#d13b3b']]), svgGroupBars(months, [{ name: 'Antecipado', color: '#2b4bd6', vals: months.map(function (k) { return mm[k].antec / 100; }) }, { name: 'Reembolsado', color: '#d13b3b', vals: months.map(function (k) { return mm[k].reemb / 100; }) }], { fmt: function (v) { return brl(v); } })) : '';
-    var warn = callout('warn', 'Coortes recentes ainda não maturaram', 'Meses marcados como <b>Em maturação</b> tendem a mostrar devolução artificialmente baixa porque o ciclo ainda não se completou. Use a coorte madura para projeções — nunca a mais recente isoladamente.');
-    return head + strip + chart + warn + '<div class="panel"><div class="ph"><h3>Coortes por mês de antecipação</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Coorte</th><th>Antecipado</th><th>Reembolsado</th><th>% devolução</th><th>Maturidade</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
-  }
-
-  function aceleraPlano() {
-    var m = aceleraMetrics(aceleraInPeriod());
-    var head = secHead('ACELERA · PLANO DE AÇÃO', 'Reduzir o custo da antecipação', 'Metas dinâmicas calculadas sobre os dados reais. Edite as metas em Configurações.');
-    var band35 = m.byResgate.filter(function (g) { return g.band === '3.5%'; }); var vol35 = band35.reduce(function (s, g) { return s + g.antec; }, 0);
-    var indicators = [
-      { l: 'Alíquota efetiva', atual: pct(r2(m.aliquota * 100)), meta: pct(r2(aceleraCfg.aliquotaAlvo * 100)) },
-      { l: 'Volume antecipado (mês)', atual: brlC(m.volumeMensalMedio), meta: brlC(Math.round(m.volumeMensalMedio * aceleraCfg.metaAntecip)) },
-      { l: 'Taxa vinculada a reembolso', atual: brlC(m.taxaReemb), meta: '↓ reduzir' },
-      { l: 'Devolução coorte madura', atual: pct(r2(m.cohortDevolRate * 100)), meta: '≤ ' + pct(r2(aceleraCfg.limiteDevol * 100)) },
-      { l: 'Dias de cobertura de caixa', atual: r2(m.coberturaDias) + 'd', meta: aceleraCfg.metaCobertura + 'd' },
-    ];
-    var indRows = indicators.map(function (i) { return '<tr><td>' + esc(i.l) + '</td><td class="nowrap"><b>' + i.atual + '</b></td><td class="nowrap">' + i.meta + '</td></tr>'; }).join('');
-    var fases = [
-      { f: 'Fase 1 — Medir', d: 'Importar todos os relatórios, conciliar com o resumo da Shopee, mapear alíquotas e coortes.', done: acelera.length > 0 },
-      { f: 'Fase 2 — Reduzir automatismo', d: 'Parar de antecipar 100% cegamente; aplicar teto de ticket e cortar faixas de maior risco (ver Simulador).', done: false },
-      { f: 'Fase 3 — Atingir o alvo', d: 'Reduzir antecipação para ' + pct(r2(aceleraCfg.metaAntecip * 100)) + ' do volume com colchão de caixa e/ou linha bancária mais barata.', done: false },
-    ];
-    var faseRows = fases.map(function (x) { return '<div class="fin-line"><span>' + (x.done ? '✅ ' : '⬜ ') + '<b>' + esc(x.f) + '</b> — ' + esc(x.d) + '</span></div>'; }).join('');
-    var alvoAno = brlC(Math.round(m.custoProj12m * aceleraCfg.metaAntecip));
-    return head + callout('', 'Meta financeira', 'Situação atual: <b>' + brlC(m.custoProj12m) + '/ano</b> de custo projetado. Meta (' + pct(r2(aceleraCfg.metaAntecip * 100)) + ' do volume): <b>' + alvoAno + '/ano</b>. Economia alvo: <b>' + brlC(m.custoProj12m - Math.round(m.custoProj12m * aceleraCfg.metaAntecip)) + '/ano</b>.') +
-      '<div class="panel"><div class="ph"><h3>Indicadores permanentes — atual × meta</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Indicador</th><th>Atual</th><th>Meta</th></tr></thead><tbody>' + indRows + '</tbody></table></div></div>' +
-      '<div class="panel"><div class="ph"><h3>Fases</h3></div><div class="pb">' + faseRows + '</div></div>';
-  }
 
   // Cruza os pedidos EXPEDIDOS (bipe, módulo Pedidos) com o Shopee Acelera: os que deveriam ter
   // sido antecipados foram encontrados? §3 do prompt de reorganização financeira e operacional.
@@ -6366,7 +6500,7 @@ buffer/index.js:
       f('cfgcob', 'Meta de cobertura (dias)', aceleraCfg.metaCobertura) +
       f('cfgtol', 'Tolerância de alíquota (%)', r2(aceleraCfg.tolAliquota * 100)) +
       '</div><div style="margin-top:12px"><button class="btn-sm primary" id="cfgsave">Salvar configurações</button></div>' +
-      '<div class="footnote" style="margin-top:8px">As configurações persistem no navegador e alimentam Coortes, a Visão Geral (capital para independência) e Plano de Ação.</div></div></div>';
+      '<div class="footnote" style="margin-top:8px">As configurações persistem no navegador e alimentam a Visão Geral (capital para independência, alíquota) e as Antecipações.</div></div></div>';
   }
   function bindAceleraConfig() {
     var s = document.getElementById('cfgsave'); if (!s) return;
@@ -7032,12 +7166,15 @@ buffer/index.js:
     // Ordem fixa pelo prompt de alterações pontuais (§2-3, §19): Visão Geral no topo, Meta & Projeção
     // sempre por último. DRE/Taxas/Categorias/Produtos priorizam a análise financeira real; Frete,
     // Ajustes, Conciliação e Auditoria são as abas já existentes, preservadas sem alteração de posição relativa.
-    var tabs = [['visao', 'Visão Geral'], ['dre', 'DRE'], ['taxas', 'Taxas Shopee'], ['categorias', 'Categorias'], ['produto', 'Produtos e SKUs'], ['frete', 'Frete & Divergências'], ['ajustes', 'Ajustes'], ['conciliacao', 'Conciliação Declaração'], ['auditoria', 'Auditoria'], ['meta', 'Meta & Projeção']];
+    // §39 do prompt "Alterações — Sistema Marketplace Líder": Visão Geral, DRE, Taxas, Categorias,
+    // Produtos/SKUs, Lucro e Prejuízo, Tendências, Meta e Projeção (sempre por último). Frete,
+    // Ajustes, Conciliação e Auditoria são abas já existentes, preservadas.
+    var tabs = [['visao', 'Visão Geral'], ['dre', 'DRE'], ['taxas', 'Taxas Shopee'], ['categorias', 'Categorias'], ['produto', 'Produtos e SKUs'], ['lucroprejuizo', 'Lucro e Prejuízo'], ['tendencias', 'Tendências'], ['frete', 'Frete & Divergências'], ['ajustes', 'Ajustes'], ['conciliacao', 'Conciliação Declaração'], ['auditoria', 'Auditoria'], ['meta', 'Meta & Projeção']];
     app.innerHTML = devPeriodBar() + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + tabs.map(function (t) { return '<div class="subtab' + (mrSub === t[0] ? ' active' : '') + '" data-mrsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-mrimport="1">Importar Income / Declaração</button></div><div id="mrbody" style="margin-top:14px"></div>';
     var body = document.getElementById('mrbody');
     try {
       if (!mrRenda.length && !mrShip.length && !mrPdf.length && mrSub !== 'meta') body.innerHTML = secHead('MINHA RENDA', 'Consolidação Financeira Shopee', 'Quanto vendemos, quanto foi descontado, para onde foi o dinheiro e quanto a Shopee liberou — do agregado até o pedido.') + emptyBox('Nenhum relatório importado. Envie o Income (XLSX) e/ou a Declaração de Renda (PDF) da Shopee. O tipo é detectado automaticamente.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="mrimp">Importar primeiro relatório</button></div>';
-      else body.innerHTML = ({ visao: mrVisao, dre: mrDRE, taxas: mrTaxas, categorias: mrCategorias, produto: mrProduto, frete: mrFrete, ajustes: mrAjustes, conciliacao: mrConciliacao, auditoria: mrAuditoria, meta: mrMeta }[mrSub] || mrVisao)();
+      else body.innerHTML = ({ visao: mrVisao, dre: mrDRE, taxas: mrTaxas, categorias: mrCategorias, produto: mrProduto, lucroprejuizo: mrLucroPrejuizo, tendencias: mrTendencias, frete: mrFrete, ajustes: mrAjustes, conciliacao: mrConciliacao, auditoria: mrAuditoria, meta: mrMeta }[mrSub] || mrVisao)();
     } catch (e) { body.innerHTML = '<div class="form-err">Erro ao renderizar Minha Renda: ' + esc(e.message || e) + '</div>'; }
     app.querySelectorAll('[data-mrsub]').forEach(function (b) { b.onclick = function () { mrSub = b.dataset.mrsub; mrPage = 1; render(); }; });
     var imp = function () { fileInput(function (f) { importMinhaRenda(f).then(function (b) { render(); if (b.kind === 'pdf') toast(b.ok ? 'Declaração PDF lida' : 'PDF processado parcialmente', b.ok ? 'Pagamento liberado ' + brlC(b.decl.liberado) : 'Não foi possível reconhecer todos os campos do PDF'); else toast('Income importado', b.stats.renda + ' linhas de renda · ' + b.stats.ship + ' fretes · ' + b.stats.adj + ' ajustes'); }).catch(function (e) { toast('Falha', e.message, true); }); }); };
@@ -7094,20 +7231,29 @@ buffer/index.js:
       { l: 'Outros Descontos/Ajustes', v: brlC(outrosAbs), cls: 'amber' },
     ]);
     var coverage = t.nMR < pe.n ? callout('warn', 'Cobertura da Minha Renda no período', '<b>' + nn(t.nMR) + '</b> de <b>' + nn(pe.n) + '</b> pedidos têm dados reais da Shopee (Income) no período. Faturamento e Lucro usam também o resultado estimado de Pedidos para os demais; Taxas Shopee/Afiliados/Devoluções/Receita Líquida acima refletem <b>só</b> os pedidos cobertos pela Minha Renda — nunca estimados.') : '';
-    // comparação com o período anterior equivalente (§14) — dobra como "Comparações e tendências"
-    var prevR = mrPrevRange(); var trend;
-    if (prevR) {
-      var pv = mrPeriodEngine(prevR); var pvTem = pv.lucroN > 0;
-      var pvFat = pvTem ? pv.faturamento : null, pvLucro = pvTem ? pv.lucro : null, pvTicket = pvTem ? Math.round(pv.faturamento / pv.lucroN) : null, pvLucroPed = pvTem ? Math.round(pv.lucro / pv.lucroN) : null;
-      var brlCN = function (v) { return v == null ? 'não disponível' : brlC(v); };
-      var items = [['Faturamento Bruto', temLucro ? pe.faturamento : null, pvFat, brlCN], ['Receita Líquida', t.liberado, pv.t.liberado, brlC], ['Lucro', temLucro ? pe.lucro : null, pvLucro, brlCN], ['Pedidos', pe.n, pv.n, nn], ['Ticket Médio', ticketMedio, pvTicket, brlCN], ['Lucro por Pedido', lucroMedioPedido, pvLucroPed, brlCN], ['Total Taxas Shopee', taxasShopeeAbs, Math.abs(pv.taxasShopeeTotal), brlC], ['Afiliados', afiliadosAbs, Math.abs(pv.t.afiliado), brlC], ['Devoluções', devolucoesAbs, Math.abs(pv.t.reembolso), brlC]];
-      var rows = items.map(function (it) { var arrow = (it[1] == null || it[2] == null) ? '—' : mrTrendArrow(it[1], it[2]); var vp = (it[1] == null || it[2] == null) ? null : mrTrendPct(it[1], it[2]); return '<tr><td>' + esc(it[0]) + '</td><td class="nowrap">' + it[3](it[2]) + '</td><td class="nowrap"><b>' + it[3](it[1]) + '</b></td><td class="nowrap ' + (arrow === '↑' ? 'pos' : arrow === '↓' ? 'neg' : '') + '">' + arrow + (vp != null ? ' ' + (vp >= 0 ? '+' : '') + pct(vp) : '') + '</td></tr>'; }).join('');
-      trend = '<div class="panel"><div class="ph"><h3>Comparações e tendências</h3><span class="footnote" style="margin:0">vs. período anterior de mesma duração</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Métrica</th><th>Período anterior</th><th>Período atual</th><th>Variação</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
-    } else trend = callout('', 'Comparações e tendências', 'Selecione um período específico (não "Todo o período") para comparar com o intervalo imediatamente anterior de mesma duração.');
+    var tendLink = callout('', 'Comparações e tendências', 'A comparação com o período anterior agora tem aba própria. <button class="btn-sm" data-mrgo="tendencias">Ver Tendências</button>');
     var e = mrEngine();
     var dedup = callout('', 'ORDER × SKU (sem dupla contagem)', mrRenda.length ? 'Importadas <b>' + nn(e.orders.length) + '</b> linhas Order (financeiro) e <b>' + nn(mrRenda.length - e.orders.length) + '</b> linhas SKU (atribuição de produto) no total já importado. Os valores financeiros vêm só das linhas Order.' : '');
     var ship = e.shipTot; var shipBox = ship.n ? callout('warn', 'Frete acima do esperado (histórico completo, sem data confiável para filtrar): ' + brlC(ship.diff), '<b>' + nn(ship.n) + '</b> pedidos · esperado ' + brlC(ship.esperado) + ' · real ' + brlC(ship.real) + '. <button class="btn-sm" data-mrgo="frete">Investigar</button>') : '';
-    return head + strip1 + strip2 + strip3 + coverage + mrWaterfall(t) + trend + dedup + shipBox + mrAlertas();
+    return head + strip1 + strip2 + strip3 + coverage + mrWaterfall(t) + tendLink + dedup + shipBox + mrAlertas();
+  }
+  // ---- Tendências (§39): comparação com o período anterior equivalente, aba própria ----
+  function mrTendencias() {
+    var pe = mrPeriodEngine(); var t = pe.t; var temLucro = pe.lucroN > 0;
+    var head = secHead('MINHA RENDA · TENDÊNCIAS', 'Como o período atual se compara ao anterior', 'Mesma duração do período selecionado no topo da tela, deslocada para trás — não é necessariamente o "mês anterior" no calendário.');
+    var ticketMedio = temLucro ? Math.round(pe.faturamento / pe.lucroN) : null;
+    var lucroMedioPedido = temLucro ? Math.round(pe.lucro / pe.lucroN) : null;
+    var taxasShopeeAbs = Math.abs(pe.taxasShopeeTotal), afiliadosAbs = Math.abs(t.afiliado), devolucoesAbs = Math.abs(t.reembolso);
+    var prevR = mrPrevRange();
+    if (!prevR) return head + callout('', 'Sem período anterior para comparar', 'Selecione um período específico (não "Todo o período") para comparar com o intervalo imediatamente anterior de mesma duração.');
+    var pv = mrPeriodEngine(prevR); var pvTem = pv.lucroN > 0;
+    var pvFat = pvTem ? pv.faturamento : null, pvLucro = pvTem ? pv.lucro : null, pvTicket = pvTem ? Math.round(pv.faturamento / pv.lucroN) : null, pvLucroPed = pvTem ? Math.round(pv.lucro / pv.lucroN) : null;
+    var brlCN = function (v) { return v == null ? 'não disponível' : brlC(v); };
+    var items = [['Faturamento Bruto', temLucro ? pe.faturamento : null, pvFat, brlCN], ['Receita Líquida', t.liberado, pv.t.liberado, brlC], ['Lucro', temLucro ? pe.lucro : null, pvLucro, brlCN], ['Pedidos', pe.n, pv.n, nn], ['Ticket Médio', ticketMedio, pvTicket, brlCN], ['Lucro por Pedido', lucroMedioPedido, pvLucroPed, brlCN], ['Total Taxas Shopee', taxasShopeeAbs, Math.abs(pv.taxasShopeeTotal), brlC], ['Afiliados', afiliadosAbs, Math.abs(pv.t.afiliado), brlC], ['Devoluções', devolucoesAbs, Math.abs(pv.t.reembolso), brlC]];
+    var rows = items.map(function (it) { var arrow = (it[1] == null || it[2] == null) ? '—' : mrTrendArrow(it[1], it[2]); var vp = (it[1] == null || it[2] == null) ? null : mrTrendPct(it[1], it[2]); return '<tr><td>' + esc(it[0]) + '</td><td class="nowrap">' + it[3](it[2]) + '</td><td class="nowrap"><b>' + it[3](it[1]) + '</b></td><td class="nowrap ' + (arrow === '↑' ? 'pos' : arrow === '↓' ? 'neg' : '') + '">' + arrow + (vp != null ? ' ' + (vp >= 0 ? '+' : '') + pct(vp) : '') + '</td></tr>'; }).join('');
+    var table = '<div class="panel"><div class="ph"><h3>Período atual × período anterior</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Métrica</th><th>Período anterior</th><th>Período atual</th><th>Variação</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+    var chart = chartCard('Faturamento e Lucro — atual × anterior', legendSwatch([['Anterior', '#94a3b8'], ['Atual', '#2b4bd6']]), svgGroupBars(['Faturamento', 'Lucro'], [{ name: 'Anterior', color: '#94a3b8', vals: [(pvFat || 0) / 100, (pvLucro || 0) / 100] }, { name: 'Atual', color: '#2b4bd6', vals: [(temLucro ? pe.faturamento : 0) / 100, (temLucro ? pe.lucro : 0) / 100] }], { fmt: function (v) { return brl(v); } }));
+    return head + table + chart;
   }
   // Central de alertas determinística (cruza Minha Renda × Acelera × Devoluções × Carteira × Meta).
   function mrAlertas() {
@@ -7505,6 +7651,32 @@ buffer/index.js:
     maiorPerdaDevol: { label: 'Maior perda c/ devolução', pred: function (x) { return x.devLoss != null && x.devLoss > 0; }, sort: function (a, b) { return b.devLoss - a.devLoss; } },
     maiorCustoAfiliado: { label: 'Maior custo de afiliado', pred: function (x) { return x.custoAfiliado !== 0; }, sort: function (a, b) { return Math.abs(b.custoAfiliado) - Math.abs(a.custoAfiliado); } },
   };
+  // ---- Lucro e Prejuízo (§39): visão consolidada — detalhamento fica em Produtos e SKUs ----
+  function mrLucroPrejuizo() {
+    var pe = mrPeriodEngine(); var list = pe.skuList; var cross = pe.cross;
+    var head = secHead('MINHA RENDA · LUCRO E PREJUÍZO', 'Onde o resultado do período vem de fato', 'Mesmo motor de lucro da Ficha 360/Meta. Para a tabela completa e filtros por SKU, use Produtos e SKUs.');
+    var withProfit = list.filter(function (x) { return x.lucroN > 0; });
+    if (!withProfit.length) return head + emptyBox('Nenhum SKU do período tem custo cadastrado em Produtos para calcular lucro/prejuízo.');
+    var lucroTotal = withProfit.filter(function (x) { return x.lucro > 0; }).reduce(function (s, x) { return s + x.lucro; }, 0);
+    var prejuizoTotal = withProfit.filter(function (x) { return x.lucro < 0; }).reduce(function (s, x) { return s + x.lucro; }, 0);
+    var liquido = lucroTotal + prejuizoTotal;
+    var comPrejuizo = withProfit.filter(function (x) { return x.lucro < 0; });
+    var strip = kstrip([
+      { l: 'Lucro bruto (SKUs positivos)', v: brlC(lucroTotal), cls: 'green' },
+      { l: 'Prejuízo (SKUs negativos)', v: brlC(prejuizoTotal), cls: 'red' },
+      { l: 'Resultado líquido', v: brlC(liquido), cls: liquido >= 0 ? 'green' : 'red' },
+      { l: 'SKUs com prejuízo', v: nn(comPrejuizo.length) + ' de ' + nn(withProfit.length), cls: comPrejuizo.length ? 'amber' : 'green' },
+    ]);
+    var topLucro = withProfit.filter(function (x) { return x.lucro > 0; }).sort(function (a, b) { return b.lucro - a.lucro; }).slice(0, 10);
+    var topPrejuizo = comPrejuizo.slice().sort(function (a, b) { return a.lucro - b.lucro; }).slice(0, 10);
+    var tblLucro = '<div class="panel"><div class="ph"><h3>🟢 Maiores lucros</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>SKU</th><th>Produto</th><th>Lucro</th><th>Margem</th></tr></thead><tbody>' + (topLucro.map(function (x) { return '<tr><td class="mono">' + esc(x.sku) + '</td><td class="cell-text">' + esc((x.produto || '—').slice(0, 28)) + '</td><td class="nowrap pos"><b>' + brlC(x.lucro) + '</b></td><td>' + (x.margem != null ? pct(x.margem) : '—') + '</td></tr>'; }).join('') || '<tr><td colspan="4" class="empty">—</td></tr>') + '</tbody></table></div></div>';
+    var tblPrejuizo = '<div class="panel"><div class="ph"><h3>🔴 Maiores prejuízos</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>SKU</th><th>Produto</th><th>Resultado</th><th>Margem</th><th>Principal motivo</th></tr></thead><tbody>' + (topPrejuizo.map(function (x) { return '<tr><td class="mono">' + esc(x.sku) + '</td><td class="cell-text">' + esc((x.produto || '—').slice(0, 24)) + '</td><td class="nowrap neg"><b>' + brlC(x.lucro) + '</b></td><td class="neg">' + (x.margem != null ? pct(x.margem) : '—') + '</td><td>' + esc(mrMotivoPrejuizo(x)) + '</td></tr>'; }).join('') || '<tr><td colspan="5" class="empty">Nenhum SKU com prejuízo no período. 🎉</td></tr>') + '</tbody></table></div></div>';
+    var bands = MR_MARGEM_BANDS.map(function (b) { var items = withProfit.filter(function (x) { return mrMargemBand(x.margem) === b[0]; }); return { b: b, n: items.length, fat: items.reduce(function (s, x) { return s + x.preco; }, 0), lucro: items.reduce(function (s, x) { return s + x.lucro; }, 0) }; });
+    var bandRows = bands.map(function (g) { return '<tr><td>' + esc(g.b[1]) + '</td><td>' + nn(g.n) + '</td><td class="nowrap">' + brlC(g.fat) + '</td><td class="nowrap ' + (g.lucro < 0 ? 'neg' : 'pos') + '">' + brlC(g.lucro) + '</td></tr>'; }).join('');
+    var tblBandas = '<div class="panel"><div class="ph"><h3>Faixas de margem</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Faixa</th><th>SKUs</th><th>Faturamento</th><th>Lucro</th></tr></thead><tbody>' + bandRows + '</tbody></table></div></div>';
+    var goProd = callout('', 'Quer ver todos os SKUs, com filtros?', '<button class="btn-sm" data-mrgo="produto">Abrir Produtos e SKUs</button>');
+    return head + strip + tblLucro + tblPrejuizo + tblBandas + goProd;
+  }
   function mrProduto() {
     var pe = mrPeriodEngine(); var list = pe.skuList; var cross = pe.cross;
     var head = secHead('MINHA RENDA · PRODUTOS E SKUS', 'Rentabilidade por SKU no período', 'Lucro e margem usam o mesmo motor da Ficha 360/Meta (custo de Produtos + taxas reais). Unidades e Família só aparecem quando o SKU do Income coincide de fato com o SKU de Pedidos/Produtos — "custo pendente" nunca é tratado como zero.');
