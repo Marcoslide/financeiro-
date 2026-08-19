@@ -269,9 +269,9 @@
     var p = periodSel.value, now = new Date();
     if (p === 'today') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate()) };
     if (p === 'yesterday') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1), to: new Date(now.getFullYear(), now.getMonth(), now.getDate()) };
-    if (p === '7d') return { from: new Date(now - 7 * 864e5) };
-    if (p === '15d') return { from: new Date(now - 15 * 864e5) };
-    if (p === '30d') return { from: new Date(now - 30 * 864e5) };
+    if (p === '7d') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6) };
+    if (p === '15d') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 14) };
+    if (p === '30d') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29) };
     if (p === 'month') return { from: new Date(now.getFullYear(), now.getMonth(), 1) };
     if (p === 'prevmonth') return { from: new Date(now.getFullYear(), now.getMonth() - 1, 1), to: new Date(now.getFullYear(), now.getMonth(), 1) };
     if (p === 'custom') { var r = {}; if (customRange.from) r.from = new Date(customRange.from + 'T00:00:00'); if (customRange.to) r.to = new Date(customRange.to + 'T23:59:59'); return r; }
@@ -433,8 +433,23 @@
   // §12-18: "pedidos feitos" (Data de criação) ≠ "pedidos pagos" (Hora do pagamento) — pedido sem
   // pagamento real ("-" na planilha) nunca conta como pago. As duas métricas ficam sempre visíveis
   // juntas; o toggle de base temporal só decide qual delas alimenta os cards que precisam de UMA base.
-  var pedDashBasis = 'criacao'; // 'criacao' | 'pagamento'
+  // §9: indicadores financeiros/de venda usam PAGAMENTO por padrão; indicadores de entrada
+  // operacional (pedidos feitos, fila de expedição, tempo de envio) sempre usam CRIAÇÃO — essa
+  // segunda parte nunca passou pelo seletor, então só o default abaixo muda.
+  var pedDashBasis = 'pagamento'; // 'criacao' | 'pagamento'
   function pedidosPagosInPeriod() { return orders.filter(function (o) { return o.paidAt && inPeriod(o.paidAt); }); }
+  // §10: "Dados atualizados até" — maior timestamp válido encontrado nos Pedidos importados, para o
+  // sistema nunca parecer "errado" por não ser tempo real (a Shopee só exporta até o momento do download).
+  var PED_TS_FIELDS = ['createdAt', 'paidAt', 'shippedAt', 'deliveredAt', 'completedAt', 'cancelledAt'];
+  function dadosAtualizadosAte() {
+    var max = null;
+    orders.forEach(function (o) { PED_TS_FIELDS.forEach(function (k) { var v = o[k]; if (v && (!max || v > max)) max = v; }); });
+    return max;
+  }
+  function dadosAtualizadosAteBadge() {
+    var ts = dadosAtualizadosAte();
+    return '<div class="footnote" style="margin:4px 0 12px">📅 Dados atualizados até: <b>' + (ts ? new Date(ts).toLocaleString('pt-BR') : 'sem pedidos importados') + '</b> — a Shopee só exporta até o momento do download, este sistema não é tempo real.</div>';
+  }
   function renderDashboard() {
     var a = computeOrderAgg(); var o = occInPeriod(); var exposure = sumExposure(o);
     var empty = orders.length === 0 && occ.length === 0 && (!Produtos || Produtos.getData().products.length === 0);
@@ -452,6 +467,7 @@
     app.innerHTML =
       '<div class="page-head"><div><h2>Pedidos</h2><p>Núcleo transacional. Importação idempotente (upsert), sem duplicar vendas.</p></div>' +
       '<button class="btn-sm primary" id="imp-ped">Importar planilha de pedidos</button></div>' +
+      dadosAtualizadosAteBadge() +
       devPeriodBar() +
       '<div class="subtabs">' + subtab('pedidos', 'pedidos', 'Pedidos') + subtab('pedidos', 'expedicao', 'Expedição') + subtab('pedidos', 'tempoenvio', 'Tempo de Envio') + subtab('pedidos', 'dashboard', 'Dashboard') + subtab('pedidos', 'import', 'Importações') + '</div>' +
       (sub.pedidos === 'dashboard' ? pedidosDashboard() : sub.pedidos === 'import' ? importsFor('Pedidos') : sub.pedidos === 'expedicao' ? pedidosExpedicao() : sub.pedidos === 'tempoenvio' ? pedidosTempoEnvio() : pedidosList());
@@ -3298,26 +3314,39 @@
     var within = mrRange(range);
     var e = mrEngine(); var mrByOrder = {}; e.orders.forEach(function (r) { mrByOrder[r.orderId] = r; });
     var profitOf = mrOrderProfitEngine();
-    var list = orders.filter(function (o) { return within(o.createdAt); });
+    // REGRA CENTRAL / §24: "o período é definido pela venda paga" — Visão Geral/DRE/Taxas/Categorias/
+    // Produtos usam os PEDIDOS PAGOS no período (Hora do pagamento, nunca a criação). As taxas da
+    // Minha Renda são cruzadas por ID a partir desta mesma lista de pedidos pagos.
+    var list = orders.filter(function (o) { return o.paidAt && within(o.paidAt); });
     var t = { n: 0, nMR: 0 }; MR_FIELDS.forEach(function (k) { t[k] = 0; });
-    var lucro = 0, lucroN = 0, pendN = 0, custoProd = 0, custoProdN = 0, faturamento = 0; var mrRows = [];
+    // §13/§16: Faturamento Bruto e Custo dos Produtos são calculados direto de Pedidos (preço
+    // acordado × quantidade / custo por item cadastrado em Produtos), SEM depender de a Minha Renda
+    // cobrir o pedido e SEM exigir que TODOS os itens do pedido tenham custo — custo é cobertura
+    // parcial por item, nunca tudo-ou-nada por pedido. Só o Lucro (que precisa do pedido inteiro
+    // custeado) continua gated por profitOf/p.known — e isso fica sinalizado como "parcial" na UI.
+    var lucro = 0, lucroN = 0, pendN = 0, faturamento = 0;
+    var custoProd = 0, custoItemsKnown = 0, custoItemsTotal = 0, custoOrdersFullN = 0;
+    var mrRows = [];
     var bySku = {};
     list.forEach(function (o) {
       t.n++;
       var mrRow = mrByOrder[o.id];
       if (mrRow) { t.nMR++; MR_FIELDS.forEach(function (k) { t[k] += mrRow[k]; }); mrRows.push(mrRow); }
+      var f = orderFinance(o);
+      faturamento += Math.round(f.revenue * 100);
+      if (!f.costPending) custoOrdersFullN++;
+      f._items.forEach(function (it) { custoItemsTotal++; if (!it.costUnknown && it.costTotal != null) custoItemsKnown++; });
+      var cC = Math.round((f.productCostTotal || 0) * 100); custoProd += cC;
       var p = profitOf(o);
       var sk = mrRow ? e.skuByOrder[o.id] : null;
       var key = sk && sk[0] ? sk[0].sku : ((o.items[0] && o.items[0].sku) || '(sem sku)');
       var prod = sk && sk[0] ? sk[0].produto : ((o.items[0] && o.items[0].productName) || '');
       var g = bySku[key] = bySku[key] || { sku: key, produto: prod, familia: null, n: 0, nMR: 0, units: 0, preco: 0, liberado: 0, taxasShopee: 0, custoAfiliado: 0, custoProduto: 0, lucro: 0, lucroN: 0, pendN: 0, devN: 0, devLoss: 0 };
       g.n++;
+      g.preco += mrRow ? mrRow.preco : Math.round(f.revenue * 100);
+      g.custoProduto += cC;
       if (mrRow) { g.nMR++; g.liberado += mrRow.liberado; g.taxasShopee += (mrRow.comissao + mrRow.servico + mrRow.transacao + mrRow.freteParceiro + mrRow.descontoFrete + mrRow.envioReverso); g.custoAfiliado += mrRow.afiliado; }
-      if (p.known) {
-        faturamento += p.receita; lucro += p.lucro; lucroN++; g.lucro += p.lucro; g.lucroN++;
-        if (!mrRow) g.preco += p.receita; else g.preco += mrRow.preco;
-        var f = orderFinance(o); if (!f.costPending) { var cC = Math.round((f.productCostTotal || 0) * 100); custoProd += cC; custoProdN++; g.custoProduto += cC; }
-      } else { pendN++; g.pendN++; }
+      if (p.known) { lucro += p.lucro; lucroN++; g.lucro += p.lucro; g.lucroN++; } else { pendN++; g.pendN++; }
     });
     var cross = mrSkuCrossCheck();
     if (cross.reliable) {
@@ -3337,7 +3366,39 @@
     var taxasShopeeTotal = t.comissao + t.servico + t.transacao + t.freteParceiro + t.descontoFrete + t.envioReverso;
     var descontosComerciais = t.cupom + t.pix;
     var receitaLiquida = t.preco + descontosComerciais + taxasShopeeTotal + t.afiliado + t.reembolso; // deve ≈ t.liberado
-    return { range: within, n: list.length, t: t, faturamento: faturamento, lucro: lucro, lucroN: lucroN, pendN: pendN, custoProd: custoProd, custoProdN: custoProdN, skuList: skuList, adjTot: e.adjTot, taxasShopeeTotal: taxasShopeeTotal, descontosComerciais: descontosComerciais, receitaLiquida: receitaLiquida, cross: cross, rows: mrRows };
+    var custoCoveragePct = custoItemsTotal ? r2(custoItemsKnown / custoItemsTotal * 100) : 0;
+    return {
+      range: within, n: list.length, t: t, faturamento: faturamento, lucro: lucro, lucroN: lucroN, pendN: pendN,
+      custoProd: custoProd, custoProdN: custoOrdersFullN, custoItemsKnown: custoItemsKnown, custoItemsTotal: custoItemsTotal, custoCoveragePct: custoCoveragePct,
+      skuList: skuList, adjTot: e.adjTot, taxasShopeeTotal: taxasShopeeTotal, descontosComerciais: descontosComerciais, receitaLiquida: receitaLiquida, cross: cross, rows: mrRows,
+    };
+  }
+  // §25: cobertura financeira do período (pedidos pagos × MR localizada × custo cadastrado × taxas
+  // completas × devolução conciliada) — mostrado explicitamente para nunca fingir 100% de precisão.
+  function mrCoberturaFinanceira(range) {
+    var pe = mrPeriodEngine(range); var within = mrRange(range);
+    var list = orders.filter(function (o) { return o.paidAt && within(o.paidAt); });
+    var comDevolConciliada = 0;
+    list.forEach(function (o) {
+      var casos = occ.filter(function (c) { return !c.isDemo && c.orderId === o.id; });
+      if (!casos.length || casos.every(function (c) { return c.receiptState === 'RECEBIDO'; })) comDevolConciliada++;
+    });
+    var full = list.filter(function (o) { var f = orderFinance(o); return !f.costPending; }).length;
+    var totalDim = list.length ? (pe.t.nMR + full + pe.t.nMR + comDevolConciliada) : 0;
+    var coberturaTotal = list.length ? r2(totalDim / (list.length * 4) * 100) : 0;
+    return { n: list.length, comMR: pe.t.nMR, comCusto: full, comTaxas: pe.t.nMR, comDevol: comDevolConciliada, coberturaTotal: coberturaTotal };
+  }
+  function mrCoberturaBox(range) {
+    var c = mrCoberturaFinanceira(range);
+    if (!c.n) return '';
+    return '<div class="panel"><div class="ph"><h3>Cobertura financeira do período</h3><span class="footnote" style="margin:0">quanto dos pedidos pagos tem cada fonte cruzada — a base honesta por trás dos números acima</span></div><div class="table-wrap"><table class="report"><tbody>' +
+      '<tr><td>Pedidos pagos</td><td class="nowrap"><b>' + nn(c.n) + '</b></td><td></td></tr>' +
+      '<tr><td>Com Minha Renda localizada</td><td class="nowrap">' + nn(c.comMR) + '</td><td>' + pct(c.n ? r2(c.comMR / c.n * 100) : 0) + '</td></tr>' +
+      '<tr><td>Com custo cadastrado (todos os itens)</td><td class="nowrap">' + nn(c.comCusto) + '</td><td>' + pct(c.n ? r2(c.comCusto / c.n * 100) : 0) + '</td></tr>' +
+      '<tr><td>Com taxas completas (Minha Renda)</td><td class="nowrap">' + nn(c.comTaxas) + '</td><td>' + pct(c.n ? r2(c.comTaxas / c.n * 100) : 0) + '</td></tr>' +
+      '<tr><td>Com devolução conciliada</td><td class="nowrap">' + nn(c.comDevol) + '</td><td>' + pct(c.n ? r2(c.comDevol / c.n * 100) : 0) + '</td></tr>' +
+      '<tr style="border-top:2px solid var(--line)"><td><b>Cobertura total</b></td><td class="nowrap"><b>' + pct(c.coberturaTotal) + '</b></td><td></td></tr>' +
+      '</tbody></table></div></div>';
   }
   function mrTrendArrow(cur, prev) { if (prev == null || prev === 0) return cur > 0 ? '↑' : cur < 0 ? '↓' : '→'; var v = (cur - prev) / Math.abs(prev); return v > 0.01 ? '↑' : v < -0.01 ? '↓' : '→'; }
   function mrTrendPct(cur, prev) { if (prev == null || prev === 0) return null; return r2((cur - prev) / Math.abs(prev) * 100); }
@@ -3365,14 +3426,22 @@
     } else if (kind === 'adjustes') {
       mrAdj.forEach(function (a) { rows.push({ orderId: a.orderId || '—', data: null, sku: '—', produto: '—', descricao: a.desc || 'Ajuste', valor: a.valor }); });
     } else if (kind === 'custoProdutos') {
-      orders.filter(function (o) { return inPeriod(o.createdAt); }).forEach(function (o) { var f = orderFinance(o); if (f.costPending) return; var cC = Math.round((f.productCostTotal || 0) * 100); if (!cC) return; rows.push({ orderId: o.id, data: o.createdAt, sku: (o.items[0] && o.items[0].sku) || '—', produto: (o.items[0] && o.items[0].productName) || '—', descricao: 'Custo do produto', valor: -cC }); });
-    } else if (kind === 'faturamento' || kind === 'lucro') {
+      // §16/§24: pedidos PAGOS do período, cobertura parcial por item (nunca tudo-ou-nada por pedido)
+      // — mesma base de pedidos e mesma soma parcial de mrPeriodEngine().
+      orders.filter(function (o) { return o.paidAt && inPeriod(o.paidAt); }).forEach(function (o) { var f = orderFinance(o); var cC = Math.round((f.productCostTotal || 0) * 100); if (!cC) return; rows.push({ orderId: o.id, data: o.paidAt, sku: (o.items[0] && o.items[0].sku) || '—', produto: (o.items[0] && o.items[0].productName) || '—', descricao: f.costPending ? 'Custo do produto (parcial — algum item sem custo)' : 'Custo do produto', valor: -cC }); });
+    } else if (kind === 'faturamento') {
+      // §13/§24: faturamento é de TODOS os pedidos pagos do período, sem depender de custo/Minha Renda.
+      var mrByOrder2 = {}; e.orders.forEach(function (r) { mrByOrder2[r.orderId] = r; });
+      orders.filter(function (o) { return o.paidAt && inPeriod(o.paidAt); }).forEach(function (o) {
+        var f = orderFinance(o); var mrRow = mrByOrder2[o.id]; var sk = mrRow ? e.skuByOrder[o.id] : null;
+        rows.push({ orderId: o.id, data: o.paidAt, sku: sk && sk[0] ? sk[0].sku : ((o.items[0] && o.items[0].sku) || '—'), produto: sk && sk[0] ? sk[0].produto : ((o.items[0] && o.items[0].productName) || '—'), descricao: 'Pedidos (preço acordado × qtd)', valor: Math.round(f.revenue * 100) });
+      });
+    } else if (kind === 'lucro') {
       var profitOf = mrOrderProfitEngine(); var mrByOrder = {}; e.orders.forEach(function (r) { mrByOrder[r.orderId] = r; });
-      orders.filter(function (o) { return inPeriod(o.createdAt); }).forEach(function (o) {
+      orders.filter(function (o) { return o.paidAt && inPeriod(o.paidAt); }).forEach(function (o) {
         var p = profitOf(o); if (!p.known) return;
         var mrRow = mrByOrder[o.id]; var sk = mrRow ? e.skuByOrder[o.id] : null;
-        var valor = kind === 'lucro' ? p.lucro : p.receita;
-        rows.push({ orderId: o.id, data: o.createdAt, sku: sk && sk[0] ? sk[0].sku : ((o.items[0] && o.items[0].sku) || '—'), produto: sk && sk[0] ? sk[0].produto : ((o.items[0] && o.items[0].productName) || '—'), descricao: mrRow ? 'Minha Renda' : 'estimado (Pedidos)', valor: valor });
+        rows.push({ orderId: o.id, data: o.paidAt, sku: sk && sk[0] ? sk[0].sku : ((o.items[0] && o.items[0].sku) || '—'), produto: sk && sk[0] ? sk[0].produto : ((o.items[0] && o.items[0].productName) || '—'), descricao: mrRow ? 'Minha Renda' : 'estimado (Pedidos)', valor: p.lucro });
       });
     }
     rows.sort(function (a, b) { return Math.abs(b.valor) - Math.abs(a.valor); });
@@ -3398,7 +3467,7 @@
     // Produtos/SKUs, Lucro e Prejuízo, Tendências, Meta e Projeção (sempre por último). Frete,
     // Ajustes, Conciliação e Auditoria são abas já existentes, preservadas.
     var tabs = [['visao', 'Visão Geral'], ['dre', 'DRE'], ['taxas', 'Taxas Shopee'], ['categorias', 'Categorias'], ['produto', 'Produtos e SKUs'], ['lucroprejuizo', 'Lucro e Prejuízo'], ['tendencias', 'Tendências'], ['frete', 'Frete & Divergências'], ['ajustes', 'Ajustes'], ['conciliacao', 'Conciliação Declaração'], ['auditoria', 'Auditoria'], ['meta', 'Meta & Projeção']];
-    app.innerHTML = devPeriodBar() + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + tabs.map(function (t) { return '<div class="subtab' + (mrSub === t[0] ? ' active' : '') + '" data-mrsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-mrimport="1">Importar Income / Declaração</button></div><div id="mrbody" style="margin-top:14px"></div>';
+    app.innerHTML = dadosAtualizadosAteBadge() + devPeriodBar() + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + tabs.map(function (t) { return '<div class="subtab' + (mrSub === t[0] ? ' active' : '') + '" data-mrsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-mrimport="1">Importar Income / Declaração</button></div><div id="mrbody" style="margin-top:14px"></div>';
     var body = document.getElementById('mrbody');
     try {
       if (!mrRenda.length && !mrShip.length && !mrPdf.length && mrSub !== 'meta') body.innerHTML = secHead('MINHA RENDA', 'Consolidação Financeira Shopee', 'Quanto vendemos, quanto foi descontado, para onde foi o dinheiro e quanto a Shopee liberou — do agregado até o pedido.') + emptyBox('Nenhum relatório importado. Envie o Income (XLSX) e/ou a Declaração de Renda (PDF) da Shopee. O tipo é detectado automaticamente.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="mrimp">Importar primeiro relatório</button></div>';
@@ -3431,26 +3500,33 @@
   }
   function mrVisao() {
     var pe = mrPeriodEngine(); var t = pe.t;
-    var head = secHead('MINHA RENDA', 'Visão Geral', 'Análise financeira real do período selecionado no topo da tela. Pagamento liberado = renda líquida Shopee (não é lucro).');
-    // lucroN=0 (nenhum pedido do período com custo cadastrado) => Faturamento/Lucro/Margem/Ticket
-    // ficam "não disponível", nunca R$ 0,00 — R$ 0,00 seria indistinguível de "resultado zero real".
+    var head = secHead('MINHA RENDA', 'Visão Geral', 'Análise financeira real do período selecionado no topo da tela (pedidos PAGOS — hora do pagamento). Pagamento liberado = renda líquida Shopee (não é lucro, ver §23).');
+    if (!pe.n) return head + emptyBox('Nenhum pedido pago no período selecionado. Motivo: não há pedidos com "Hora do pagamento do pedido" preenchida dentro deste intervalo — ajuste o período ou importe Pedidos.');
+    // §13/§16/§19: Faturamento Bruto e Ticket Médio vêm direto de Pedidos (preço acordado × qtd dos
+    // pedidos pagos) e NUNCA dependem de custo/Minha Renda estarem disponíveis. Custo dos Produtos é
+    // cobertura parcial por item (nunca tudo-ou-nada). Só Lucro/Lucro Médio/Margem continuam
+    // dependendo do pedido inteiro custeado — por isso ficam marcados "parcial" quando pendN > 0,
+    // nunca escondidos como "não disponível" enquanto houver ao menos 1 pedido com lucro conhecido.
     var temLucro = pe.lucroN > 0;
+    var lucroParcial = pe.pendN > 0;
     var margemLiq = (temLucro && pe.faturamento) ? r2(pe.lucro / pe.faturamento * 100) : null;
-    var ticketMedio = temLucro ? Math.round(pe.faturamento / pe.lucroN) : null;
+    var ticketMedio = pe.n ? Math.round(pe.faturamento / pe.n) : null;
     var lucroMedioPedido = temLucro ? Math.round(pe.lucro / pe.lucroN) : null;
-    var custoProdutos = pe.custoProdN > 0 ? pe.custoProd : null;
+    var custoTemDado = pe.custoItemsKnown > 0;
+    var custoParcial = custoTemDado && pe.custoCoveragePct < 100;
     var taxasShopeeAbs = Math.abs(pe.taxasShopeeTotal), afiliadosAbs = Math.abs(t.afiliado), devolucoesAbs = Math.abs(t.reembolso), outrosAbs = Math.abs(t.cupom + t.pix) + Math.abs(pe.adjTot);
+    var parcialTag = ' <span class="tag warn">parcial</span>';
     var strip1 = kstrip([
-      { l: 'Faturamento Bruto', v: temLucro ? brlC(pe.faturamento) : 'não disponível', cls: 'blue', s: nn(pe.n) + ' pedidos no período', drill: temLucro ? 'faturamento' : null, drillLabel: 'Faturamento Bruto' },
-      { l: 'Receita Líquida', v: brlC(t.liberado), cls: 'blue', s: nn(t.nMR) + ' de ' + nn(pe.n) + ' com dados da Shopee', drill: t.nMR ? 'receitaLiquida' : null, drillLabel: 'Receita Líquida' },
-      { l: 'Lucro', v: temLucro ? brlC(pe.lucro) : 'não disponível', cls: !temLucro ? 'blue' : (pe.lucro >= 0 ? 'green' : 'red'), drill: temLucro ? 'lucro' : null, drillLabel: 'Lucro' },
-      { l: 'Margem Líquida %', v: margemLiq != null ? pct(margemLiq) : '—', cls: margemLiq == null ? 'blue' : (margemLiq >= 0 ? 'green' : 'red') },
+      { l: 'Faturamento Bruto', v: brlC(pe.faturamento), cls: 'blue', s: nn(pe.n) + ' pedidos pagos no período', drill: 'faturamento', drillLabel: 'Faturamento Bruto' },
+      { l: 'Receita Líquida (Pagamento Liberado)', v: brlC(t.liberado), cls: 'blue', s: nn(t.nMR) + ' de ' + nn(pe.n) + ' com dados da Shopee — não é faturamento (§23)', drill: t.nMR ? 'receitaLiquida' : null, drillLabel: 'Receita Líquida' },
+      { l: 'Lucro' + (temLucro && lucroParcial ? parcialTag : ''), v: temLucro ? brlC(pe.lucro) : 'não disponível', s: temLucro ? null : 'Motivo: nenhum pedido pago do período tem o custo de todos os itens cadastrado em Produtos.', cls: !temLucro ? 'blue' : (pe.lucro >= 0 ? 'green' : 'red'), drill: temLucro ? 'lucro' : null, drillLabel: 'Lucro' },
+      { l: 'Margem Líquida %' + (margemLiq != null && lucroParcial ? parcialTag : ''), v: margemLiq != null ? pct(margemLiq) : '—', cls: margemLiq == null ? 'blue' : (margemLiq >= 0 ? 'green' : 'red') },
     ]);
     var strip2 = kstrip([
-      { l: 'Pedidos', v: nn(pe.n), cls: 'blue', s: pe.pendN ? nn(pe.pendN) + ' com custo pendente' : 'todos com custo conhecido' },
-      { l: 'Ticket Médio', v: ticketMedio != null ? brlC(ticketMedio) : 'não disponível', cls: 'blue' },
-      { l: 'Lucro Médio por Pedido', v: lucroMedioPedido != null ? brlC(lucroMedioPedido) : 'não disponível', cls: lucroMedioPedido == null ? 'blue' : (lucroMedioPedido >= 0 ? 'green' : 'red') },
-      { l: 'Custo dos Produtos', v: custoProdutos != null ? brlC(custoProdutos) : 'não disponível', cls: 'amber', drill: custoProdutos != null ? 'custoProdutos' : null, drillLabel: 'Custo dos Produtos' },
+      { l: 'Pedidos pagos', v: nn(pe.n), cls: 'blue', s: pe.pendN ? nn(pe.pendN) + ' com custo pendente em algum item' : 'todos com custo conhecido' },
+      { l: 'Ticket Médio', v: ticketMedio != null ? brlC(ticketMedio) : 'não disponível', cls: 'blue', s: 'faturamento ÷ pedidos pagos' },
+      { l: 'Lucro Médio por Pedido' + (temLucro && lucroParcial ? parcialTag : ''), v: lucroMedioPedido != null ? brlC(lucroMedioPedido) : 'não disponível', s: lucroMedioPedido != null ? null : 'Motivo: nenhum pedido pago do período tem lucro calculável (custo incompleto).', cls: lucroMedioPedido == null ? 'blue' : (lucroMedioPedido >= 0 ? 'green' : 'red') },
+      { l: 'Custo dos Produtos' + (custoParcial ? parcialTag : ''), v: custoTemDado ? brlC(pe.custoProd) : 'não disponível', cls: 'amber', s: custoTemDado ? (nn(pe.custoItemsKnown) + ' de ' + nn(pe.custoItemsTotal) + ' itens com custo (' + pct(pe.custoCoveragePct) + ')') : 'Motivo: nenhum custo de produto foi encontrado para os pedidos pagos deste período (SKUs sem vínculo em Produtos ou sem custo cadastrado).', drill: custoTemDado ? 'custoProdutos' : null, drillLabel: 'Custo dos Produtos' },
     ]);
     var strip3 = kstrip([
       { l: 'Total Taxas Shopee', v: brlC(taxasShopeeAbs), cls: 'red', drill: t.nMR ? 'taxasShopee' : null, drillLabel: 'Total Taxas Shopee' },
@@ -3458,29 +3534,30 @@
       { l: 'Devoluções', v: brlC(devolucoesAbs), cls: 'red', drill: t.nMR ? 'reembolso' : null, drillLabel: 'Devoluções' },
       { l: 'Outros Descontos/Ajustes', v: brlC(outrosAbs), cls: 'amber' },
     ]);
-    var coverage = t.nMR < pe.n ? callout('warn', 'Cobertura da Minha Renda no período', '<b>' + nn(t.nMR) + '</b> de <b>' + nn(pe.n) + '</b> pedidos têm dados reais da Shopee (Income) no período. Faturamento e Lucro usam também o resultado estimado de Pedidos para os demais; Taxas Shopee/Afiliados/Devoluções/Receita Líquida acima refletem <b>só</b> os pedidos cobertos pela Minha Renda — nunca estimados.') : '';
+    var coverage = t.nMR < pe.n ? callout('warn', 'Cobertura da Minha Renda no período', '<b>' + nn(t.nMR) + '</b> de <b>' + nn(pe.n) + '</b> pedidos pagos têm dados reais da Shopee (Income) no período. Faturamento Bruto/Ticket Médio já vêm de Pedidos (sempre completos); Taxas Shopee/Afiliados/Devoluções/Receita Líquida acima refletem <b>só</b> os pedidos cobertos pela Minha Renda — nunca estimados.') : '';
+    var cobertura = mrCoberturaBox();
     var tendLink = callout('', 'Comparações e tendências', 'A comparação com o período anterior agora tem aba própria. <button class="btn-sm" data-mrgo="tendencias">Ver Tendências</button>');
     var e = mrEngine();
     var dedup = callout('', 'ORDER × SKU (sem dupla contagem)', mrRenda.length ? 'Importadas <b>' + nn(e.orders.length) + '</b> linhas Order (financeiro) e <b>' + nn(mrRenda.length - e.orders.length) + '</b> linhas SKU (atribuição de produto) no total já importado. Os valores financeiros vêm só das linhas Order.' : '');
     var ship = e.shipTot; var shipBox = ship.n ? callout('warn', 'Frete acima do esperado (histórico completo, sem data confiável para filtrar): ' + brlC(ship.diff), '<b>' + nn(ship.n) + '</b> pedidos · esperado ' + brlC(ship.esperado) + ' · real ' + brlC(ship.real) + '. <button class="btn-sm" data-mrgo="frete">Investigar</button>') : '';
-    return head + strip1 + strip2 + strip3 + coverage + mrWaterfall(t) + tendLink + dedup + shipBox + mrAlertas();
+    return head + strip1 + strip2 + strip3 + coverage + mrWaterfall(t) + cobertura + tendLink + dedup + shipBox + mrAlertas();
   }
   // ---- Tendências (§39): comparação com o período anterior equivalente, aba própria ----
   function mrTendencias() {
     var pe = mrPeriodEngine(); var t = pe.t; var temLucro = pe.lucroN > 0;
-    var head = secHead('MINHA RENDA · TENDÊNCIAS', 'Como o período atual se compara ao anterior', 'Mesma duração do período selecionado no topo da tela, deslocada para trás — não é necessariamente o "mês anterior" no calendário.');
-    var ticketMedio = temLucro ? Math.round(pe.faturamento / pe.lucroN) : null;
+    var head = secHead('MINHA RENDA · TENDÊNCIAS', 'Como o período atual se compara ao anterior', 'Mesma duração do período selecionado no topo da tela (pedidos pagos), deslocada para trás — não é necessariamente o "mês anterior" no calendário.');
+    var ticketMedio = pe.n ? Math.round(pe.faturamento / pe.n) : null;
     var lucroMedioPedido = temLucro ? Math.round(pe.lucro / pe.lucroN) : null;
     var taxasShopeeAbs = Math.abs(pe.taxasShopeeTotal), afiliadosAbs = Math.abs(t.afiliado), devolucoesAbs = Math.abs(t.reembolso);
     var prevR = mrPrevRange();
     if (!prevR) return head + callout('', 'Sem período anterior para comparar', 'Selecione um período específico (não "Todo o período") para comparar com o intervalo imediatamente anterior de mesma duração.');
     var pv = mrPeriodEngine(prevR); var pvTem = pv.lucroN > 0;
-    var pvFat = pvTem ? pv.faturamento : null, pvLucro = pvTem ? pv.lucro : null, pvTicket = pvTem ? Math.round(pv.faturamento / pv.lucroN) : null, pvLucroPed = pvTem ? Math.round(pv.lucro / pv.lucroN) : null;
+    var pvFat = pv.n ? pv.faturamento : null, pvLucro = pvTem ? pv.lucro : null, pvTicket = pv.n ? Math.round(pv.faturamento / pv.n) : null, pvLucroPed = pvTem ? Math.round(pv.lucro / pv.lucroN) : null;
     var brlCN = function (v) { return v == null ? 'não disponível' : brlC(v); };
-    var items = [['Faturamento Bruto', temLucro ? pe.faturamento : null, pvFat, brlCN], ['Receita Líquida', t.liberado, pv.t.liberado, brlC], ['Lucro', temLucro ? pe.lucro : null, pvLucro, brlCN], ['Pedidos', pe.n, pv.n, nn], ['Ticket Médio', ticketMedio, pvTicket, brlCN], ['Lucro por Pedido', lucroMedioPedido, pvLucroPed, brlCN], ['Total Taxas Shopee', taxasShopeeAbs, Math.abs(pv.taxasShopeeTotal), brlC], ['Afiliados', afiliadosAbs, Math.abs(pv.t.afiliado), brlC], ['Devoluções', devolucoesAbs, Math.abs(pv.t.reembolso), brlC]];
+    var items = [['Faturamento Bruto', pe.n ? pe.faturamento : null, pvFat, brlCN], ['Receita Líquida', t.liberado, pv.t.liberado, brlC], ['Lucro', temLucro ? pe.lucro : null, pvLucro, brlCN], ['Pedidos pagos', pe.n, pv.n, nn], ['Ticket Médio', ticketMedio, pvTicket, brlCN], ['Lucro por Pedido', lucroMedioPedido, pvLucroPed, brlCN], ['Total Taxas Shopee', taxasShopeeAbs, Math.abs(pv.taxasShopeeTotal), brlC], ['Afiliados', afiliadosAbs, Math.abs(pv.t.afiliado), brlC], ['Devoluções', devolucoesAbs, Math.abs(pv.t.reembolso), brlC]];
     var rows = items.map(function (it) { var arrow = (it[1] == null || it[2] == null) ? '—' : mrTrendArrow(it[1], it[2]); var vp = (it[1] == null || it[2] == null) ? null : mrTrendPct(it[1], it[2]); return '<tr><td>' + esc(it[0]) + '</td><td class="nowrap">' + it[3](it[2]) + '</td><td class="nowrap"><b>' + it[3](it[1]) + '</b></td><td class="nowrap ' + (arrow === '↑' ? 'pos' : arrow === '↓' ? 'neg' : '') + '">' + arrow + (vp != null ? ' ' + (vp >= 0 ? '+' : '') + pct(vp) : '') + '</td></tr>'; }).join('');
     var table = '<div class="panel"><div class="ph"><h3>Período atual × período anterior</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Métrica</th><th>Período anterior</th><th>Período atual</th><th>Variação</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
-    var chart = chartCard('Faturamento e Lucro — atual × anterior', legendSwatch([['Anterior', '#94a3b8'], ['Atual', '#2b4bd6']]), svgGroupBars(['Faturamento', 'Lucro'], [{ name: 'Anterior', color: '#94a3b8', vals: [(pvFat || 0) / 100, (pvLucro || 0) / 100] }, { name: 'Atual', color: '#2b4bd6', vals: [(temLucro ? pe.faturamento : 0) / 100, (temLucro ? pe.lucro : 0) / 100] }], { fmt: function (v) { return brl(v); } }));
+    var chart = chartCard('Faturamento e Lucro — atual × anterior', legendSwatch([['Anterior', '#94a3b8'], ['Atual', '#2b4bd6']]), svgGroupBars(['Faturamento', 'Lucro'], [{ name: 'Anterior', color: '#94a3b8', vals: [(pvFat || 0) / 100, (pvLucro || 0) / 100] }, { name: 'Atual', color: '#2b4bd6', vals: [(pe.n ? pe.faturamento : 0) / 100, (temLucro ? pe.lucro : 0) / 100] }], { fmt: function (v) { return brl(v); } }));
     return head + table + chart;
   }
   // Central de alertas determinística (cruza Minha Renda × Acelera × Devoluções × Carteira × Meta).
@@ -3514,38 +3591,47 @@
   // Fixos/Internos" não tem fonte no sistema — declarado como não disponível, nunca R$ 0.
   function mrDRE() {
     var pe = mrPeriodEngine(); var t = pe.t;
-    var head = secHead('MINHA RENDA · DRE', 'Demonstrativo de Resultado', 'Cascata construída só com valores reais das linhas Order do Income, no período selecionado no topo da tela. "Custos Fixos/Internos" não tem fonte de dados no sistema hoje — aparece como não disponível, nunca como R$ 0.');
-    if (!t.nMR) return head + emptyBox('Nenhum pedido do período tem dados da Minha Renda (Income) para montar a DRE. Ajuste o período ou importe o Income do mês correspondente.');
-    var receitaBruta = t.preco;
+    var head = secHead('MINHA RENDA · DRE', 'Demonstrativo de Resultado', 'Cascata do período selecionado no topo da tela — pedidos PAGOS (hora do pagamento, REGRA CENTRAL). "Custos Fixos/Internos" não tem fonte de dados no sistema hoje — aparece como não disponível, nunca como R$ 0.');
+    if (!pe.n) return head + emptyBox('Nenhum pedido pago no período selecionado. Motivo: não há pedidos com "Hora do pagamento do pedido" preenchida dentro deste intervalo.');
+    // §13/§24: Receita Bruta = Faturamento Bruto de TODOS os pedidos pagos do período, calculado
+    // direto de Pedidos (preço acordado × qtd) — nunca só o subconjunto coberto pela Minha Renda.
+    var receitaBruta = pe.faturamento;
+    // §18/§24: as deduções abaixo (descontos/taxas/devoluções) só existem para os pedidos com dados
+    // da Minha Renda (Income) cruzados por ID — quando t.nMR < pe.n, a cascata é uma aproximação
+    // PARCIAL e isso é sinalizado explicitamente, nunca escondido.
     var descComerciais = t.cupom + t.pix;
     var taxasShopee = pe.taxasShopeeTotal + t.afiliado;
     var devolucoes = t.reembolso;
     var outrosAj = pe.adjTot;
     var receitaLiquida = receitaBruta + descComerciais + taxasShopee + devolucoes + outrosAj;
-    // "Custo dos Produtos" só é um número quando pelo menos 1 pedido do período tem custo cadastrado
-    // em Produtos — com custoProdN=0, R$ 0,00 seria indistinguível de "custo realmente zero" (mentira
-    // por omissão). Nesse caso, Custo e Lucro ficam "não disponível", nunca R$ 0.
-    var custoProdutos = pe.custoProdN > 0 ? pe.custoProd : null;
+    // §16/§19: Custo dos Produtos é a soma parcial dos itens com custo cadastrado — nunca
+    // tudo-ou-nada por pedido. Só falta o dado quando NENHUM item do período tem custo.
+    var custoTemDado = pe.custoItemsKnown > 0;
+    var custoProdutos = custoTemDado ? pe.custoProd : null;
     var lucro = custoProdutos == null ? null : receitaLiquida - custoProdutos;
     var margem = (receitaBruta && lucro != null) ? r2(lucro / receitaBruta * 100) : null;
-    var check = t.liberado - (receitaBruta + descComerciais + taxasShopee + devolucoes);
+    var mrParcial = t.nMR < pe.n;
+    var custoParcial = custoTemDado && pe.custoCoveragePct < 100;
     // Todas as linhas com valor real são clicáveis (§25-29): abrem os lançamentos que a formaram.
-    var line = function (label, v, opts) { opts = opts || {}; var drillAttr = opts.drill && v != null ? ' rowlink" data-mrdrill="' + esc(opts.drill) + '" data-mrdrilllabel="' + esc(label) : ''; return '<div class="fin-line' + (opts.total ? ' total' : '') + drillAttr + '"><span>' + (opts.op ? '<b>' + opts.op + '</b> ' : '') + esc(label) + (opts.note ? ' <span class="footnote" style="margin:0">' + esc(opts.note) + '</span>' : '') + '</span><b class="' + (v == null ? '' : v < 0 ? 'neg' : v > 0 ? 'pos' : '') + '">' + (v == null ? 'não disponível' : brlC(v)) + '</b></div>'; };
-    var custoNote = pe.custoProdN === 0 ? 'nenhum pedido do período tem custo cadastrado em Produtos' : pe.pendN ? nn(pe.pendN) + ' pedido(s) com custo pendente em Produtos (excluídos da soma abaixo)' : 'custo completo';
+    var line = function (label, v, opts) { opts = opts || {}; var drillAttr = opts.drill && v != null ? ' rowlink" data-mrdrill="' + esc(opts.drill) + '" data-mrdrilllabel="' + esc(label) : ''; return '<div class="fin-line' + (opts.total ? ' total' : '') + drillAttr + '"><span>' + (opts.op ? '<b>' + opts.op + '</b> ' : '') + esc(label) + (opts.warn ? ' <span class="tag warn">parcial</span>' : '') + (opts.note ? ' <span class="footnote" style="margin:0">' + esc(opts.note) + '</span>' : '') + '</span><b class="' + (v == null ? '' : v < 0 ? 'neg' : v > 0 ? 'pos' : '') + '">' + (v == null ? 'não disponível' : brlC(v)) + '</b></div>'; };
+    var custoNote = !custoTemDado ? 'Motivo: nenhum custo de produto foi encontrado para os pedidos pagos deste período.' : (nn(pe.custoItemsKnown) + ' de ' + nn(pe.custoItemsTotal) + ' itens com custo cadastrado (' + pct(pe.custoCoveragePct) + ')');
+    var taxasNote = 'comissão, serviço, transação, frete parceiro, ajuste de frete, envio reverso e afiliados — detalhamento na aba Taxas Shopee. ' + (mrParcial ? nn(t.nMR) + ' de ' + nn(pe.n) + ' pedidos pagos com dados da Minha Renda cruzados.' : 'todos os pedidos pagos cruzados.');
     var cascata = '<div class="panel"><div class="ph"><h3>Cascata</h3><span class="footnote" style="margin:0">clique numa linha para ver os lançamentos</span></div><div class="pb">' +
-      line('Receita Bruta', receitaBruta, { note: nn(t.nMR) + ' pedidos com dados da Shopee no período', drill: 'preco' }) +
-      line('Descontos Comerciais', descComerciais, { op: '−', note: 'cupom + PIX' }) +
-      line('Taxas Shopee', taxasShopee, { op: '−', note: 'comissão, serviço, transação, frete parceiro, ajuste de frete, envio reverso e afiliados — detalhamento na aba Taxas Shopee', drill: 'taxasShopee' }) +
-      line('Devoluções e Reembolsos', devolucoes, { op: '−', drill: 'reembolso' }) +
+      line('Receita Bruta (Faturamento)', receitaBruta, { note: nn(pe.n) + ' pedidos pagos no período (Pedidos, preço acordado × qtd)', drill: 'faturamento' }) +
+      line('Descontos Comerciais', descComerciais, { op: '−', note: 'cupom + PIX', warn: mrParcial }) +
+      line('Taxas Shopee', taxasShopee, { op: '−', note: taxasNote, drill: 'taxasShopee', warn: mrParcial }) +
+      line('Devoluções e Reembolsos', devolucoes, { op: '−', drill: 'reembolso', warn: mrParcial }) +
       line('Outros Ajustes/Descontos', outrosAj, { op: '−', note: 'aba Adjustment — total importado, sem data confiável para restringir ao período', drill: 'adjustes' }) +
-      line('Receita Líquida', receitaLiquida, { total: true, op: '=', drill: 'receitaLiquida' }) +
-      line('Custo dos Produtos', custoProdutos, { op: '−', note: custoNote, drill: 'custoProdutos' }) +
+      line('Receita Líquida', receitaLiquida, { total: true, op: '=', drill: 'receitaLiquida', warn: mrParcial }) +
+      line('Custo dos Produtos', custoProdutos, { op: '−', note: custoNote, drill: custoTemDado ? 'custoProdutos' : null, warn: custoParcial }) +
       line('Custos Fixos/Internos', null, { op: '−', note: 'sem fonte de dados no sistema' }) +
-      line('Lucro', lucro, { total: true, op: '=', drill: 'lucro' }) +
-      '<div class="fin-line"><span>Margem sobre a Receita Bruta</span><b class="' + (margem == null ? '' : margem >= 0 ? 'pos' : 'neg') + '">' + (margem == null ? '—' : pct(margem)) + '</b></div>' +
+      line('Lucro', lucro, { total: true, op: '=', drill: 'lucro', warn: mrParcial || custoParcial }) +
+      '<div class="fin-line"><span>Margem sobre a Receita Bruta' + (margem != null && (mrParcial || custoParcial) ? ' <span class="tag warn">parcial</span>' : '') + '</span><b class="' + (margem == null ? '' : margem >= 0 ? 'pos' : 'neg') + '">' + (margem == null ? '—' : pct(margem)) + '</b></div>' +
       '</div></div>';
-    var conf = callout(Math.abs(check) <= 100 ? 'green' : 'warn', Math.abs(check) <= 100 ? '✓ Receita Líquida bate com o Pagamento Liberado real' : '⚠ Diferença entre a cascata e o Pagamento Liberado real', 'Pagamento liberado real (soma das linhas Order): <b>' + brlC(t.liberado) + '</b> · Receita Bruta − Descontos − Taxas − Devoluções (sem Outros Ajustes, que não são filtráveis por período): <b>' + brlC(receitaBruta + descComerciais + taxasShopee + devolucoes) + '</b> · diferença <b>' + brlC(check) + '</b>.');
-    return head + cascata + conf;
+    var mrCheck = t.liberado - (t.preco + descComerciais + taxasShopee + devolucoes);
+    var conf = t.nMR ? callout(Math.abs(mrCheck) <= 100 ? 'green' : 'warn', Math.abs(mrCheck) <= 100 ? '✓ Conferência Minha Renda: bate com o Pagamento Liberado real' : '⚠ Diferença na conferência da Minha Renda', 'Só para os ' + nn(t.nMR) + ' pedidos com dados da Shopee (Income): pagamento liberado real <b>' + brlC(t.liberado) + '</b> · preço − descontos − taxas − devoluções calculado <b>' + brlC(t.preco + descComerciais + taxasShopee + devolucoes) + '</b> · diferença <b>' + brlC(mrCheck) + '</b>. Esta conferência é independente da Receita Bruta acima (que cobre todos os pedidos pagos, não só os com Minha Renda).') : '';
+    var cobertura = mrCoberturaBox();
+    return head + cascata + conf + cobertura;
   }
   // ---- Meta & Projeção (§7,10,11 do prompt de reorganização) ----
   function saveMrMetaCfg() { return putMany('settings', [{ id: 'mrMetaCfg', data: mrMetaCfg }]); }
@@ -3802,8 +3888,8 @@
   // sem valor é inventada; "Acelera/Antecipação" fica como link para o módulo (unidades e período
   // diferentes, não somamos por cima para não misturar bases).
   function mrCategorias() {
-    var pe = mrPeriodEngine(); var t = pe.t; var head = secHead('MINHA RENDA · CATEGORIAS', 'Para onde foi o dinheiro, por grupo', 'Cada valor vem só das linhas Order do Income no período. Grupos com valor zero não aparecem.');
-    if (!t.nMR) return head + emptyBox('Nenhum pedido do período tem dados da Minha Renda (Income) para categorizar.');
+    var pe = mrPeriodEngine(); var t = pe.t; var head = secHead('MINHA RENDA · CATEGORIAS', 'Para onde foi o dinheiro, por grupo', 'RECEITAS/TAXAS/COMERCIAL/PÓS-VENDA vêm das linhas Order do Income (só pedidos pagos com Minha Renda localizada); CUSTOS INTERNOS vem direto de Pedidos×Produtos, cobertura parcial por item. Grupos com valor zero não aparecem.');
+    if (!t.nMR && pe.custoItemsKnown === 0) return head + emptyBox('Nenhum pedido pago do período tem dados da Minha Renda (Income) nem custo de produto cadastrado para categorizar.');
     function grp(title, items) {
       var rows = items.filter(function (it) { return it[1] !== 0; }).map(function (it) { var drillAttr = it[2] ? ' rowlink" data-mrdrill="' + esc(it[2]) + '" data-mrdrilllabel="' + esc(it[0]) : ''; return '<div class="fin-line' + drillAttr + '"><span>' + esc(it[0]) + '</span><b class="' + (it[1] < 0 ? 'neg' : 'pos') + '">' + brlC(it[1]) + '</b></div>'; }).join('');
       var tot = items.reduce(function (s, it) { return s + it[1]; }, 0);
@@ -3816,7 +3902,7 @@
     var posVenda = grp('PÓS-VENDA', [['Devoluções/Reembolso', t.reembolso, 'reembolso'], ['PIX', t.pix, 'pix'], ['Envio reverso', t.envioReverso, 'envioReverso']]);
     var financeiro = grp('FINANCEIRO', [['Ajustes (Adjustment, total importado)', pe.adjTot, 'adjustes']]);
     var financeiroNote = callout('', 'Shopee Acelera (antecipação)', 'O custo de antecipação tem base e período próprios no módulo <b>Shopee Acelera</b> — não é somado aqui para não misturar unidades/base de cálculo diferentes. <button class="btn-sm" data-golink="acelera">Abrir Shopee Acelera</button>');
-    var custos = pe.custoProdN > 0 ? grp('CUSTOS INTERNOS', [['Custo dos produtos', pe.custoProd, 'custoProdutos']]) : callout('warn', 'CUSTOS INTERNOS — Custo dos produtos não disponível', 'Nenhum pedido do período tem custo cadastrado em Produtos — não é R$ 0, é "sem dado".');
+    var custos = pe.custoItemsKnown > 0 ? grp('CUSTOS INTERNOS' + (pe.custoCoveragePct < 100 ? ' (parcial — ' + pct(pe.custoCoveragePct) + ' dos itens)' : ''), [['Custo dos produtos', pe.custoProd, 'custoProdutos']]) : callout('warn', 'CUSTOS INTERNOS — Custo dos produtos não disponível', 'Motivo: nenhum custo de produto foi encontrado para os pedidos pagos deste período — não é R$ 0, é "sem dado".');
     var custosNote = callout('', 'Custos fixos/internos', 'Sem fonte de dados no sistema hoje (aluguel, folha, etc.) — não disponível, não é R$ 0.');
     return head + receitas + taxas + comercial + posVenda + financeiro + financeiroNote + custos + custosNote;
   }
