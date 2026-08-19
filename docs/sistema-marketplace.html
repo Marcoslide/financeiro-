@@ -4486,6 +4486,7 @@ buffer/index.js:
       sub.posvenda = dest; render();
     }; });
     app.querySelectorAll('[data-conf]').forEach(function (b) { b.onclick = function () { openConferir(b.dataset.conf); }; });
+    app.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.goped360); }; });
     if (t === 'recebimentos') bindRecebimentos();
     if (t === 'casos') bindDevOcc();
     if (t === 'analises') bindAnalises();
@@ -4997,13 +4998,19 @@ buffer/index.js:
     var achados = devAchadosData(list).findings.slice(0, 3);
     var achadosHtml = achados.length ? callout('warn', 'O que o sistema descobriu', achados.map(function (f) { return '<div class="fin-line"><span>' + esc(f.title) + '</span><button class="btn-sm" data-go="analises" data-asub="inteligencia">ver</button></div>'; }).join('')) : '';
 
+    // Devolução × Expedição (§4 do prompt de reorganização): quanto representa sobre o que
+    // realmente SAIU da empresa (bipe), não só sobre o que foi vendido.
+    var totalExpedidos = Object.keys(shipBip).length;
+    var expKpi = totalExpedidos ? (function () { var devExpedidos = list.filter(function (o) { return o.orderId && pedIsExpedido(o.orderId); }).length; return { l: 'Taxa sobre expedidos', v: pct(r2(devExpedidos / totalExpedidos * 100)), cls: 'blue', s: nn(devExpedidos) + ' de ' + nn(totalExpedidos) + ' expedidos' }; })() : null;
     return secHead('PANORAMA', 'Como estamos?', 'Estamos melhorando ou piorando, quanto perdemos, por quê e quanto recuperamos.') +
       kstrip([
-        { l: 'Taxa de devolução', v: agg.orders ? pct(list.length / agg.orders * 100) : '—', cls: 'blue', s: agg.orders ? nn(list.length) + ' de ' + nn(agg.orders) + ' pedidos' : 'sem base de pedidos' },
+        { l: 'Taxa sobre vendidos', v: agg.orders ? pct(list.length / agg.orders * 100) : '—', cls: 'blue', s: agg.orders ? nn(list.length) + ' de ' + nn(agg.orders) + ' pedidos' : 'sem base de pedidos' },
+      ].concat(expKpi ? [expKpi] : []).concat([
         { l: 'Perda confirmada', v: brl(confirmed), cls: 'red', s: agg.revenue ? pct(confirmed / agg.revenue * 100) + ' do faturamento' : '' },
         { l: 'Em risco', v: brl(atRisk), cls: 'amber' },
         { l: 'Recuperado', v: brl(recovered), cls: 'green' },
-      ]) +
+      ])) +
+      (!totalExpedidos ? callout('', 'Taxa sobre expedidos ainda não disponível', 'Registre a expedição (bipe) em Pedidos → Expedição para ver a devolução como % do que realmente saiu da empresa — não só do que foi vendido.') : '') +
       denomWarn + achadosHtml + trend +
       '<div class="split2">' + motChart + prodChart + '</div>' +
       finResumo;
@@ -5183,10 +5190,39 @@ buffer/index.js:
   };
   // Sub-abas do Financeiro (§Financeiro real): impacto das devoluções · taxas da venda · a receber da Shopee · conciliação.
   function devFinanceiro() {
-    var subs = [['impacto', 'Impacto das devoluções'], ['taxas', 'Taxas da venda'], ['areceber', 'A Receber da Shopee'], ['concil', 'Conciliação']];
-    if (['impacto', 'taxas', 'areceber', 'concil'].indexOf(finSub) < 0) finSub = 'impacto';
-    var inner = finSub === 'taxas' ? devFinTaxas() : finSub === 'areceber' ? devFinAReceber() : finSub === 'concil' ? devFinConcil() : devFinImpacto();
+    var subs = [['impacto', 'Impacto das devoluções'], ['taxas', 'Taxas da venda'], ['areceber', 'A Receber da Shopee'], ['concil', 'Conciliação'], ['pedidos', 'Pedido a Pedido']];
+    if (['impacto', 'taxas', 'areceber', 'concil', 'pedidos'].indexOf(finSub) < 0) finSub = 'impacto';
+    var inner = finSub === 'taxas' ? devFinTaxas() : finSub === 'areceber' ? devFinAReceber() : finSub === 'concil' ? devFinConcil() : finSub === 'pedidos' ? devFinPedidoAPedido() : devFinImpacto();
     return '<div class="subtabs" style="margin-bottom:12px">' + subs.map(function (x) { return '<div class="subtab' + (finSub === x[0] ? ' active' : '') + '" data-finsub="' + x[0] + '">' + x[1] + '</div>'; }).join('') + '</div><div>' + inner + '</div>';
+  }
+  // Financeiro = auditoria PEDIDO A PEDIDO (granular). Minha Renda = visão gerencial/consolidada.
+  // Mesma missão que a Ficha 360, em formato de tabela — cada linha abre a mesma ficha. §13/§18.
+  function devFinPedidoAPedido() {
+    var head = secHead('FINANCEIRO · PEDIDO A PEDIDO', 'Tabela completa por pedido', 'Auditoria detalhada — cada pedido com sua composição financeira. Minha Renda mostra a visão gerencial consolidada; aqui é o detalhe, linha a linha. Clique em qualquer pedido para abrir a Ficha Financeira 360º.');
+    var list = pedidosInPeriod(); if (!list.length) return head + emptyBox('Nenhum pedido no período.');
+    var profitOf = mrOrderProfitEngine(); var mr = mrEngine(); var mrByOrder = {}; mr.orders.forEach(function (r) { mrByOrder[r.orderId] = r; });
+    var affEng = affEngine(); var acByOrder = {}; acelera.forEach(function (r) { (acByOrder[r.pedido] = acByOrder[r.pedido] || []).push(r); });
+    var renda = walletRendaByOrder();
+    var slice = list.slice(0, 300);
+    var rows = slice.map(function (o) {
+      var f = orderFinance(o); var it = o.items[0] || {}; var mrRow = mrByOrder[o.id]; var affRow = affEng.orderMap[o.id]; var acRecs = acByOrder[o.id]; var st = pedidoConciliacaoStatus(o.id);
+      var vendaC = Math.round(f.revenue * 100);
+      var custoC = f.costPending ? null : Math.round((f.productCostTotal || 0) * 100);
+      var taxaTransC = mrRow ? mrRow.transacao : -Math.round((o.transactionFee || 0) * 100);
+      var comissaoC = mrRow ? mrRow.comissao : -Math.round((o.commissionNet || 0) * 100);
+      var afilC = mrRow ? mrRow.afiliado : (affRow ? -Math.round((affRow.comAff + affRow.svcFee) / 100) : null);
+      var acC = acRecs ? -Math.abs(acRecs.reduce(function (s, r) { return s + r.taxa; }, 0)) : null;
+      var occHere = occ.filter(function (x) { return !x.isDemo && x.orderId === o.id; }); var devC = occHere.length ? -Math.round(occHere.reduce(function (s, x) { return s + occEffectiveLoss(x); }, 0) * 100) : null;
+      var outrosC = mrRow ? (mrRow.freteParceiro + mrRow.descontoFrete + mrRow.envioReverso + mrRow.cupom + mrRow.pix + mrRow.reembolso) : null;
+      var receitaLiqC = mrRow ? mrRow.liberado : (vendaC + Math.round((f.marketplaceFeesTotal || 0) * -100));
+      var p = profitOf(o); var lucroC = p.known ? p.lucro : null; var margem = (lucroC != null && vendaC) ? r2(lucroC / vendaC * 100) : null;
+      var recWallet = renda[o.id]; var recebidoC = recWallet ? Math.round(recWallet.sum * 100) : null;
+      var difC = (receitaLiqC != null && recebidoC != null) ? receitaLiqC - recebidoC : null;
+      var stTag = st.code === 'CONCILIADO' ? 'ok' : st.code === 'PARCIAL' ? 'warn' : st.code === 'DIVERGENTE' ? 'warn' : 'neutral';
+      return '<tr class="rowlink" data-goped360="' + esc(o.id) + '"><td class="nowrap">' + dbr(o.createdAt) + '</td><td class="mono">' + esc(o.id) + '</td><td class="cell-text">' + esc((it.sku || '—')) + '</td><td class="nowrap">' + brlC(vendaC) + '</td><td class="nowrap">' + (custoC != null ? brlC(custoC) : '<span class="tag warn">pendente</span>') + '</td><td class="nowrap">' + brlC(taxaTransC) + '</td><td class="nowrap">' + brlC(comissaoC) + '</td><td class="nowrap">' + (afilC != null ? brlC(afilC) : '—') + '</td><td class="nowrap">' + (acC != null ? brlC(acC) : '—') + '</td><td class="nowrap">' + (devC != null ? brlC(devC) : '—') + '</td><td class="nowrap">' + (outrosC != null ? brlC(outrosC) : '—') + '</td><td class="nowrap">' + (receitaLiqC != null ? brlC(receitaLiqC) : '—') + '</td><td class="nowrap ' + (lucroC != null && lucroC < 0 ? 'neg' : 'pos') + '">' + (lucroC != null ? '<b>' + brlC(lucroC) + '</b>' : '<span class="tag warn">custo pendente</span>') + '</td><td>' + (margem != null ? pct(margem) : '—') + '</td><td class="nowrap">' + (recebidoC != null ? brlC(recebidoC) : '—') + '</td><td class="nowrap">' + (difC != null ? brlC(difC) : '—') + '</td><td><span class="tag ' + stTag + '">' + st.label + '</span></td></tr>';
+    }).join('');
+    return head + '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos' + (list.length > 300 ? ' · mostrando os 300 mais recentes' : '') + '</div>' +
+      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Pedido</th><th>SKU</th><th>Venda Bruta</th><th>Custo Produto</th><th>Tx. Transação</th><th>Comissão</th><th>Afiliado</th><th>Acelera</th><th>Devolução</th><th>Outros</th><th>Receita Líquida</th><th>Lucro</th><th>Margem</th><th>Recebido</th><th>Diferença</th><th>Conciliação</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
   }
   // Taxas que a Shopee cobra por venda e o que acontece com elas quando há devolução. Fontes: Pedidos (taxas) × Devoluções.
   function orderFeeBreakdown(o) { return { comissao: r2(o.commissionNet || 0), servico: r2(o.serviceFeeNet || 0), transacao: r2(o.transactionFee || 0), freteRev: r2(o.reverseShippingFee || 0), total: r2((o.commissionNet || 0) + (o.serviceFeeNet || 0) + (o.transactionFee || 0) + (o.reverseShippingFee || 0)) }; }
@@ -6875,9 +6911,15 @@ buffer/index.js:
     var e = mrEngine(); var bySku = {}; e.orders.forEach(function (o) { var sk = e.skuByOrder[o.orderId]; var key = sk && sk[0] ? sk[0].sku : '(sem sku)'; var g = bySku[key] = bySku[key] || { n: 0, liberado: 0 }; g.n++; g.liberado += o.liberado; });
     var negSkus = Object.keys(bySku).filter(function (k) { return bySku[k].liberado < 0; });
     if (negSkus.length) alerts.push({ icon: '🔴', text: nn(negSkus.length) + ' SKU(s) com pagamento liberado negativo no período.', go: 'produto' });
+    // SKU com prejuízo real (lucro após custo do produto, não só o liberado)
+    var prejuizoSkus = mrSkuRentabilidade().filter(function (x) { return x.lucroN > 0 && x.lucro < 0; });
+    if (prejuizoSkus.length) alerts.push({ icon: '🔴', text: nn(prejuizoSkus.length) + ' SKU(s) com prejuízo real (após custo do produto).', go: 'produto' });
     // devolução sem baixa (recebimento pendente há mais de 7 dias)
     var semBaixa = occ.filter(function (o) { return !o.isDemo && o.type === 'RETURN_REFUND' && (!o.receiptState || o.receiptState === 'DESCONHECIDO') && inPeriod(o.occurredAt); });
     if (semBaixa.length) alerts.push({ icon: '🟠', text: nn(semBaixa.length) + ' devolução(ões) ainda sem baixa de recebimento.', go: 'posvenda-recebimentos' });
+    // devolução recebida mas sem classificação de reaproveitamento (§21)
+    var semReaprov = occ.filter(function (o) { return !o.isDemo && o.receiptState === 'RECEBIDO' && !o.merchandiseCondition && inPeriod(o.occurredAt); });
+    if (semReaprov.length) alerts.push({ icon: '🟠', text: nn(semReaprov.length) + ' devolução(ões) recebida(s) sem classificação de reaproveitamento.', go: 'posvenda-recebimentos' });
     // lançamentos da carteira sem categoria/origem identificada
     var walletUnclass = wallet.filter(function (t) { return (wEffCat ? wEffCat(t) === 'OUTRO' : false) && !t.orderId; });
     if (walletUnclass.length) alerts.push({ icon: '🟡', text: nn(walletUnclass.length) + ' lançamento(s) da carteira sem origem identificada.', go: 'carteira' });
