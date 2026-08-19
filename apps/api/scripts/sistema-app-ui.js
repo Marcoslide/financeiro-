@@ -29,7 +29,7 @@
   var Produtos = null;
   var sub = { pedidos: 'pedidos', posvenda: 'visao' };
   var pedTab = 'ALL';
-  var devF = { search: '', internalStatus: '', disputeStatus: '', type: '', status: '', flag: '' }, devPage = 1;
+  var devF = { search: '', internalStatus: '', disputeStatus: '', type: '', status: '', flag: '', jornada: '', motivo: '' }, devPage = 1;
   // Shopee Acelera / Antecipação de Recebíveis
   var acelera = [];                 // registros pedido-a-pedido do relatório de antecipação
   var aceleraSummary = null;        // resumo informado pela própria Shopee (para conciliar)
@@ -47,7 +47,10 @@
   // Minha Renda
   var mrRenda = [], mrShip = [], mrAdj = [], mrSvc = [], mrPdf = [], mrSummary = null;
   var mrSub = 'visao', mrPage = 1, mrF = { search: '', motivo: '', invest: '' };
-  var mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null };
+  // gerada=false → modo planejamento (o usuário ainda está ajustando valor/período, nada "trava").
+  // "Gerar Meta" (§33) congela periodMode='custom' com as datas resolvidas naquele momento e grava
+  // um retrato da margem/faturamento necessário usados na criação, para detectar deriva depois (§39).
+  var mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null, gerada: false, nome: '', geradaEm: null, margemNaCriacao: null, faturamentoNecessarioNaCriacao: null };
   var mrProdCfg = { margemMeta: 0.10 }; // meta padrão de margem para classificar "abaixo da meta" (§41 do prompt de reorganização)
   var mrProdFilter = 'todos'; // filtro rápido da tabela de Produtos e SKUs (§9-13 do prompt de alterações pontuais)
   var mrTaxasSort = 'valor'; // ordenação da tabela de Taxas Shopee (§6 do prompt de alterações pontuais)
@@ -148,6 +151,15 @@
   function upsertImportEvents(occ, exposure, requested, compensation) { if (exposure.bucket === 'CONFIRMED' && requested > 0) putEvent(occ, 'import:refund', 'REEMBOLSO_PAGO', 'COST', requested, 'IMPORT'); if (compensation > 0) putEvent(occ, 'import:compensation', 'COMPENSACAO_SHOPEE', 'RECOVERY', compensation, 'IMPORT'); }
   function addActivity(occ, kind, data) { occ.activities = occ.activities || []; occ.activities.unshift(Object.assign({ id: 'a' + Date.now() + Math.round(Math.random() * 1e6), kind: kind, createdAt: new Date().toISOString() }, data)); }
   function occEffectiveLoss(o) { return Math.max(0, (o.impact && o.impact.knownNetImpact) || 0); }
+  // Resultado provisório × confirmado (§24): antes da baixa, só temos o impacto financeiro (reembolso
+  // menos compensação) — provisório. Depois de conferir e dar baixa (o.recuperacao, gravado em
+  // confirmReceive), a perda confirmada usa custo real do produto − valor reaproveitável, mais
+  // precisa. occEffectiveLoss() nunca muda de comportamento — isto é aditivo, consumido por quem
+  // já sabe ler o campo novo (Ficha, Ficha 360, Financeiro), sem quebrar quem só usa o provisório.
+  function occResultadoDevolucao(o) {
+    if (o.recuperacao && ['RECEBIDO', 'PARCIAL', 'DIVERGENCIA'].indexOf(o.receiptState) >= 0) return { status: 'confirmado', perda: o.recuperacao.perdaConfirmada, custoTotal: o.recuperacao.custoTotal, valorReaproveitavel: o.recuperacao.valorReaproveitavel };
+    return { status: 'provisorio', perda: occEffectiveLoss(o) };
+  }
   function occGuessCause(o) { var s = (o.causeFamily || o.internalCause || o.reason || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); if (/quebr|avar|dano|trinc|rachad/.test(s)) return 'AVARIA'; if (/errad|troca|separac|item faltando|faltan|divergent/.test(s)) return 'SEPARACAO'; if (/arrepend|desist|nao quero|gostei/.test(s)) return 'ARREPENDIMENTO'; if (/entreg|extravi|transport|correi|logistic|nao recebi/.test(s)) return 'LOGISTICA'; if (/defeit|qualidade|funciona|apresent/.test(s)) return 'QUALIDADE'; return 'SEM_MOTIVO'; }
   function occApproved(o) { return /conclu|aprovad|reembols|pago|finaliz|sucesso|deferid/.test((o.status || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()); }
   function occGiveup(o) { return /cancel|desist|recus|rejeit/.test((o.status || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()); }
@@ -595,13 +607,26 @@
       taxasRows = [['Comissão líquida', -Math.round((ord.commissionNet || 0) * 100)], ['Taxa de serviço líquida', -Math.round((ord.serviceFeeNet || 0) * 100)], ['Taxa de transação', -Math.round((ord.transactionFee || 0) * 100)], ['Frete reverso', -Math.round((ord.reverseShippingFee || 0) * 100)]];
     } else taxasRows = [];
     var taxasSomaC = taxasRows.reduce(function (s, r) { return s + (r[1] || 0); }, 0);
+    // Conferência matemática determinística (§6): total informado × soma dos componentes.
+    // Nunca usa IA — só soma os campos já importados de Minha Renda/Service Fee Details.
+    function conferencia(total, soma) { if (total == null) return ''; var dif = total - soma; var bate = Math.abs(dif) <= 100; return '<span class="tag ' + (bate ? 'ok' : 'warn') + '">' + (bate ? '🟢 Conferido' : '🔴 Divergência de ' + brlC(dif)) + '</span>'; }
     var svcComposicao = '';
     if (svcRows.length) {
       var svcT = { afil: 0, trans: 0, item: 0 }; svcRows.forEach(function (v) { svcT.afil += v.afiliadosVendedor; svcT.trans += v.transacao; svcT.item += v.porItem; });
       var svcSoma = svcT.afil + svcT.trans + svcT.item; var svcTotal = mrRow ? mrRow.servico : null;
-      var bate = svcTotal != null && Math.abs(svcTotal - svcSoma) <= 100;
-      svcComposicao = '<div class="panel"><div class="ph"><h3>Composição da taxa de serviço</h3>' + (svcTotal != null ? '<span class="tag ' + (bate ? 'ok' : 'warn') + '">' + (bate ? '✅ Conciliada' : '⚠ Parcialmente explicada') + '</span>' : '') + '</div><div class="pb">' + fLine('Taxa de serviço líquida (total)', svcTotal) + '<div class="footnote" style="margin:6px 0">Composição / memória de cálculo (não somada por cima do total):</div>' + fLine('— Afiliados do vendedor', svcT.afil) + fLine('— Transação', svcT.trans) + fLine('— Por item vendido', svcT.item) + (svcTotal != null && !bate ? '<div class="footnote neg">Não identificado: ' + brlC(svcTotal - svcSoma) + '</div>' : '') + '</div></div>';
+      svcComposicao = '<div class="panel"><div class="ph"><h3>Taxa de serviço líquida — composição</h3>' + conferencia(svcTotal, svcSoma) + '</div><div class="pb">' + fLine('Taxa de serviço líquida (total)', svcTotal) + '<div class="footnote" style="margin:6px 0">Componentes (Service Fee Details, mesmo pedido — não somados por cima do total):</div>' + fLine('↳ Afiliados do vendedor', svcT.afil) + fLine('↳ Transação', svcT.trans) + fLine('↳ Por item vendido', svcT.item) + '<div class="footnote" style="margin-top:6px">Origem: Minha Renda (Service Fee Details) · Pedido ' + esc(orderId) + '</div></div></div>';
     }
+    // Composição da comissão (§3-6): bruta → líquida, usando colunas já importadas e não usadas
+    // em nenhuma outra tela (comissaoBruta/servicoBruta) — nada inventado, só exposto.
+    var comComposicao = '';
+    if (mrRow && mrRow.comissaoBruta != null && mrRow.comissaoBruta !== 0 && mrRow.comissaoBruta !== mrRow.comissao) {
+      var comDesc = mrRow.comissao - mrRow.comissaoBruta;
+      comComposicao = '<div class="panel"><div class="ph"><h3>Comissão — composição</h3>' + conferencia(mrRow.comissao, mrRow.comissaoBruta + comDesc) + '</div><div class="pb">' + fLine('Comissão bruta', mrRow.comissaoBruta) + fLine('↳ Desconto/ajuste aplicado pela Shopee', comDesc) + fLine('Comissão líquida (total)', mrRow.comissao, { total: true }) + '<div class="footnote" style="margin-top:6px">Origem: Minha Renda · Pedido ' + esc(orderId) + '</div></div></div>';
+    }
+    // Ajustes (Adjustment) ligados a este pedido — mesmo campo orderId da Minha Renda, sem inventar vínculo.
+    var adjRows = mrAdj.filter(function (a) { return a.orderId === orderId; });
+    var adjTotalC = adjRows.reduce(function (s, a) { return s + a.valor; }, 0);
+    var adjBlock = adjRows.length ? '<div class="panel"><div class="ph"><h3>Ajustes (Minha Renda · Adjustment)</h3></div><div class="pb">' + adjRows.map(function (a) { return fLine(a.desc || 'Ajuste', a.valor); }).join('') + fLine('Total de ajustes deste pedido', adjTotalC, { total: true }) + '<div class="footnote" style="margin-top:6px">Origem: Minha Renda (Adjustment) · Pedido ' + esc(orderId) + '</div></div></div>' : '';
 
     // ---- Acelera ----
     var acBlock = '';
@@ -619,18 +644,22 @@
 
     // ---- Devolução ----
     var devBlock = '';
-    if (occs.length) devBlock = '<div class="panel"><div class="ph"><h3>Devolução</h3></div><div class="pb">' + occs.map(function (x) { return kv('Status', statusLabel(x.status)) + kv('Motivo', x.reason || '—') + '<div class="fin-line"><span>Impacto líquido</span><span class="neg">' + brl(occEffectiveLoss(x)) + '</span></div><button class="btn-sm" style="margin-top:6px" data-godev360="' + esc(x.id) + '">Abrir devolução</button>'; }).join('<hr style="border:none;border-top:1px solid var(--line);margin:10px 0">') + '</div></div>';
+    if (occs.length) devBlock = '<div class="panel"><div class="ph"><h3>Devolução</h3></div><div class="pb">' + occs.map(function (x) { var r = occResultadoDevolucao(x); return kv('Status', statusLabel(x.status)) + kv('Motivo', x.reason || '—') + '<div class="fin-line"><span>Resultado (<span class="tag ' + (r.status === 'confirmado' ? 'ok' : 'info') + '">' + (r.status === 'confirmado' ? 'confirmado' : 'provisório') + '</span>)</span><span class="neg">' + brl(r.perda) + '</span></div><button class="btn-sm" style="margin-top:6px" data-godev360="' + esc(x.id) + '">Abrir devolução</button>'; }).join('<hr style="border:none;border-top:1px solid var(--line);margin:10px 0">') + '</div></div>';
 
     // ---- Resultado final ----
     // Evita dupla contagem (§ regra de não duplicidade): quando Minha Renda já cobre o pedido, o
     // campo "Afiliados" da própria Renda já está dentro de taxasSomaC — não soma de novo do relatório de Afiliados.
     var custoAfilCents = (!mrRow && affRow) ? Math.round((affRow.comAff + affRow.svcFee) / 100) : 0;
     var acTaxaCents = acRows.length ? acRows.reduce(function (s, r) { return s + r.taxa; }, 0) : 0; // já em cents
-    var devImpactoCents = occs.length ? Math.round(occs.reduce(function (s, x) { return s + occEffectiveLoss(x); }, 0) * 100) : 0;
+    // Usa o resultado CONFIRMADO da baixa quando existir (custo real − reaproveitável), senão o
+    // provisório (§22-24) — occResultadoDevolucao() cai para occEffectiveLoss() automaticamente.
+    var devImpactoCents = occs.length ? Math.round(occs.reduce(function (s, x) { return s + occResultadoDevolucao(x).perda; }, 0) * 100) : 0;
+    var devConfirmadoN = occs.filter(function (x) { return occResultadoDevolucao(x).status === 'confirmado'; }).length;
     var lucroConhecido = receitaC != null && (custoProdC != null || !custoPendente);
     var resultadoC = null;
-    if (receitaC != null && custoProdC != null) { resultadoC = receitaC + taxasSomaC - custoProdC - custoAfilCents - acTaxaCents - devImpactoCents; }
+    if (receitaC != null && custoProdC != null) { resultadoC = receitaC + taxasSomaC - custoProdC - custoAfilCents - acTaxaCents - devImpactoCents + adjTotalC; }
     var margemPct = (resultadoC != null && receitaC) ? r2(resultadoC / receitaC * 100) : null;
+    var taxasConf = mrRow ? conferencia(mrRow.liberado, mrRow.preco + taxasSomaC) : '';
 
     var idBlock = '<div class="panel"><div class="ph"><h3>Identificação</h3></div><div class="pb">' + kv('Pedido', orderId) + kv('Data da venda', ord ? dbr(ord.createdAt) : '—') + kv('Data de conclusão (Minha Renda)', mrRow ? dbr(mrRow.dataConclusao) : '—') + kv('Data de expedição (bipe)', bip ? new Date(bip.bipedAt).toLocaleString('pt-BR') : 'ainda não expedido') + kv('Status', ord ? (S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus) : '—') + '</div></div>';
 
@@ -643,15 +672,15 @@
       '<div class="kc"><div class="kl">Margem</div><div class="kv" style="font-size:16px">' + (margemPct != null ? pct(margemPct) : '—') + '</div></div>' +
       '</div>' +
       idBlock +
-      '<div class="panel"><div class="ph"><h3>Taxas Shopee (detalhado)</h3><span class="footnote" style="margin:0">' + (mrRow ? 'fonte: Minha Renda' : ord ? 'fonte: Pedidos (aproximado)' : 'sem fonte') + '</span></div><div class="pb">' + (taxasRows.length ? taxasRows.map(function (r) { return fLine(r[0], r[1]); }).join('') + fLine('Total de taxas', taxasSomaC, { total: true }) : '<span class="tag neutral">sem dados de taxas para este pedido</span>') + '</div></div>' +
-      svcComposicao +
+      '<div class="panel"><div class="ph"><h3>Taxas Shopee (detalhado, individualizado)</h3>' + taxasConf + '</div><div class="pb"><span class="footnote">' + (mrRow ? 'Origem: Minha Renda · Pedido ' + esc(orderId) : ord ? 'Origem: Pedidos (aproximado — sem Minha Renda para este pedido)' : 'sem fonte') + '</span>' + (taxasRows.length ? taxasRows.map(function (r) { return fLine(r[0], r[1]); }).join('') + fLine('Total de taxas', taxasSomaC, { total: true }) : '<span class="tag neutral">sem dados de taxas para este pedido</span>') + '</div></div>' +
+      comComposicao + svcComposicao + adjBlock +
       (shipRow ? '<div class="panel"><div class="ph"><h3>Frete — divergência</h3></div><div class="pb">' + fLine('Esperado', shipRow.esperado) + fLine('Real', shipRow.real) + fLine('Diferença', shipRow.real - shipRow.esperado, { total: true }) + '</div></div>' : '') +
       acBlock + afBlock + wBlock + devBlock +
       '<div class="panel"><div class="ph"><h3>Resultado</h3></div><div class="pb">' +
-      fLine('Receita', receitaC) + fLine('+ Taxas Shopee (líquido, já negativo, inclui afiliados quando há Minha Renda)', taxasSomaC) + fLine('− Custo do produto', custoProdC != null ? -custoProdC : null) + (custoAfilCents ? fLine('− Custo de afiliados (sem Minha Renda para este pedido)', -custoAfilCents) : '') + fLine('− Taxa Acelera', -Math.abs(acTaxaCents)) + fLine('− Impacto de devolução', -devImpactoCents) +
+      fLine('Receita', receitaC) + fLine('+ Taxas Shopee (líquido, já negativo, inclui afiliados quando há Minha Renda)', taxasSomaC) + fLine('− Custo do produto', custoProdC != null ? -custoProdC : null) + (custoAfilCents ? fLine('− Custo de afiliados (sem Minha Renda para este pedido)', -custoAfilCents) : '') + fLine('− Taxa Acelera', -Math.abs(acTaxaCents)) + fLine('− Impacto de devolução (' + (devConfirmadoN === occs.length && occs.length ? 'confirmado' : occs.length ? 'parcialmente confirmado' : 'provisório') + ')', -devImpactoCents) + (adjRows.length ? fLine('+ Ajustes (Minha Renda)', adjTotalC) : '') +
       '<div class="fin-line total"><span>Lucro real do pedido</span><span class="' + (resultadoC != null && resultadoC < 0 ? 'neg' : 'pos') + '">' + (resultadoC != null ? brlC(resultadoC) : 'aguardando custo do produto') + '</span></div>' +
       '</div></div>' +
-      '<div class="footnote" style="padding:8px 0">Fontes usadas: Pedidos' + (mrRow ? ' · Minha Renda' : '') + (svcRows.length ? ' · Service Fee Details' : '') + (acRows.length ? ' · Shopee Acelera' : '') + (affRow ? ' · Afiliados' : '') + (wtx.length ? ' · Saldo da Carteira' : '') + (occs.length ? ' · Devoluções' : '') + '.</div>' +
+      '<div class="footnote" style="padding:8px 0">Fontes usadas: Pedidos' + (mrRow ? ' · Minha Renda' : '') + (svcRows.length ? ' · Service Fee Details' : '') + (adjRows.length ? ' · Adjustment' : '') + (acRows.length ? ' · Shopee Acelera' : '') + (affRow ? ' · Afiliados' : '') + (wtx.length ? ' · Saldo da Carteira' : '') + (occs.length ? ' · Devoluções' : '') + '.</div>' +
       (ord ? '<button class="btn-sm" data-goped="' + esc(orderId) + '">Ver na lista de Pedidos</button>' : '') +
       '</div>';
     panel.querySelector('.x').onclick = function () { d.remove(); };
@@ -685,6 +714,52 @@
 
   function devReceiptSituation(o) { return RECEIPT_LABELS[o.receiptState] || '—'; }
   function devReturnList() { return occInPeriod().filter(expectsReturn); }
+
+  // ---- Jornada operacional (§10-24 do prompt de alterações pontuais) ----
+  // A ETAPA (onde o caso está) é sempre CALCULADA — nunca digitada — a partir dos campos que já são
+  // fonte da verdade (receiptState, exposure.bucket, disputeStatus, internalStatus/hasSellerWindow).
+  // Isso separa etapa de MOTIVO (o.reason) — os dois nunca aparecem misturados no mesmo filtro — e
+  // se adapta ao tipo do caso: devolução tem etapas que cancelamento não tem, e vice-versa (§18).
+  var JORNADA_META = {
+    NOVA: 'Nova solicitação', AVALIACAO: 'Em avaliação', ACAO_NECESSARIA: 'Ação necessária / Recurso', AGUARDANDO_SHOPEE: 'Aguardando Shopee',
+    COLETA: 'Aprovada — Organizar coleta', FALHA_IDENTIFICADA: 'Falha identificada', CONCILIACAO: 'Aprovado — Conciliar financeiro',
+    TRANSPORTE: 'Em devolução / transporte', VALIDAR: 'Retornada — Validar', BAIXADA: 'Baixada / Concluída', REJEITADA: 'Rejeitada / Cancelada',
+  };
+  var JORNADA_POR_TIPO = {
+    RETURN_REFUND: ['NOVA', 'AVALIACAO', 'ACAO_NECESSARIA', 'AGUARDANDO_SHOPEE', 'COLETA', 'TRANSPORTE', 'VALIDAR', 'BAIXADA', 'REJEITADA'],
+    FAILED_DELIVERY: ['NOVA', 'AVALIACAO', 'FALHA_IDENTIFICADA', 'TRANSPORTE', 'VALIDAR', 'BAIXADA', 'REJEITADA'],
+    ORDER_CANCELLATION: ['NOVA', 'AVALIACAO', 'CONCILIACAO', 'BAIXADA', 'REJEITADA'],
+  };
+  function casoJornada(o) {
+    var b = o.exposure ? o.exposure.bucket : null;
+    if (b === 'CANCELLED') return 'REJEITADA';
+    if (['RECEBIDO', 'PARCIAL', 'DIVERGENCIA'].indexOf(o.receiptState) >= 0) return 'BAIXADA';
+    if (o.receiptState === 'CHEGOU_CONFERIR') return 'VALIDAR';
+    if (o.receiptState === 'EM_TRANSITO') return 'TRANSPORTE';
+    if (o.type === 'ORDER_CANCELLATION') { if (b === 'RECOVERED') return 'BAIXADA'; if (b === 'CONFIRMED') return 'CONCILIACAO'; return o.internalStatus === 'NOVA' ? 'NOVA' : 'AVALIACAO'; }
+    if (b === 'CONFIRMED') return o.type === 'FAILED_DELIVERY' ? 'FALHA_IDENTIFICADA' : 'COLETA';
+    if (o.disputeStatus && ['RESPONDIDA', 'AGUARDANDO_SHOPEE'].indexOf(o.disputeStatus) >= 0) return 'AGUARDANDO_SHOPEE';
+    if (o.internalStatus === 'AGUARDANDO_RESULTADO') return 'AGUARDANDO_SHOPEE';
+    if (o.type !== 'FAILED_DELIVERY' && o.hasSellerWindow && o.disputeDeadline) return 'ACAO_NECESSARIA';
+    if (o.internalStatus === 'NOVA') return 'NOVA';
+    return 'AVALIACAO';
+  }
+  var JORNADA_PROXIMA_ACAO = {
+    NOVA: 'Analisar a solicitação e classificar o motivo', AVALIACAO: 'Continuar avaliação — sem ação externa pendente agora',
+    ACAO_NECESSARIA: 'Enviar evidências/recurso à Shopee', AGUARDANDO_SHOPEE: 'Aguardar decisão/resposta da Shopee',
+    COLETA: 'Organizar a coleta/postagem da devolução', FALHA_IDENTIFICADA: 'Verificar com a transportadora e organizar o retorno',
+    CONCILIACAO: 'Conferir o reembolso na Carteira/Financeiro', TRANSPORTE: 'Aguardar o retorno da mercadoria',
+    VALIDAR: 'Conferir o produto e dar baixa', BAIXADA: 'Concluído — nenhuma ação pendente', REJEITADA: 'Encerrado — nenhuma ação pendente',
+  };
+  function casoProximaAcao(o) {
+    var j = casoJornada(o); var text = JORNADA_PROXIMA_ACAO[j] || '—'; var prazo = (j === 'ACAO_NECESSARIA' && o.disputeDeadline) ? o.disputeDeadline : null;
+    if (prazo) text += ' até ' + dbr(prazo);
+    return { jornada: j, label: JORNADA_META[j] || j, text: text, prazo: prazo };
+  }
+  // MOTIVO (causa declarada pelo cliente/Shopee, o.reason) — dimensão SEPARADA da jornada (§16-17).
+  // "Motivo não informado" só aparece quando a fonte importada realmente não trouxe motivo — nunca
+  // inventamos um motivo que não existe nos dados.
+  function casoMotivo(o) { return (o.reason || '').trim() || 'Motivo não informado'; }
 
   function renderPosVenda() {
     var tabs = [['visao', 'Visão Geral'], ['casos', 'Casos'], ['recebimentos', 'Recebimentos'], ['analises', 'Análises'], ['planos', 'Plano de Ação'], ['import', 'Importações']];
@@ -795,47 +870,76 @@
     else { recSearch = v; render(); }
   }
   // Conferência item a item num drawer (§12): abre sobre qualquer aba, não exige tela nova.
-  function openConferir(idOrCode) {
+  // §21: reaproveitamento/destino do item conferido — controle interno de recuperação (§22-24).
+  var REAPROV_LABELS = { SIM: 'Sim', PARCIAL: 'Parcialmente', NAO: 'Não' };
+  var DESTINO_LABELS = { ESTOQUE: 'Voltar ao estoque', RETRABALHO: 'Retrabalho', SEGUNDA_LINHA: 'Segunda linha', DESCARTE: 'Descarte', OUTRO: 'Outro' };
+  function itemCustoUnit(sku) { var c = sku ? skuCost[sku.toLowerCase()] : null; return c && c.cost != null ? c.cost : null; }
+  function openConferir(idOrCode, onDone) {
     var o = occ.find(function (x) { return x.id === idOrCode; });
     if (!o) { var m = findOccByCode(idOrCode); if (m.length) o = m[0]; }
     if (!o) { toast('Nada encontrado', 'Devolução não localizada.', true); return; }
-    var items = (o.items && o.items.length ? o.items : [{ sku: null, productName: '(item único)', qty: 1 }]).map(function (it, i) { return { idx: i, sku: it.sku, productName: it.productName, variationName: it.variationName, expected: it.qty || 1, received: it.qty || 1, condition: 'REAPROVEITAVEL' }; });
-    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '720px'; panel.style.maxWidth = '96vw';
+    var items = (o.items && o.items.length ? o.items : [{ sku: null, productName: '(item único)', qty: 1 }]).map(function (it, i) {
+      var custoUnit = itemCustoUnit(it.sku); var custoTotal = custoUnit != null ? Math.round(custoUnit * (it.qty || 1) * 100) / 100 : null;
+      return { idx: i, sku: it.sku, productName: it.productName, variationName: it.variationName, expected: it.qty || 1, received: it.qty || 1, condition: 'REAPROVEITAVEL', reaproveitavel: 'SIM', destino: 'ESTOQUE', custoUnit: custoUnit, custoTotal: custoTotal, valorReaproveitavel: custoTotal };
+    });
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '860px'; panel.style.maxWidth = '98vw';
     d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    // valor sugerido de reaproveitamento a partir de reaproveitável+condição — o operador pode sobrescrever.
+    function sugestaoReaproveitavel(it) { if (it.custoTotal == null) return null; if (it.reaproveitavel === 'NAO') return 0; if (it.reaproveitavel === 'PARCIAL') return Math.round(it.custoTotal / 2 * 100) / 100; return it.custoTotal; }
     function draw() {
       var totExp = items.reduce(function (s, i) { return s + i.expected; }, 0), totRec = items.reduce(function (s, i) { return s + i.received; }, 0);
+      var custoTotalGeral = items.reduce(function (s, i) { return s + (i.custoTotal || 0); }, 0);
+      var reaprovTotalGeral = items.reduce(function (s, i) { return s + (i.valorReaproveitavel || 0); }, 0);
+      var perdaGeral = Math.max(0, custoTotalGeral - reaprovTotalGeral);
+      var semCusto = items.some(function (i) { return i.custoTotal == null; });
       var rows = items.map(function (it) {
         return '<tr><td class="cell-text">' + esc(it.productName || '—') + (it.variationName ? ' · ' + esc(it.variationName) : '') + '<div class="footnote" style="margin:0">' + esc(it.sku || '—') + '</div></td><td>' + it.expected + '</td>' +
           '<td class="nowrap"><button class="btn-sm" data-dec="' + it.idx + '">−</button> <b>' + it.received + '</b> <button class="btn-sm" data-inc="' + it.idx + '">+</button></td>' +
-          '<td><select class="select sm" data-cond="' + it.idx + '">' + Object.keys(COND_LABELS).map(function (k) { return '<option value="' + k + '"' + (it.condition === k ? ' selected' : '') + '>' + COND_LABELS[k] + '</option>'; }).join('') + '</select></td></tr>';
+          '<td><select class="select sm" data-cond="' + it.idx + '">' + Object.keys(COND_LABELS).map(function (k) { return '<option value="' + k + '"' + (it.condition === k ? ' selected' : '') + '>' + COND_LABELS[k] + '</option>'; }).join('') + '</select></td>' +
+          '<td><select class="select sm" data-reap="' + it.idx + '">' + Object.keys(REAPROV_LABELS).map(function (k) { return '<option value="' + k + '"' + (it.reaproveitavel === k ? ' selected' : '') + '>' + REAPROV_LABELS[k] + '</option>'; }).join('') + '</select></td>' +
+          '<td><select class="select sm" data-dest="' + it.idx + '">' + Object.keys(DESTINO_LABELS).map(function (k) { return '<option value="' + k + '"' + (it.destino === k ? ' selected' : '') + '>' + DESTINO_LABELS[k] + '</option>'; }).join('') + '</select></td>' +
+          '<td class="nowrap">' + (it.custoTotal != null ? brl(it.custoTotal) : '<span class="tag warn">sem custo</span>') + '</td>' +
+          '<td><input class="input sm" data-valreap="' + it.idx + '" style="width:90px" value="' + (it.valorReaproveitavel != null ? it.valorReaproveitavel : '') + '" placeholder="—"></td></tr>';
       }).join('');
-      panel.innerHTML = '<div class="dh"><div><b>Conferir devolução ' + esc(o.returnId || o.id) + '</b> <span class="tag info" style="margin-left:6px">Shopee: ' + esc(o.status || '—') + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
+      panel.innerHTML = '<div class="dh"><div><b>Conferir e dar baixa · devolução ' + esc(o.returnId || o.id) + '</b> <span class="tag info" style="margin-left:6px">Shopee: ' + esc(o.status || '—') + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
         '<div class="footnote" style="margin:0 0 10px">Pedido ' + esc(o.orderId || '—') + ' · Valor envolvido ' + brl(o.requested) + ' · Motivo: ' + esc(o.reason || '—') + '</div>' +
-        '<div class="table-wrap"><table><thead><tr><th>Produto / SKU</th><th>Esperado</th><th>Recebido</th><th>Condição</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+        '<div class="table-wrap"><table><thead><tr><th>Produto / SKU</th><th>Esperado</th><th>Recebido</th><th>Condição</th><th>Reaproveitável?</th><th>Destino</th><th>Custo do produto</th><th>Valor reaproveitável</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+        (semCusto ? '<div class="footnote" style="margin-top:6px">⚠ Algum item não tem custo cadastrado em Produtos — o valor de perda confirmada abaixo fica parcial para esses itens.</div>' : '') +
+        '<div class="kstrip" style="margin-top:12px"><div class="kc"><div class="kl">Custo total dos itens</div><div class="kv">' + brl(custoTotalGeral) + '</div></div><div class="kc"><div class="kl">Valor reaproveitável</div><div class="kv">' + brl(reaprovTotalGeral) + '</div></div><div class="kc"><div class="kl">Perda confirmada (se der baixa agora)</div><div class="kv" style="color:var(--err)">' + brl(perdaGeral) + '</div></div></div>' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;flex-wrap:wrap;gap:10px"><div><b>Esperado ' + totExp + '</b> · <b>Recebido ' + totRec + '</b></div>' +
-        '<div style="display:flex;gap:8px"><input class="input sm" id="cnote" placeholder="Observação (opcional)" style="width:220px"><button class="btn-sm primary" id="cok">Confirmar recebimento</button></div></div>' +
-        '<div class="footnote" style="margin-top:8px">A baixa é manual. O produto só fica "recebido" quando você confirma aqui.</div></div>';
+        '<div style="display:flex;gap:8px"><input class="input sm" id="cnote" placeholder="Observação (opcional)" style="width:220px"><button class="btn-sm primary" id="cok">Confirmar recebimento e dar baixa</button></div></div>' +
+        '<div class="footnote" style="margin-top:8px">A baixa é manual. O produto só fica "recebido" quando você confirma aqui — e o resultado da devolução passa de provisório para confirmado.</div></div>';
       panel.querySelector('.x').onclick = function () { d.remove(); };
       panel.querySelectorAll('[data-dec]').forEach(function (b) { b.onclick = function () { var it = items[+b.dataset.dec]; it.received = Math.max(0, it.received - 1); draw(); }; });
       panel.querySelectorAll('[data-inc]').forEach(function (b) { b.onclick = function () { var it = items[+b.dataset.inc]; it.received = it.received + 1; draw(); }; });
       panel.querySelectorAll('[data-cond]').forEach(function (s) { s.onchange = function () { items[+s.dataset.cond].condition = s.value; }; });
-      panel.querySelector('#cok').onclick = function () { confirmReceive(o, items, (panel.querySelector('#cnote') || {}).value || null, d); };
+      panel.querySelectorAll('[data-reap]').forEach(function (s) { s.onchange = function () { var it = items[+s.dataset.reap]; it.reaproveitavel = s.value; it.valorReaproveitavel = sugestaoReaproveitavel(it); draw(); }; });
+      panel.querySelectorAll('[data-dest]').forEach(function (s) { s.onchange = function () { items[+s.dataset.dest].destino = s.value; }; });
+      panel.querySelectorAll('[data-valreap]').forEach(function (inp) { inp.onchange = function () { var it = items[+inp.dataset.valreap]; var v = parseFloat((inp.value || '').replace(',', '.')); it.valorReaproveitavel = isNaN(v) ? null : v; draw(); }; });
+      panel.querySelector('#cok').onclick = function () { confirmReceive(o, items, (panel.querySelector('#cnote') || {}).value || null, d, onDone); };
     }
     draw();
   }
-  function confirmReceive(o, items, note, drawerEl) {
+  function confirmReceive(o, items, note, drawerEl, onDone) {
     var totExp = items.reduce(function (s, i) { return s + i.expected; }, 0), totRec = items.reduce(function (s, i) { return s + i.received; }, 0);
     var diff = items.some(function (i) { return i.condition === 'DIFERENTE'; });
     var state = diff ? 'DIVERGENCIA' : (totRec === 0 ? 'DIVERGENCIA' : (totRec >= totExp ? 'RECEBIDO' : 'PARCIAL'));
     o.receiptState = state; o.receiptItems = items.slice(); o.receivedBy = 'Operador'; o.receivedAt = new Date().toISOString(); o.receiptNote = note;
     o.merchandiseStatus = (state === 'RECEBIDO' || state === 'PARCIAL') ? 'RECEBIDO' : o.merchandiseStatus;
     o.merchandiseCondition = (items[0] && items[0].condition) || o.merchandiseCondition;
+    // Controle interno de recuperação (§22): nasce aqui, na baixa; consumido por Financeiro/Minha
+    // Renda via occResultadoDevolucao(). Só considera itens com custo cadastrado — "sem custo" nunca
+    // vira R$ 0 de perda, fica de fora da soma (mesma disciplina do resto do sistema).
+    var custoTotal = items.reduce(function (s, i) { return s + (i.custoTotal || 0); }, 0);
+    var valorReaproveitavel = items.reduce(function (s, i) { return s + (i.valorReaproveitavel || 0); }, 0);
+    o.recuperacao = { itens: items.map(function (i) { return { sku: i.sku, received: i.received, condition: i.condition, reaproveitavel: i.reaproveitavel, destino: i.destino, custoTotal: i.custoTotal, valorReaproveitavel: i.valorReaproveitavel }; }), custoTotal: custoTotal, valorReaproveitavel: valorReaproveitavel, perdaConfirmada: Math.max(0, custoTotal - valorReaproveitavel), calculadoEm: new Date().toISOString() };
     if (state === 'RECEBIDO' && o.internalStatus === 'NOVA') o.internalStatus = 'RECEBIDO';
-    addActivity(o, 'RECEIPT', { message: 'Recebimento: ' + totRec + ' de ' + totExp + ' item(ns) · ' + RECEIPT_LABELS[state] + (note ? ' · ' + note : ''), userName: 'Operador' });
+    addActivity(o, 'RECEIPT', { message: 'Recebimento: ' + totRec + ' de ' + totExp + ' item(ns) · ' + RECEIPT_LABELS[state] + ' · perda confirmada ' + brl(o.recuperacao.perdaConfirmada) + (note ? ' · ' + note : ''), userName: 'Operador' });
     recomputeOccImpact(o);
     saveOcc(o).then(function () {
       if (drawerEl) drawerEl.remove(); render();
       toast('Recebimento registrado', (o.returnId || o.id) + ' · ' + totRec + ' de ' + totExp + ' · ' + RECEIPT_LABELS[state]);
+      if (onDone) onDone();
     });
   }
 
@@ -1254,15 +1358,26 @@
   function devOcc() {
     var all = occInPeriodAll().slice();
     if (!all.length) return secHead('CASOS', 'Casos', 'Todos os casos de devolução, cancelamento e falha de entrega em um só lugar.') + emptyBox('Nenhum caso. Importe os relatórios na aba Importações.');
+    // Contagem nos cabeçalhos por tipo (§11), sempre respeitando o período selecionado (§42).
+    var typeCounts = { RETURN_REFUND: 0, ORDER_CANCELLATION: 0, FAILED_DELIVERY: 0 }; all.forEach(function (o) { if (typeCounts[o.type] != null) typeCounts[o.type]++; });
     var typed = devF.type ? all.filter(function (o) { return o.type === devF.type; }) : all;
     // Segunda linha DINÂMICA: status reais presentes na fonte selecionada (§4-15) — nunca inventa.
     var statusCounts = {}; var novoStatus = {}; typed.forEach(function (o) { var raw = o.status || '(sem status)'; statusCounts[raw] = (statusCounts[raw] || 0) + 1; if (o.status && !SHOPEE_STATUS_MAP[normStatus(o.status)]) novoStatus[o.status] = true; });
     var statusList = Object.keys(statusCounts).sort();
+    // Etapa da jornada (§10-15,18) — SEMPRE calculada, nunca digitada; nunca mistura com motivo/pendência.
+    var jornadaCounts = {}; typed.forEach(function (o) { var j = casoJornada(o); jornadaCounts[j] = (jornadaCounts[j] || 0) + 1; });
+    var JORNADA_ORDEM = ['NOVA', 'AVALIACAO', 'ACAO_NECESSARIA', 'AGUARDANDO_SHOPEE', 'COLETA', 'FALHA_IDENTIFICADA', 'CONCILIACAO', 'TRANSPORTE', 'VALIDAR', 'BAIXADA', 'REJEITADA'];
+    var jornadaKeys = JORNADA_ORDEM.filter(function (k) { return jornadaCounts[k]; });
+    // Motivo (§16-17) — dimensão separada da jornada, construída só com o que existe em o.reason.
+    var motivoCounts = {}; typed.forEach(function (o) { var mv = casoMotivo(o); motivoCounts[mv] = (motivoCounts[mv] || 0) + 1; });
+    var motivoKeys = Object.keys(motivoCounts).sort(function (a, b) { return motivoCounts[b] - motivoCounts[a]; });
+    var motivoTop = motivoKeys.slice(0, 8), motivoRest = motivoKeys.length - motivoTop.length;
     var list = typed;
     if (devF.status) list = list.filter(function (o) { return (o.status || '(sem status)') === devF.status; });
+    if (devF.jornada) list = list.filter(function (o) { return casoJornada(o) === devF.jornada; });
+    if (devF.motivo) list = list.filter(function (o) { return casoMotivo(o) === devF.motivo; });
     if (devF.flag === 'prazo') list = list.filter(function (o) { return o.hasSellerWindow && o.disputeDeadline; });
     else if (devF.flag === 'semcausa') list = list.filter(function (o) { return !o.internalCause && !o.causeFamily; });
-    else if (devF.flag === 'nova') list = list.filter(function (o) { return o.internalStatus === 'NOVA'; });
     else if (devF.flag === 'semresp') list = list.filter(function (o) { return !o.ownerName; });
     else if (devF.flag === 'naovinc') list = list.filter(function (o) { return (o.items || []).some(function (i) { return i.sku && !i.skuLinked; }); });
     // Filtro de status interno com MULTI-SELEÇÃO (§Casos): devF.istSet = {key:true}; compat com devF.internalStatus (único).
@@ -1276,15 +1391,18 @@
     var pages = Math.max(1, Math.ceil(list.length / 25)); if (devPage > pages) devPage = pages;
     var slice = list.slice((devPage - 1) * 25, devPage * 25);
     var ISTMAP = internalStatusMap();
-    var typeChips = [['', 'Todas'], ['RETURN_REFUND', 'Devoluções'], ['ORDER_CANCELLATION', 'Cancelamentos'], ['FAILED_DELIVERY', 'Falhas de entrega']];
+    var typeChips = [['', 'Todas', all.length], ['RETURN_REFUND', 'Devoluções', typeCounts.RETURN_REFUND], ['ORDER_CANCELLATION', 'Cancelamentos', typeCounts.ORDER_CANCELLATION], ['FAILED_DELIVERY', 'Falhas de entrega', typeCounts.FAILED_DELIVERY]];
     var demoN = typed.filter(function (o) { return o.isDemo; }).length;
-    var statusRow = '<div class="chips" style="margin-top:6px"><span class="chip' + (devF.status === '' ? ' chip-on' : '') + '" data-ocstatus="">Todos</span>' + statusList.map(function (raw) { var isNew = raw !== '(sem status)' && !SHOPEE_STATUS_MAP[normStatus(raw)]; return '<span class="chip' + (devF.status === raw ? ' chip-on' : '') + '" data-ocstatus="' + esc(raw) + '" title="' + esc(raw) + '">' + esc(statusLabel(raw)) + (isNew ? ' ✦' : '') + ' <b>' + nn(statusCounts[raw]) + '</b></span>'; }).join('') + '</div>';
-    var flagChips = [['', 'Sem filtro rápido'], ['prazo', '⚠️ Prazo p/ recorrer'], ['semcausa', 'Sem causa'], ['nova', 'Novas'], ['semresp', 'Sem responsável'], ['naovinc', 'SKU não vinculado']];
+    var statusRow = '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Status Shopee (bruto):</span><span class="chip' + (devF.status === '' ? ' chip-on' : '') + '" data-ocstatus="">Todos</span>' + statusList.map(function (raw) { var isNew = raw !== '(sem status)' && !SHOPEE_STATUS_MAP[normStatus(raw)]; return '<span class="chip' + (devF.status === raw ? ' chip-on' : '') + '" data-ocstatus="' + esc(raw) + '" title="' + esc(raw) + '">' + esc(statusLabel(raw)) + (isNew ? ' ✦' : '') + ' <b>' + nn(statusCounts[raw]) + '</b></span>'; }).join('') + '</div>';
+    var jornadaChips = '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Etapa da jornada:</span><span class="chip' + (!devF.jornada ? ' chip-on' : '') + '" data-ocjorn="">Todas <b>' + nn(typed.length) + '</b></span>' + jornadaKeys.map(function (k) { return '<span class="chip' + (devF.jornada === k ? ' chip-on' : '') + '" data-ocjorn="' + k + '">' + esc(JORNADA_META[k]) + ' <b>' + nn(jornadaCounts[k]) + '</b></span>'; }).join('') + '</div>';
+    var motivoChips = '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Motivo:</span><span class="chip' + (!devF.motivo ? ' chip-on' : '') + '" data-ocmotivo="">Todos</span>' + motivoTop.map(function (mv) { return '<span class="chip' + (devF.motivo === mv ? ' chip-on' : '') + '" data-ocmotivo="' + esc(mv) + '" title="' + esc(mv) + '">' + esc(mv.length > 26 ? mv.slice(0, 26) + '…' : mv) + ' <b>' + nn(motivoCounts[mv]) + '</b></span>'; }).join('') + (motivoRest > 0 ? '<span class="footnote" style="margin:0 0 0 6px">+' + motivoRest + ' outro(s) motivo(s)</span>' : '') + '</div>';
+    // "Pendências operacionais" (§12): qualidade de dado/prazo — NUNCA misturado com etapa ou motivo.
+    var flagChips = [['', 'Sem filtro'], ['prazo', '⚠️ Prazo p/ recorrer'], ['semcausa', 'Sem causa interna classificada'], ['semresp', 'Sem responsável'], ['naovinc', 'SKU não vinculado']];
     // Filtro de status interno como chips de multi-seleção (marque quantos quiser).
     var istCounts = {}; typed.forEach(function (o) { istCounts[o.internalStatus] = (istCounts[o.internalStatus] || 0) + 1; });
     var istOrder = Object.keys(ISTMAP).filter(function (k) { return istCounts[k]; }).sort(function (a, b) { return istCounts[b] - istCounts[a]; });
     devCustomStatus.forEach(function (s) { if (s && s.key && istOrder.indexOf(s.key) < 0) istOrder.push(s.key); }); // status personalizados sempre visíveis como filtro
-    var istChips = '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Status interno:</span><span class="chip' + (!istKeys.length ? ' chip-on' : '') + '" data-ocist="">Todos</span>' + istOrder.map(function (k) { return '<span class="chip' + (istKeys.indexOf(k) >= 0 ? ' chip-on' : '') + '" data-ocist="' + esc(k) + '">' + esc(ISTMAP[k]) + ' <b>' + nn(istCounts[k]) + '</b></span>'; }).join('') + '<span class="chip" data-ocmanage="1" title="Criar, renomear ou remover status internos personalizados">⚙ Gerenciar status</span></div>';
+    var istChips = '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Status interno (livre, editável):</span><span class="chip' + (!istKeys.length ? ' chip-on' : '') + '" data-ocist="">Todos</span>' + istOrder.map(function (k) { return '<span class="chip' + (istKeys.indexOf(k) >= 0 ? ' chip-on' : '') + '" data-ocist="' + esc(k) + '">' + esc(ISTMAP[k]) + ' <b>' + nn(istCounts[k]) + '</b></span>'; }).join('') + '<span class="chip" data-ocmanage="1" title="Criar, renomear ou remover status internos personalizados">⚙ Gerenciar status</span></div>';
     var novoNote = Object.keys(novoStatus).length ? callout('warn', 'Novo status da Shopee detectado', 'Valores nunca vistos antes (mostrados com ✦): ' + Object.keys(novoStatus).map(function (s) { return '<b>' + esc(s) + '</b>'; }).join(', ') + '. Estão preservados e visíveis; ainda não foram agrupados.') : '';
     var demoNote = demoN ? '<div class="callout warn" style="padding:8px 14px"><div class="cbody">🧪 ' + nn(demoN) + ' caso(s) demonstrativos para validação da interface — não entram em KPIs, financeiro nem análises.</div></div>' : '';
     // Ações em massa: aplicam sobre os casos reais selecionados (demo não é selecionável nem persistido).
@@ -1299,19 +1417,19 @@
       '<button class="btn-sm primary" id="blkapply">Aplicar aos ' + nn(selIds.length) + '</button><button class="btn-sm" id="blkclear">Limpar seleção</button></div></div>' : '';
     var allSelectable = slice.filter(function (o) { return !o.isDemo; });
     var allChecked = allSelectable.length && allSelectable.every(function (o) { return devSel[o.id]; });
-    return secHead('CASOS', 'Casos', 'Todos os casos de devolução, cancelamento e falha de entrega em um só lugar. Selecione vários para ações em massa, edite o status na própria linha ou abra o caso.') +
-      '<div class="chips">' + typeChips.map(function (c) { return '<span class="chip' + (devF.type === c[0] ? ' chip-on' : '') + '" data-octype="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
-      statusRow +
-      '<div class="chips" style="margin-top:6px">' + flagChips.map(function (c) { return '<span class="chip' + (devF.flag === c[0] ? ' chip-on' : '') + '" data-ocflag="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
+    return secHead('CASOS', 'Casos', 'Todos os casos de devolução, cancelamento e falha de entrega em um só lugar. Etapa e motivo são filtros separados; a próxima ação diz o que fazer agora.') +
+      '<div class="chips">' + typeChips.map(function (c) { return '<span class="chip' + (devF.type === c[0] ? ' chip-on' : '') + '" data-octype="' + c[0] + '">' + c[1] + ' <b>' + nn(c[2]) + '</b></span>'; }).join('') + '</div>' +
+      jornadaChips + motivoChips + statusRow +
+      '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Pendências operacionais:</span>' + flagChips.map(function (c) { return '<span class="chip' + (devF.flag === c[0] ? ' chip-on' : '') + '" data-ocflag="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
       istChips +
       '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="devq" style="width:260px" placeholder="Buscar ID da devolução, pedido, produto ou SKU…" value="' + esc(devF.search) + '">' +
       '<select class="select sm" id="devsort"><option value="recent"' + (devF.sort === 'recent' ? ' selected' : '') + '>Mais recentes</option><option value="impact"' + (devF.sort === 'impact' ? ' selected' : '') + '>Maior impacto</option></select></div>' +
       novoNote + demoNote + '<div class="count-line"><b>' + nn(list.length) + '</b> casos' + (selIds.length ? ' · <b>' + nn(selIds.length) + '</b> selecionado(s)' : '') + '</div>' + bulkBar +
-      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th style="width:34px"><input type="checkbox" id="devselall"' + (allChecked ? ' checked' : '') + ' title="Selecionar os desta página"></th><th>Pedido / Devolução</th><th>Tipo</th><th>Produto</th><th>Motivo</th><th>Status Shopee</th><th>Status interno</th><th>Recebimento</th><th>Valor</th><th>Ação</th></tr></thead><tbody>' +
-      slice.map(function (o) { var it = (o.items || [])[0] || {}; var prod = (it.productName || '—') + (it.variationName ? ' · ' + it.variationName : '') + ((o.items || []).length > 1 ? ' (+' + (o.items.length - 1) + ')' : ''); var rl = REC_LABEL[recGroup(o)];
+      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th style="width:34px"><input type="checkbox" id="devselall"' + (allChecked ? ' checked' : '') + ' title="Selecionar os desta página"></th><th>Pedido / Devolução</th><th>Tipo</th><th>Produto</th><th>Motivo</th><th>Etapa</th><th>Próxima ação</th><th>Status Shopee</th><th>Status interno</th><th>Recebimento</th><th>Valor</th><th>Ação</th></tr></thead><tbody>' +
+      slice.map(function (o) { var it = (o.items || [])[0] || {}; var prod = (it.productName || '—') + (it.variationName ? ' · ' + it.variationName : '') + ((o.items || []).length > 1 ? ' (+' + (o.items.length - 1) + ')' : ''); var rl = REC_LABEL[recGroup(o)]; var pa = casoProximaAcao(o);
         var chk = o.isDemo ? '<span class="footnote" style="margin:0">—</span>' : '<input type="checkbox" class="devrowsel" data-selid="' + esc(o.id) + '"' + (devSel[o.id] ? ' checked' : '') + '>';
         var istCell = o.isDemo ? '<span class="pill st-int">' + esc(istLabel(o.internalStatus)) + '</span>' : '<select class="select sm devinlinest" data-inlid="' + esc(o.id) + '" style="min-width:150px">' + Object.keys(ISTMAP).map(function (k) { return '<option value="' + k + '"' + (o.internalStatus === k ? ' selected' : '') + '>' + ISTMAP[k] + '</option>'; }).join('') + '</select>';
-        return '<tr' + (o.isDemo ? ' style="background:#fff8ef"' : (devSel[o.id] ? ' style="background:var(--brand-soft,#f2f5ff)"' : '')) + '><td>' + chk + '</td><td class="mono">' + esc(o.orderId || '—') + (o.returnId ? '<div class="footnote" style="margin:0">' + esc(o.returnId) + '</div>' : '') + '</td><td>' + esc(TYPE_LABELS[o.type] || '—') + (o.isDemo ? ' <span class="tag warn">demo</span>' : '') + '</td><td class="cell-text">' + esc(prod) + '<div class="footnote" style="margin:0">' + esc(it.sku || '—') + '</div></td><td class="cell-text">' + esc(o.reason || '—') + '</td><td class="cell-text"><span class="tag ' + (normStatus(o.status).indexOf('disputa') >= 0 ? 'info' : 'neutral') + '">' + esc(statusLabel(o.status)) + '</span>' + prazoBadge(o) + '</td><td>' + istCell + '</td><td><span class="tag ' + rl[1] + '">' + rl[0] + '</span></td><td class="nowrap">' + brl(o.requested) + '</td><td><button class="btn-sm primary" data-oc="' + esc(o.id) + '">Abrir</button></td></tr>'; }).join('') +
+        return '<tr' + (o.isDemo ? ' style="background:#fff8ef"' : (devSel[o.id] ? ' style="background:var(--brand-soft,#f2f5ff)"' : '')) + '><td>' + chk + '</td><td class="mono">' + esc(o.orderId || '—') + (o.returnId ? '<div class="footnote" style="margin:0">' + esc(o.returnId) + '</div>' : '') + '</td><td>' + esc(TYPE_LABELS[o.type] || '—') + (o.isDemo ? ' <span class="tag warn">demo</span>' : '') + '</td><td class="cell-text">' + esc(prod) + '<div class="footnote" style="margin:0">' + esc(it.sku || '—') + '</div></td><td class="cell-text">' + esc(casoMotivo(o)) + '</td><td class="cell-text"><span class="tag ' + (pa.jornada === 'BAIXADA' ? 'ok' : pa.jornada === 'REJEITADA' ? 'neutral' : pa.jornada === 'ACAO_NECESSARIA' ? 'warn' : 'info') + '">' + esc(pa.label) + '</span></td><td class="cell-text">' + esc(pa.text) + '</td><td class="cell-text"><span class="tag ' + (normStatus(o.status).indexOf('disputa') >= 0 ? 'info' : 'neutral') + '">' + esc(statusLabel(o.status)) + '</span>' + prazoBadge(o) + '</td><td>' + istCell + '</td><td><span class="tag ' + rl[1] + '">' + rl[0] + '</span></td><td class="nowrap">' + brl(o.requested) + '</td><td><button class="btn-sm primary" data-oc="' + esc(o.id) + '">Abrir</button></td></tr>'; }).join('') +
       '</tbody></table></div></div>' + (pages > 1 ? '<div style="display:flex;gap:8px;justify-content:flex-end;align-items:center"><button class="btn-sm" id="devprev"' + (devPage <= 1 ? ' disabled' : '') + '>Anterior</button><span class="footnote" style="margin:0">página ' + devPage + ' de ' + pages + '</span><button class="btn-sm" id="devnext"' + (devPage >= pages ? ' disabled' : '') + '>Próxima</button></div>' : '');
   }
   function bulkApplyDev(selIds, patch, ownerName) {
@@ -1359,8 +1477,10 @@
   }
   function bindDevOcc() {
     var q = document.getElementById('devq'); if (q) { var t; q.oninput = function () { clearTimeout(t); t = setTimeout(function () { var v = q.value; devF.search = v; devPage = 1; render(); var el = document.getElementById('devq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
-    app.querySelectorAll('[data-octype]').forEach(function (c) { c.onclick = function () { devF.type = c.dataset.octype; devF.status = ''; devPage = 1; render(); }; });
+    app.querySelectorAll('[data-octype]').forEach(function (c) { c.onclick = function () { devF.type = c.dataset.octype; devF.status = ''; devF.jornada = ''; devF.motivo = ''; devPage = 1; render(); }; });
     app.querySelectorAll('[data-ocstatus]').forEach(function (c) { c.onclick = function () { devF.status = c.dataset.ocstatus; devPage = 1; render(); }; });
+    app.querySelectorAll('[data-ocjorn]').forEach(function (c) { c.onclick = function () { devF.jornada = c.dataset.ocjorn; devPage = 1; render(); }; });
+    app.querySelectorAll('[data-ocmotivo]').forEach(function (c) { c.onclick = function () { devF.motivo = c.dataset.ocmotivo; devPage = 1; render(); }; });
     app.querySelectorAll('[data-ocflag]').forEach(function (c) { c.onclick = function () { devF.flag = c.dataset.ocflag; devPage = 1; render(); }; });
     app.querySelectorAll('[data-ocist]').forEach(function (c) { c.onclick = function () { var k = c.dataset.ocist; devF.internalStatus = ''; if (!k) { devF.istSet = {}; } else { devF.istSet = devF.istSet || {}; devF.istSet[k] = !devF.istSet[k]; } devPage = 1; render(); }; });
     var mg = app.querySelector('[data-ocmanage]'); if (mg) mg.onclick = function () { openManageStatus(); };
@@ -1445,7 +1565,8 @@
       var comissaoC = mrRow ? mrRow.comissao : -Math.round((o.commissionNet || 0) * 100);
       var afilC = mrRow ? mrRow.afiliado : (affRow ? -Math.round((affRow.comAff + affRow.svcFee) / 100) : null);
       var acC = acRecs ? -Math.abs(acRecs.reduce(function (s, r) { return s + r.taxa; }, 0)) : null;
-      var occHere = occ.filter(function (x) { return !x.isDemo && x.orderId === o.id; }); var devC = occHere.length ? -Math.round(occHere.reduce(function (s, x) { return s + occEffectiveLoss(x); }, 0) * 100) : null;
+      // Usa o resultado confirmado da baixa quando existir (§22-24), senão o provisório.
+      var occHere = occ.filter(function (x) { return !x.isDemo && x.orderId === o.id; }); var devC = occHere.length ? -Math.round(occHere.reduce(function (s, x) { return s + occResultadoDevolucao(x).perda; }, 0) * 100) : null;
       var outrosC = mrRow ? (mrRow.freteParceiro + mrRow.descontoFrete + mrRow.envioReverso + mrRow.cupom + mrRow.pix + mrRow.reembolso) : null;
       var receitaLiqC = mrRow ? mrRow.liberado : (vendaC + Math.round((f.marketplaceFeesTotal || 0) * -100));
       var p = profitOf(o); var lucroC = p.known ? p.lucro : null; var margem = (lucroC != null && vendaC) ? r2(lucroC / vendaC * 100) : null;
@@ -1637,7 +1758,8 @@
       panel.innerHTML = '<div class="dh"><div><b>Ficha — ' + esc(o.orderId || o.id) + '</b> <span class="pill st-int" style="margin-left:8px">' + istLabel(o.internalStatus) + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
         '<div class="cards6">' + fcard('Reembolso', brl(o.impact.refundedTotal), 'red') + fcard('Custos adicionais', brl(o.impact.additionalCostTotal), 'amber') + fcard('Recuperado', brl(o.impact.recoveredTotal), 'green') + fcard('Impacto líquido', o.impact.knownNetImpact == null ? '—' : brl(o.impact.knownNetImpact), 'red', o.impact.cmvAvailable ? '' : 'CMV não disponível') + '</div>' +
         '<div class="split"><div>' +
-        '<div class="panel"><div class="ph"><h3>Produto / retorno</h3><span class="tag ' + situacaoCaso(o)[1] + '">' + situacaoCaso(o)[0] + '</span></div><div class="pb">' + kv('Motivo (cliente)', o.reason) + kv('Situação do retorno', RECEIPT_LABELS[o.receiptState] || 'Não iniciado') + '<label class="fld">Itens</label>' + (o.items || []).map(function (i) { return '<div class="ro" style="margin-bottom:4px"><span class="mono">' + esc(i.sku || '—') + '</span> ' + esc(i.productName || '') + (i.variationName ? ' · ' + esc(i.variationName) : '') + (i.skuLinked ? '' : ' <span class="tag warn">não vinc.</span>') + '</div>'; }).join('') + '</div></div>' +
+        (function () { var pa = casoProximaAcao(o); return callout(pa.jornada === 'BAIXADA' || pa.jornada === 'REJEITADA' ? 'green' : 'warn', 'Etapa: ' + pa.label, 'Próxima ação: <b>' + esc(pa.text) + '</b>'); })() +
+        '<div class="panel"><div class="ph"><h3>Produto / retorno</h3><span class="tag ' + situacaoCaso(o)[1] + '">' + situacaoCaso(o)[0] + '</span></div><div class="pb">' + kv('Motivo (cliente)', o.reason) + kv('Situação do retorno', RECEIPT_LABELS[o.receiptState] || 'Não iniciado') + '<label class="fld">Itens</label>' + (o.items || []).map(function (i) { return '<div class="ro" style="margin-bottom:4px"><span class="mono">' + esc(i.sku || '—') + '</span> ' + esc(i.productName || '') + (i.variationName ? ' · ' + esc(i.variationName) : '') + (i.skuLinked ? '' : ' <span class="tag warn">não vinc.</span>') + '</div>'; }).join('') + (expectsReturn(o) && !receiptDone(o) ? '<button class="btn-sm primary" id="fichabaixa" style="margin-top:8px">📦 Dar baixa / Conferir recebimento</button>' : (o.recuperacao ? '<div class="footnote" style="margin-top:8px">Baixa registrada em ' + new Date(o.receivedAt).toLocaleString('pt-BR') + '. <button class="btn-sm" id="fichabaixa2">Reabrir conferência</button></div>' : '')) + '</div></div>' +
         '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Ver dados originais (Shopee)</summary><div class="pb">' +
         '<label class="fld">Identificação</label>' + kv('Pedido', o.orderId) + kv('Devolução', o.returnId) + (ord ? kv('Status do pedido', S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus || '—') : '') +
         '<label class="fld">Solicitação</label>' + kv('Motivo', o.reason) + (o.reasonRevised ? kv('Motivo revisado', o.reasonRevised) : '') + (o.resolution ? kv('Solução', o.resolution) : '') + (o.returnType ? kv('Tipo', o.returnType) : '') + kv('Status Shopee', o.status) + kv('Data', dbr(o.occurredAt)) +
@@ -1647,6 +1769,7 @@
         '<label class="fld">Financeiro</label>' + kv('Reembolso solicitado', brl(o.requested)) + kv('Compensação', brl(o.compensation)) +
         '</div></details>' +
         '<div class="panel"><div class="ph"><h3>Impacto financeiro</h3></div><div class="pb">' +
+        (function () { var r = occResultadoDevolucao(o); return '<div class="fin-line total"><span>Resultado da devolução — <span class="tag ' + (r.status === 'confirmado' ? 'ok' : 'info') + '">' + (r.status === 'confirmado' ? 'Confirmado (baixa feita)' : 'Provisório (aguardando baixa)') + '</span></span><span class="neg">' + brl(r.perda) + '</span></div>' + (r.status === 'confirmado' ? '<div class="footnote" style="margin:2px 0 8px">Custo do produto ' + brl(r.custoTotal) + ' − valor reaproveitável ' + brl(r.valorReaproveitavel) + ' = perda confirmada ' + brl(r.perda) + '.</div>' : '<div class="footnote" style="margin:2px 0 8px">Baseado no reembolso pago menos compensação — vira "confirmado" quando a mercadoria voltar e você conferir/der baixa.</div>'); })() +
         '<div class="fin-line"><span>Reembolso pago</span><span class="neg">' + brl(o.impact.refundedTotal) + '</span></div><div class="fin-line"><span>Custos adicionais</span><span class="neg">' + brl(o.impact.additionalCostTotal) + '</span></div><div class="fin-line"><span>Recuperações</span><span class="pos">-' + brl(o.impact.recoveredTotal) + '</span></div><div class="fin-line total"><span>Impacto líquido conhecido</span><span class="neg">' + (o.impact.knownNetImpact == null ? '—' : brl(o.impact.knownNetImpact)) + '</span></div>' +
         '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center"><select class="select sm" id="evtype">' + Object.keys(EVENT_META).map(function (k) { return '<option value="' + k + '">' + EVENT_META[k].label + '</option>'; }).join('') + '</select><input class="input sm" id="evamt" style="width:100px" placeholder="valor"><button class="btn-sm primary" id="evadd">+ Movimentação</button></div>' +
         (o.events && o.events.length ? '<div style="margin-top:10px">' + o.events.map(function (e) { return '<div class="fin-line"><span>' + (EVENT_META[e.type] ? EVENT_META[e.type].label : e.type) + (e.note ? ' · ' + esc(e.note) : '') + '</span><span class="' + (e.direction === 'RECOVERY' ? 'pos' : 'neg') + '">' + (e.direction === 'RECOVERY' ? '-' : '') + brl(e.amount) + '</span></div>'; }).join('') + '</div>' : '') + '</div></div></div>' +
@@ -1665,6 +1788,8 @@
         }).join('') : '<div class="footnote">Sem atividade ainda.</div>') + '</div></div>' +
         '</div>';
       panel.querySelector('.x').onclick = function () { d.remove(); };
+      var fb = panel.querySelector('#fichabaixa'); if (fb) fb.onclick = function () { openConferir(o.id, draw); };
+      var fb2 = panel.querySelector('#fichabaixa2'); if (fb2) fb2.onclick = function () { openConferir(o.id, draw); };
       panel.querySelectorAll('[data-set]').forEach(function (s) { s.onchange = function () { setField(s.dataset.set, s.value || (s.dataset.set === 'merchandiseCondition' ? null : s.value)); }; });
       panel.querySelectorAll('[data-inp]').forEach(function (i) { i.onblur = function () { var field = i.dataset.inp; var val = field === 'recoverableValue' ? (i.value === '' ? null : Number(i.value.replace(',', '.'))) : (i.value || null); setField(field, val); }; });
       var evadd = panel.querySelector('#evadd'); evadd.onclick = function () { var type = panel.querySelector('#evtype').value; var amt = Number((panel.querySelector('#evamt').value || '').replace(',', '.')); if (!amt || amt < 0) { toast('Valor inválido', 'Informe um valor.', true); return; } putEvent(o, 'manual:' + type + ':' + Date.now(), type, EVENT_META[type].direction, amt, 'MANUAL'); persist({ kind: 'FINANCIAL', message: (EVENT_META[type].label) + ': ' + brl(amt), userName: 'Operador' }); toast('Movimentação lançada', EVENT_META[type].label + ' · ' + brl(amt)); };
@@ -1834,15 +1959,23 @@
   // gráfico de linha simples (saldo × tempo) + 2ª linha opcional (valor a ajustar)
   function svgWalletLine(points, opt) {
     opt = opt || {}; var W = 760, H = 240, padL = 56, padR = 20, padB = 26, padT = 16; if (points.length < 2) return '<div class="footnote">Poucos pontos para desenhar a evolução.</div>';
-    var vals = []; points.forEach(function (p) { vals.push(p.a); if (p.b != null) vals.push(p.b); });
+    var vals = []; points.forEach(function (p) { vals.push(p.a); if (p.b != null) vals.push(p.b); if (opt.three && p.c != null) vals.push(p.c); });
     var mn = Math.min.apply(null, vals.concat([0])), mx = Math.max.apply(null, vals.concat([0])); if (mx === mn) mx = mn + 1;
     var x = function (i) { return padL + i * (W - padL - padR) / (points.length - 1); }; var y = function (v) { return H - padB - (v - mn) / (mx - mn) * (H - padB - padT); };
     var zero = mn < 0 && mx > 0 ? '<line x1="' + padL + '" y1="' + y(0).toFixed(1) + '" x2="' + (W - padR) + '" y2="' + y(0).toFixed(1) + '" stroke="#e2e8f0" stroke-dasharray="3 3"/>' : '';
     var lineA = '<polyline points="' + points.map(function (p, i) { return x(i).toFixed(1) + ',' + y(p.a).toFixed(1); }).join(' ') + '" fill="none" stroke="#2b4bd6" stroke-width="2.5"/>';
     var lineB = opt.two ? '<polyline points="' + points.map(function (p, i) { return x(i).toFixed(1) + ',' + y(p.b || 0).toFixed(1); }).join(' ') + '" fill="none" stroke="#e0662a" stroke-width="2" stroke-dasharray="4 3"/>' : '';
+    // Terceira linha opcional (ex.: projeção) — só pontos com c != null são desenhados (mantém "hoje em diante").
+    var lineC = '';
+    if (opt.three) {
+      var segs = []; var cur = [];
+      points.forEach(function (p, i) { if (p.c != null) cur.push(x(i).toFixed(1) + ',' + y(p.c).toFixed(1)); else if (cur.length) { segs.push(cur); cur = []; } });
+      if (cur.length) segs.push(cur);
+      lineC = segs.map(function (s) { return '<polyline points="' + s.join(' ') + '" fill="none" stroke="#8a5cf6" stroke-width="2" stroke-dasharray="2 3"/>'; }).join('');
+    }
     var labels = ''; var step = Math.ceil(points.length / 6); points.forEach(function (p, i) { if (i % step === 0 || i === points.length - 1) labels += '<text x="' + x(i).toFixed(1) + '" y="' + (H - 8) + '" font-size="10" fill="#64708a" text-anchor="middle">' + esc(p.label) + '</text>'; });
     var yl = '<text x="8" y="' + (y(mx) + 4).toFixed(1) + '" font-size="10" fill="#64708a">' + brl(mx) + '</text><text x="8" y="' + (y(mn) + 4).toFixed(1) + '" font-size="10" fill="#64708a">' + brl(mn) + '</text>';
-    return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="max-width:' + W + 'px">' + zero + lineA + lineB + labels + yl + '</svg>';
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="max-width:' + W + 'px">' + zero + lineA + lineB + lineC + labels + yl + '</svg>';
   }
   function walletSaldoSeries() {
     var byDay = {}; wallet.filter(function (t) { return t.date && inPeriod(t.date); }).sort(function (a, b) { return a.date.localeCompare(b.date); }).forEach(function (t) { var d = t.date.slice(0, 10); if (!byDay[d]) byDay[d] = { label: monthDayLabel(d), a: null, b: null }; if (t.balance != null) byDay[d].a = t.balance; if (t.adjust != null) byDay[d].b = t.adjust; });
@@ -3076,6 +3209,54 @@
   function mrTrendArrow(cur, prev) { if (prev == null || prev === 0) return cur > 0 ? '↑' : cur < 0 ? '↓' : '→'; var v = (cur - prev) / Math.abs(prev); return v > 0.01 ? '↑' : v < -0.01 ? '↓' : '→'; }
   function mrTrendPct(cur, prev) { if (prev == null || prev === 0) return null; return r2((cur - prev) / Math.abs(prev) * 100); }
 
+  // ---- Drill-down universal das linhas financeiras (§25-29) ----
+  // Clicar em qualquer valor consolidado (Visão Geral, DRE, Taxas Shopee, Categorias) abre a lista
+  // real dos lançamentos que o formaram, respeitando o período global já selecionado. Clicar no
+  // pedido abre a Ficha Financeira 360º. Nunca soma de novo (mesma leitura de mrPeriodEngine).
+  function openMrDrill(kind, label) {
+    var pe = mrPeriodEngine(); var e = mrEngine(); var rows = [];
+    if (kind === 'taxasShopee') {
+      pe.rows.forEach(function (r) {
+        var v = r.comissao + r.servico + r.transacao + r.freteParceiro + r.descontoFrete + r.envioReverso; if (!v) return;
+        var sk = e.skuByOrder[r.orderId];
+        rows.push({ orderId: r.orderId, data: r.dataConclusao || r.dataCriacao, sku: sk && sk[0] ? sk[0].sku : '—', produto: sk && sk[0] ? sk[0].produto : (r.produto || '—'), descricao: 'comissão+serviço+transação+frete parceiro+ajuste de frete+envio reverso', valor: v });
+      });
+    } else if (MR_FIELDS.indexOf(kind) >= 0 || kind === 'receitaLiquida') {
+      // "Receita Líquida" = exatamente o pagamento liberado (soma de mrRow.liberado) — mesma base do
+      // card e do DRE. Não depende de custo do produto conhecido (diferente de faturamento/lucro).
+      var mrKind = kind === 'receitaLiquida' ? 'liberado' : kind;
+      pe.rows.filter(function (r) { return r[mrKind] !== 0; }).forEach(function (r) {
+        var sk = e.skuByOrder[r.orderId];
+        rows.push({ orderId: r.orderId, data: r.dataConclusao || r.dataCriacao, sku: sk && sk[0] ? sk[0].sku : '—', produto: sk && sk[0] ? sk[0].produto : (r.produto || '—'), descricao: r.tipoPedido || '—', valor: r[mrKind] });
+      });
+    } else if (kind === 'adjustes') {
+      mrAdj.forEach(function (a) { rows.push({ orderId: a.orderId || '—', data: null, sku: '—', produto: '—', descricao: a.desc || 'Ajuste', valor: a.valor }); });
+    } else if (kind === 'custoProdutos') {
+      orders.filter(function (o) { return inPeriod(o.createdAt); }).forEach(function (o) { var f = orderFinance(o); if (f.costPending) return; var cC = Math.round((f.productCostTotal || 0) * 100); if (!cC) return; rows.push({ orderId: o.id, data: o.createdAt, sku: (o.items[0] && o.items[0].sku) || '—', produto: (o.items[0] && o.items[0].productName) || '—', descricao: 'Custo do produto', valor: -cC }); });
+    } else if (kind === 'faturamento' || kind === 'lucro') {
+      var profitOf = mrOrderProfitEngine(); var mrByOrder = {}; e.orders.forEach(function (r) { mrByOrder[r.orderId] = r; });
+      orders.filter(function (o) { return inPeriod(o.createdAt); }).forEach(function (o) {
+        var p = profitOf(o); if (!p.known) return;
+        var mrRow = mrByOrder[o.id]; var sk = mrRow ? e.skuByOrder[o.id] : null;
+        var valor = kind === 'lucro' ? p.lucro : p.receita;
+        rows.push({ orderId: o.id, data: o.createdAt, sku: sk && sk[0] ? sk[0].sku : ((o.items[0] && o.items[0].sku) || '—'), produto: sk && sk[0] ? sk[0].produto : ((o.items[0] && o.items[0].productName) || '—'), descricao: mrRow ? 'Minha Renda' : 'estimado (Pedidos)', valor: valor });
+      });
+    }
+    rows.sort(function (a, b) { return Math.abs(b.valor) - Math.abs(a.valor); });
+    var total = rows.reduce(function (s, r) { return s + r.valor; }, 0);
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '820px'; panel.style.maxWidth = '97vw';
+    d.appendChild(panel); d.onclick = function (ev) { if (ev.target === d) d.remove(); }; document.body.appendChild(d);
+    var trs = rows.slice(0, 500).map(function (r) { return '<tr class="rowlink" data-drillped="' + esc(r.orderId) + '"><td class="mono">' + esc(r.orderId) + '</td><td class="nowrap">' + (r.data ? dbr(r.data) : '—') + '</td><td class="mono">' + esc(r.sku) + '</td><td class="cell-text">' + esc((r.produto || '—').slice(0, 26)) + '</td><td class="cell-text">' + esc(r.descricao) + '</td><td class="nowrap ' + (r.valor < 0 ? 'neg' : 'pos') + '">' + brlC(r.valor) + '</td></tr>'; }).join('');
+    var periodNote = kind === 'adjustes' ? 'Ajustes (Adjustment) não têm data confiável na fonte — lista mostra o total importado, não filtrado por período.' : 'Respeita o período selecionado no topo da tela.';
+    panel.innerHTML = '<div class="dh"><div><b>' + esc(label) + '</b></div><button class="x">&times;</button></div><div class="dbd">' +
+      '<div class="kstrip" style="margin-bottom:12px"><div class="kc"><div class="kl">Total exibido</div><div class="kv">' + brlC(total) + '</div></div><div class="kc"><div class="kl">Pedidos envolvidos</div><div class="kv">' + nn(rows.length) + '</div></div></div>' +
+      (rows.length ? '<div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Data</th><th>SKU</th><th>Produto</th><th>Descrição</th><th>Valor</th></tr></thead><tbody>' + trs + '</tbody></table></div>' + (rows.length > 500 ? '<div class="footnote" style="padding:8px 0">Mostrando os 500 maiores lançamentos de ' + nn(rows.length) + '.</div>' : '') : emptyBox('Nenhum lançamento encontrado para este valor no período selecionado.')) +
+      '<div class="footnote" style="padding:8px 0">' + esc(periodNote) + ' Clique no pedido para abrir a Ficha Financeira 360º.</div>' +
+      '</div>';
+    panel.querySelector('.x').onclick = function () { d.remove(); };
+    panel.querySelectorAll('[data-drillped]').forEach(function (tr) { tr.onclick = function () { var oid = tr.dataset.drillped; if (oid === '—') return; d.remove(); openPedidoFicha360(oid); }; });
+  }
+
   function renderMinhaRenda() {
     // Ordem fixa pelo prompt de alterações pontuais (§2-3, §19): Visão Geral no topo, Meta & Projeção
     // sempre por último. DRE/Taxas/Categorias/Produtos priorizam a análise financeira real; Frete,
@@ -3099,6 +3280,7 @@
     app.querySelectorAll('[data-gorecb]').forEach(function (b) { b.onclick = function () { route = 'posvenda'; sub.posvenda = 'recebimentos'; render(); }; });
     app.querySelectorAll('[data-gowal]').forEach(function (b) { b.onclick = function () { route = 'carteira'; walletSub = 'mov'; render(); }; });
     app.querySelectorAll('[data-golink]').forEach(function (b) { b.onclick = function () { route = b.dataset.golink; render(); }; });
+    app.querySelectorAll('[data-mrdrill]').forEach(function (b) { b.onclick = function () { openMrDrill(b.dataset.mrdrill, b.dataset.mrdrilllabel || b.dataset.mrdrill); }; });
     bindDevPeriodBar();
     if (mrSub === 'frete') bindMrFrete();
     if (mrSub === 'meta') bindMrMeta();
@@ -3123,21 +3305,21 @@
     var custoProdutos = pe.custoProdN > 0 ? pe.custoProd : null;
     var taxasShopeeAbs = Math.abs(pe.taxasShopeeTotal), afiliadosAbs = Math.abs(t.afiliado), devolucoesAbs = Math.abs(t.reembolso), outrosAbs = Math.abs(t.cupom + t.pix) + Math.abs(pe.adjTot);
     var strip1 = kstrip([
-      { l: 'Faturamento Bruto', v: temLucro ? brlC(pe.faturamento) : 'não disponível', cls: 'blue', s: nn(pe.n) + ' pedidos no período' },
-      { l: 'Receita Líquida', v: brlC(t.liberado), cls: 'blue', s: nn(t.nMR) + ' de ' + nn(pe.n) + ' com dados da Shopee' },
-      { l: 'Lucro', v: temLucro ? brlC(pe.lucro) : 'não disponível', cls: !temLucro ? 'blue' : (pe.lucro >= 0 ? 'green' : 'red') },
+      { l: 'Faturamento Bruto', v: temLucro ? brlC(pe.faturamento) : 'não disponível', cls: 'blue', s: nn(pe.n) + ' pedidos no período', drill: temLucro ? 'faturamento' : null, drillLabel: 'Faturamento Bruto' },
+      { l: 'Receita Líquida', v: brlC(t.liberado), cls: 'blue', s: nn(t.nMR) + ' de ' + nn(pe.n) + ' com dados da Shopee', drill: t.nMR ? 'receitaLiquida' : null, drillLabel: 'Receita Líquida' },
+      { l: 'Lucro', v: temLucro ? brlC(pe.lucro) : 'não disponível', cls: !temLucro ? 'blue' : (pe.lucro >= 0 ? 'green' : 'red'), drill: temLucro ? 'lucro' : null, drillLabel: 'Lucro' },
       { l: 'Margem Líquida %', v: margemLiq != null ? pct(margemLiq) : '—', cls: margemLiq == null ? 'blue' : (margemLiq >= 0 ? 'green' : 'red') },
     ]);
     var strip2 = kstrip([
       { l: 'Pedidos', v: nn(pe.n), cls: 'blue', s: pe.pendN ? nn(pe.pendN) + ' com custo pendente' : 'todos com custo conhecido' },
       { l: 'Ticket Médio', v: ticketMedio != null ? brlC(ticketMedio) : 'não disponível', cls: 'blue' },
       { l: 'Lucro Médio por Pedido', v: lucroMedioPedido != null ? brlC(lucroMedioPedido) : 'não disponível', cls: lucroMedioPedido == null ? 'blue' : (lucroMedioPedido >= 0 ? 'green' : 'red') },
-      { l: 'Custo dos Produtos', v: custoProdutos != null ? brlC(custoProdutos) : 'não disponível', cls: 'amber' },
+      { l: 'Custo dos Produtos', v: custoProdutos != null ? brlC(custoProdutos) : 'não disponível', cls: 'amber', drill: custoProdutos != null ? 'custoProdutos' : null, drillLabel: 'Custo dos Produtos' },
     ]);
     var strip3 = kstrip([
-      { l: 'Total Taxas Shopee', v: brlC(taxasShopeeAbs), cls: 'red' },
-      { l: 'Afiliados', v: brlC(afiliadosAbs), cls: 'amber' },
-      { l: 'Devoluções', v: brlC(devolucoesAbs), cls: 'red' },
+      { l: 'Total Taxas Shopee', v: brlC(taxasShopeeAbs), cls: 'red', drill: t.nMR ? 'taxasShopee' : null, drillLabel: 'Total Taxas Shopee' },
+      { l: 'Afiliados', v: brlC(afiliadosAbs), cls: 'amber', drill: t.nMR ? 'afiliado' : null, drillLabel: 'Afiliados' },
+      { l: 'Devoluções', v: brlC(devolucoesAbs), cls: 'red', drill: t.nMR ? 'reembolso' : null, drillLabel: 'Devoluções' },
       { l: 'Outros Descontos/Ajustes', v: brlC(outrosAbs), cls: 'amber' },
     ]);
     var coverage = t.nMR < pe.n ? callout('warn', 'Cobertura da Minha Renda no período', '<b>' + nn(t.nMR) + '</b> de <b>' + nn(pe.n) + '</b> pedidos têm dados reais da Shopee (Income) no período. Faturamento e Lucro usam também o resultado estimado de Pedidos para os demais; Taxas Shopee/Afiliados/Devoluções/Receita Líquida acima refletem <b>só</b> os pedidos cobertos pela Minha Renda — nunca estimados.') : '';
@@ -3202,18 +3384,19 @@
     var lucro = custoProdutos == null ? null : receitaLiquida - custoProdutos;
     var margem = (receitaBruta && lucro != null) ? r2(lucro / receitaBruta * 100) : null;
     var check = t.liberado - (receitaBruta + descComerciais + taxasShopee + devolucoes);
-    var line = function (label, v, opts) { opts = opts || {}; return '<div class="fin-line' + (opts.total ? ' total' : '') + '"><span>' + (opts.op ? '<b>' + opts.op + '</b> ' : '') + esc(label) + (opts.note ? ' <span class="footnote" style="margin:0">' + esc(opts.note) + '</span>' : '') + '</span><b class="' + (v == null ? '' : v < 0 ? 'neg' : v > 0 ? 'pos' : '') + '">' + (v == null ? 'não disponível' : brlC(v)) + '</b></div>'; };
+    // Todas as linhas com valor real são clicáveis (§25-29): abrem os lançamentos que a formaram.
+    var line = function (label, v, opts) { opts = opts || {}; var drillAttr = opts.drill && v != null ? ' rowlink" data-mrdrill="' + esc(opts.drill) + '" data-mrdrilllabel="' + esc(label) : ''; return '<div class="fin-line' + (opts.total ? ' total' : '') + drillAttr + '"><span>' + (opts.op ? '<b>' + opts.op + '</b> ' : '') + esc(label) + (opts.note ? ' <span class="footnote" style="margin:0">' + esc(opts.note) + '</span>' : '') + '</span><b class="' + (v == null ? '' : v < 0 ? 'neg' : v > 0 ? 'pos' : '') + '">' + (v == null ? 'não disponível' : brlC(v)) + '</b></div>'; };
     var custoNote = pe.custoProdN === 0 ? 'nenhum pedido do período tem custo cadastrado em Produtos' : pe.pendN ? nn(pe.pendN) + ' pedido(s) com custo pendente em Produtos (excluídos da soma abaixo)' : 'custo completo';
-    var cascata = '<div class="panel"><div class="ph"><h3>Cascata</h3></div><div class="pb">' +
-      line('Receita Bruta', receitaBruta, { note: nn(t.nMR) + ' pedidos com dados da Shopee no período' }) +
+    var cascata = '<div class="panel"><div class="ph"><h3>Cascata</h3><span class="footnote" style="margin:0">clique numa linha para ver os lançamentos</span></div><div class="pb">' +
+      line('Receita Bruta', receitaBruta, { note: nn(t.nMR) + ' pedidos com dados da Shopee no período', drill: 'preco' }) +
       line('Descontos Comerciais', descComerciais, { op: '−', note: 'cupom + PIX' }) +
-      line('Taxas Shopee', taxasShopee, { op: '−', note: 'comissão, serviço, transação, frete parceiro, ajuste de frete, envio reverso e afiliados — detalhamento na aba Taxas Shopee' }) +
-      line('Devoluções e Reembolsos', devolucoes, { op: '−' }) +
-      line('Outros Ajustes/Descontos', outrosAj, { op: '−', note: 'aba Adjustment — total importado, sem data confiável para restringir ao período' }) +
-      line('Receita Líquida', receitaLiquida, { total: true, op: '=' }) +
-      line('Custo dos Produtos', custoProdutos, { op: '−', note: custoNote }) +
+      line('Taxas Shopee', taxasShopee, { op: '−', note: 'comissão, serviço, transação, frete parceiro, ajuste de frete, envio reverso e afiliados — detalhamento na aba Taxas Shopee', drill: 'taxasShopee' }) +
+      line('Devoluções e Reembolsos', devolucoes, { op: '−', drill: 'reembolso' }) +
+      line('Outros Ajustes/Descontos', outrosAj, { op: '−', note: 'aba Adjustment — total importado, sem data confiável para restringir ao período', drill: 'adjustes' }) +
+      line('Receita Líquida', receitaLiquida, { total: true, op: '=', drill: 'receitaLiquida' }) +
+      line('Custo dos Produtos', custoProdutos, { op: '−', note: custoNote, drill: 'custoProdutos' }) +
       line('Custos Fixos/Internos', null, { op: '−', note: 'sem fonte de dados no sistema' }) +
-      line('Lucro', lucro, { total: true, op: '=' }) +
+      line('Lucro', lucro, { total: true, op: '=', drill: 'lucro' }) +
       '<div class="fin-line"><span>Margem sobre a Receita Bruta</span><b class="' + (margem == null ? '' : margem >= 0 ? 'pos' : 'neg') + '">' + (margem == null ? '—' : pct(margem)) + '</b></div>' +
       '</div></div>';
     var conf = callout(Math.abs(check) <= 100 ? 'green' : 'warn', Math.abs(check) <= 100 ? '✓ Receita Líquida bate com o Pagamento Liberado real' : '⚠ Diferença entre a cascata e o Pagamento Liberado real', 'Pagamento liberado real (soma das linhas Order): <b>' + brlC(t.liberado) + '</b> · Receita Bruta − Descontos − Taxas − Devoluções (sem Outros Ajustes, que não são filtráveis por período): <b>' + brlC(receitaBruta + descComerciais + taxasShopee + devolucoes) + '</b> · diferença <b>' + brlC(check) + '</b>.');
@@ -3259,22 +3442,51 @@
     var ticketMedio = nConhecido ? Math.round(receitaTot / nConhecido) : 0;
     var faturamentoNecessario = margemMedia > 0 ? Math.round(falta / margemMedia) : null;
     var pedidosNecessarios = faturamentoNecessario != null && ticketMedio > 0 ? Math.ceil(faturamentoNecessario / ticketMedio) : null;
-    // série diária acumulada (para o gráfico meta × realizado)
+    // §32: não fingir precisão — cobertura real de pedidos com custo cadastrado no período da meta.
+    var coveragePct = list.length ? r2(nConhecido / list.length * 100) : 0;
+    // §35: ritmo diário (médio já realizado) e necessidade diária a partir de hoje.
+    var vendaMediaDiaria = diasDecorridos > 0 ? Math.round(receitaTot / diasDecorridos) : 0;
+    var lucroMedioDiario = diasDecorridos > 0 ? Math.round(realizado / diasDecorridos) : 0;
+    var vendaNecessariaPorDia = (faturamentoNecessario != null && diasRestantes > 0) ? Math.round(faturamentoNecessario / diasRestantes) : null;
+    // série diária acumulada (para o gráfico meta × realizado × projeção — §38)
     var byDay = {}; list.forEach(function (o) { var p = profitOf(o); if (!p.known) return; var k = o.createdAt.slice(0, 10); byDay[k] = (byDay[k] || 0) + p.lucro; });
-    var days = []; for (var i = 0; i <= Math.min(diasDecorridos, totalDias - 1); i++) { var dt = new Date(range.from.getTime() + i * 864e5); days.push(dt.toISOString().slice(0, 10)); }
-    var acumRealizado = 0; var metaDiaria = totalDias ? metaC / totalDias : 0;
-    var serie = days.map(function (k, i) { acumRealizado += (byDay[k] || 0); return { label: monthDayLabel(k), a: Math.round(metaDiaria * (i + 1)), b: acumRealizado }; });
-    return { range: range, totalDias: totalDias, diasDecorridos: diasDecorridos, diasRestantes: diasRestantes, metaC: metaC, realizado: realizado, falta: falta, necessarioPorDia: necessarioPorDia, ritmoEsperado: ritmoEsperado, ritmoDiffPct: ritmoDiffPct, ritmoStatus: ritmoStatus, projecao: projecao, projStatus: projStatus, margemMedia: margemMedia, ticketMedio: ticketMedio, faturamentoNecessario: faturamentoNecessario, pedidosNecessarios: pedidosNecessarios, nConhecido: nConhecido, nPendenteCusto: nPendenteCusto, serie: serie };
+    var days = []; for (var i = 0; i < totalDias; i++) { var dt = new Date(range.from.getTime() + i * 864e5); days.push(dt.toISOString().slice(0, 10)); }
+    var acumRealizado = 0; var metaDiaria = totalDias ? metaC / totalDias : 0; var ritmoDiario = diasDecorridos > 0 ? realizado / diasDecorridos : 0;
+    var serie = days.map(function (k, i) {
+      var b = null; if (i < diasDecorridos) { acumRealizado += (byDay[k] || 0); b = acumRealizado; }
+      var c = (diasDecorridos > 0 && i >= diasDecorridos - 1) ? Math.round(ritmoDiario * (i + 1)) : null;
+      // svgWalletLine formata os rótulos do eixo Y com brl() (reais) — a série vem em centavos
+      // (convenção da Minha Renda), então convertemos aqui para não inflar o eixo em 100x.
+      return { label: monthDayLabel(k), a: (metaDiaria * (i + 1)) / 100, b: b == null ? null : b / 100, c: c == null ? null : c / 100 };
+    });
+    return { range: range, totalDias: totalDias, diasDecorridos: diasDecorridos, diasRestantes: diasRestantes, metaC: metaC, realizado: realizado, falta: falta, necessarioPorDia: necessarioPorDia, ritmoEsperado: ritmoEsperado, ritmoDiffPct: ritmoDiffPct, ritmoStatus: ritmoStatus, projecao: projecao, projStatus: projStatus, margemMedia: margemMedia, ticketMedio: ticketMedio, faturamentoNecessario: faturamentoNecessario, pedidosNecessarios: pedidosNecessarios, nConhecido: nConhecido, nPendenteCusto: nPendenteCusto, coveragePct: coveragePct, vendaMediaDiaria: vendaMediaDiaria, lucroMedioDiario: lucroMedioDiario, vendaNecessariaPorDia: vendaNecessariaPorDia, serie: serie };
   }
   function mrMeta() {
     var head = secHead('MINHA RENDA · META & PROJEÇÃO', 'Quanto falta para a meta?', 'Cálculo determinístico sobre os pedidos do período — lucro usa Minha Renda quando cobre o pedido, senão o estimado de Pedidos. Nunca soma os dois.');
-    var cfgBox = '<div class="panel"><div class="ph"><h3>Meta</h3></div><div class="pb"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">' +
-      '<div><label class="fld">Quero atingir lucro de (R$)</label><input class="input sm" id="metaval" value="' + (mrMetaCfg.lucroAlvo || '') + '" style="width:160px" placeholder="ex.: 300000"></div>' +
-      '<div><label class="fld">Período</label><select class="select sm" id="metaperiod"><option value="mes_atual"' + (mrMetaCfg.periodMode === 'mes_atual' ? ' selected' : '') + '>Mês atual</option><option value="proximo_mes"' + (mrMetaCfg.periodMode === 'proximo_mes' ? ' selected' : '') + '>Próximo mês</option><option value="custom"' + (mrMetaCfg.periodMode === 'custom' ? ' selected' : '') + '>Personalizado</option></select></div>' +
-      (mrMetaCfg.periodMode === 'custom' ? '<div><label class="fld">De</label><input class="input sm" type="date" id="metafrom" value="' + esc(mrMetaCfg.customFrom || '') + '"></div><div><label class="fld">Até</label><input class="input sm" type="date" id="metato" value="' + esc(mrMetaCfg.customTo || '') + '"></div>' : '') +
-      '<button class="btn-sm primary" id="metasave">Calcular</button></div></div></div>';
-    if (!mrMetaCfg.lucroAlvo) return head + cfgBox + emptyBox('Informe uma meta de lucro para ver o cálculo de ritmo e projeção.');
+    // ---- Modo planejamento (§30-33): ainda não "gerada" — o valor/período pode mudar livremente.
+    if (!mrMetaCfg.gerada) {
+      var cfgBox = '<div class="panel"><div class="ph"><h3>Nova meta</h3></div><div class="pb"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">' +
+        '<div><label class="fld">Quero lucrar (R$)</label><input class="input sm" id="metaval" value="' + (mrMetaCfg.lucroAlvo || '') + '" style="width:160px" placeholder="ex.: 100000"></div>' +
+        '<div><label class="fld">Período</label><select class="select sm" id="metaperiod"><option value="mes_atual"' + (mrMetaCfg.periodMode === 'mes_atual' ? ' selected' : '') + '>Mês atual</option><option value="proximo_mes"' + (mrMetaCfg.periodMode === 'proximo_mes' ? ' selected' : '') + '>Próximo mês</option><option value="custom"' + (mrMetaCfg.periodMode === 'custom' ? ' selected' : '') + '>Personalizado</option></select></div>' +
+        (mrMetaCfg.periodMode === 'custom' ? '<div><label class="fld">De</label><input class="input sm" type="date" id="metafrom" value="' + esc(mrMetaCfg.customFrom || '') + '"></div><div><label class="fld">Até</label><input class="input sm" type="date" id="metato" value="' + esc(mrMetaCfg.customTo || '') + '"></div>' : '') +
+        '<div><label class="fld">Nome (opcional)</label><input class="input sm" id="metanome" style="width:180px" placeholder="ex.: Meta de agosto"></div>' +
+        '<button class="btn-sm" id="metacalc">Calcular</button></div></div></div>';
+      if (!mrMetaCfg.lucroAlvo) return head + cfgBox + emptyBox('Informe quanto quer lucrar para ver o cálculo de faturamento necessário.');
+      var mp = mrMetaEngine();
+      var covWarn = mp.coveragePct < 100 ? callout('warn', '⚠️ Projeção parcial — existem pedidos sem custo cadastrado', pct(mp.coveragePct) + ' das vendas do período possuem custo completo. O cálculo abaixo usa só os pedidos com custo conhecido — não finge precisão sobre os demais.') : callout('green', '✓ Cobertura completa', pct(mp.coveragePct) + ' das vendas do período têm custo completo.');
+      var preview = kstrip([
+        { l: 'Margem líquida projetada (do período)', v: pct(r2(mp.margemMedia * 100)), cls: 'blue' },
+        { l: 'Lucro já realizado no período', v: brlC(mp.realizado), cls: mp.realizado >= 0 ? 'green' : 'red' },
+        { l: 'Falta para a meta', v: brlC(mp.falta), cls: mp.falta > 0 ? 'amber' : 'green' },
+        { l: 'Faturamento estimado necessário', v: mp.faturamentoNecessario != null ? brlC(mp.faturamentoNecessario) : 'sem margem para calcular', cls: 'amber' },
+      ]);
+      var gerarBtn = '<div class="panel"><div class="pb"><button class="btn-sm primary" id="metagerar">Gerar meta</button> <span class="footnote">Congela o período (datas fixas) e passa a acompanhar as vendas reais automaticamente todo dia — sem precisar informar nada manualmente.</span></div></div>';
+      return head + cfgBox + covWarn + preview + gerarBtn;
+    }
+    // ---- Modo acompanhamento (§34-39): meta gerada, datas fixas, alimentada por Pedidos/Minha Renda.
     var m = mrMetaEngine();
+    var metaHead = '<div class="panel"><div class="pb" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><div><b>' + esc(mrMetaCfg.nome || 'Meta') + '</b> <span class="footnote">gerada em ' + dbr(mrMetaCfg.geradaEm) + ' · período ' + esc(mrMetaCfg.customFrom || '') + ' a ' + esc(mrMetaCfg.customTo || '') + '</span></div><button class="btn-sm" id="metanova">Nova meta</button></div></div>';
+    var covWarn2 = m.coveragePct < 100 ? callout('warn', '⚠️ Acompanhamento parcial — existem pedidos sem custo cadastrado', pct(m.coveragePct) + ' das vendas do período têm custo completo (' + nn(m.nConhecido) + ' pedidos conhecidos' + (m.nPendenteCusto ? ' · ' + nn(m.nPendenteCusto) + ' pendentes' : '') + '). O realizado/ritmo abaixo usa só o que já tem custo cadastrado.') : '';
     var strip1 = kstrip([
       { l: 'Meta de lucro', v: brlC(m.metaC), cls: 'blue' },
       { l: 'Lucro já realizado', v: brlC(m.realizado), cls: m.realizado >= 0 ? 'green' : 'red', s: nn(m.nConhecido) + ' pedidos c/ custo conhecido' + (m.nPendenteCusto ? ' · ' + nn(m.nPendenteCusto) + ' com custo pendente' : '') },
@@ -3283,18 +3495,31 @@
       { l: 'Lucro necessário/dia', v: brlC(m.necessarioPorDia), cls: 'amber' },
       { l: 'Lucro necessário/semana', v: brlC(m.necessarioPorDia * 7), cls: 'amber' },
     ]);
+    var stripDiaria = kstrip([
+      { l: 'Venda média diária (realizada)', v: brlC(m.vendaMediaDiaria), cls: 'blue' },
+      { l: 'Lucro médio diário (realizado)', v: brlC(m.lucroMedioDiario), cls: m.lucroMedioDiario >= 0 ? 'green' : 'red' },
+      { l: 'Venda necessária por dia (p/ meta)', v: m.vendaNecessariaPorDia != null ? brlC(m.vendaNecessariaPorDia) : '—', cls: 'amber' },
+    ]);
     var ritmoIcon = m.ritmoStatus === 'ACIMA' ? '🟢' : m.ritmoStatus === 'NO_RITMO' ? '🟡' : '🔴';
     var ritmoTxt = m.ritmoStatus === 'ACIMA' ? pct(Math.abs(m.ritmoDiffPct)) + ' acima do ritmo necessário.' : m.ritmoStatus === 'NO_RITMO' ? 'No ritmo esperado.' : pct(Math.abs(m.ritmoDiffPct)) + ' abaixo da velocidade necessária.';
     var ritmoBox = callout(m.ritmoStatus === 'ABAIXO' ? 'warn' : 'green', ritmoIcon + ' Ritmo da meta', 'Meta proporcional até hoje: <b>' + brlC(m.ritmoEsperado) + '</b> · Realizado: <b>' + brlC(m.realizado) + '</b> · ' + ritmoTxt);
     var projIcon = m.projStatus === 'ACIMA' ? '🟢' : m.projStatus === 'NO_RITMO' ? '🟡' : '🔴';
-    var projBox = callout(m.projStatus === 'ABAIXO' ? 'warn' : 'green', projIcon + ' Projeção de fechamento (mantendo o ritmo atual)', 'Lucro projetado: <b>' + brlC(m.projecao) + '</b> · Meta: <b>' + brlC(m.metaC) + '</b> · Diferença: <b>' + brlC(m.projecao - m.metaC) + '</b>');
+    var projBox = callout(m.projStatus === 'ABAIXO' ? 'warn' : 'green', projIcon + ' Projeção de fechamento (mantendo o ritmo atual)', 'Lucro projetado: <b>' + brlC(m.projecao) + '</b> · Meta: <b>' + brlC(m.metaC) + '</b> · Diferença projetada: <b>' + brlC(m.projecao - m.metaC) + '</b>');
     var strip2 = kstrip([
-      { l: 'Margem média realizada', v: pct(r2(m.margemMedia * 100)), cls: 'blue' },
+      { l: 'Margem média realizada (atual)', v: pct(r2(m.margemMedia * 100)), cls: 'blue' },
       { l: 'Ticket médio', v: brlC(m.ticketMedio), cls: 'blue' },
-      { l: 'Faturamento necessário (p/ meta)', v: m.faturamentoNecessario != null ? brlC(m.faturamentoNecessario) : 'sem margem para calcular', cls: 'amber' },
+      { l: 'Faturamento necessário (com margem atual)', v: m.faturamentoNecessario != null ? brlC(m.faturamentoNecessario) : 'sem margem para calcular', cls: 'amber' },
       { l: 'Pedidos necessários', v: m.pedidosNecessarios != null ? nn(m.pedidosNecessarios) : '—', cls: 'amber' },
     ]);
-    var chart = m.serie.length > 1 ? chartCard('Meta acumulada × Realizado acumulado', legendSwatch([['Meta acumulada', '#2b4bd6'], ['Realizado acumulado', '#0f9d6b']]), svgWalletLine(m.serie, { two: true })) : '';
+    // §39: a margem usada na criação da meta é preservada — se a margem real mudar durante o
+    // período, mostramos as duas leituras lado a lado, sem alterar a meta original silenciosamente.
+    var margemDrift = '';
+    if (mrMetaCfg.margemNaCriacao != null) {
+      var margemCriacaoPct = r2(mrMetaCfg.margemNaCriacao * 100), margemAtualPct = r2(m.margemMedia * 100);
+      var mudou = Math.abs(margemCriacaoPct - margemAtualPct) >= 0.5;
+      margemDrift = mudou ? callout('warn', '⚠ A margem mudou desde a criação da meta', 'Na criação: margem de <b>' + pct(margemCriacaoPct) + '</b> → faturamento necessário estimado em <b>' + (mrMetaCfg.faturamentoNecessarioNaCriacao != null ? brlC(mrMetaCfg.faturamentoNecessarioNaCriacao) : '—') + '</b>. Com a margem atual de <b>' + pct(margemAtualPct) + '</b>, o faturamento necessário agora é <b>' + (m.faturamentoNecessario != null ? brlC(m.faturamentoNecessario) : 'sem margem para calcular') + '</b>. A meta de lucro (' + brlC(m.metaC) + ') não muda — só a estimativa de quanto faturar para chegar lá.') : callout('green', '✓ Margem estável desde a criação', 'Margem na criação: ' + pct(margemCriacaoPct) + ' · margem atual: ' + pct(margemAtualPct) + '.');
+    }
+    var chart = m.serie.length > 1 ? chartCard('Meta acumulada × Realizado acumulado × Projeção', legendSwatch([['Meta acumulada', '#2b4bd6'], ['Realizado acumulado', '#0f9d6b'], ['Projeção (ritmo atual)', '#8a5cf6']]), svgWalletLine(m.serie, { two: true, three: true })) : '';
     // Sugestões automáticas de SKU (§19-20): só leitura, classificação sobre dados já calculados.
     // Explicitamente SEM simulador — nenhum ajuste manual de mix, nenhuma projeção "e se".
     var skuList = mrPeriodEngine(mrMetaPeriodRange()).skuList.filter(function (x) { return x.lucroN > 0; });
@@ -3307,15 +3532,35 @@
       skuCol('SKUs com melhor margem para priorizar', topMargem, { h: 'Margem', v: function (x) { return pct(x.margem); }, cls: function () { return 'pos'; } }) +
       '</div>' + skuCol('Produtos negativos — não escalar', negativos, { h: 'Resultado', v: function (x) { return brlC(x.lucro); }, cls: function () { return 'neg'; } }) +
       callout('', 'Sem simulador de mix', 'Estas listas só classificam SKUs já vendidos no período da meta — não há ajuste manual de volume nem projeção "e se eu vender mais/menos". Para o detalhamento completo, use a aba Produtos e SKUs.') : '';
-    return head + cfgBox + strip1 + ritmoBox + projBox + strip2 + chart + sug;
+    return head + metaHead + covWarn2 + strip1 + stripDiaria + ritmoBox + projBox + strip2 + margemDrift + chart + sug;
   }
   function bindMrMeta() {
-    var mp = document.getElementById('metaperiod'); if (mp) mp.onchange = function () { mrMetaCfg.periodMode = mp.value; render(); };
-    var ms = document.getElementById('metasave'); if (ms) ms.onclick = function () {
+    var mp2 = document.getElementById('metaperiod'); if (mp2) mp2.onchange = function () { mrMetaCfg.periodMode = mp2.value; render(); };
+    var mc = document.getElementById('metacalc'); if (mc) mc.onclick = function () {
       var v = document.getElementById('metaval').value; mrMetaCfg.lucroAlvo = v ? parseFloat(v.replace(/\./g, '').replace(',', '.')) || 0 : 0;
       var pm = document.getElementById('metaperiod'); if (pm) mrMetaCfg.periodMode = pm.value;
       var mf = document.getElementById('metafrom'), mt = document.getElementById('metato'); if (mf) mrMetaCfg.customFrom = mf.value || null; if (mt) mrMetaCfg.customTo = mt.value || null;
-      saveMrMetaCfg().then(function () { render(); toast('Meta salva', ''); });
+      render();
+    };
+    var mg = document.getElementById('metagerar'); if (mg) mg.onclick = function () {
+      var mv = document.getElementById('metaval'); if (mv) mrMetaCfg.lucroAlvo = mv.value ? parseFloat(mv.value.replace(/\./g, '').replace(',', '.')) || 0 : 0;
+      if (!mrMetaCfg.lucroAlvo) { toast('Informe uma meta', 'Preencha "Quero lucrar (R$)" antes de gerar.', true); return; }
+      var eng = mrMetaEngine(); var range = eng.range;
+      mrMetaCfg.customFrom = range.from.toISOString().slice(0, 10);
+      mrMetaCfg.customTo = new Date(range.to.getTime() - 864e5).toISOString().slice(0, 10);
+      mrMetaCfg.periodMode = 'custom';
+      mrMetaCfg.gerada = true;
+      mrMetaCfg.geradaEm = new Date().toISOString();
+      mrMetaCfg.margemNaCriacao = eng.margemMedia;
+      mrMetaCfg.faturamentoNecessarioNaCriacao = eng.faturamentoNecessario;
+      var nomeInp = document.getElementById('metanome');
+      mrMetaCfg.nome = (nomeInp && nomeInp.value.trim()) || ('Meta ' + mrMetaCfg.customFrom + ' a ' + mrMetaCfg.customTo);
+      saveMrMetaCfg().then(function () { render(); toast('Meta gerada', mrMetaCfg.nome + ' — acompanhamento automático ativado'); });
+    };
+    var mn = document.getElementById('metanova'); if (mn) mn.onclick = function () {
+      if (!confirm('Encerrar esta meta e planejar uma nova? O histórico desta meta não fica salvo.')) return;
+      mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null, gerada: false, nome: '', geradaEm: null, margemNaCriacao: null, faturamentoNecessarioNaCriacao: null };
+      saveMrMetaCfg().then(function () { render(); });
     };
   }
   function mrFrete() {
@@ -3391,8 +3636,8 @@
       { l: 'Afiliados', v: brlC(Math.abs(t.afiliado)), cls: 'amber' },
     ]);
     var sortSel = '<select class="select sm" id="mrtaxsort"><option value="valor"' + (mrTaxasSort === 'valor' ? ' selected' : '') + '>Maior valor</option><option value="crescimento"' + (mrTaxasSort === 'crescimento' ? ' selected' : '') + '>Maior crescimento</option><option value="percentual"' + (mrTaxasSort === 'percentual' ? ' selected' : '') + '>Maior percentual</option><option value="pedidos"' + (mrTaxasSort === 'pedidos' ? ' selected' : '') + '>Mais pedidos afetados</option></select>';
-    var rows = sorted.map(function (c) { var varPct = mrTrendPct(c.valor, c.prevValor); var arrow = mrTrendArrow(c.valor, c.prevValor); return '<tr><td>' + esc(c.label) + '</td><td class="nowrap"><b>' + brlC(c.valor) + '</b></td><td>' + pct(t.preco ? r2(c.valor / t.preco * 100) : 0) + '</td><td>' + pct(totalAbs ? r2(c.valor / totalAbs * 100) : 0) + '</td><td>' + nn(c.n) + '</td><td class="nowrap">' + brlC(c.media) + '</td><td class="nowrap">' + (c.prevValor == null ? '—' : brlC(c.prevValor)) + '</td><td class="nowrap ' + (arrow === '↑' ? 'neg' : arrow === '↓' ? 'pos' : '') + '">' + (varPct == null ? '—' : arrow + ' ' + (varPct >= 0 ? '+' : '') + pct(varPct)) + '</td></tr>'; }).join('');
-    var table = '<div class="panel"><div class="ph"><h3>Categorias de taxas</h3>' + sortSel + '</div><div class="table-wrap"><table class="report"><thead><tr><th>Categoria</th><th>Valor</th><th>% Faturamento</th><th>% das Taxas</th><th>Pedidos afetados</th><th>Média/pedido</th><th>Período anterior</th><th>Variação</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+    var rows = sorted.map(function (c) { var varPct = mrTrendPct(c.valor, c.prevValor); var arrow = mrTrendArrow(c.valor, c.prevValor); return '<tr class="rowlink" data-mrdrill="' + esc(c.key) + '" data-mrdrilllabel="' + esc(c.label) + '"><td>' + esc(c.label) + '</td><td class="nowrap"><b>' + brlC(c.valor) + '</b></td><td>' + pct(t.preco ? r2(c.valor / t.preco * 100) : 0) + '</td><td>' + pct(totalAbs ? r2(c.valor / totalAbs * 100) : 0) + '</td><td>' + nn(c.n) + '</td><td class="nowrap">' + brlC(c.media) + '</td><td class="nowrap">' + (c.prevValor == null ? '—' : brlC(c.prevValor)) + '</td><td class="nowrap ' + (arrow === '↑' ? 'neg' : arrow === '↓' ? 'pos' : '') + '">' + (varPct == null ? '—' : arrow + ' ' + (varPct >= 0 ? '+' : '') + pct(varPct)) + '</td></tr>'; }).join('');
+    var table = '<div class="panel"><div class="ph"><h3>Categorias de taxas</h3>' + sortSel + '</div><div class="table-wrap"><table class="report"><thead><tr><th>Categoria</th><th>Valor</th><th>% Faturamento</th><th>% das Taxas</th><th>Pedidos afetados</th><th>Média/pedido</th><th>Período anterior</th><th>Variação</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="footnote" style="padding:8px 16px">Clique numa categoria para ver os lançamentos.</div></div>';
     var svcTot = { afil: 0, trans: 0, item: 0 }; mrSvc.forEach(function (v) { svcTot.afil += v.afiliadosVendedor; svcTot.trans += v.transacao; svcTot.item += v.porItem; });
     var svcBox = mrSvc.length ? callout('', 'Composição da taxa de serviço (Service Fee Details, histórico completo)', 'Componentes somam: taxa de serviço afiliados ' + brlC(svcTot.afil) + ' · transação ' + brlC(svcTot.trans) + ' · por item vendido ' + brlC(svcTot.item) + '. Estes explicam a taxa de serviço — não são somados por cima dela.') : '';
     var chart = chartCard('Composição das taxas no período', legendSwatch([['Valor', '#d13b3b']]), svgHBars(sorted.map(function (c) { return { label: c.label, value: c.valor / 100, color: '#d13b3b' }; }), { fmt: function (v) { return brl(v); } }));
@@ -3415,18 +3660,18 @@
     var pe = mrPeriodEngine(); var t = pe.t; var head = secHead('MINHA RENDA · CATEGORIAS', 'Para onde foi o dinheiro, por grupo', 'Cada valor vem só das linhas Order do Income no período. Grupos com valor zero não aparecem.');
     if (!t.nMR) return head + emptyBox('Nenhum pedido do período tem dados da Minha Renda (Income) para categorizar.');
     function grp(title, items) {
-      var rows = items.filter(function (it) { return it[1] !== 0; }).map(function (it) { return '<div class="fin-line"><span>' + esc(it[0]) + '</span><b class="' + (it[1] < 0 ? 'neg' : 'pos') + '">' + brlC(it[1]) + '</b></div>'; }).join('');
+      var rows = items.filter(function (it) { return it[1] !== 0; }).map(function (it) { var drillAttr = it[2] ? ' rowlink" data-mrdrill="' + esc(it[2]) + '" data-mrdrilllabel="' + esc(it[0]) : ''; return '<div class="fin-line' + drillAttr + '"><span>' + esc(it[0]) + '</span><b class="' + (it[1] < 0 ? 'neg' : 'pos') + '">' + brlC(it[1]) + '</b></div>'; }).join('');
       var tot = items.reduce(function (s, it) { return s + it[1]; }, 0);
       if (!rows) return '';
       return '<div class="panel"><div class="ph"><h3>' + esc(title) + '</h3><b class="' + (tot < 0 ? 'neg' : 'pos') + '">' + brlC(tot) + '</b></div><div class="pb">' + rows + '</div></div>';
     }
-    var receitas = grp('RECEITAS', [['Vendas (preço do produto)', t.preco], ['Desconto de frete recebido da Shopee', t.descontoFrete > 0 ? t.descontoFrete : 0]]);
-    var taxas = grp('TAXAS SHOPEE', [['Comissão', t.comissao], ['Serviço', t.servico], ['Transação', t.transacao], ['Programa de frete (frete parceiro)', t.freteParceiro], ['Ajuste de frete (quando custo)', t.descontoFrete < 0 ? t.descontoFrete : 0]]);
-    var comercial = grp('COMERCIAL', [['Afiliados', t.afiliado], ['Cupom', t.cupom]]);
-    var posVenda = grp('PÓS-VENDA', [['Devoluções/Reembolso', t.reembolso], ['PIX', t.pix], ['Envio reverso', t.envioReverso]]);
-    var financeiro = grp('FINANCEIRO', [['Ajustes (Adjustment, total importado)', pe.adjTot]]);
+    var receitas = grp('RECEITAS', [['Vendas (preço do produto)', t.preco, 'preco'], ['Desconto de frete recebido da Shopee', t.descontoFrete > 0 ? t.descontoFrete : 0, 'descontoFrete']]);
+    var taxas = grp('TAXAS SHOPEE', [['Comissão', t.comissao, 'comissao'], ['Serviço', t.servico, 'servico'], ['Transação', t.transacao, 'transacao'], ['Programa de frete (frete parceiro)', t.freteParceiro, 'freteParceiro'], ['Ajuste de frete (quando custo)', t.descontoFrete < 0 ? t.descontoFrete : 0, 'descontoFrete']]);
+    var comercial = grp('COMERCIAL', [['Afiliados', t.afiliado, 'afiliado'], ['Cupom', t.cupom, 'cupom']]);
+    var posVenda = grp('PÓS-VENDA', [['Devoluções/Reembolso', t.reembolso, 'reembolso'], ['PIX', t.pix, 'pix'], ['Envio reverso', t.envioReverso, 'envioReverso']]);
+    var financeiro = grp('FINANCEIRO', [['Ajustes (Adjustment, total importado)', pe.adjTot, 'adjustes']]);
     var financeiroNote = callout('', 'Shopee Acelera (antecipação)', 'O custo de antecipação tem base e período próprios no módulo <b>Shopee Acelera</b> — não é somado aqui para não misturar unidades/base de cálculo diferentes. <button class="btn-sm" data-golink="acelera">Abrir Shopee Acelera</button>');
-    var custos = pe.custoProdN > 0 ? grp('CUSTOS INTERNOS', [['Custo dos produtos', pe.custoProd]]) : callout('warn', 'CUSTOS INTERNOS — Custo dos produtos não disponível', 'Nenhum pedido do período tem custo cadastrado em Produtos — não é R$ 0, é "sem dado".');
+    var custos = pe.custoProdN > 0 ? grp('CUSTOS INTERNOS', [['Custo dos produtos', pe.custoProd, 'custoProdutos']]) : callout('warn', 'CUSTOS INTERNOS — Custo dos produtos não disponível', 'Nenhum pedido do período tem custo cadastrado em Produtos — não é R$ 0, é "sem dado".');
     var custosNote = callout('', 'Custos fixos/internos', 'Sem fonte de dados no sistema hoje (aluguel, folha, etc.) — não disponível, não é R$ 0.');
     return head + receitas + taxas + comercial + posVenda + financeiro + financeiroNote + custos + custosNote;
   }
@@ -3575,7 +3820,7 @@
 
   // ---------- componentes de "relatório" (dashboards visuais) ----------
   function secHead(eyebrow, title, sub) { return '<div class="rhead"><div class="eyebrow">' + esc(eyebrow) + '</div><h3 class="rtitle">' + esc(title) + '</h3>' + (sub ? '<p class="rsub">' + esc(sub) + '</p>' : '') + '<div class="rule"></div></div>'; }
-  function kstrip(items) { return '<div class="kstrip">' + items.map(function (k) { return '<div class="kc ' + (k.cls || '') + '"><div class="kl">' + esc(k.l) + '</div><div class="kv">' + k.v + '</div>' + (k.s ? '<div class="ks">' + esc(k.s) + '</div>' : '') + '</div>'; }).join('') + '</div>'; }
+  function kstrip(items) { return '<div class="kstrip">' + items.map(function (k) { return '<div class="kc ' + (k.cls || '') + (k.drill ? ' rowlink' : '') + '"' + (k.drill ? ' data-mrdrill="' + esc(k.drill) + '" data-mrdrilllabel="' + esc(k.drillLabel || k.l) + '"' : '') + '><div class="kl">' + esc(k.l) + '</div><div class="kv">' + k.v + '</div>' + (k.s ? '<div class="ks">' + esc(k.s) + '</div>' : '') + '</div>'; }).join('') + '</div>'; }
   function callout(kind, title, bodyHtml) { return '<div class="callout ' + (kind || '') + '"><div class="ct">' + esc(title) + '</div><div class="cbody">' + bodyHtml + '</div></div>'; }
   function chartCard(title, legendHtml, svg) { return '<div class="chartcard"><div class="cch"><h4>' + esc(title) + '</h4>' + (legendHtml ? '<div class="cleg">' + legendHtml + '</div>' : '') + '</div><div style="overflow-x:auto">' + svg + '</div></div>'; }
   // Gráfico combinado barras + linha (barras = eixo esq., linha = eixo dir.). rows: [{label,bar,line}].
