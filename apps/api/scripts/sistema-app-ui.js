@@ -48,6 +48,10 @@
   // Minha Renda
   var mrRenda = [], mrShip = [], mrAdj = [], mrSvc = [], mrPdf = [], mrSummary = null;
   var mrSub = 'visao', mrPage = 1, mrF = { search: '', motivo: '', invest: '' };
+  var mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null };
+  // Expedição / Bipe (Pedidos): registro de saída física, chave = ID do pedido (idempotente).
+  var shipBip = {};   // orderId -> { id, orderId, bipedAt, bipedBy, note, history: [] }
+  var pedExpF = { search: '', status: '' };
   var devSel = {};            // seleção múltipla em Casos: id -> true (em memória)
   var devCustomStatus = [];   // status internos personalizados pelo operador: [{key,label}]
   var chat = [];
@@ -165,7 +169,7 @@
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -421,11 +425,75 @@
     app.innerHTML =
       '<div class="page-head"><div><h2>Pedidos</h2><p>Núcleo transacional. Importação idempotente (upsert), sem duplicar vendas.</p></div>' +
       '<button class="btn-sm primary" id="imp-ped">Importar planilha de pedidos</button></div>' +
-      '<div class="subtabs">' + subtab('pedidos', 'pedidos', 'Pedidos') + subtab('pedidos', 'dashboard', 'Dashboard') + subtab('pedidos', 'import', 'Importações') + '</div>' +
-      (sub.pedidos === 'dashboard' ? pedidosDashboard() : sub.pedidos === 'import' ? importsFor('Pedidos') : pedidosList());
+      '<div class="subtabs">' + subtab('pedidos', 'pedidos', 'Pedidos') + subtab('pedidos', 'expedicao', 'Expedição') + subtab('pedidos', 'dashboard', 'Dashboard') + subtab('pedidos', 'import', 'Importações') + '</div>' +
+      (sub.pedidos === 'dashboard' ? pedidosDashboard() : sub.pedidos === 'import' ? importsFor('Pedidos') : sub.pedidos === 'expedicao' ? pedidosExpedicao() : pedidosList());
     document.getElementById('imp-ped').onclick = function () { fileInput(function (f) { importPedidos(f).then(function (b) { render(); toast('Pedidos importados', b.seen + ' pedidos · ' + b.novo + ' novos · ' + b.upd + ' atualizados · ' + b.unch + ' sem alteração'); }).catch(function (e) { toast('Falha', e.message, true); }); }); };
     bindSubtabs('pedidos');
     if (sub.pedidos === 'pedidos') bindPedidosList();
+    if (sub.pedidos === 'expedicao') bindPedidosExpedicao();
+  }
+  // ---------- Expedição / Bipe (§1 do prompt de reorganização): "vendido" ≠ "expedido" ----------
+  // Bipe = leitor de código de barras USB/Bluetooth (emite como teclado) ou digitação manual do ID.
+  // Leitura por câmera exigiria uma biblioteca de decodificação de código de barras não empacotada
+  // neste HTML autônomo — não implementada agora para não fingir uma funcionalidade não testada.
+  function bipRegister(orderId, note) {
+    orderId = (orderId || '').trim(); if (!orderId) return Promise.reject(new Error('Informe o ID do pedido.'));
+    var now = new Date().toISOString(); var ex = shipBip[orderId];
+    if (ex) { ex.history = ex.history || []; ex.history.unshift({ at: now, note: note || '' }); ex.lastScanAt = now; if (note) ex.note = note; }
+    else { ex = shipBip[orderId] = { id: orderId, orderId: orderId, bipedAt: now, lastScanAt: now, bipedBy: 'Operador', note: note || '', history: [] }; }
+    return putMany('shipbip', [ex]).then(function () { return ex; });
+  }
+  function pedIsExpedido(orderId) { return !!shipBip[orderId]; }
+  // Status de conciliação financeira de um pedido, cruzando Minha Renda × Acelera × Carteira × Devolução.
+  // Usado na fila de Expedição e na Ficha Financeira 360º (mesma definição nos dois lugares).
+  function pedidoConciliacaoStatus(orderId) {
+    var hasRenda = mrRenda.some(function (r) { return r.orderId === orderId && r.ver === 'Order'; });
+    var accEng = acelera.length ? acelera.some(function (r) { return r.pedido === orderId; }) : null;
+    var hasWallet = wallet.some(function (t) { return t.orderId === orderId; });
+    var hasDevol = occ.some(function (o) { return !o.isDemo && o.orderId === orderId; });
+    var found = [hasRenda, accEng, hasWallet].filter(function (x) { return x === true; }).length;
+    var expected = 1 + (acelera.length ? 1 : 0) + (wallet.length ? 1 : 0); // Renda sempre esperado se módulo tem dados; Acelera/Carteira só contam se o módulo tiver algum dado importado
+    if (!mrRenda.length && !acelera.length && !wallet.length) return { code: 'AGUARDANDO', label: '⚪ Aguardando informações', hasRenda: hasRenda, hasAcelera: accEng, hasWallet: hasWallet, hasDevol: hasDevol };
+    if (found === 0) return { code: 'DIVERGENTE', label: '🔴 Divergência', hasRenda: hasRenda, hasAcelera: accEng, hasWallet: hasWallet, hasDevol: hasDevol };
+    if (expected > 0 && found >= expected) return { code: 'CONCILIADO', label: '🟢 Conciliado', hasRenda: hasRenda, hasAcelera: accEng, hasWallet: hasWallet, hasDevol: hasDevol };
+    return { code: 'PARCIAL', label: '🟡 Parcialmente conciliado', hasRenda: hasRenda, hasAcelera: accEng, hasWallet: hasWallet, hasDevol: hasDevol };
+  }
+  function pedidosExpedicao() {
+    var head = secHead('PEDIDOS · EXPEDIÇÃO', 'Vendido × Expedido', 'A expedição é registrada pelo bipe da etiqueta (leitor USB/Bluetooth ou digitação do ID) — é um evento diferente da venda. "Vendido" não significa "saiu da empresa".');
+    var vendidosHoje = orders.filter(function (o) { return o.createdAt && o.createdAt.slice(0, 10) === new Date().toISOString().slice(0, 10); }).length;
+    var expedidosHoje = Object.values(shipBip).filter(function (b) { return b.bipedAt.slice(0, 10) === new Date().toISOString().slice(0, 10); }).length;
+    var totalExpedidos = Object.keys(shipBip).length;
+    var pendentes = orders.filter(function (o) { return !pedIsExpedido(o.id) && o.normalizedStatus !== 'CANCELADO'; }).length;
+    var pctExp = orders.length ? r2(totalExpedidos / orders.length * 100) : 0;
+    var semConf = 0, comDiverg = 0;
+    Object.keys(shipBip).forEach(function (oid) { var st = pedidoConciliacaoStatus(oid); if (st.code === 'AGUARDANDO' || st.code === 'PARCIAL') semConf++; if (st.code === 'DIVERGENTE') comDiverg++; });
+    var strip = kstrip([
+      { l: 'Vendidos hoje', v: nn(vendidosHoje), cls: 'blue' },
+      { l: 'Expedidos hoje', v: nn(expedidosHoje), cls: 'green' },
+      { l: 'Pendentes de expedição', v: nn(pendentes), cls: pendentes ? 'amber' : 'green' },
+      { l: '% expedido (total)', v: pct(pctExp), cls: 'blue', s: nn(totalExpedidos) + ' de ' + nn(orders.length) },
+      { l: 'Expedidos sem conferência', v: nn(semConf), cls: semConf ? 'amber' : 'green' },
+      { l: 'Expedidos com divergência', v: nn(comDiverg), cls: comDiverg ? 'red' : 'green' },
+    ]);
+    var bipe = '<div class="panel"><div class="ph"><h3>Bipar etiqueta</h3><span class="footnote" style="margin:0">leitor USB/Bluetooth (emite como teclado) ou digite o ID e pressione Enter</span></div><div class="pb"><div style="display:flex;gap:8px;max-width:480px"><input class="input" id="bipinput" placeholder="ID do pedido" autofocus style="flex:1"><button class="btn-sm primary" id="bipbtn">Registrar saída</button></div><div class="footnote" style="margin-top:8px">Leitura por câmera não está implementada nesta versão — exigiria uma biblioteca de decodificação de código de barras, que não incluímos para não declarar um recurso não testado.</div></div></div>';
+    if (!orders.length) return head + bipe + emptyBox('Importe os Pedidos para começar a controlar a expedição.');
+    var q = pedExpF.search.toLowerCase();
+    var list = orders.filter(function (o) { if (pedExpF.status === 'expedido' && !pedIsExpedido(o.id)) return false; if (pedExpF.status === 'pendente' && (pedIsExpedido(o.id) || o.normalizedStatus === 'CANCELADO')) return false; if (q && o.id.toLowerCase().indexOf(q) < 0) return false; return true; }).sort(function (a, b) { var ba = shipBip[a.id], bb = shipBip[b.id]; if (ba && bb) return bb.bipedAt.localeCompare(ba.bipedAt); if (ba) return -1; if (bb) return 1; return (b.createdAt || '').localeCompare(a.createdAt || ''); });
+    var chips = [['', 'Todos'], ['expedido', 'Expedidos'], ['pendente', 'Pendentes']];
+    var rows = list.slice(0, 200).map(function (o) { var b = shipBip[o.id]; var st = b ? pedidoConciliacaoStatus(o.id) : null; return '<tr' + (b ? '' : ' style="background:#fff8ef"') + '><td class="mono">' + esc(o.id) + '</td><td class="nowrap">' + dbr(o.createdAt) + '</td><td><span class="pill ' + o.normalizedStatus + '">' + esc(S.pedidos.labels[o.normalizedStatus] || o.normalizedStatus) + '</span></td><td>' + (b ? '<span class="tag ok">expedido</span> <span class="footnote" style="margin:0">' + new Date(b.bipedAt).toLocaleString('pt-BR') + '</span>' : '<span class="tag warn">pendente</span>') + '</td><td>' + (st ? '<span class="tag">' + esc(st.label) + '</span>' : '—') + '</td><td><button class="btn-sm" data-goped360="' + esc(o.id) + '">Ficha 360º</button></td></tr>'; }).join('');
+    return head + strip + bipe +
+      '<div class="chips">' + chips.map(function (c) { return '<span class="chip' + (pedExpF.status === c[0] ? ' chip-on' : '') + '" data-expst="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
+      '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="expq" style="width:260px" placeholder="Buscar ID do pedido…" value="' + esc(pedExpF.search) + '"></div>' +
+      '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos</div>' +
+      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Data venda</th><th>Status</th><th>Expedição</th><th>Conciliação</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="empty">Nenhum pedido neste filtro.</td></tr>') + '</tbody></table></div></div>';
+  }
+  function bindPedidosExpedicao() {
+    var bi = document.getElementById('bipinput'); var doRegister = function () { var v = bi.value; bipRegister(v).then(function (rec) { bi.value = ''; render(); var el = document.getElementById('bipinput'); if (el) el.focus(); toast('Expedição registrada', rec.orderId); }).catch(function (e) { toast('Falha', e.message, true); }); };
+    if (bi) bi.onkeydown = function (e) { if (e.key === 'Enter') doRegister(); };
+    var bb = document.getElementById('bipbtn'); if (bb) bb.onclick = doRegister;
+    app.querySelectorAll('[data-expst]').forEach(function (c) { c.onclick = function () { pedExpF.status = c.dataset.expst; render(); }; });
+    var q = document.getElementById('expq'); if (q) { var t; q.oninput = function () { clearTimeout(t); t = setTimeout(function () { var v = q.value; pedExpF.search = v; render(); var el = document.getElementById('expq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
+    app.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.goped360); }; });
   }
   function pedidosList() {
     var occByOrder = {}; occ.forEach(function (o) { if (o.orderId) occByOrder[o.orderId] = true; });
@@ -477,7 +545,7 @@
         '<div class="fin-line total"><span>Lucro estimado</span><span>' + lucro + '</span></div></div>';
     }).join('');
     var d = document.createElement('div'); d.className = 'drawer drawer-wide';
-    d.innerHTML = '<div class="drawer-panel"><div class="dh"><div><b>Pedido ' + esc(o.id) + '</b><div class="footnote" style="margin-top:2px">Shopee · lidermolduras · ' + dbr(o.createdAt) + '</div></div><button class="x">&times;</button></div><div class="dbd">' +
+    d.innerHTML = '<div class="drawer-panel"><div class="dh"><div><b>Pedido ' + esc(o.id) + '</b><div class="footnote" style="margin-top:2px">Shopee · lidermolduras · ' + dbr(o.createdAt) + '</div></div><div style="display:flex;gap:8px;align-items:center"><button class="btn-sm" id="go360">Ficha Financeira 360º</button><button class="x">&times;</button></div></div><div class="dbd">' +
       '<div class="cards6">' + fcard('Venda real', brl(f.revenue), 'blue') + fcard('Valor Total', brl(o.totalAmount), '') + fcard('Taxas marketplace', brl(f.marketplaceFeesTotal), 'red') + fcard('Custo produtos', f.costPending ? '—' : brl(f.productCostTotal), 'amber') + fcard('Lucro estimado', f.estimatedResult == null ? 'pendente' : brl(f.estimatedResult), 'green') + fcard('Margem', f.estimatedMarginPct == null ? '—' : pct(f.estimatedMarginPct), '') + '</div>' +
       '<div class="split"><div><div class="panel"><div class="ph"><h3>Itens do pedido</h3><span class="footnote" style="margin:0">' + o.items.length + '</span></div><div class="pb">' + itemsHtml + '</div></div></div>' +
       '<div><div class="panel"><div class="ph"><h3>Composição financeira</h3></div><div class="pb">' + finLine('Venda real (Σ preço acordado)', f.revenue) + finLine('Valor Total (Shopee)', o.totalAmount) + finLine('Comissão líquida', -o.commissionNet, true) + finLine('Taxa de serviço líquida', -o.serviceFeeNet, true) + finLine('Taxa de transação', -o.transactionFee, true) + finLine('Frete reverso', -o.reverseShippingFee, true) + finLine('Custo produtos', f.costPending ? null : -f.productCostTotal, true) + '<div class="fin-line total"><span>Resultado estimado</span><span class="' + (f.estimatedResult >= 0 ? 'pos' : 'neg') + '">' + (f.estimatedResult == null ? 'pendente (custo)' : brl(f.estimatedResult)) + '</span></div></div></div>' +
@@ -485,7 +553,107 @@
       (occs.length ? '<div class="panel"><div class="ph"><h3>Devolução vinculada</h3></div><div class="pb">' + occs.map(function (x) { return '<div class="ro" style="margin-bottom:6px">' + esc(x.type) + ' · ' + esc(x.status || '—') + ' · ' + brl(x.requested) + ' <span class="tag">' + x.exposure.bucket + '</span></div>'; }).join('') + '</div></div>' : '') +
       '</div></div></div></div>';
     d.onclick = function (e) { if (e.target === d) d.remove(); }; d.querySelector('.x').onclick = function () { d.remove(); };
+    d.querySelector('#go360').onclick = function () { openPedidoFicha360(o.id); };
     document.body.appendChild(d);
+  }
+
+  // ---------- FICHA FINANCEIRA 360º DO PEDIDO ----------
+  // O ID do pedido é a chave central: consolida Pedidos, Produtos (custo), Minha Renda (taxas
+  // detalhadas), Shopee Acelera, Afiliados, Saldo da Carteira e Devoluções em uma única visão.
+  // §2 do prompt de reorganização financeira e operacional.
+  function fLine(label, cents, opt) { opt = opt || {}; if (cents == null) return '<div class="fin-line"><span>' + esc(label) + '</span><span class="tag warn">' + (opt.missingLabel || 'não disponível') + '</span></div>'; return '<div class="fin-line' + (opt.total ? ' total' : '') + '"><span>' + esc(label) + '</span><span class="' + (cents < 0 ? 'neg' : cents > 0 && opt.pos ? 'pos' : '') + '">' + brlC(cents) + '</span></div>'; }
+  function openPedidoFicha360(orderId) {
+    var ord = orders.find(function (x) { return x.id === orderId; });
+    var mr = mrEngine(); var mrRow = mr.orders.find(function (r) { return r.orderId === orderId; });
+    var svcRows = mrSvc.filter(function (v) { return v.orderId === orderId; });
+    var shipRow = mrShip.find(function (s) { return s.id === orderId; });
+    var acRows = acelera.filter(function (r) { return r.pedido === orderId; });
+    var affEng = affEngine(); var affRow = affEng.orderMap[orderId];
+    var wtx = wallet.filter(function (t) { return t.orderId === orderId; });
+    var occs = occ.filter(function (x) { return !x.isDemo && x.orderId === orderId; });
+    var bip = shipBip[orderId];
+    var st = pedidoConciliacaoStatus(orderId);
+
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '860px'; panel.style.maxWidth = '98vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+
+    // ---- Receita e custo (base: Minha Renda se disponível — mais detalhado; senão Pedidos) ----
+    var receitaC = mrRow ? mrRow.preco : (ord ? Math.round(orderFinance(ord).revenue * 100) : null);
+    var custoProdC = null, custoPendente = false;
+    if (ord) { var fOrd = orderFinance(ord); if (fOrd.costPending) custoPendente = true; else custoProdC = Math.round((fOrd.productCostTotal || 0) * 100); }
+
+    // ---- Taxas Shopee detalhadas ----
+    var taxasRows;
+    if (mrRow) {
+      taxasRows = [['Comissão', mrRow.comissao], ['Taxa de serviço líquida', mrRow.servico], ['Taxa de transação', mrRow.transacao], ['Afiliados (Minha Renda)', mrRow.afiliado], ['Frete cobrado pelo parceiro', mrRow.freteParceiro], ['Desconto de frete (Shopee)', mrRow.descontoFrete], ['Envio reverso', mrRow.envioReverso], ['Cupom', mrRow.cupom], ['Ajuste PIX', mrRow.pix], ['Reembolso', mrRow.reembolso]];
+    } else if (ord) {
+      taxasRows = [['Comissão líquida', -Math.round((ord.commissionNet || 0) * 100)], ['Taxa de serviço líquida', -Math.round((ord.serviceFeeNet || 0) * 100)], ['Taxa de transação', -Math.round((ord.transactionFee || 0) * 100)], ['Frete reverso', -Math.round((ord.reverseShippingFee || 0) * 100)]];
+    } else taxasRows = [];
+    var taxasSomaC = taxasRows.reduce(function (s, r) { return s + (r[1] || 0); }, 0);
+    var svcComposicao = '';
+    if (svcRows.length) {
+      var svcT = { afil: 0, trans: 0, item: 0 }; svcRows.forEach(function (v) { svcT.afil += v.afiliadosVendedor; svcT.trans += v.transacao; svcT.item += v.porItem; });
+      var svcSoma = svcT.afil + svcT.trans + svcT.item; var svcTotal = mrRow ? mrRow.servico : null;
+      var bate = svcTotal != null && Math.abs(svcTotal - svcSoma) <= 100;
+      svcComposicao = '<div class="panel"><div class="ph"><h3>Composição da taxa de serviço</h3>' + (svcTotal != null ? '<span class="tag ' + (bate ? 'ok' : 'warn') + '">' + (bate ? '✅ Conciliada' : '⚠ Parcialmente explicada') + '</span>' : '') + '</div><div class="pb">' + fLine('Taxa de serviço líquida (total)', svcTotal) + '<div class="footnote" style="margin:6px 0">Composição / memória de cálculo (não somada por cima do total):</div>' + fLine('— Afiliados do vendedor', svcT.afil) + fLine('— Transação', svcT.trans) + fLine('— Por item vendido', svcT.item) + (svcTotal != null && !bate ? '<div class="footnote neg">Não identificado: ' + brlC(svcTotal - svcSoma) + '</div>' : '') + '</div></div>';
+    }
+
+    // ---- Acelera ----
+    var acBlock = '';
+    if (acRows.length) { var acAntec = acRows.reduce(function (s, r) { return s + r.antecipado; }, 0), acTaxa = acRows.reduce(function (s, r) { return s + r.taxa; }, 0), acReceb = acRows.reduce(function (s, r) { return s + r.recebido; }, 0); acBlock = '<div class="panel"><div class="ph"><h3>Shopee Acelera</h3></div><div class="pb">' + fLine('Valor antecipado', acAntec) + fLine('Taxa de antecipação', -Math.abs(acTaxa)) + fLine('Líquido recebido', acReceb, { total: true }) + '<button class="btn-sm" style="margin-top:8px" data-acped360="' + esc(orderId) + '">Abrir no Acelera</button></div></div>'; }
+    else acBlock = '<div class="panel"><div class="ph"><h3>Shopee Acelera</h3></div><div class="pb"><span class="tag neutral">não encontrado no Acelera</span> — pedido não antecipado, ou relatório do Acelera ainda não cobre este pedido.</div></div>';
+
+    // ---- Afiliados ----
+    var afBlock = '';
+    if (affRow) afBlock = '<div class="panel"><div class="ph"><h3>Afiliados</h3></div><div class="pb">' + kv('Afiliado', affRow.affUser) + '<div class="fin-line"><span>Comissão</span><span class="neg">' + brlU(affRow.comAff) + '</span></div><div class="fin-line"><span>Taxa de serviço afiliados</span><span class="neg">' + brlU(affRow.svcFee) + '</span></div>' + (mrRow ? '<div class="footnote" style="margin-top:6px">Já incluído em "Afiliados (Minha Renda)" nas taxas acima — não somado de novo no resultado, para evitar dupla contagem.</div>' : '') + '<button class="btn-sm" style="margin-top:8px" data-affped360="' + esc(orderId) + '">Abrir em Afiliados</button></div></div>';
+
+    // ---- Carteira ----
+    var wBlock = '';
+    if (wtx.length) { var wSum = wtx.reduce(function (s, t) { return s + t.amount; }, 0); wBlock = '<div class="panel"><div class="ph"><h3>Saldo da Carteira</h3><span class="footnote" style="margin:0">' + nn(wtx.length) + ' movimentação(ões)</span></div><div class="pb"><div class="fin-line total"><span>Líquido na carteira</span><span class="' + (wSum < 0 ? 'neg' : 'pos') + '">' + brl(wSum) + '</span></div></div></div>'; }
+    else wBlock = '<div class="panel"><div class="ph"><h3>Saldo da Carteira</h3></div><div class="pb"><span class="tag neutral">nenhuma movimentação localizada</span></div></div>';
+
+    // ---- Devolução ----
+    var devBlock = '';
+    if (occs.length) devBlock = '<div class="panel"><div class="ph"><h3>Devolução</h3></div><div class="pb">' + occs.map(function (x) { return kv('Status', statusLabel(x.status)) + kv('Motivo', x.reason || '—') + '<div class="fin-line"><span>Impacto líquido</span><span class="neg">' + brl(occEffectiveLoss(x)) + '</span></div><button class="btn-sm" style="margin-top:6px" data-godev360="' + esc(x.id) + '">Abrir devolução</button>'; }).join('<hr style="border:none;border-top:1px solid var(--line);margin:10px 0">') + '</div></div>';
+
+    // ---- Resultado final ----
+    // Evita dupla contagem (§ regra de não duplicidade): quando Minha Renda já cobre o pedido, o
+    // campo "Afiliados" da própria Renda já está dentro de taxasSomaC — não soma de novo do relatório de Afiliados.
+    var custoAfilCents = (!mrRow && affRow) ? Math.round((affRow.comAff + affRow.svcFee) / 100) : 0;
+    var acTaxaCents = acRows.length ? acRows.reduce(function (s, r) { return s + r.taxa; }, 0) : 0; // já em cents
+    var devImpactoCents = occs.length ? Math.round(occs.reduce(function (s, x) { return s + occEffectiveLoss(x); }, 0) * 100) : 0;
+    var lucroConhecido = receitaC != null && (custoProdC != null || !custoPendente);
+    var resultadoC = null;
+    if (receitaC != null && custoProdC != null) { resultadoC = receitaC + taxasSomaC - custoProdC - custoAfilCents - acTaxaCents - devImpactoCents; }
+    var margemPct = (resultadoC != null && receitaC) ? r2(resultadoC / receitaC * 100) : null;
+
+    var idBlock = '<div class="panel"><div class="ph"><h3>Identificação</h3></div><div class="pb">' + kv('Pedido', orderId) + kv('Data da venda', ord ? dbr(ord.createdAt) : '—') + kv('Data de conclusão (Minha Renda)', mrRow ? dbr(mrRow.dataConclusao) : '—') + kv('Data de expedição (bipe)', bip ? new Date(bip.bipedAt).toLocaleString('pt-BR') : 'ainda não expedido') + kv('Status', ord ? (S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus) : '—') + '</div></div>';
+
+    panel.innerHTML = '<div class="dh"><div><b>Ficha Financeira 360º</b> — <span class="mono">' + esc(orderId) + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
+      '<div class="kstrip" style="margin-bottom:12px">' +
+      '<div class="kc"><div class="kl">Status de conciliação</div><div class="kv" style="font-size:15px">' + st.label + '</div></div>' +
+      '<div class="kc"><div class="kl">Receita</div><div class="kv" style="font-size:16px">' + (receitaC != null ? brlC(receitaC) : '—') + '</div></div>' +
+      '<div class="kc"><div class="kl">Custo produto</div><div class="kv" style="font-size:16px">' + (custoProdC != null ? brlC(custoProdC) : (custoPendente ? '<span class="tag warn">pendente</span>' : '—')) + '</div></div>' +
+      '<div class="kc"><div class="kl">Lucro real do pedido</div><div class="kv" style="font-size:16px;color:' + (resultadoC != null && resultadoC < 0 ? 'var(--err)' : 'var(--ok)') + '">' + (resultadoC != null ? brlC(resultadoC) : '<span class="tag warn">custo pendente</span>') + '</div></div>' +
+      '<div class="kc"><div class="kl">Margem</div><div class="kv" style="font-size:16px">' + (margemPct != null ? pct(margemPct) : '—') + '</div></div>' +
+      '</div>' +
+      idBlock +
+      '<div class="panel"><div class="ph"><h3>Taxas Shopee (detalhado)</h3><span class="footnote" style="margin:0">' + (mrRow ? 'fonte: Minha Renda' : ord ? 'fonte: Pedidos (aproximado)' : 'sem fonte') + '</span></div><div class="pb">' + (taxasRows.length ? taxasRows.map(function (r) { return fLine(r[0], r[1]); }).join('') + fLine('Total de taxas', taxasSomaC, { total: true }) : '<span class="tag neutral">sem dados de taxas para este pedido</span>') + '</div></div>' +
+      svcComposicao +
+      (shipRow ? '<div class="panel"><div class="ph"><h3>Frete — divergência</h3></div><div class="pb">' + fLine('Esperado', shipRow.esperado) + fLine('Real', shipRow.real) + fLine('Diferença', shipRow.real - shipRow.esperado, { total: true }) + '</div></div>' : '') +
+      acBlock + afBlock + wBlock + devBlock +
+      '<div class="panel"><div class="ph"><h3>Resultado</h3></div><div class="pb">' +
+      fLine('Receita', receitaC) + fLine('+ Taxas Shopee (líquido, já negativo, inclui afiliados quando há Minha Renda)', taxasSomaC) + fLine('− Custo do produto', custoProdC != null ? -custoProdC : null) + (custoAfilCents ? fLine('− Custo de afiliados (sem Minha Renda para este pedido)', -custoAfilCents) : '') + fLine('− Taxa Acelera', -Math.abs(acTaxaCents)) + fLine('− Impacto de devolução', -devImpactoCents) +
+      '<div class="fin-line total"><span>Lucro real do pedido</span><span class="' + (resultadoC != null && resultadoC < 0 ? 'neg' : 'pos') + '">' + (resultadoC != null ? brlC(resultadoC) : 'aguardando custo do produto') + '</span></div>' +
+      '</div></div>' +
+      '<div class="footnote" style="padding:8px 0">Fontes usadas: Pedidos' + (mrRow ? ' · Minha Renda' : '') + (svcRows.length ? ' · Service Fee Details' : '') + (acRows.length ? ' · Shopee Acelera' : '') + (affRow ? ' · Afiliados' : '') + (wtx.length ? ' · Saldo da Carteira' : '') + (occs.length ? ' · Devoluções' : '') + '.</div>' +
+      (ord ? '<button class="btn-sm" data-goped="' + esc(orderId) + '">Ver na lista de Pedidos</button>' : '') +
+      '</div>';
+    panel.querySelector('.x').onclick = function () { d.remove(); };
+    var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { d.remove(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
+    var gd = panel.querySelector('[data-godev360]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev360; d.remove(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
+    var ga = panel.querySelector('[data-acped360]'); if (ga) ga.onclick = function () { d.remove(); route = 'acelera'; aceleraSub = 'antecipacoes'; render(); setTimeout(function () { openAceleraPedido(orderId); }, 60); };
+    var gf = panel.querySelector('[data-affped360]'); if (gf) gf.onclick = function () { d.remove(); route = 'afiliados'; affSub = 'pedidos'; render(); setTimeout(function () { openAffPedido(orderId); }, 60); };
   }
 
   // ---------- PÓS-VENDA ----------
@@ -1970,12 +2138,12 @@
   function aceleraInPeriodAll() { return acelera; } // o módulo tem período próprio; não filtra por padrão (§5)
 
   function renderAcelera() {
-    var tabs = [['visao', 'Visão Geral'], ['antecipacoes', 'Antecipações'], ['desperdicio', 'Devoluções & Desperdício'], ['aliquotas', 'Alíquotas'], ['coortes', 'Coortes'], ['capital', 'Capital & Simulador'], ['plano', 'Plano de Ação'], ['auditoria', 'Auditoria'], ['config', 'Configurações']];
+    var tabs = [['visao', 'Visão Geral'], ['antecipacoes', 'Antecipações'], ['bipados', 'Pedidos Expedidos × Acelera'], ['desperdicio', 'Devoluções & Desperdício'], ['aliquotas', 'Alíquotas'], ['coortes', 'Coortes'], ['capital', 'Capital & Simulador'], ['plano', 'Plano de Ação'], ['auditoria', 'Auditoria'], ['config', 'Configurações']];
     app.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + tabs.map(function (t) { return '<div class="subtab' + (aceleraSub === t[0] ? ' active' : '') + '" data-acsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-acimport="1">Importar Shopee Acelera</button></div><div id="acbody" style="margin-top:14px"></div>';
     var body = document.getElementById('acbody');
     try {
-      if (!acelera.length && aceleraSub !== 'config') body.innerHTML = secHead('SHOPEE ACELERA', 'Antecipação de Recebíveis', 'Quanto antecipamos, quanto pagamos, qual a alíquota real, quanto disso virou desperdício com devolução e qual decisão de capital é mais barata.') + emptyBox('Nenhum relatório Shopee Acelera importado. Clique em “Importar Shopee Acelera” e envie o CSV de antecipação de recebíveis.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="acimp">Importar primeiro relatório</button></div>';
-      else body.innerHTML = ({ visao: aceleraVisao, antecipacoes: aceleraAntecipacoes, desperdicio: aceleraDesperdicio, aliquotas: aceleraAliquotas, coortes: aceleraCoortes, capital: aceleraCapital, plano: aceleraPlano, auditoria: aceleraAuditoria, config: aceleraConfig }[aceleraSub] || aceleraVisao)();
+      if (!acelera.length && aceleraSub !== 'config' && aceleraSub !== 'bipados') body.innerHTML = secHead('SHOPEE ACELERA', 'Antecipação de Recebíveis', 'Quanto antecipamos, quanto pagamos, qual a alíquota real, quanto disso virou desperdício com devolução e qual decisão de capital é mais barata.') + emptyBox('Nenhum relatório Shopee Acelera importado. Clique em “Importar Shopee Acelera” e envie o CSV de antecipação de recebíveis.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="acimp">Importar primeiro relatório</button></div>';
+      else body.innerHTML = ({ visao: aceleraVisao, antecipacoes: aceleraAntecipacoes, bipados: aceleraBipados, desperdicio: aceleraDesperdicio, aliquotas: aceleraAliquotas, coortes: aceleraCoortes, capital: aceleraCapital, plano: aceleraPlano, auditoria: aceleraAuditoria, config: aceleraConfig }[aceleraSub] || aceleraVisao)();
     } catch (e) { body.innerHTML = '<div class="form-err">Erro ao renderizar o Shopee Acelera: ' + esc(e.message || e) + '</div>'; }
     app.querySelectorAll('[data-acsub]').forEach(function (b) { b.onclick = function () { aceleraSub = b.dataset.acsub; aceleraPage = 1; render(); }; });
     var imp = function () { fileInput(function (f) { importAcelera(f).then(function (b) { render(); toast('Importação concluída', b.novo + ' novos · ' + b.upd + ' atualizados · ' + b.unch + ' sem alteração'); }).catch(function (e) { toast('Falha', e.message, true); }); }); };
@@ -2268,6 +2436,30 @@
       '<div class="panel"><div class="ph"><h3>Fases</h3></div><div class="pb">' + faseRows + '</div></div>';
   }
 
+  // Cruza os pedidos EXPEDIDOS (bipe, módulo Pedidos) com o Shopee Acelera: os que deveriam ter
+  // sido antecipados foram encontrados? §3 do prompt de reorganização financeira e operacional.
+  function aceleraBipados() {
+    var head = secHead('SHOPEE ACELERA · PEDIDOS EXPEDIDOS × ACELERA', 'Os pedidos que saíram da empresa foram antecipados?', 'Cruza a expedição (bipe, em Pedidos → Expedição) com os registros do Acelera. Só considera pedidos com expedição registrada.');
+    var bips = Object.keys(shipBip);
+    if (!bips.length) return head + emptyBox('Nenhum pedido expedido (bipado) ainda. Registre a expedição em Pedidos → Expedição para habilitar este cruzamento.');
+    var acByOrder = {}; acelera.forEach(function (r) { (acByOrder[r.pedido] = acByOrder[r.pedido] || []).push(r); });
+    var localizados = [], naoLocalizados = [];
+    bips.forEach(function (oid) { var recs = acByOrder[oid]; var ord = orders.find(function (o) { return o.id === oid; }); if (recs && recs.length) localizados.push({ oid: oid, recs: recs, ord: ord }); else naoLocalizados.push({ oid: oid, ord: ord }); });
+    var valorEsperado = 0; naoLocalizados.forEach(function (x) { if (x.ord) valorEsperado += Math.round(orderFinance(x.ord).revenue * 100); });
+    var valorAntecipado = 0; localizados.forEach(function (x) { x.recs.forEach(function (r) { valorAntecipado += r.antecipado; }); });
+    var pctConferido = bips.length ? r2(localizados.length / bips.length * 100) : 0;
+    var strip = kstrip([
+      { l: 'Pedidos expedidos', v: nn(bips.length), cls: 'blue' },
+      { l: 'Encontrados no Acelera', v: nn(localizados.length), cls: 'green' },
+      { l: 'Não encontrados', v: nn(naoLocalizados.length), cls: naoLocalizados.length ? 'red' : 'green' },
+      { l: '% conferido', v: pct(pctConferido), cls: 'blue' },
+      { l: 'Valor antecipado (localizados)', v: brlC(valorAntecipado), cls: 'green' },
+      { l: 'Valor esperado (não localizados)', v: brlC(valorEsperado), cls: 'amber', s: 'estimado pela venda em Pedidos' },
+    ]);
+    var rows = naoLocalizados.map(function (x) { return '<tr><td class="mono">' + esc(x.oid) + '</td><td>SIM</td><td>' + (x.ord ? 'SIM' : 'talvez') + '</td><td>NÃO</td><td class="nowrap">' + (x.ord ? brl(orderFinance(x.ord).revenue) : '—') + '</td><td><span class="tag warn">INVESTIGAR</span></td></tr>'; }).join('');
+    var excTable = naoLocalizados.length ? '<div class="panel"><div class="ph"><h3>Exceções — expedidos e não encontrados no Acelera</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Expedido</th><th>Acelera esperado</th><th>Encontrado</th><th>Valor esperado</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>' : callout('green', '✓ Todos os pedidos expedidos foram localizados no Acelera', '');
+    return head + strip + excTable;
+  }
   function aceleraAuditoria() {
     var m = aceleraMetrics(acelera);
     var subhead = secHead('ACELERA · AUDITORIA', 'Rastreabilidade e qualidade dos dados', 'Resumo Shopee × sistema, importações, anomalias e a base histórica do estudo para comparação.');
@@ -2854,12 +3046,12 @@
   }
 
   function renderMinhaRenda() {
-    var tabs = [['visao', 'Visão Geral'], ['frete', 'Frete & Divergências'], ['taxas', 'Taxas'], ['ajustes', 'Ajustes'], ['produto', 'Renda por Produto'], ['conciliacao', 'Conciliação Declaração'], ['auditoria', 'Auditoria']];
+    var tabs = [['visao', 'Visão Geral'], ['meta', 'Meta & Projeção'], ['frete', 'Frete & Divergências'], ['taxas', 'Taxas'], ['ajustes', 'Ajustes'], ['produto', 'Renda por Produto'], ['conciliacao', 'Conciliação Declaração'], ['auditoria', 'Auditoria']];
     app.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + tabs.map(function (t) { return '<div class="subtab' + (mrSub === t[0] ? ' active' : '') + '" data-mrsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-mrimport="1">Importar Income / Declaração</button></div><div id="mrbody" style="margin-top:14px"></div>';
     var body = document.getElementById('mrbody');
     try {
-      if (!mrRenda.length && !mrShip.length && !mrPdf.length) body.innerHTML = secHead('MINHA RENDA', 'Consolidação Financeira Shopee', 'Quanto vendemos, quanto foi descontado, para onde foi o dinheiro e quanto a Shopee liberou — do agregado até o pedido.') + emptyBox('Nenhum relatório importado. Envie o Income (XLSX) e/ou a Declaração de Renda (PDF) da Shopee. O tipo é detectado automaticamente.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="mrimp">Importar primeiro relatório</button></div>';
-      else body.innerHTML = ({ visao: mrVisao, frete: mrFrete, taxas: mrTaxas, ajustes: mrAjustes, produto: mrProduto, conciliacao: mrConciliacao, auditoria: mrAuditoria }[mrSub] || mrVisao)();
+      if (!mrRenda.length && !mrShip.length && !mrPdf.length && mrSub !== 'meta') body.innerHTML = secHead('MINHA RENDA', 'Consolidação Financeira Shopee', 'Quanto vendemos, quanto foi descontado, para onde foi o dinheiro e quanto a Shopee liberou — do agregado até o pedido.') + emptyBox('Nenhum relatório importado. Envie o Income (XLSX) e/ou a Declaração de Renda (PDF) da Shopee. O tipo é detectado automaticamente.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="mrimp">Importar primeiro relatório</button></div>';
+      else body.innerHTML = ({ visao: mrVisao, meta: mrMeta, frete: mrFrete, taxas: mrTaxas, ajustes: mrAjustes, produto: mrProduto, conciliacao: mrConciliacao, auditoria: mrAuditoria }[mrSub] || mrVisao)();
     } catch (e) { body.innerHTML = '<div class="form-err">Erro ao renderizar Minha Renda: ' + esc(e.message || e) + '</div>'; }
     app.querySelectorAll('[data-mrsub]').forEach(function (b) { b.onclick = function () { mrSub = b.dataset.mrsub; mrPage = 1; render(); }; });
     var imp = function () { fileInput(function (f) { importMinhaRenda(f).then(function (b) { render(); if (b.kind === 'pdf') toast(b.ok ? 'Declaração PDF lida' : 'PDF processado parcialmente', b.ok ? 'Pagamento liberado ' + brlC(b.decl.liberado) : 'Não foi possível reconhecer todos os campos do PDF'); else toast('Income importado', b.stats.renda + ' linhas de renda · ' + b.stats.ship + ' fretes · ' + b.stats.adj + ' ajustes'); }).catch(function (e) { toast('Falha', e.message, true); }); }); };
@@ -2868,7 +3060,12 @@
     app.querySelectorAll('[data-mrgo]').forEach(function (b) { b.onclick = function () { mrSub = b.dataset.mrgo; render(); }; });
     app.querySelectorAll('[data-mrsku]').forEach(function (b) { b.onclick = function () { openMrSku(b.dataset.mrsku); }; });
     app.querySelectorAll('[data-mrped]').forEach(function (b) { b.onclick = function () { openMrPedido(b.dataset.mrped); }; });
+    app.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.goped360); }; });
+    app.querySelectorAll('[data-goacbip]').forEach(function (b) { b.onclick = function () { route = 'acelera'; aceleraSub = 'bipados'; render(); }; });
+    app.querySelectorAll('[data-gorecb]').forEach(function (b) { b.onclick = function () { route = 'posvenda'; sub.posvenda = 'recebimentos'; render(); }; });
+    app.querySelectorAll('[data-gowal]').forEach(function (b) { b.onclick = function () { route = 'carteira'; walletSub = 'mov'; render(); }; });
     if (mrSub === 'frete') bindMrFrete();
+    if (mrSub === 'meta') bindMrMeta();
   }
   function mrWaterfall(t) {
     // do preço (bruto) até o liberado
@@ -2893,7 +3090,114 @@
     var dedup = callout('', 'ORDER × SKU (sem dupla contagem)', mrRenda.length ? 'Importadas <b>' + nn(e.orders.length) + '</b> linhas Order (financeiro) e <b>' + nn(mrRenda.length - e.orders.length) + '</b> linhas SKU (atribuição de produto). Os valores financeiros vêm só das linhas Order.' : '');
     // frete resumo
     var ship = e.shipTot; var shipBox = ship.n ? callout('warn', 'Frete acima do esperado: ' + brlC(ship.diff), '<b>' + nn(ship.n) + '</b> pedidos · esperado ' + brlC(ship.esperado) + ' · real ' + brlC(ship.real) + '. <button class="btn-sm" data-mrgo="frete">Investigar</button>') : '';
-    return head + strip + conf + dedup + mrWaterfall(t) + shipBox;
+    return head + strip + conf + dedup + mrWaterfall(t) + shipBox + mrAlertas();
+  }
+  // Central de alertas determinística (cruza Minha Renda × Acelera × Devoluções × Carteira × Meta).
+  function mrAlertas() {
+    var alerts = [];
+    // pedidos expedidos não localizados no Acelera
+    var bips = Object.keys(shipBip); if (bips.length && acelera.length) { var acSet = {}; acelera.forEach(function (r) { acSet[r.pedido] = 1; }); var naoAch = bips.filter(function (oid) { return !acSet[oid]; }); if (naoAch.length) alerts.push({ icon: '🔴', text: nn(naoAch.length) + ' pedido(s) expedidos não encontrados no Acelera.', go: 'acelera-bipados' }); }
+    // SKU com margem negativa (Renda por Produto)
+    var e = mrEngine(); var bySku = {}; e.orders.forEach(function (o) { var sk = e.skuByOrder[o.orderId]; var key = sk && sk[0] ? sk[0].sku : '(sem sku)'; var g = bySku[key] = bySku[key] || { n: 0, liberado: 0 }; g.n++; g.liberado += o.liberado; });
+    var negSkus = Object.keys(bySku).filter(function (k) { return bySku[k].liberado < 0; });
+    if (negSkus.length) alerts.push({ icon: '🔴', text: nn(negSkus.length) + ' SKU(s) com pagamento liberado negativo no período.', go: 'produto' });
+    // devolução sem baixa (recebimento pendente há mais de 7 dias)
+    var semBaixa = occ.filter(function (o) { return !o.isDemo && o.type === 'RETURN_REFUND' && (!o.receiptState || o.receiptState === 'DESCONHECIDO') && inPeriod(o.occurredAt); });
+    if (semBaixa.length) alerts.push({ icon: '🟠', text: nn(semBaixa.length) + ' devolução(ões) ainda sem baixa de recebimento.', go: 'posvenda-recebimentos' });
+    // lançamentos da carteira sem categoria/origem identificada
+    var walletUnclass = wallet.filter(function (t) { return (wEffCat ? wEffCat(t) === 'OUTRO' : false) && !t.orderId; });
+    if (walletUnclass.length) alerts.push({ icon: '🟡', text: nn(walletUnclass.length) + ' lançamento(s) da carteira sem origem identificada.', go: 'carteira' });
+    // ritmo da meta (se configurada)
+    if (mrMetaCfg.lucroAlvo > 0) { var mm = mrMetaEngine(); if (mm.ritmoStatus === 'ABAIXO') alerts.push({ icon: '🔴', text: 'Lucro está ' + pct(Math.abs(mm.ritmoDiffPct)) + ' abaixo do ritmo necessário para a meta.', go: 'meta' }); }
+    if (!alerts.length) return '';
+    return '<div class="panel"><div class="ph"><h3>Alertas</h3></div><div class="pb">' + alerts.map(function (a) { return '<div class="fin-line"><span>' + a.icon + ' ' + esc(a.text) + '</span>' + (a.go === 'acelera-bipados' ? '<button class="btn-sm" data-goacbip="1">abrir</button>' : a.go === 'posvenda-recebimentos' ? '<button class="btn-sm" data-gorecb="1">abrir</button>' : a.go === 'carteira' ? '<button class="btn-sm" data-gowal="1">abrir</button>' : '<button class="btn-sm" data-mrgo="' + a.go + '">abrir</button>'); }).join('') + '</div></div>';
+  }
+  // ---- Meta & Projeção (§7,10,11 do prompt de reorganização) ----
+  function saveMrMetaCfg() { return putMany('settings', [{ id: 'mrMetaCfg', data: mrMetaCfg }]); }
+  function mrMetaPeriodRange() {
+    var now = new Date();
+    if (mrMetaCfg.periodMode === 'proximo_mes') { var f = new Date(now.getFullYear(), now.getMonth() + 1, 1); var t2 = new Date(now.getFullYear(), now.getMonth() + 2, 1); return { from: f, to: t2 }; }
+    if (mrMetaCfg.periodMode === 'custom' && mrMetaCfg.customFrom && mrMetaCfg.customTo) return { from: new Date(mrMetaCfg.customFrom + 'T00:00:00'), to: new Date(mrMetaCfg.customTo + 'T23:59:59') };
+    return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: new Date(now.getFullYear(), now.getMonth() + 1, 1) };
+  }
+  // Lucro por pedido: usa Minha Renda quando cobre o pedido (mais preciso, líquido Shopee real);
+  // senão cai para o resultado estimado do módulo Pedidos. Nunca soma os dois (evita dupla contagem).
+  function mrOrderProfitEngine() {
+    var mr = mrEngine(); var mrByOrder = {}; mr.orders.forEach(function (r) { mrByOrder[r.orderId] = r; });
+    return function (o) {
+      var mrRow = mrByOrder[o.id]; var f = orderFinance(o); var custoProdC = f.costPending ? null : Math.round((f.productCostTotal || 0) * 100);
+      if (custoProdC == null) return { known: false };
+      if (mrRow) { var taxasSomaC = mrRow.comissao + mrRow.servico + mrRow.transacao + mrRow.freteParceiro + mrRow.descontoFrete + mrRow.envioReverso + mrRow.cupom + mrRow.pix + mrRow.reembolso + mrRow.afiliado; return { known: true, receita: mrRow.preco, lucro: mrRow.preco + taxasSomaC - custoProdC }; }
+      return { known: true, receita: Math.round(f.revenue * 100), lucro: Math.round((f.estimatedResult || 0) * 100) };
+    };
+  }
+  function mrMetaEngine() {
+    var range = mrMetaPeriodRange(); var hoje = new Date();
+    var profitOf = mrOrderProfitEngine();
+    var list = orders.filter(function (o) { var d = o.createdAt ? new Date(o.createdAt) : null; return d && d >= range.from && d < range.to; });
+    var realizado = 0, receitaTot = 0, nConhecido = 0, nPendenteCusto = 0;
+    list.forEach(function (o) { var p = profitOf(o); if (p.known) { realizado += p.lucro; receitaTot += p.receita; nConhecido++; } else nPendenteCusto++; });
+    var totalDiasMs = range.to - range.from; var totalDias = Math.max(1, Math.round(totalDiasMs / 864e5));
+    var decorridosMs = Math.min(hoje - range.from, totalDiasMs); var diasDecorridos = Math.max(0, Math.round(decorridosMs / 864e5));
+    var diasRestantes = Math.max(0, totalDias - diasDecorridos);
+    var metaC = Math.round((mrMetaCfg.lucroAlvo || 0) * 100);
+    var falta = metaC - realizado;
+    var necessarioPorDia = diasRestantes > 0 ? Math.round(falta / diasRestantes) : falta;
+    var ritmoEsperado = totalDias > 0 ? Math.round(metaC * diasDecorridos / totalDias) : 0;
+    var ritmoDiffPct = ritmoEsperado ? r2((realizado - ritmoEsperado) / Math.abs(ritmoEsperado) * 100) : 0;
+    var ritmoStatus = realizado >= ritmoEsperado * 1.02 ? 'ACIMA' : realizado >= ritmoEsperado * 0.98 ? 'NO_RITMO' : 'ABAIXO';
+    var projecao = diasDecorridos > 0 ? Math.round(realizado / diasDecorridos * totalDias) : realizado;
+    var projStatus = metaC > 0 ? (projecao >= metaC ? 'ACIMA' : projecao >= metaC * 0.95 ? 'NO_RITMO' : 'ABAIXO') : 'SEM_META';
+    var margemMedia = receitaTot > 0 ? realizado / receitaTot : 0;
+    var ticketMedio = nConhecido ? Math.round(receitaTot / nConhecido) : 0;
+    var faturamentoNecessario = margemMedia > 0 ? Math.round(falta / margemMedia) : null;
+    var pedidosNecessarios = faturamentoNecessario != null && ticketMedio > 0 ? Math.ceil(faturamentoNecessario / ticketMedio) : null;
+    // série diária acumulada (para o gráfico meta × realizado)
+    var byDay = {}; list.forEach(function (o) { var p = profitOf(o); if (!p.known) return; var k = o.createdAt.slice(0, 10); byDay[k] = (byDay[k] || 0) + p.lucro; });
+    var days = []; for (var i = 0; i <= Math.min(diasDecorridos, totalDias - 1); i++) { var dt = new Date(range.from.getTime() + i * 864e5); days.push(dt.toISOString().slice(0, 10)); }
+    var acumRealizado = 0; var metaDiaria = totalDias ? metaC / totalDias : 0;
+    var serie = days.map(function (k, i) { acumRealizado += (byDay[k] || 0); return { label: monthDayLabel(k), a: Math.round(metaDiaria * (i + 1)), b: acumRealizado }; });
+    return { range: range, totalDias: totalDias, diasDecorridos: diasDecorridos, diasRestantes: diasRestantes, metaC: metaC, realizado: realizado, falta: falta, necessarioPorDia: necessarioPorDia, ritmoEsperado: ritmoEsperado, ritmoDiffPct: ritmoDiffPct, ritmoStatus: ritmoStatus, projecao: projecao, projStatus: projStatus, margemMedia: margemMedia, ticketMedio: ticketMedio, faturamentoNecessario: faturamentoNecessario, pedidosNecessarios: pedidosNecessarios, nConhecido: nConhecido, nPendenteCusto: nPendenteCusto, serie: serie };
+  }
+  function mrMeta() {
+    var head = secHead('MINHA RENDA · META & PROJEÇÃO', 'Quanto falta para a meta?', 'Cálculo determinístico sobre os pedidos do período — lucro usa Minha Renda quando cobre o pedido, senão o estimado de Pedidos. Nunca soma os dois.');
+    var cfgBox = '<div class="panel"><div class="ph"><h3>Meta</h3></div><div class="pb"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">' +
+      '<div><label class="fld">Quero atingir lucro de (R$)</label><input class="input sm" id="metaval" value="' + (mrMetaCfg.lucroAlvo || '') + '" style="width:160px" placeholder="ex.: 300000"></div>' +
+      '<div><label class="fld">Período</label><select class="select sm" id="metaperiod"><option value="mes_atual"' + (mrMetaCfg.periodMode === 'mes_atual' ? ' selected' : '') + '>Mês atual</option><option value="proximo_mes"' + (mrMetaCfg.periodMode === 'proximo_mes' ? ' selected' : '') + '>Próximo mês</option><option value="custom"' + (mrMetaCfg.periodMode === 'custom' ? ' selected' : '') + '>Personalizado</option></select></div>' +
+      (mrMetaCfg.periodMode === 'custom' ? '<div><label class="fld">De</label><input class="input sm" type="date" id="metafrom" value="' + esc(mrMetaCfg.customFrom || '') + '"></div><div><label class="fld">Até</label><input class="input sm" type="date" id="metato" value="' + esc(mrMetaCfg.customTo || '') + '"></div>' : '') +
+      '<button class="btn-sm primary" id="metasave">Calcular</button></div></div></div>';
+    if (!mrMetaCfg.lucroAlvo) return head + cfgBox + emptyBox('Informe uma meta de lucro para ver o cálculo de ritmo e projeção.');
+    var m = mrMetaEngine();
+    var strip1 = kstrip([
+      { l: 'Meta de lucro', v: brlC(m.metaC), cls: 'blue' },
+      { l: 'Lucro já realizado', v: brlC(m.realizado), cls: m.realizado >= 0 ? 'green' : 'red', s: nn(m.nConhecido) + ' pedidos c/ custo conhecido' + (m.nPendenteCusto ? ' · ' + nn(m.nPendenteCusto) + ' com custo pendente' : '') },
+      { l: 'Falta', v: brlC(m.falta), cls: m.falta > 0 ? 'amber' : 'green' },
+      { l: 'Dias decorridos / restantes', v: nn(m.diasDecorridos) + ' / ' + nn(m.diasRestantes), cls: 'blue' },
+      { l: 'Lucro necessário/dia', v: brlC(m.necessarioPorDia), cls: 'amber' },
+      { l: 'Lucro necessário/semana', v: brlC(m.necessarioPorDia * 7), cls: 'amber' },
+    ]);
+    var ritmoIcon = m.ritmoStatus === 'ACIMA' ? '🟢' : m.ritmoStatus === 'NO_RITMO' ? '🟡' : '🔴';
+    var ritmoTxt = m.ritmoStatus === 'ACIMA' ? pct(Math.abs(m.ritmoDiffPct)) + ' acima do ritmo necessário.' : m.ritmoStatus === 'NO_RITMO' ? 'No ritmo esperado.' : pct(Math.abs(m.ritmoDiffPct)) + ' abaixo da velocidade necessária.';
+    var ritmoBox = callout(m.ritmoStatus === 'ABAIXO' ? 'warn' : 'green', ritmoIcon + ' Ritmo da meta', 'Meta proporcional até hoje: <b>' + brlC(m.ritmoEsperado) + '</b> · Realizado: <b>' + brlC(m.realizado) + '</b> · ' + ritmoTxt);
+    var projIcon = m.projStatus === 'ACIMA' ? '🟢' : m.projStatus === 'NO_RITMO' ? '🟡' : '🔴';
+    var projBox = callout(m.projStatus === 'ABAIXO' ? 'warn' : 'green', projIcon + ' Projeção de fechamento (mantendo o ritmo atual)', 'Lucro projetado: <b>' + brlC(m.projecao) + '</b> · Meta: <b>' + brlC(m.metaC) + '</b> · Diferença: <b>' + brlC(m.projecao - m.metaC) + '</b>');
+    var strip2 = kstrip([
+      { l: 'Margem média realizada', v: pct(r2(m.margemMedia * 100)), cls: 'blue' },
+      { l: 'Ticket médio', v: brlC(m.ticketMedio), cls: 'blue' },
+      { l: 'Faturamento necessário (p/ meta)', v: m.faturamentoNecessario != null ? brlC(m.faturamentoNecessario) : 'sem margem para calcular', cls: 'amber' },
+      { l: 'Pedidos necessários', v: m.pedidosNecessarios != null ? nn(m.pedidosNecessarios) : '—', cls: 'amber' },
+    ]);
+    var chart = m.serie.length > 1 ? chartCard('Meta acumulada × Realizado acumulado', legendSwatch([['Meta acumulada', '#2b4bd6'], ['Realizado acumulado', '#0f9d6b']]), svgWalletLine(m.serie, { two: true })) : '';
+    return head + cfgBox + strip1 + ritmoBox + projBox + strip2 + chart;
+  }
+  function bindMrMeta() {
+    var mp = document.getElementById('metaperiod'); if (mp) mp.onchange = function () { mrMetaCfg.periodMode = mp.value; render(); };
+    var ms = document.getElementById('metasave'); if (ms) ms.onclick = function () {
+      var v = document.getElementById('metaval').value; mrMetaCfg.lucroAlvo = v ? parseFloat(v.replace(/\./g, '').replace(',', '.')) || 0 : 0;
+      var pm = document.getElementById('metaperiod'); if (pm) mrMetaCfg.periodMode = pm.value;
+      var mf = document.getElementById('metafrom'), mt = document.getElementById('metato'); if (mf) mrMetaCfg.customFrom = mf.value || null; if (mt) mrMetaCfg.customTo = mt.value || null;
+      saveMrMetaCfg().then(function () { render(); toast('Meta salva', ''); });
+    };
   }
   function mrFrete() {
     var e = mrEngine(); var head = secHead('MINHA RENDA · FRETE & DIVERGÊNCIAS', 'Frete cobrado acima do esperado', 'Diferença entre frete real e esperado, por pedido e por SKU. Não é automaticamente "erro da Shopee" — classifique cada caso.');
@@ -3283,13 +3587,13 @@
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
 
   // Abre o banco; se falhar (corrompido/bloqueado/privado), ativa o modo em memória e SEGUE —
   // o sistema sempre carrega e Produtos sempre abre (só não salva). Nunca dead-end / tela branca.
   openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip')]);
   }).then(function (r) {
     orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
     wallet = r[5] || [];
@@ -3302,6 +3606,8 @@
     affConv = r[9] || []; affRpa = r[10] || []; affVb = r[11] || []; affMaster = {}; (r[12] || []).forEach(function (mm) { affMaster[mm.id] = mm; });
     mrRenda = r[13] || []; mrShip = r[14] || []; mrAdj = r[15] || []; mrSvc = r[16] || []; mrPdf = r[17] || [];
     var mrS = settings.filter(function (x) { return x.id === 'mrSummary'; })[0]; if (mrS) mrSummary = mrS.data;
+    var mrMCfg = settings.filter(function (x) { return x.id === 'mrMetaCfg'; })[0]; if (mrMCfg && mrMCfg.data) Object.keys(mrMCfg.data).forEach(function (k) { mrMetaCfg[k] = mrMCfg.data[k]; });
+    shipBip = {}; (r[18] || []).forEach(function (b) { shipBip[b.orderId] = b; });
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
     plans = (r[4] || []).map(function (p) { if (PLAN_MIGR[p.status]) p.status = PLAN_MIGR[p.status]; if (p.scopeSkus == null && p.relatedSkus) p.scopeSkus = p.relatedSkus; if (p.indicatorKind == null) p.indicatorKind = 'liquido'; return p; });
     occ = occ.filter(function (o) { return !o.isDemo; }); // higiene: nunca deixar demo no banco real
