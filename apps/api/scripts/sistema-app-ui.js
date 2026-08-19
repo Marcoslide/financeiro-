@@ -49,6 +49,9 @@
   var mrRenda = [], mrShip = [], mrAdj = [], mrSvc = [], mrPdf = [], mrSummary = null;
   var mrSub = 'visao', mrPage = 1, mrF = { search: '', motivo: '', invest: '' };
   var mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null };
+  var mrProdCfg = { margemMeta: 0.10 }; // meta padrão de margem para classificar "abaixo da meta" (§41 do prompt de reorganização)
+  var mrProdSort = 'liberado'; // ordenação da tabela de Renda por Produto
+  var mrSimAdjust = {}; // simulador de mix: sku -> % de ajuste aplicado (ex.: 20 = +20%)
   // Expedição / Bipe (Pedidos): registro de saída física, chave = ID do pedido (idempotente).
   var shipBip = {};   // orderId -> { id, orderId, bipedAt, bipedBy, note, history: [] }
   var pedExpF = { search: '', status: '' };
@@ -3046,12 +3049,12 @@
   }
 
   function renderMinhaRenda() {
-    var tabs = [['visao', 'Visão Geral'], ['meta', 'Meta & Projeção'], ['frete', 'Frete & Divergências'], ['taxas', 'Taxas'], ['ajustes', 'Ajustes'], ['produto', 'Renda por Produto'], ['conciliacao', 'Conciliação Declaração'], ['auditoria', 'Auditoria']];
+    var tabs = [['visao', 'Visão Geral'], ['meta', 'Meta & Projeção'], ['frete', 'Frete & Divergências'], ['taxas', 'Taxas'], ['ajustes', 'Ajustes'], ['produto', 'Renda por Produto'], ['simulador', 'Simulador de Mix'], ['conciliacao', 'Conciliação Declaração'], ['auditoria', 'Auditoria']];
     app.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + tabs.map(function (t) { return '<div class="subtab' + (mrSub === t[0] ? ' active' : '') + '" data-mrsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-mrimport="1">Importar Income / Declaração</button></div><div id="mrbody" style="margin-top:14px"></div>';
     var body = document.getElementById('mrbody');
     try {
       if (!mrRenda.length && !mrShip.length && !mrPdf.length && mrSub !== 'meta') body.innerHTML = secHead('MINHA RENDA', 'Consolidação Financeira Shopee', 'Quanto vendemos, quanto foi descontado, para onde foi o dinheiro e quanto a Shopee liberou — do agregado até o pedido.') + emptyBox('Nenhum relatório importado. Envie o Income (XLSX) e/ou a Declaração de Renda (PDF) da Shopee. O tipo é detectado automaticamente.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="mrimp">Importar primeiro relatório</button></div>';
-      else body.innerHTML = ({ visao: mrVisao, meta: mrMeta, frete: mrFrete, taxas: mrTaxas, ajustes: mrAjustes, produto: mrProduto, conciliacao: mrConciliacao, auditoria: mrAuditoria }[mrSub] || mrVisao)();
+      else body.innerHTML = ({ visao: mrVisao, meta: mrMeta, frete: mrFrete, taxas: mrTaxas, ajustes: mrAjustes, produto: mrProduto, simulador: mrSimulador, conciliacao: mrConciliacao, auditoria: mrAuditoria }[mrSub] || mrVisao)();
     } catch (e) { body.innerHTML = '<div class="form-err">Erro ao renderizar Minha Renda: ' + esc(e.message || e) + '</div>'; }
     app.querySelectorAll('[data-mrsub]').forEach(function (b) { b.onclick = function () { mrSub = b.dataset.mrsub; mrPage = 1; render(); }; });
     var imp = function () { fileInput(function (f) { importMinhaRenda(f).then(function (b) { render(); if (b.kind === 'pdf') toast(b.ok ? 'Declaração PDF lida' : 'PDF processado parcialmente', b.ok ? 'Pagamento liberado ' + brlC(b.decl.liberado) : 'Não foi possível reconhecer todos os campos do PDF'); else toast('Income importado', b.stats.renda + ' linhas de renda · ' + b.stats.ship + ' fretes · ' + b.stats.adj + ' ajustes'); }).catch(function (e) { toast('Falha', e.message, true); }); }); };
@@ -3066,6 +3069,8 @@
     app.querySelectorAll('[data-gowal]').forEach(function (b) { b.onclick = function () { route = 'carteira'; walletSub = 'mov'; render(); }; });
     if (mrSub === 'frete') bindMrFrete();
     if (mrSub === 'meta') bindMrMeta();
+    if (mrSub === 'produto') bindMrProduto();
+    if (mrSub === 'simulador') bindMrSimulador();
   }
   function mrWaterfall(t) {
     // do preço (bruto) até o liberado
@@ -3268,14 +3273,117 @@
     var rows = mrAdj.slice().sort(function (a, b) { return a.valor - b.valor; }).slice(0, 300).map(function (a) { return '<tr' + (a.orderId ? ' class="rowlink" data-mrped="' + esc(a.orderId) + '"' : '') + '><td class="mono">' + esc(a.orderId || '—') + '</td><td class="cell-text">' + esc(a.desc || '—') + '</td><td class="nowrap ' + (a.valor < 0 ? 'neg' : 'pos') + '"><b>' + brlC(a.valor) + '</b></td></tr>'; }).join('');
     return head + strip + '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Descrição (original Shopee)</th><th>Valor</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
   }
-  function mrProduto() {
-    var e = mrEngine(); var head = secHead('MINHA RENDA · RENDA POR PRODUTO', 'Renda por SKU / produto', 'Consolidação por SKU (atribuição via linhas SKU do Income), cruzando com o frete e o custo de Produtos quando disponível.');
-    // agrega por sku via skuByOrder → soma financeiro do pedido no primeiro sku (evita dupla contagem por múltiplos sku)
+  // Rentabilidade por SKU: lucro/margem usam o mesmo motor da Ficha 360 e do Meta & Projeção
+  // (mrOrderProfitEngine) — nunca uma segunda fórmula divergente. Unidades vêm de Pedidos
+  // (quantidade real vendida); devolução vem do módulo Devoluções, ligada por pedido+SKU.
+  // O "SKU" do Income é o ID numérico interno da Shopee; o "SKU" de Pedidos/Devoluções é a
+  // referência do próprio vendedor — são identificadores DIFERENTES, não o mesmo campo. Antes de
+  // cruzar unidades/devolução por SKU, verificamos se os dois conjuntos realmente se sobrepõem;
+  // se não, declaramos "não disponível" em vez de mostrar zero (nunca inventar vínculo).
+  function mrSkuCrossCheck() {
+    var e = mrEngine(); var mrSkus = {}; e.skuByOrder && Object.keys(e.skuByOrder).forEach(function (oid) { (e.skuByOrder[oid] || []).forEach(function (r) { if (r.sku) mrSkus[r.sku] = 1; }); });
+    var pedSkus = {}; orders.forEach(function (o) { o.items.forEach(function (it) { if (it.sku) pedSkus[it.sku] = 1; }); });
+    var mrList = Object.keys(mrSkus); if (!mrList.length) return { reliable: false, overlapPct: 0 };
+    var matched = mrList.filter(function (s) { return pedSkus[s]; }).length;
+    var overlapPct = r2(matched / mrList.length * 100);
+    return { reliable: overlapPct >= 5, overlapPct: overlapPct };
+  }
+  function mrSkuRentabilidade() {
+    var e = mrEngine(); var profitOf = mrOrderProfitEngine(); var cross = mrSkuCrossCheck();
     var bySku = {};
-    e.orders.forEach(function (o) { var sk = e.skuByOrder[o.orderId]; var key = sk && sk[0] ? sk[0].sku : '(sem sku)'; var prod = sk && sk[0] ? sk[0].produto : ''; var g = bySku[key] = bySku[key] || { sku: key, produto: prod, n: 0, liberado: 0, preco: 0, reembolso: 0, comissao: 0, servico: 0, afiliado: 0, multi: sk && sk.length > 1 }; g.n++; g.liberado += o.liberado; g.preco += o.preco; g.reembolso += o.reembolso; g.comissao += o.comissao; g.servico += o.servico; g.afiliado += o.afiliado; });
-    var list = Object.values(bySku).sort(function (a, b) { return b.liberado - a.liberado; }).slice(0, 300);
-    var rows = list.map(function (x) { return '<tr><td class="mono">' + esc((x.sku || '—')) + (x.multi ? ' <span class="tag warn">multi</span>' : '') + '</td><td class="cell-text">' + esc((x.produto || '—').slice(0, 34)) + '</td><td>' + nn(x.n) + '</td><td class="nowrap">' + brlC(x.preco) + '</td><td class="nowrap">' + brlC(x.reembolso) + '</td><td class="nowrap">' + brlC(x.comissao + x.servico) + '</td><td class="nowrap">' + brlC(x.afiliado) + '</td><td class="nowrap"><b>' + brlC(x.liberado) + '</b></td></tr>'; }).join('');
-    return head + '<div class="panel"><div class="ph"><h3>Por SKU</h3><span class="footnote" style="margin:0">financeiro do pedido atribuído ao SKU principal (sem dupla contagem)</span></div><div class="table-wrap"><table class="report"><thead><tr><th>SKU</th><th>Produto</th><th>Pedidos</th><th>Preço</th><th>Reembolso</th><th>Taxas</th><th>Afiliado</th><th>Liberado</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+    e.orders.forEach(function (o) {
+      var sk = e.skuByOrder[o.orderId]; var key = sk && sk[0] ? sk[0].sku : '(sem sku)'; var prod = sk && sk[0] ? sk[0].produto : '';
+      var g = bySku[key] = bySku[key] || { sku: key, produto: prod, n: 0, liberado: 0, preco: 0, lucro: 0, lucroN: 0, pendN: 0, units: 0, devN: 0, devLoss: 0, multi: sk && sk.length > 1 };
+      g.n++; g.liberado += o.liberado; g.preco += o.preco;
+      var ord = orders.find(function (x) { return x.id === o.orderId; });
+      if (ord) { var p = profitOf(ord); if (p.known) { g.lucro += p.lucro; g.lucroN++; } else g.pendN++; if (cross.reliable) ord.items.forEach(function (it) { if (it.sku === key) g.units += it.qty; }); }
+      else g.pendN++;
+    });
+    if (cross.reliable) occ.forEach(function (o) { if (o.isDemo || !o.orderId) return; (o.items || []).forEach(function (it) { if (!it.sku) return; var g = bySku[it.sku]; if (!g) return; g.devN++; g.devLoss += occEffectiveLoss(o); }); });
+    var list = Object.values(bySku).map(function (g) {
+      g.margem = (g.lucroN && g.preco) ? r2(g.lucro / g.preco * 100) : null;
+      g.lucroUn = (cross.reliable && g.units && g.lucroN) ? Math.round(g.lucro / g.units) : null;
+      g.units = cross.reliable ? g.units : null;
+      g.taxaDevol = cross.reliable && g.n ? r2(g.devN / g.n * 100) : null;
+      g.devLoss = cross.reliable ? r2(g.devLoss) : null;
+      return g;
+    });
+    return list;
+  }
+  function mrProduto() {
+    var list = mrSkuRentabilidade(); var cross = mrSkuCrossCheck();
+    var head = secHead('MINHA RENDA · RENDA POR PRODUTO', 'Rentabilidade por SKU', 'Lucro e margem usam o mesmo cálculo da Ficha 360 (custo de Produtos + taxas reais). Unidades vêm de Pedidos; devolução, do módulo Devoluções. "Custo pendente" nunca é tratado como zero.');
+    if (!list.length) return head + emptyBox('Sem dados de Renda por Produto ainda.');
+    var crossNote = !cross.reliable ? callout('warn', '⚠ Unidades e devolução por SKU não disponíveis', 'O "SKU" do Income é o ID numérico interno da Shopee; o SKU de Pedidos/Devoluções é a referência do próprio vendedor — são identificadores diferentes e, neste conjunto de arquivos, só ' + pct(cross.overlapPct) + ' deles coincidem. Para não inventar um vínculo, unidades vendidas, lucro por unidade e taxa de devolução por SKU ficam "não disponível" nesta tela. Lucro e margem continuam corretos — eles usam o ID do <b>pedido</b>, que é o mesmo em todas as fontes.') : '';
+    var withProfit = list.filter(function (x) { return x.lucroN > 0; });
+    var comCusto = withProfit.length, semCusto = list.length - withProfit.length;
+    // classificações (§40)
+    var maisLucrativo = withProfit.slice().sort(function (a, b) { return b.lucro - a.lucro; })[0];
+    var maiorMargem = withProfit.filter(function (x) { return x.margem != null; }).sort(function (a, b) { return b.margem - a.margem; })[0];
+    var maiorFat = list.slice().sort(function (a, b) { return b.preco - a.preco; })[0];
+    var maiorVol = cross.reliable ? list.slice().sort(function (a, b) { return b.units - a.units; })[0] : null;
+    var maiorPerdaDevol = cross.reliable ? list.filter(function (x) { return x.devLoss > 0; }).sort(function (a, b) { return b.devLoss - a.devLoss; })[0] : null;
+    var prejuizo = withProfit.filter(function (x) { return x.lucro < 0; }).sort(function (a, b) { return a.lucro - b.lucro; });
+    var margemMedia = withProfit.length ? withProfit.reduce(function (s, x) { return s + (x.margem || 0); }, 0) / withProfit.length : 0;
+    var fatMed = list.length ? list.reduce(function (s, x) { return s + x.preco; }, 0) / list.length : 0;
+    var vendeMuitoLucraPouco = withProfit.filter(function (x) { return x.preco > fatMed && x.margem != null && x.margem < margemMedia; }).sort(function (a, b) { return b.preco - a.preco; }).slice(0, 5);
+    var abaixoMeta = withProfit.filter(function (x) { return x.margem != null && x.margem < mrProdCfg.margemMeta * 100; }).sort(function (a, b) { return a.margem - b.margem; });
+    var hi = function (label, x, extra) { return x ? '<div class="kc"><div class="kl">' + esc(label) + '</div><div class="kv" style="font-size:14px">' + esc((x.sku || '—')) + '</div><div class="ks">' + esc(extra) + '</div></div>' : ''; };
+    var highlights = '<div class="kstrip">' +
+      hi('SKU mais lucrativo', maisLucrativo, maisLucrativo ? brlC(maisLucrativo.lucro) : '') +
+      hi('Maior margem', maiorMargem, maiorMargem ? pct(maiorMargem.margem) : '') +
+      hi('Maior faturamento', maiorFat, brlC(maiorFat ? maiorFat.preco : 0)) +
+      hi('Maior volume', maiorVol, maiorVol ? nn(maiorVol.units) + ' un.' : '') +
+      hi('Maior perda em devolução', maiorPerdaDevol, maiorPerdaDevol ? brl(maiorPerdaDevol.devLoss) : '') +
+      '</div>';
+    var custoNote = semCusto ? callout('warn', nn(semCusto) + ' SKU(s) com custo pendente', 'Não entram nos rankings de lucro/margem — cadastre o custo em Produtos para liberá-los. O pagamento liberado continua visível para todos.') : '';
+    var attnBlocks = '';
+    if (prejuizo.length) attnBlocks += '<div class="panel"><div class="ph"><h3>🔴 SKUs com prejuízo</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>SKU</th><th>Produto</th><th>Lucro</th><th>Margem</th></tr></thead><tbody>' + prejuizo.slice(0, 10).map(function (x) { return '<tr><td class="mono">' + esc(x.sku) + '</td><td class="cell-text">' + esc((x.produto || '—').slice(0, 30)) + '</td><td class="nowrap neg">' + brlC(x.lucro) + '</td><td>' + (x.margem != null ? pct(x.margem) : '—') + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
+    if (vendeMuitoLucraPouco.length) attnBlocks += '<div class="panel"><div class="ph"><h3>🟠 Vende muito, mas lucra pouco</h3><span class="footnote" style="margin:0">faturamento acima da média, margem abaixo da média (' + pct(r2(margemMedia)) + ')</span></div><div class="table-wrap"><table class="report"><thead><tr><th>SKU</th><th>Produto</th><th>Faturamento</th><th>Margem</th></tr></thead><tbody>' + vendeMuitoLucraPouco.map(function (x) { return '<tr><td class="mono">' + esc(x.sku) + '</td><td class="cell-text">' + esc((x.produto || '—').slice(0, 30)) + '</td><td class="nowrap">' + brlC(x.preco) + '</td><td>' + pct(x.margem) + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
+    if (abaixoMeta.length) attnBlocks += callout('warn', nn(abaixoMeta.length) + ' SKU(s) com margem abaixo da meta (' + pct(r2(mrProdCfg.margemMeta * 100)) + ')', 'Meta padrão de margem — ajustável no código. <button class="btn-sm" data-mrgo="produto">ver na tabela abaixo</button>');
+    var SORTS = { liberado: function (a, b) { return b.liberado - a.liberado; }, lucro: function (a, b) { return b.lucro - a.lucro; }, margem: function (a, b) { return (b.margem || -999) - (a.margem || -999); }, preco: function (a, b) { return b.preco - a.preco; }, units: function (a, b) { return b.units - a.units; }, devol: function (a, b) { return b.taxaDevol - a.taxaDevol; } };
+    var sorted = list.slice().sort(SORTS[mrProdSort] || SORTS.liberado).slice(0, 300);
+    var rows = sorted.map(function (x) { return '<tr' + (x.lucroN === 0 ? ' style="background:#fff8ef"' : '') + '><td class="mono">' + esc((x.sku || '—')) + (x.multi ? ' <span class="tag warn">multi</span>' : '') + '</td><td class="cell-text">' + esc((x.produto || '—').slice(0, 30)) + '</td><td>' + nn(x.n) + '</td><td>' + (x.units != null ? nn(x.units) : '—') + '</td><td class="nowrap">' + brlC(x.preco) + '</td><td class="nowrap">' + brlC(x.liberado) + '</td><td class="nowrap ' + (x.lucroN === 0 ? '' : x.lucro < 0 ? 'neg' : 'pos') + '">' + (x.lucroN ? '<b>' + brlC(x.lucro) + '</b>' : '<span class="tag warn">custo pendente</span>') + '</td><td>' + (x.margem != null ? pct(x.margem) : '—') + '</td><td class="nowrap">' + (x.lucroUn != null ? brlC(x.lucroUn) : '—') + '</td><td>' + (x.taxaDevol != null ? pct(x.taxaDevol) : '—') + '</td></tr>'; }).join('');
+    var sortSel = '<select class="select sm" id="mrprodsort"><option value="liberado"' + (mrProdSort === 'liberado' ? ' selected' : '') + '>Maior liberado</option><option value="lucro"' + (mrProdSort === 'lucro' ? ' selected' : '') + '>Maior lucro</option><option value="margem"' + (mrProdSort === 'margem' ? ' selected' : '') + '>Maior margem</option><option value="preco"' + (mrProdSort === 'preco' ? ' selected' : '') + '>Maior faturamento</option>' + (cross.reliable ? '<option value="units"' + (mrProdSort === 'units' ? ' selected' : '') + '>Maior volume</option><option value="devol"' + (mrProdSort === 'devol' ? ' selected' : '') + '>Maior taxa de devolução</option>' : '') + '</select>';
+    return head + crossNote + highlights + custoNote + attnBlocks +
+      '<div class="panel"><div class="ph"><h3>Por SKU</h3>' + sortSel + '</div><div class="table-wrap"><table class="report"><thead><tr><th>SKU</th><th>Produto</th><th>Pedidos</th><th>Unid.</th><th>Preço</th><th>Liberado</th><th>Lucro</th><th>Margem</th><th>Lucro/un.</th><th>Devolução</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+  }
+  function bindMrProduto() { var s = document.getElementById('mrprodsort'); if (s) s.onchange = function () { mrProdSort = s.value; render(); }; }
+  // ---- Simulador de Mix de Produtos (§9-10 do prompt de reorganização) ----
+  // Extrapolação LINEAR do lucro/margem realizados por SKU — não é previsão de demanda de mercado.
+  function mrSimulador() {
+    var head = secHead('MINHA RENDA · SIMULADOR DE MIX', 'E se eu vender mais disso, menos daquilo?', 'Extrapola linearmente o lucro/margem já realizados por SKU no período. Não prevê demanda de mercado — mostra o impacto financeiro SE o volume mudar na proporção indicada.');
+    var list = mrSkuRentabilidade().filter(function (x) { return x.lucroN > 0; }).sort(function (a, b) { return b.preco - a.preco; }).slice(0, 20);
+    if (!list.length) return head + emptyBox('Sem SKUs com custo conhecido para simular (cadastre custos em Produtos).');
+    var baseFat = list.reduce(function (s, x) { return s + x.preco; }, 0), baseLucro = list.reduce(function (s, x) { return s + x.lucro; }, 0);
+    function project(adjust) {
+      var fat = 0, lucro = 0; list.forEach(function (x) { var pctAdj = (adjust[x.sku] || 0) / 100; fat += x.preco * (1 + pctAdj); lucro += x.lucro * (1 + pctAdj); }); return { fat: Math.round(fat), lucro: Math.round(lucro) };
+    }
+    var manual = project(mrSimAdjust);
+    var metaC = Math.round((mrMetaCfg.lucroAlvo || 0) * 100);
+    var rows = list.map(function (x) { return '<tr><td class="mono">' + esc(x.sku) + '</td><td class="cell-text">' + esc((x.produto || '—').slice(0, 26)) + '</td><td class="nowrap">' + brlC(x.preco) + '</td><td class="nowrap">' + brlC(x.lucro) + '</td><td>' + (x.margem != null ? pct(x.margem) : '—') + '</td><td><input type="number" class="input sm mrsimadj" data-sku="' + esc(x.sku) + '" value="' + (mrSimAdjust[x.sku] || 0) + '" style="width:80px" step="5"> %</td></tr>'; }).join('');
+    var manualBox = kstrip([
+      { l: 'Faturamento (base → simulado)', v: brlC(baseFat) + ' → ' + brlC(manual.fat), cls: 'blue' },
+      { l: 'Lucro (base → simulado)', v: brlC(baseLucro) + ' → ' + brlC(manual.lucro), cls: manual.lucro >= baseLucro ? 'green' : 'red' },
+      { l: 'Diferença de lucro', v: brlC(manual.lucro - baseLucro), cls: manual.lucro >= baseLucro ? 'green' : 'red' },
+      { l: 'Vs. meta', v: metaC ? brlC(manual.lucro - metaC) : 'sem meta definida', cls: 'amber' },
+    ]);
+    // Cenários automáticos (§9): aplicados sobre os mesmos Top-20 SKUs
+    function scenarioAdjust(kind) {
+      var adj = {}; var maiorMargem = list.slice().sort(function (a, b) { return (b.margem || -999) - (a.margem || -999); }); var maiorVol = list.slice().sort(function (a, b) { return b.units - a.units; });
+      if (kind === 'conservador') { maiorMargem.slice(0, 3).forEach(function (x) { adj[x.sku] = 5; }); list.filter(function (x) { return x.lucro < 0; }).forEach(function (x) { adj[x.sku] = -10; }); }
+      else if (kind === 'meta') { var falta = metaC - baseLucro; var top = maiorMargem.slice(0, 5).filter(function (x) { return x.lucro > 0; }); var somaLucroTop = top.reduce(function (s, x) { return s + x.lucro; }, 0); if (somaLucroTop > 0 && falta > 0) { var pctNeed = Math.min(200, r2(falta / somaLucroTop * 100)); top.forEach(function (x) { adj[x.sku] = pctNeed; }); } }
+      else if (kind === 'agressivo') { maiorMargem.slice(0, 5).forEach(function (x) { adj[x.sku] = 30; }); maiorVol.slice(0, 5).forEach(function (x) { adj[x.sku] = Math.max(adj[x.sku] || 0, 50); }); list.filter(function (x) { return x.lucro < 0; }).forEach(function (x) { adj[x.sku] = -100; }); }
+      return adj; // 'atual' = {}
+    }
+    var cenarios = ['atual', 'conservador', 'meta', 'agressivo'].map(function (k) { var adj = k === 'atual' ? {} : scenarioAdjust(k); var r = project(adj); return { k: k, label: { atual: 'Atual', conservador: 'Conservador', meta: 'Meta', agressivo: 'Agressivo' }[k], fat: r.fat, lucro: r.lucro, margem: r.fat ? r2(r.lucro / r.fat * 100) : 0 }; });
+    var cenTable = '<div class="panel"><div class="ph"><h3>Cenários automáticos</h3><span class="footnote" style="margin:0">todos aplicados sobre os mesmos Top-20 SKUs por faturamento</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Cenário</th><th>Faturamento</th><th>Lucro</th><th>Margem</th><th>Vs. meta</th></tr></thead><tbody>' + cenarios.map(function (c) { return '<tr><td><b>' + esc(c.label) + '</b></td><td class="nowrap">' + brlC(c.fat) + '</td><td class="nowrap ' + (c.lucro >= 0 ? 'pos' : 'neg') + '">' + brlC(c.lucro) + '</td><td>' + pct(c.margem) + '</td><td class="nowrap">' + (metaC ? brlC(c.lucro - metaC) : '—') + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
+    var simTable = '<div class="panel"><div class="ph"><h3>Ajuste manual por SKU (Top 20 por faturamento)</h3><button class="link-btn" id="mrsimreset">limpar ajustes</button></div><div class="table-wrap"><table class="report"><thead><tr><th>SKU</th><th>Produto</th><th>Faturamento (base)</th><th>Lucro (base)</th><th>Margem</th><th>Ajuste</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+    return head + manualBox + cenTable + simTable;
+  }
+  function bindMrSimulador() {
+    app.querySelectorAll('.mrsimadj').forEach(function (inp) { inp.onchange = function () { var v = parseFloat(inp.value) || 0; if (v) mrSimAdjust[inp.dataset.sku] = v; else delete mrSimAdjust[inp.dataset.sku]; render(); }; });
+    var rs = document.getElementById('mrsimreset'); if (rs) rs.onclick = function () { mrSimAdjust = {}; render(); };
   }
   function mrConciliacao() {
     var e = mrEngine(); var t = e.tot; var head = secHead('MINHA RENDA · CONCILIAÇÃO DA DECLARAÇÃO', 'XLSX × Declaração (PDF)', 'Compara o que o sistema somou do Income com a Declaração oficial da Shopee (PDF). Períodos diferentes são sinalizados — não forçamos R$ 0.');
