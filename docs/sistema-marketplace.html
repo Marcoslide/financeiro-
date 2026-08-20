@@ -8020,6 +8020,7 @@ buffer/index.js:
     app.querySelectorAll('[data-mrimport]').forEach(function (b) { b.onclick = imp; });
     var mi = document.getElementById('mrimp'); if (mi) mi.onclick = imp;
     app.querySelectorAll('[data-mrgo]').forEach(function (b) { b.onclick = function () { mrSub = b.dataset.mrgo; render(); }; });
+    app.querySelectorAll('[data-mrgocarteira]').forEach(function (b) { b.onclick = function () { route = 'carteira'; walletSub = 'pendencias'; render(); }; });
     app.querySelectorAll('[data-mrsku]').forEach(function (b) { b.onclick = function () { openMrSku(b.dataset.mrsku); }; });
     app.querySelectorAll('[data-mrped]').forEach(function (b) { b.onclick = function () { openMrPedido(b.dataset.mrped); }; });
     app.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.goped360); }; });
@@ -8082,7 +8083,32 @@ buffer/index.js:
     var e = mrEngine();
     var dedup = callout('', 'ORDER × SKU (sem dupla contagem)', mrRenda.length ? 'Importadas <b>' + nn(e.orders.length) + '</b> linhas Order (financeiro) e <b>' + nn(mrRenda.length - e.orders.length) + '</b> linhas SKU (atribuição de produto) no total já importado. Os valores financeiros vêm só das linhas Order.' : '');
     var ship = e.shipTot; var shipBox = ship.n ? callout('warn', 'Frete acima do esperado (histórico completo, sem data confiável para filtrar): ' + brlC(ship.diff), '<b>' + nn(ship.n) + '</b> pedidos · esperado ' + brlC(ship.esperado) + ' · real ' + brlC(ship.real) + '. <button class="btn-sm" data-mrgo="frete">Investigar</button>') : '';
-    return head + strip1 + strip2 + strip3 + coverage + mrWaterfall(t) + cobertura + tendLink + dedup + shipBox + mrAlertas();
+    return head + strip1 + mrQualidadeConciliacaoBox() + strip2 + strip3 + coverage + mrWaterfall(t) + cobertura + tendLink + dedup + shipBox + mrAlertas();
+  }
+  // §40-44 — Fase 5 da arquitetura: Minha Renda como camada executiva. Não espera 100% da
+  // conciliação para mostrar resultado (§41) — separa Resultado ESTIMADO (todos os eventos
+  // disponíveis, é exatamente pe.lucro/profitOf já existentes, sem alterar a fórmula aprovada) de
+  // Resultado CONCILIADO (só pedidos com pedidoConciliacaoStatus===CONCILIADO — Renda+Acelera+
+  // Carteira já confirmados). Reaproveita mrPeriodEngine()/mrOrderProfitEngine()/
+  // pedidoConciliacaoStatus() — nunca soma o mesmo lucro duas vezes, nunca recalcula taxa Acelera
+  // fora do que já está em profitOf (§44: Carteira só muda status de conciliação, não o valor).
+  function mrConciliacaoQualidade(range) {
+    var pe = mrPeriodEngine(range); var within = mrRange(range);
+    var list = orders.filter(function (o) { return o.paidAt && within(o.paidAt); });
+    var profitOf = mrOrderProfitEngine();
+    var lucroConc = 0, lucroConcN = 0, nConc = 0, fatConc = 0;
+    list.forEach(function (o) {
+      if (pedidoConciliacaoStatus(o.id).code !== 'CONCILIADO') return;
+      nConc++; var f = orderFinance(o); fatConc += Math.round(f.revenue * 100);
+      var p = profitOf(o); if (p.known) { lucroConc += p.lucro; lucroConcN++; }
+    });
+    return { nConc: nConc, nTotal: pe.n, lucroConc: lucroConc, lucroConcN: lucroConcN, fatConc: fatConc, pctPedidosConc: pe.n ? r2(nConc / pe.n * 100) : null, pctFatConc: pe.faturamento ? r2(fatConc / pe.faturamento * 100) : null, lucroEstimado: pe.lucro, lucroEstimadoN: pe.lucroN };
+  }
+  function mrQualidadeConciliacaoBox() {
+    var q = mrConciliacaoQualidade(); if (!q.nTotal) return '';
+    var tone = q.pctPedidosConc == null ? '' : q.pctPedidosConc >= 95 ? 'green' : q.pctPedidosConc >= 60 ? '' : 'warn';
+    return callout(tone, 'Qualidade da conciliação: ' + (q.pctPedidosConc != null ? pct(q.pctPedidosConc) : '—') + ' dos pedidos pagos',
+      'Resultado estimado (usa todos os eventos já disponíveis — Pedidos/Produtos/Income): <b>' + (q.lucroEstimadoN ? brlC(q.lucroEstimado) : 'não disponível') + '</b>. Resultado conciliado (só pedidos onde Renda + Acelera + Carteira já batem): <b>' + (q.lucroConcN ? brlC(q.lucroConc) : 'não disponível') + '</b>. <b>' + nn(q.nConc) + '</b> de <b>' + nn(q.nTotal) + '</b> pedidos pagos já conciliados' + (q.pctFatConc != null ? ' (' + pct(q.pctFatConc) + ' da receita do período)' : '') + ' — o valor ainda não conciliado não é erro, é o normal enquanto a Carteira/Acelera não chegam até essa data. <button class="btn-sm" data-mrgocarteira="1">Ver pendências na Carteira</button>');
   }
   // ---- Tendências (§39): comparação com o período anterior equivalente, aba própria ----
   function mrTendencias() {
