@@ -4371,21 +4371,28 @@ buffer/index.js:
     var q = document.getElementById('expq'); if (q) { var t; q.oninput = function () { clearTimeout(t); t = setTimeout(function () { var v = q.value; pedExpF.search = v; render(); var el = document.getElementById('expq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
     app.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.goped360); }; });
   }
-  // §5-7: "Retornos e Pedidos Cancelados" não pode depender só do texto "Cancelado" — usa também
-  // Status da Devolução/Reembolso (Solicitação aprovada, Devolução em Andamento/Concluída) e o
-  // motivo de cancelamento, sem sobrescrever o status original da Shopee (§6).
-  function pedidoIsRetornoCancelado(o) { return o.normalizedStatus === 'CANCELADO' || !!(o.returnRefundStatus && o.returnRefundStatus.trim()) || !!(o.cancelReason && o.cancelReason.trim()); }
+  // Correção do usuário (§1): a aba OFICIAL precisa espelhar exatamente a contagem de status da
+  // Shopee — nunca um agrupamento mais amplo por baixo do mesmo número. "Cancelado" mostra só
+  // normalizedStatus===CANCELADO (idêntico ao texto de status da Shopee). Pedidos com devolução/
+  // motivo associado mas outro status Shopee (ex.: Entregue com Status da Devolução preenchido)
+  // ficam num filtro ADICIONAL opt-in, nunca somados por baixo do count oficial da aba.
+  function pedidoTemRetornoAssociado(o) { return o.normalizedStatus !== 'CANCELADO' && !!((o.returnRefundStatus && o.returnRefundStatus.trim()) || (o.cancelReason && o.cancelReason.trim())); }
+  function pedidoIsRetornoCancelado(o) { return o.normalizedStatus === 'CANCELADO' || pedidoTemRetornoAssociado(o); }
+  var pedIncluirRetornoAssociado = false; // toggle opt-in, nunca liga sozinho — não altera a contagem oficial da aba
   function pedidosList() {
     var occByOrder = {}; occ.forEach(function (o) { if (o.orderId) occByOrder[o.orderId] = true; });
     var all = pedidosInPeriod();
     // §2/§12: contadores SEMPRE por ID de pedido único — "orders" já é 1 registro por pedido
-    // (agrupado na importação), nunca por linha/item da planilha.
+    // (agrupado na importação), nunca por linha/item da planilha. Todos os counts abaixo usam
+    // normalizedStatus puro — o mesmo texto de status que a Shopee mostra, contagem idêntica.
     var counts = { ALL: all.length };
-    ['NAO_PAGO', 'A_ENVIAR', 'ENVIADO', 'CONCLUIDO'].forEach(function (k) { counts[k] = all.filter(function (o) { return o.normalizedStatus === k; }).length; });
-    counts.CANCELADO = all.filter(pedidoIsRetornoCancelado).length;
-    var TAB_DEFS = S.pedidos.tabs.map(function (t) { return t.key === 'CANCELADO' ? { key: 'CANCELADO', label: 'Retornos e Pedidos Cancelados' } : t; });
+    ['NAO_PAGO', 'A_ENVIAR', 'ENVIADO', 'CONCLUIDO', 'CANCELADO'].forEach(function (k) { counts[k] = all.filter(function (o) { return o.normalizedStatus === k; }).length; });
+    var comRetornoAssociado = all.filter(pedidoTemRetornoAssociado);
+    var TAB_DEFS = S.pedidos.tabs;
     var tabs = TAB_DEFS.map(function (t) { return '<div class="tab ' + (pedTab === t.key ? 'active' : '') + '" data-ptab="' + t.key + '">' + t.label + ' <span class="tag">' + nn(counts[t.key] || 0) + '</span></div>'; }).join('');
-    var list = pedTab === 'ALL' ? all : pedTab === 'CANCELADO' ? all.filter(pedidoIsRetornoCancelado) : all.filter(function (o) { return o.normalizedStatus === pedTab; });
+    var baseList = pedTab === 'ALL' ? all : all.filter(function (o) { return o.normalizedStatus === pedTab; });
+    var retornoToggle = (pedTab === 'CANCELADO' && comRetornoAssociado.length) ? '<div class="chips" style="margin-top:6px"><span class="chip' + (pedIncluirRetornoAssociado ? ' chip-on' : '') + '" data-pedretorno="1">+ Com devolução/motivo associado (status Shopee diferente) — ' + nn(comRetornoAssociado.length) + '</span></div>' : '';
+    var list = (pedTab === 'CANCELADO' && pedIncluirRetornoAssociado) ? baseList.concat(comRetornoAssociado) : baseList;
     var qel = document.getElementById('ped-q'); var q = qel ? qel.value : '';
     if (q) { var ql = q.toLowerCase(); list = list.filter(function (o) { return (o.id || '').toLowerCase().indexOf(ql) >= 0 || (o.tracking || '').toLowerCase().indexOf(ql) >= 0 || o.items.some(function (i) { return (i.sku || '').toLowerCase().indexOf(ql) >= 0 || (i.productName || '').toLowerCase().indexOf(ql) >= 0; }); }); }
     if (!all.length) return emptyBox('Nenhum pedido. Importe a planilha "Order.all…" da Shopee.');
@@ -4396,12 +4403,14 @@ buffer/index.js:
         '<td>' + (f.estimatedResult == null ? '<span class="tag warn">pendente</span>' : '<b style="color:var(--ok)">' + brl(f.estimatedResult) + '</b>') + '</td><td>' + (f.estimatedMarginPct == null ? '—' : pct(f.estimatedMarginPct)) + '</td>' +
         '<td>' + (occByOrder[o.id] ? '<span class="tag warn">devolução</span>' : '') + '</td><td><button class="btn-sm" data-open="' + esc(o.id) + '">Abrir</button></td></tr>';
     }).join('');
-    return '<div class="tabs">' + tabs + '</div><div class="toolbar2"><input class="input sm" id="ped-q" style="width:280px" placeholder="Buscar ID, BR, SKU, produto…" value="' + esc(q) + '"></div>' +
-      '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos' + (list.length > 300 ? ' (mostrando 300)' : '') + '</div>' +
+    return '<div class="tabs">' + tabs + '</div>' + retornoToggle + '<div class="toolbar2"><input class="input sm" id="ped-q" style="width:280px" placeholder="Buscar ID, BR, SKU, produto…" value="' + esc(q) + '"></div>' +
+      '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos' + (list.length > 300 ? ' (mostrando 300)' : '') + (pedTab === 'CANCELADO' ? ' <span class="footnote">— ' + nn(counts.CANCELADO) + ' com status "Cancelado" da Shopee' + (pedIncluirRetornoAssociado ? ' + ' + nn(comRetornoAssociado.length) + ' com devolução/motivo associado' : '') + '</span>' : '') +
+      '</div>' +
       '<div class="panel"><div class="table-wrap"><table><thead><tr><th>Pedido</th><th>BR</th><th>Data</th><th>Status</th><th>Produto</th><th>Modalidade</th><th>Venda</th><th>Taxas</th><th>Lucro est.</th><th>Margem</th><th>Devolução</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
   }
   function bindPedidosList() {
     app.querySelectorAll('[data-ptab]').forEach(function (t) { t.onclick = function () { pedTab = t.dataset.ptab; render(); }; });
+    var rt = document.querySelector('[data-pedretorno]'); if (rt) rt.onclick = function () { pedIncluirRetornoAssociado = !pedIncluirRetornoAssociado; render(); };
     var q = document.getElementById('ped-q'); if (q) { var deb; q.oninput = function () { clearTimeout(deb); deb = setTimeout(function () { var v = q.value; renderPedidos(); var el = document.getElementById('ped-q'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 200); }; }
     app.querySelectorAll('[data-open]').forEach(function (b) { b.onclick = function () { openOrder(b.dataset.open); }; });
   }
@@ -6132,12 +6141,35 @@ buffer/index.js:
     }
     // Tier 2: sem ID de pedido no lançamento — Acelera lança o RESGATE inteiro (soma de vários
     // pedidos), então tenta casar por valor recebido do resgate consolidado + janela de 5 dias.
+    // Correção do usuário: correspondência por valor+data é só CANDIDATO — nunca fecha conciliação
+    // sozinha. confidence:'candidato' nunca entra no 🟢/🔴 automático; exige confirmação manual.
     if (cat === 'ACELERA' && acelera.length) {
       var resgates = aceleraByResgate(acelera);
       var cand = resgates.find(function (g) { if (Math.abs(g.receb - amtC) > 100) return false; if (!t.date) return true; var gd = acLocalDate(g.data); if (!gd) return true; return Math.abs(new Date(t.date) - gd) <= 5 * 864e5; });
-      if (cand) return { tier: 'Valor + janela de data', confidence: 'alta', fonte: 'Resgate ' + cand.resgate, esperado: cand.receb / 100, encontrado: t.amount, diff: 0, ok: true };
+      if (cand) return { tier: 'Valor + janela de data', confidence: 'candidato', fonte: 'Resgate ' + cand.resgate + ' (candidato — confirmar manualmente)', esperado: cand.receb / 100, encontrado: t.amount, diff: 0, ok: null };
     }
     return null;
+  }
+  // Correção do usuário (§3): não contar lançamento sem origem como "pendência real" se a fonte
+  // relevante ainda não cobre o período do lançamento — só o que está DENTRO da janela coberta e
+  // mesmo assim não bate é pendência de verdade. Cobertura = intervalo [min,max] de datas realmente
+  // importadas em cada fonte (não o período declarado no cabeçalho de um único arquivo).
+  function walletSourceCoverage() {
+    var acDates = acelera.map(function (r) { return r.data; }).filter(Boolean).sort();
+    var acRange = acDates.length ? { min: acLocalDate(acDates[0]), max: acLocalDate(acDates[acDates.length - 1]) } : null;
+    var mr = mrRenda.length ? mrEngine() : null;
+    var mrDates = mr ? mr.orders.map(function (r) { return r.dataConclusao || r.dataCriacao; }).filter(Boolean).sort() : [];
+    var mrRange = mrDates.length ? { min: new Date(mrDates[0]), max: new Date(mrDates[mrDates.length - 1]) } : null;
+    var occDates = occ.filter(function (o) { return !o.isDemo; }).map(function (o) { return o.occurredAt; }).filter(Boolean).sort();
+    var occRange = occDates.length ? { min: new Date(occDates[0]), max: new Date(occDates[occDates.length - 1]) } : null;
+    return { ACELERA: acRange, RENDA: mrRange, DEVOLUCAO: occRange, CANCELAMENTO: occRange, INDENIZACAO: occRange };
+  }
+  // true = dentro da cobertura (pendência real se não achou origem); false = fora (fonte ainda não
+  // chega até essa data — não é pendência, é lacuna de importação); null = fonte não tem NENHUM dado
+  // ainda (mesmo critério: não classificar como pendência sem ter o que comparar).
+  function walletInCoverage(t, cat, coverage) {
+    var cov = coverage[cat]; if (!cov || !t.date) return null;
+    var d = new Date(t.date); return d >= cov.min && d <= cov.max;
   }
   // Agrupa por (origem esperada normalizada, valor arredondado) — quando um MESMO evento esperado
   // aparece mais vezes do que deveria na carteira, sinaliza possível duplicidade (§31).
@@ -6226,35 +6258,50 @@ buffer/index.js:
   var WALLET_ORIGEM_CATS = { ACELERA: 1, DEVOLUCAO: 1, CANCELAMENTO: 1, INDENIZACAO: 1, RENDA: 1 };
   function walletOrigemDiag(m) {
     var elegiveis = m.real.filter(function (t) { return WALLET_ORIGEM_CATS[wEffCat(t)]; });
-    var comOrigem = [], semOrigem = [];
-    elegiveis.forEach(function (t) { var o = walletOrigin(t); if (o) comOrigem.push({ t: t, origin: o }); else semOrigem.push(t); });
-    var altaConf = comOrigem.filter(function (x) { return x.origin.confidence === 'alta'; });
+    var coverage = walletSourceCoverage();
+    var comOrigem = [], semMatch = [];
+    elegiveis.forEach(function (t) { var o = walletOrigin(t); if (o) comOrigem.push({ t: t, origin: o }); else semMatch.push(t); });
+    // fonte definitiva (Acelera/Income) e conciliação FECHADA — só ID exato entra aqui.
+    var altaConf = comOrigem.filter(function (x) { return x.origin.confidence === 'alta' && x.origin.tier === 'ID exato'; });
     var conciliados = altaConf.filter(function (x) { return x.origin.ok; });
     var divergentes = altaConf.filter(function (x) { return !x.origin.ok; });
+    // candidato por valor+data — nunca fecha sozinho, sempre exige confirmação manual (correção do usuário).
+    var candidatos = comOrigem.filter(function (x) { return x.origin.confidence === 'candidato'; });
     var estimativa = comOrigem.filter(function (x) { return x.origin.confidence === 'estimativa'; });
+    // sem match: separa o que é pendência REAL (dentro da janela coberta pela fonte) do que está
+    // fora da cobertura de conciliação (a fonte ainda não tem dado suficiente para comparar).
+    var semOrigem = [], foraCobertura = [];
+    semMatch.forEach(function (t) { var inCov = walletInCoverage(t, wEffCat(t), coverage); if (inCov === false || inCov === null) foraCobertura.push(t); else semOrigem.push(t); });
     var dup = walletDuplicidade(altaConf);
-    return { elegiveis: elegiveis.length, conciliados: conciliados, divergentes: divergentes, estimativa: estimativa, semOrigem: semOrigem, dup: dup };
+    return { elegiveis: elegiveis.length, conciliados: conciliados, divergentes: divergentes, candidatos: candidatos, estimativa: estimativa, semOrigem: semOrigem, foraCobertura: foraCobertura, dup: dup, coverage: coverage };
   }
   function walletOrigemPanel(m) {
     var g = walletOrigemDiag(m);
     if (!g.elegiveis) return '';
     var strip = kstrip([
-      { l: '🟢 Origem conciliada (fonte definitiva)', v: nn(g.conciliados.length), cls: 'green' },
-      { l: '🔴 Diferença de valor (fonte definitiva)', v: nn(g.divergentes.length), cls: g.divergentes.length ? 'red' : 'green' },
+      { l: '🟢 Origem conciliada (ID exato, fonte definitiva)', v: nn(g.conciliados.length), cls: 'green' },
+      { l: '🔴 Diferença de valor (ID exato, fonte definitiva)', v: nn(g.divergentes.length), cls: g.divergentes.length ? 'red' : 'green' },
+      { l: '🔵 Candidato provável (valor+data) — confirmar', v: nn(g.candidatos.length), cls: g.candidatos.length ? 'blue' : '', s: 'nunca fecha sozinho — exige confirmação manual' },
       { l: '🟡 Correspondência com estimativa (Devolução/Compensação)', v: nn(g.estimativa.length), cls: 'amber', s: 'valor solicitado, ainda provisório até a baixa — nunca contado como divergência' },
-      { l: '⚪ Sem origem encontrada', v: nn(g.semOrigem.length), cls: g.semOrigem.length ? 'amber' : 'green', s: nn(g.elegiveis) + ' elegíveis (Acelera/Devolução/Indenização/Renda)' },
+      { l: '⚪ Pendência real (dentro da janela coberta)', v: nn(g.semOrigem.length), cls: g.semOrigem.length ? 'amber' : 'green' },
+      { l: '⚫ Fora da cobertura de conciliação', v: nn(g.foraCobertura.length), cls: '', s: 'fonte relevante ainda não importou dado para esse período — não é pendência' },
       { l: '🔴 Possível duplicidade', v: nn(g.dup.length), cls: g.dup.length ? 'red' : 'green' },
     ]);
+    var covLine = Object.keys(g.coverage).map(function (k) { var c = g.coverage[k]; return c ? (wcatLabel(k) + ': ' + dbr(c.min.toISOString()) + ' a ' + dbr(c.max.toISOString())) : (wcatLabel(k) + ': sem dado importado ainda'); }).filter(function (v, i, a) { return a.indexOf(v) === i; }).join(' · ');
     var divRows = g.divergentes.slice(0, 100).map(function (x) { return '<tr class="rowlink" data-wtx="' + esc(x.t.id) + '"><td class="nowrap">' + dbr(x.t.date) + '</td><td class="cell-text">' + esc(x.origin.fonte) + '</td><td class="nowrap">' + brl(x.origin.esperado) + '</td><td class="nowrap">' + brl(x.t.amount) + '</td><td class="nowrap neg">' + brl(x.origin.diff) + '</td></tr>'; }).join('');
     var divTable = g.divergentes.length ? '<div class="panel"><div class="ph"><h3>🔴 Diferença de valor (Acelera/Income — fonte definitiva, origem encontrada mas o valor não bate)</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Origem esperada</th><th>Valor esperado</th><th>Valor na carteira</th><th>Diferença</th></tr></thead><tbody>' + divRows + '</tbody></table></div></div>' : '';
+    var candRows = g.candidatos.slice(0, 100).map(function (x) { return '<tr class="rowlink" data-wtx="' + esc(x.t.id) + '"><td class="nowrap">' + dbr(x.t.date) + '</td><td class="cell-text">' + esc(x.origin.fonte) + '</td><td class="nowrap">' + brl(x.t.amount) + '</td></tr>'; }).join('');
+    var candTable = g.candidatos.length ? '<div class="panel"><div class="ph"><h3>🔵 Candidatos prováveis — confirmar manualmente</h3><span class="footnote" style="margin:0">valor e janela de data batem com um resgate, mas sem ID exato no lançamento — nunca conciliado automaticamente</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Candidato</th><th>Valor na carteira</th></tr></thead><tbody>' + candRows + '</tbody></table></div></div>' : '';
     var estRows = g.estimativa.slice(0, 100).map(function (x) { return '<tr class="rowlink" data-wtx="' + esc(x.t.id) + '"><td class="nowrap">' + dbr(x.t.date) + '</td><td class="cell-text">' + esc(x.origin.fonte) + '</td><td class="nowrap">' + brl(x.origin.esperado) + '</td><td class="nowrap">' + brl(x.t.amount) + '</td></tr>'; }).join('');
     var estTable = g.estimativa.length ? '<div class="panel"><div class="ph"><h3>🟡 Correspondência encontrada — valor estimado, a conferir</h3><span class="footnote" style="margin:0">o valor esperado vem da solicitação de devolução/compensação, ainda não confirmado pela baixa — diferença aqui não é erro, é o normal até a conferência física</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Origem provável</th><th>Valor solicitado</th><th>Valor na carteira</th></tr></thead><tbody>' + estRows + '</tbody></table></div></div>' : '';
     var semRows = g.semOrigem.slice(0, 100).map(function (t) { return '<tr class="rowlink" data-wtx="' + esc(t.id) + '"><td class="nowrap">' + dbr(t.date) + '</td><td>' + esc(wcatLabel(wEffCat(t))) + '</td><td class="cell-text">' + esc((t.desc || '').slice(0, 60)) + '</td><td class="mono">' + esc(t.orderId || '—') + '</td><td class="nowrap">' + brl(t.amount) + '</td></tr>'; }).join('');
-    var semTable = g.semOrigem.length ? '<div class="panel"><div class="ph"><h3>⚪ Pendência — origem não identificada</h3><span class="footnote" style="margin:0">o sistema procurou em Acelera, Devolução, Indenização e Minha Renda e não encontrou correspondência — pode ser porque o pedido está fora do período importado nos outros módulos</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Categoria</th><th>Descrição</th><th>Pedido</th><th>Valor</th></tr></thead><tbody>' + semRows + '</tbody></table></div></div>' : '';
+    var semTable = g.semOrigem.length ? '<div class="panel"><div class="ph"><h3>⚪ Pendência real — origem não identificada</h3><span class="footnote" style="margin:0">a fonte relevante já cobre a data deste lançamento e mesmo assim não encontrou correspondência</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Categoria</th><th>Descrição</th><th>Pedido</th><th>Valor</th></tr></thead><tbody>' + semRows + '</tbody></table></div></div>' : '';
+    var foraRows = g.foraCobertura.slice(0, 100).map(function (t) { return '<tr class="rowlink" data-wtx="' + esc(t.id) + '"><td class="nowrap">' + dbr(t.date) + '</td><td>' + esc(wcatLabel(wEffCat(t))) + '</td><td class="cell-text">' + esc((t.desc || '').slice(0, 60)) + '</td><td class="mono">' + esc(t.orderId || '—') + '</td><td class="nowrap">' + brl(t.amount) + '</td></tr>'; }).join('');
+    var foraTable = g.foraCobertura.length ? '<div class="panel"><div class="ph"><h3>⚫ Fora da cobertura de conciliação</h3><span class="footnote" style="margin:0">' + esc(covLine || 'sem cobertura calculada') + '</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Categoria</th><th>Descrição</th><th>Pedido</th><th>Valor</th></tr></thead><tbody>' + foraRows + '</tbody></table></div></div>' : '';
     var dupRows = g.dup.map(function (d) { return '<tr><td class="cell-text">' + esc(d.fonte) + '</td><td class="nowrap">' + brl(d.valor) + '</td><td>' + nn(d.itens.length) + '× na carteira</td></tr>'; }).join('');
     var dupTable = g.dup.length ? '<div class="panel"><div class="ph"><h3>🔴 Possível cobrança duplicada</h3><span class="footnote" style="margin:0">mesma origem esperada (fonte definitiva) apareceu mais de uma vez com o mesmo valor</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Origem esperada</th><th>Valor</th><th>Ocorrências</th></tr></thead><tbody>' + dupRows + '</tbody></table></div></div>' : '';
-    var nota = callout('', 'Origem automática', 'Para cada lançamento (Acelera, Devolução, Indenização, Renda), o sistema procura a origem esperada no próprio sistema por ID do pedido — e, quando o lançamento é um resgate inteiro do Acelera (sem ID de pedido único), por valor + janela de data. Acelera e Minha Renda/Income são fontes definitivas (🟢/🔴); Devolução e Compensação usam o valor solicitado, ainda provisório até a baixa — por isso aparecem à parte, nunca como divergência. Nunca soma o mesmo evento duas vezes: a carteira só confirma se o evento esperado aconteceu.');
-    return nota + strip + divTable + estTable + semTable + dupTable;
+    var nota = callout('', 'Origem automática', 'Para cada lançamento (Acelera, Devolução, Indenização, Renda), o sistema procura a origem esperada por ID exato do pedido — só ID/chave forte fecha conciliação automaticamente. Quando o lançamento é um resgate inteiro do Acelera (sem ID de pedido único), o sistema só sugere um CANDIDATO por valor+data, que precisa de confirmação manual. Acelera e Minha Renda/Income são fontes definitivas (🟢/🔴); Devolução e Compensação usam o valor solicitado, ainda provisório até a baixa. Lançamentos fora da janela de dados já importada em cada fonte não viram pendência — ficam marcados como fora da cobertura. Nunca soma o mesmo evento duas vezes: a carteira só confirma se o evento esperado aconteceu.' + (covLine ? '<div class="footnote" style="margin-top:6px">Cobertura atual: ' + esc(covLine) + '</div>' : ''));
+    return nota + strip + divTable + candTable + estTable + semTable + foraTable + dupTable;
   }
 
   function renderCarteira() {
