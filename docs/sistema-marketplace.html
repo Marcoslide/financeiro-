@@ -6095,6 +6095,57 @@ buffer/index.js:
     });
     return { txs: out, diffs: diffs };
   }
+  // ---- Fase 1 da arquitetura (§26-30/§53-55): motor de origem por ID ----
+  // Para cada lançamento, busca a origem esperada no próprio sistema, por prioridade determinística:
+  // (1) ID exato — pedido ligado a um registro do Acelera/Devolução/Minha Renda com o mesmo ID;
+  // (2) relacionamento conhecido — sem ID exato no lançamento, mas valor+janela de data batem com um
+  // resgate consolidado do Acelera (o extrato da carteira lança o resgate inteiro, não pedido a pedido);
+  // (3) sem origem — vira pendência. NUNCA substitui reconcileWallet() (que audita a matemática do
+  // saldo do extrato) — é uma camada adicional que audita CADA LANÇAMENTO contra as fontes internas.
+  // Aditivo: não altera wgetCls/wEffCat/wLinkedOcc nem qualquer classificação manual já aprovada.
+  // confidence: 'alta' → fonte que a própria Shopee já fechou (Acelera "recebido", Income "Pagamento
+  // Liberado") — entra na dicotomia estrita 🟢 conciliado / 🔴 divergente. confidence: 'estimativa' →
+  // fonte ainda provisória (Devolução usa o valor SOLICITADO, que o próprio módulo já rotula como
+  // "resultado provisório" até a baixa/conferência) — NUNCA vira "divergência", só "correspondência
+  // encontrada, valor a conferir": comparar um extrato real contra uma estimativa e chamar de erro
+  // seria inventar divergência, o que a regra de ouro do sistema proíbe.
+  function walletOrigin(t) {
+    var cat = wEffCat(t); var oid = (wgetCls(t.id) && wgetCls(t.id).linkedOrderId) || t.orderId;
+    var amtC = Math.round(t.amount * 100);
+    if (oid) {
+      if (cat === 'ACELERA' && acelera.length) {
+        var acRecs = acelera.filter(function (r) { return r.pedido === oid; });
+        if (acRecs.length) { var recebC = acRecs.reduce(function (s, r) { return s + r.recebido; }, 0); return { tier: 'ID exato', confidence: 'alta', fonte: 'Shopee Acelera · pedido ' + oid, esperado: recebC / 100, encontrado: t.amount, diff: r2(t.amount - recebC / 100), ok: Math.abs(amtC - recebC) <= 100 }; }
+      }
+      if ((cat === 'DEVOLUCAO' || cat === 'CANCELAMENTO') && occ.length) {
+        var oc = occ.find(function (o) { return !o.isDemo && o.orderId === oid; });
+        if (oc && oc.impact && oc.impact.refundedTotal > 0) { return { tier: 'ID exato', confidence: 'estimativa', fonte: 'Devolução ' + oc.id + ' (valor solicitado, provisório até a baixa)', esperado: -oc.impact.refundedTotal, encontrado: t.amount, diff: r2(t.amount + oc.impact.refundedTotal), ok: null }; }
+      }
+      if (cat === 'INDENIZACAO' && occ.length) {
+        var oc2 = occ.find(function (o) { return !o.isDemo && o.orderId === oid; });
+        if (oc2 && oc2.impact && oc2.impact.recoveredTotal > 0) { return { tier: 'ID exato', confidence: 'estimativa', fonte: 'Compensação — Devolução ' + oc2.id + ' (provisório)', esperado: oc2.impact.recoveredTotal, encontrado: t.amount, diff: r2(t.amount - oc2.impact.recoveredTotal), ok: null }; }
+      }
+      if (cat === 'RENDA' && mrRenda.length) {
+        var mr = mrEngine(); var mrow = mr.orders.find(function (r) { return r.orderId === oid; });
+        if (mrow) { return { tier: 'ID exato', confidence: 'alta', fonte: 'Minha Renda / Income · pedido ' + oid, esperado: mrow.liberado / 100, encontrado: t.amount, diff: r2(t.amount - mrow.liberado / 100), ok: Math.abs(amtC - mrow.liberado) <= 100 }; }
+      }
+    }
+    // Tier 2: sem ID de pedido no lançamento — Acelera lança o RESGATE inteiro (soma de vários
+    // pedidos), então tenta casar por valor recebido do resgate consolidado + janela de 5 dias.
+    if (cat === 'ACELERA' && acelera.length) {
+      var resgates = aceleraByResgate(acelera);
+      var cand = resgates.find(function (g) { if (Math.abs(g.receb - amtC) > 100) return false; if (!t.date) return true; var gd = acLocalDate(g.data); if (!gd) return true; return Math.abs(new Date(t.date) - gd) <= 5 * 864e5; });
+      if (cand) return { tier: 'Valor + janela de data', confidence: 'alta', fonte: 'Resgate ' + cand.resgate, esperado: cand.receb / 100, encontrado: t.amount, diff: 0, ok: true };
+    }
+    return null;
+  }
+  // Agrupa por (origem esperada normalizada, valor arredondado) — quando um MESMO evento esperado
+  // aparece mais vezes do que deveria na carteira, sinaliza possível duplicidade (§31).
+  function walletDuplicidade(txsComOrigem) {
+    var map = {};
+    txsComOrigem.forEach(function (x) { if (!x.origin) return; var key = x.origin.fonte + '|' + Math.round(x.t.amount * 100); var g = map[key] = map[key] || { fonte: x.origin.fonte, valor: x.t.amount, itens: [] }; g.itens.push(x.t); });
+    return Object.values(map).filter(function (g) { return g.itens.length > 1; });
+  }
   function walletCurrentBalance() { var withBal = wallet.filter(function (t) { return t.balance != null && t.date; }).sort(function (a, b) { return (a.date).localeCompare(b.date); }); return withBal.length ? withBal[withBal.length - 1].balance : 0; }
   function walletCurrentAdjust() { var withAdj = wallet.filter(function (t) { return t.adjust != null && t.date; }).sort(function (a, b) { return (a.date).localeCompare(b.date); }); return withAdj.length ? withAdj[withAdj.length - 1].adjust : 0; }
   function walletTxInPeriod(txs) { return txs.filter(function (t) { return inPeriod(t.date); }); }
@@ -6167,6 +6218,44 @@ buffer/index.js:
   }
   function monthDayLabel(d) { var p = d.split('-'); return p[2] + '/' + p[1]; }
   var RECON_LABEL = { FECHADO: ['Fechado', 'ok'], EXPLICADO: ['Explicado', 'info'], PROVAVEL: ['Provável ajuste', 'warn'], DIVERGENTE: ['Divergente', 'warn'] };
+  // §26-32 — "Origem automática": para cada lançamento real (não reconstruído), tenta achar a origem
+  // esperada por ID; classifica 🟢 conciliado / 🔴 diferença de valor / ⚪ sem origem encontrada.
+  // Só avalia categorias com fonte de comparação (Acelera/Devolução/Indenização/Renda) — as demais
+  // (Pix, Saque, Ads, Ajuste, etc.) não têm um valor esperado no sistema hoje e ficam fora da conta,
+  // nunca viram "pendência" por engano.
+  var WALLET_ORIGEM_CATS = { ACELERA: 1, DEVOLUCAO: 1, CANCELAMENTO: 1, INDENIZACAO: 1, RENDA: 1 };
+  function walletOrigemDiag(m) {
+    var elegiveis = m.real.filter(function (t) { return WALLET_ORIGEM_CATS[wEffCat(t)]; });
+    var comOrigem = [], semOrigem = [];
+    elegiveis.forEach(function (t) { var o = walletOrigin(t); if (o) comOrigem.push({ t: t, origin: o }); else semOrigem.push(t); });
+    var altaConf = comOrigem.filter(function (x) { return x.origin.confidence === 'alta'; });
+    var conciliados = altaConf.filter(function (x) { return x.origin.ok; });
+    var divergentes = altaConf.filter(function (x) { return !x.origin.ok; });
+    var estimativa = comOrigem.filter(function (x) { return x.origin.confidence === 'estimativa'; });
+    var dup = walletDuplicidade(altaConf);
+    return { elegiveis: elegiveis.length, conciliados: conciliados, divergentes: divergentes, estimativa: estimativa, semOrigem: semOrigem, dup: dup };
+  }
+  function walletOrigemPanel(m) {
+    var g = walletOrigemDiag(m);
+    if (!g.elegiveis) return '';
+    var strip = kstrip([
+      { l: '🟢 Origem conciliada (fonte definitiva)', v: nn(g.conciliados.length), cls: 'green' },
+      { l: '🔴 Diferença de valor (fonte definitiva)', v: nn(g.divergentes.length), cls: g.divergentes.length ? 'red' : 'green' },
+      { l: '🟡 Correspondência com estimativa (Devolução/Compensação)', v: nn(g.estimativa.length), cls: 'amber', s: 'valor solicitado, ainda provisório até a baixa — nunca contado como divergência' },
+      { l: '⚪ Sem origem encontrada', v: nn(g.semOrigem.length), cls: g.semOrigem.length ? 'amber' : 'green', s: nn(g.elegiveis) + ' elegíveis (Acelera/Devolução/Indenização/Renda)' },
+      { l: '🔴 Possível duplicidade', v: nn(g.dup.length), cls: g.dup.length ? 'red' : 'green' },
+    ]);
+    var divRows = g.divergentes.slice(0, 100).map(function (x) { return '<tr class="rowlink" data-wtx="' + esc(x.t.id) + '"><td class="nowrap">' + dbr(x.t.date) + '</td><td class="cell-text">' + esc(x.origin.fonte) + '</td><td class="nowrap">' + brl(x.origin.esperado) + '</td><td class="nowrap">' + brl(x.t.amount) + '</td><td class="nowrap neg">' + brl(x.origin.diff) + '</td></tr>'; }).join('');
+    var divTable = g.divergentes.length ? '<div class="panel"><div class="ph"><h3>🔴 Diferença de valor (Acelera/Income — fonte definitiva, origem encontrada mas o valor não bate)</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Origem esperada</th><th>Valor esperado</th><th>Valor na carteira</th><th>Diferença</th></tr></thead><tbody>' + divRows + '</tbody></table></div></div>' : '';
+    var estRows = g.estimativa.slice(0, 100).map(function (x) { return '<tr class="rowlink" data-wtx="' + esc(x.t.id) + '"><td class="nowrap">' + dbr(x.t.date) + '</td><td class="cell-text">' + esc(x.origin.fonte) + '</td><td class="nowrap">' + brl(x.origin.esperado) + '</td><td class="nowrap">' + brl(x.t.amount) + '</td></tr>'; }).join('');
+    var estTable = g.estimativa.length ? '<div class="panel"><div class="ph"><h3>🟡 Correspondência encontrada — valor estimado, a conferir</h3><span class="footnote" style="margin:0">o valor esperado vem da solicitação de devolução/compensação, ainda não confirmado pela baixa — diferença aqui não é erro, é o normal até a conferência física</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Origem provável</th><th>Valor solicitado</th><th>Valor na carteira</th></tr></thead><tbody>' + estRows + '</tbody></table></div></div>' : '';
+    var semRows = g.semOrigem.slice(0, 100).map(function (t) { return '<tr class="rowlink" data-wtx="' + esc(t.id) + '"><td class="nowrap">' + dbr(t.date) + '</td><td>' + esc(wcatLabel(wEffCat(t))) + '</td><td class="cell-text">' + esc((t.desc || '').slice(0, 60)) + '</td><td class="mono">' + esc(t.orderId || '—') + '</td><td class="nowrap">' + brl(t.amount) + '</td></tr>'; }).join('');
+    var semTable = g.semOrigem.length ? '<div class="panel"><div class="ph"><h3>⚪ Pendência — origem não identificada</h3><span class="footnote" style="margin:0">o sistema procurou em Acelera, Devolução, Indenização e Minha Renda e não encontrou correspondência — pode ser porque o pedido está fora do período importado nos outros módulos</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Categoria</th><th>Descrição</th><th>Pedido</th><th>Valor</th></tr></thead><tbody>' + semRows + '</tbody></table></div></div>' : '';
+    var dupRows = g.dup.map(function (d) { return '<tr><td class="cell-text">' + esc(d.fonte) + '</td><td class="nowrap">' + brl(d.valor) + '</td><td>' + nn(d.itens.length) + '× na carteira</td></tr>'; }).join('');
+    var dupTable = g.dup.length ? '<div class="panel"><div class="ph"><h3>🔴 Possível cobrança duplicada</h3><span class="footnote" style="margin:0">mesma origem esperada (fonte definitiva) apareceu mais de uma vez com o mesmo valor</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Origem esperada</th><th>Valor</th><th>Ocorrências</th></tr></thead><tbody>' + dupRows + '</tbody></table></div></div>' : '';
+    var nota = callout('', 'Origem automática', 'Para cada lançamento (Acelera, Devolução, Indenização, Renda), o sistema procura a origem esperada no próprio sistema por ID do pedido — e, quando o lançamento é um resgate inteiro do Acelera (sem ID de pedido único), por valor + janela de data. Acelera e Minha Renda/Income são fontes definitivas (🟢/🔴); Devolução e Compensação usam o valor solicitado, ainda provisório até a baixa — por isso aparecem à parte, nunca como divergência. Nunca soma o mesmo evento duas vezes: a carteira só confirma se o evento esperado aconteceu.');
+    return nota + strip + divTable + estTable + semTable + dupTable;
+  }
 
   function renderCarteira() {
     app.innerHTML = devPeriodBar() +
@@ -6233,8 +6322,9 @@ buffer/index.js:
     // BLOCO 7 — gráfico
     var series = walletSaldoSeries();
     var chart = chartCard('Fluxo da carteira — evolução do saldo', legendSwatch([['Saldo', '#2b4bd6'], ['Valor a ajustar', '#e0662a']]), svgWalletLine(series, { two: true }));
+    var origemPanel = walletOrigemPanel(m);
     return secHead('SALDO DA CARTEIRA', 'Raio-X da carteira', 'Onde o dinheiro está vazando: quanto, quantas vezes, por quê, em quais pedidos, de quem é a responsabilidade e o que ainda não conseguimos explicar.') +
-      band + conf + bloco2 + bloco3 + bloco4 + bloco5 + bloco6 + chart;
+      band + conf + bloco2 + bloco3 + bloco4 + bloco5 + bloco6 + chart + origemPanel;
   }
   var WFLOW_LABEL = { pedido: 'Ligados a um pedido', devolucao: 'Ligados a uma devolução', sempedido: 'Saídas sem pedido', semcat: 'Saídas sem categoria', precisa: 'Precisam de análise' };
   function walletMov() {
