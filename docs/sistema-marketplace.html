@@ -4261,16 +4261,63 @@ buffer/index.js:
     var ts = dadosAtualizadosAte();
     return '<div class="footnote" style="margin:4px 0 12px">📅 Dados atualizados até: <b>' + (ts ? new Date(ts).toLocaleString('pt-BR') : 'sem pedidos importados') + '</b> — a Shopee só exporta até o momento do download, este sistema não é tempo real.</div>';
   }
+  // §56-58/§61-62 — Dashboard como funil operacional: VENDEU → PRECISA ENVIAR → FOI EXPEDIDO → FOI
+  // ANTECIPADO → FOI RECEBIDO → FOI CONCILIADO. Cada etapa usa o conceito de data que já é o correto
+  // para aquele estágio (venda = pagamento; expedição = bipe; Acelera = data consolidada do resgate;
+  // carteira = data do lançamento — nunca uma data genérica única, §58). Cada etapa é clicável e leva
+  // direto ao módulo que já responde por aquele estágio — nenhuma lógica de conciliação nova aqui,
+  // só reaproveita pedidoConciliacaoStatus()/walletOrigin() já existentes.
+  function dashboardFunil() {
+    var vendidos = pedidosPagosInPeriod();
+    var aEnviar = vendidos.filter(function (o) { return o.normalizedStatus === 'A_ENVIAR'; });
+    var bipados = vendidos.filter(function (o) { return !!shipBip[o.id]; });
+    var acPedidosSet = {}; acelera.forEach(function (r) { acPedidosSet[r.pedido] = true; });
+    var antecipados = bipados.filter(function (o) { return acPedidosSet[o.id]; });
+    var recebidos = antecipados.filter(function (o) {
+      var wtx = wallet.filter(function (t) { return t.orderId === o.id && WALLET_ORIGEM_CATS[wEffCat(t)]; });
+      return wtx.some(function (t) { var org = walletOrigin(t); return org && org.confidence === 'alta' && org.ok; });
+    });
+    var conciliados = vendidos.filter(function (o) { return pedidoConciliacaoStatus(o.id).code === 'CONCILIADO'; });
+    var revTotal = 0, revConc = 0;
+    vendidos.forEach(function (o) { var rv = orderFinance(o).revenue || 0; revTotal += rv; });
+    conciliados.forEach(function (o) { revConc += orderFinance(o).revenue || 0; });
+    var pctConciliado = revTotal ? r2(revConc / revTotal * 100) : null;
+    return { vendidos: vendidos, aEnviar: aEnviar, bipados: bipados, antecipados: antecipados, recebidos: recebidos, conciliados: conciliados, revTotal: r2(revTotal), revConc: r2(revConc), pctConciliado: pctConciliado };
+  }
+  function dashboardFunilPanel() {
+    var f = dashboardFunil();
+    var step = function (label, n, base, go, dataHint) { var pctv = base ? r2(n / base * 100) : null; return '<div class="kc" style="cursor:pointer" data-dashgo="' + go + '"><div class="kl">' + label + '</div><div class="kv" style="font-size:18px">' + nn(n) + '</div><div class="ks">' + (pctv != null ? pct(pctv) + ' · ' : '') + esc(dataHint) + '</div></div>'; };
+    var strip = '<div class="kstrip" style="box-shadow:none;border:none">' +
+      step('Vendeu', f.vendidos.length, null, 'pedidos', 'data de pagamento') +
+      step('Precisa enviar', f.aEnviar.length, f.vendidos.length, 'expedicao', 'status Shopee = A Enviar') +
+      step('Foi expedido', f.bipados.length, f.vendidos.length, 'expedicao', 'bipe confirmado') +
+      step('Foi antecipado', f.antecipados.length, f.bipados.length, 'acelera', 'encontrado no Acelera') +
+      step('Foi recebido', f.recebidos.length, f.antecipados.length, 'carteira', 'confirmado na Carteira') +
+      step('Foi conciliado', f.conciliados.length, f.vendidos.length, 'carteirapend', 'Renda+Acelera+Carteira batem') +
+      '</div>';
+    var indicador = f.pctConciliado != null ? callout(f.pctConciliado >= 95 ? 'green' : 'warn', '% Financeiro Conciliado: ' + pct(f.pctConciliado), 'Receita total do período: <b>' + brl(f.revTotal) + '</b> · Conciliado: <b>' + brl(f.revConc) + '</b> · Pendente/não identificado: <b>' + brl(r2(f.revTotal - f.revConc)) + '</b>') : '';
+    return '<div class="panel"><div class="ph"><h3>Funil operacional</h3><span class="footnote" style="margin:0">cada etapa usa a data que faz sentido para ela — venda=pagamento, expedição=bipe, Acelera=resgate, carteira=lançamento</span></div><div class="pb">' + strip + '</div></div>' + indicador;
+  }
   function renderDashboard() {
     var a = computeOrderAgg(); var o = occInPeriod(); var exposure = sumExposure(o);
     var empty = orders.length === 0 && occ.length === 0 && (!Produtos || Produtos.getData().products.length === 0);
     app.innerHTML =
       '<div class="page-head"><div><h2>Visão geral</h2><p>Panorama de vendas e devoluções — números auditáveis, sem estimativas inventadas.</p></div></div>' +
       (empty ? banner('Comece importando planilhas em <b>Produtos</b>, <b>Pedidos</b> e <b>Devolução</b>. Os módulos se conectam automaticamente (SKU→família→custo e pedido↔devolução).') : '') +
+      (empty ? '' : dashboardFunilPanel()) +
       '<div class="cards6">' + fcard('Venda real', brl(a.revenue), 'blue', nn(a.orders) + ' pedidos') + fcard('Unidades', nn(a.units), '') + fcard('Taxas marketplace', brl(a.fees), 'red') + fcard('Custo produtos', brl(a.cost), 'amber') + fcard('Resultado estimado', brl(a.result), 'green', a.costPending ? a.costPending + ' pedidos c/ custo pendente' : 'custo completo') + fcard('Margem estimada', a.revenue ? pct((a.result / a.revenue) * 100) : '—', '') + '</div>' +
       '<div class="cards6">' + fcard('A enviar', nn(a.byStatus.A_ENVIAR || 0), 'amber') + fcard('Enviados', nn(a.byStatus.ENVIADO || 0), 'blue') + fcard('Concluídos', nn(a.byStatus.CONCLUIDO || 0), 'green') + fcard('Cancelados', nn(a.byStatus.CANCELADO || 0), 'red') + fcard('Devoluções', nn(o.length), '') + fcard('Prejuízo confirmado', brl(exposure.confirmedLoss), 'red') + '</div>' +
       '<div class="cards6">' + fcard('SKUs sem vínculo', nn(a.unlinked) + ' pedidos', 'amber') + fcard('Custo pendente', nn(a.costPending) + ' pedidos', 'amber') + fcard('Em risco (devolução)', brl(exposure.atRisk), 'amber') + '</div>' +
       panelImports();
+    app.querySelectorAll('[data-dashgo]').forEach(function (b) { b.onclick = function () {
+      var go = b.dataset.dashgo;
+      if (go === 'pedidos') { route = 'pedidos'; sub.pedidos = 'pedidos'; }
+      else if (go === 'expedicao') { route = 'pedidos'; sub.pedidos = 'expedicao'; }
+      else if (go === 'acelera') { route = 'acelera'; aceleraSub = 'expedidos'; }
+      else if (go === 'carteira') { route = 'carteira'; walletSub = 'visao'; }
+      else if (go === 'carteirapend') { route = 'carteira'; walletSub = 'pendencias'; }
+      render();
+    }; });
   }
 
   // ---------- PEDIDOS ----------
