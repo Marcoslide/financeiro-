@@ -3794,8 +3794,11 @@ buffer/index.js:
   var skuCost = {}; // sku(lower) -> { linked:true, cost:number|null, familyName:string|null }
   var lastImportStamp = null; // "Atualizado com dados até…" (§31)
   var wallet = [];            // extrato da carteira (linhas SHOPEE; reconstruídas são calculadas)
-  var walletCls = {};         // classificação INTERNA por id (separada do dado Shopee; preservada na reimportação)
-  var walletSub = 'visao';    // sub-aba da Carteira: visao | mov | ajustes
+  var walletCls = {};         // classificação INTERNA por id (separada do dado Shopee; preservada na reimportação) —
+  // reaproveitada como o ciclo de vida de pendências (§39/§63): internalStatus/history já são exatamente
+  // "status da pendência + quem mudou + quando", nunca recriamos um segundo mecanismo para a mesma coisa.
+  var walletClose = {};       // Fase 3 (§35-38): fechamento de caixa diário, por data (YYYY-MM-DD) — nunca apagado na reimportação
+  var walletSub = 'visao';    // sub-aba da Carteira: visao | mov | ajustes | pendencias | fechamento
   var walletF = { search: '', cat: '', flow: '' }; // filtros da tabela de movimentações
   var walletStamp = null;     // "atualizado até" da carteira
   var Produtos = null;
@@ -3982,7 +3985,7 @@ buffer/index.js:
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -6350,14 +6353,104 @@ buffer/index.js:
     return nota + strip + divTable + candTable + estTable + semTable + foraTable + dupTable;
   }
 
+  // §39/§63 — Central de Pendências: reaproveita o mecanismo já aprovado de classificação interna
+  // (wgetCls/wsetCls/WSTATUS — ciclo de vida por lançamento com histórico, nunca apagado na
+  // reimportação) sobre os itens que a Fase 1 (walletOrigemDiag) e o raio-x (walletDiag) já
+  // identificam como precisando de atenção. Não cria um segundo mecanismo de status para a mesma coisa.
+  var walletPendF = { status: '' };
+  function walletPendItems(m) {
+    var g = walletOrigemDiag(m); var seen = {}; var items = [];
+    function add(t, motivo, detalhe) { if (seen[t.id]) return; seen[t.id] = true; items.push({ t: t, motivo: motivo, detalhe: detalhe }); }
+    g.divergentes.forEach(function (x) { add(x.t, 'Diferença de valor — ' + x.origin.fonte, 'Esperado ' + brl(x.origin.esperado) + ' · Carteira ' + brl(x.t.amount) + ' · Diferença ' + brl(x.origin.diff)); });
+    g.dup.forEach(function (d) { d.itens.forEach(function (t) { add(t, 'Possível cobrança duplicada — ' + d.fonte, nn(d.itens.length) + '× o mesmo valor (' + brl(d.valor) + ') na carteira'); }); });
+    g.semOrigem.forEach(function (t) { add(t, 'Origem não identificada (' + wcatLabel(wEffCat(t)) + ')', 'Fonte relevante já cobre esta data e mesmo assim não achou correspondência'); });
+    var diag = walletDiag(m);
+    diag.divergentes.forEach(function (d) { add(d.tx, 'Diferença de saldo do extrato (reconciliação matemática)', 'Esperado ' + brl(d.expected) + ' · Informado ' + brl(d.informed) + ' · Diferença ' + brl(d.gap)); });
+    return items;
+  }
+  function walletPendencias() {
+    var m = walletMetrics(); var items = walletPendItems(m);
+    var counts = {}; items.forEach(function (it) { var s = wStatus(it.t); counts[s] = (counts[s] || 0) + 1; });
+    var head = secHead('CARTEIRA · CENTRAL DE PENDÊNCIAS', 'O que ainda precisa de decisão', 'Junta tudo que a conciliação automática não conseguiu fechar sozinha — diferença de valor, possível duplicidade e origem não identificada — com o mesmo status interno usado no resto da Carteira (nunca apagado ao reimportar).');
+    var strip = kstrip(Object.keys(WSTATUS).map(function (k) { return { l: WSTATUS[k], v: nn(counts[k] || 0), cls: k === 'RESOLVIDO' ? 'green' : (k === 'NAO_REVISADO' && counts[k] ? 'amber' : '') }; }).concat([{ l: 'Total de pendências', v: nn(items.length), cls: items.length ? 'red' : 'green' }]));
+    var chips = '<div class="chips" style="margin-top:8px"><span class="chip' + (!walletPendF.status ? ' chip-on' : '') + '" data-pendst="">Todas (' + nn(items.length) + ')</span>' + Object.keys(WSTATUS).map(function (k) { return '<span class="chip' + (walletPendF.status === k ? ' chip-on' : '') + '" data-pendst="' + k + '">' + WSTATUS[k] + ' (' + nn(counts[k] || 0) + ')</span>'; }).join('') + '</div>';
+    var filtered = walletPendF.status ? items.filter(function (it) { return wStatus(it.t) === walletPendF.status; }) : items;
+    var rows = filtered.slice(0, 300).map(function (it) { return '<tr class="rowlink" data-wtx="' + esc(it.t.id) + '"><td class="nowrap">' + dbr(it.t.date) + '</td><td class="cell-text">' + esc(it.motivo) + '</td><td class="cell-text">' + esc(it.detalhe) + '</td><td class="nowrap">' + brl(it.t.amount) + '</td><td><span class="tag ' + (wStatus(it.t) === 'RESOLVIDO' || wStatus(it.t) === 'EXPLICADO' ? 'ok' : 'neutral') + '">' + esc(WSTATUS[wStatus(it.t)]) + '</span></td></tr>'; }).join('');
+    var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Motivo</th><th>Detalhe</th><th>Valor</th><th>Status</th></tr></thead><tbody>' + (rows || '<tr><td colspan="5" class="empty">Nenhuma pendência neste filtro. 🎉</td></tr>') + '</tbody></table></div></div>';
+    return head + strip + chips + '<div class="count-line" style="margin-top:8px"><b>' + nn(filtered.length) + '</b> pendência(s)</div>' + table;
+  }
+  function bindWalletPendencias() {
+    app.querySelectorAll('[data-pendst]').forEach(function (c) { c.onclick = function () { walletPendF.status = c.dataset.pendst; render(); }; });
+  }
+
+  // §35-38 — Fechamento de Caixa Diário: confere se as entradas/saídas do dia estão classificadas e
+  // explicadas. Nunca recalcula o resultado do negócio — só usa os mesmos wIsExplained()/wStatus()
+  // já aprovados. O snapshot do fechamento é gravado (walletclose, nunca apagado); se dado retroativo
+  // chegar depois, o dia aparece como "recebeu atualização posterior" sem apagar o registro anterior.
+  var CLOSE_LABEL = { ABERTO: ['Aberto', 'neutral'], COM_PENDENCIAS: ['Com pendências', 'warn'], FECHADO: ['Fechado', 'ok'] };
+  function walletDayMetrics(dateKey) {
+    var txs = wallet.filter(function (t) { return t.date && t.date.slice(0, 10) === dateKey && t.origin === 'SHOPEE'; });
+    var entradas = 0, saidas = 0, conciliado = 0, pendente = 0, pendN = 0;
+    txs.forEach(function (t) { if (t.amount > 0) entradas += t.amount; else saidas += t.amount; if (wIsExplained(t)) conciliado += Math.abs(t.amount); else { pendente += Math.abs(t.amount); pendN++; } });
+    return { dateKey: dateKey, n: txs.length, entradas: r2(entradas), saidas: r2(saidas), liquido: r2(entradas + saidas), conciliado: r2(conciliado), pendente: r2(pendente), pendN: pendN };
+  }
+  function walletCloseDay(dateKey, userName, obs) {
+    var dm = walletDayMetrics(dateKey);
+    var status = dm.pendN === 0 ? 'FECHADO' : 'COM_PENDENCIAS';
+    var rec = walletClose[dateKey] || { id: dateKey, history: [] };
+    var at = new Date().toISOString();
+    rec.status = status; rec.closedBy = userName || 'Operador'; rec.closedAt = at;
+    rec.snapshot = { entradas: dm.entradas, saidas: dm.saidas, conciliado: dm.conciliado, pendente: dm.pendente, n: dm.n, pendN: dm.pendN };
+    rec.obs = obs || null;
+    rec.history = rec.history || []; rec.history.unshift({ at: at, user: rec.closedBy, status: status, obs: obs || null, n: dm.n, pendN: dm.pendN });
+    walletClose[dateKey] = rec; return putMany('walletclose', [rec]);
+  }
+  function walletFechamento() {
+    var days = {}; wallet.forEach(function (t) { if (t.date && t.origin === 'SHOPEE') days[t.date.slice(0, 10)] = 1; });
+    var head = secHead('CARTEIRA · FECHAMENTO DE CAIXA', 'Conferência diária', 'Para cada dia: entradas, saídas, quanto já está classificado/explicado e quanto ainda falta — feche o dia quando estiver tudo certo, ou registre com pendências e justifique.');
+    if (!Object.keys(days).length) return head + emptyBox('Nenhuma movimentação real (Shopee) importada ainda.');
+    var list = Object.keys(days).sort().reverse().slice(0, 60).map(function (dk) {
+      var dm = walletDayMetrics(dk); var rec = walletClose[dk] || null;
+      var atualizadoDepois = rec && rec.snapshot && (rec.snapshot.n !== dm.n);
+      var statusAoVivo = rec ? rec.status : (dm.pendN === 0 ? 'FECHADO' : 'ABERTO');
+      return { dm: dm, rec: rec, atualizadoDepois: atualizadoDepois, statusAoVivo: statusAoVivo };
+    });
+    var abertos = list.filter(function (x) { return !x.rec; }).length;
+    var comPend = list.filter(function (x) { return x.rec && x.rec.status === 'COM_PENDENCIAS'; }).length;
+    var fechados = list.filter(function (x) { return x.rec && x.rec.status === 'FECHADO'; }).length;
+    var desatualizados = list.filter(function (x) { return x.atualizadoDepois; }).length;
+    var strip = kstrip([
+      { l: 'Dias fechados', v: nn(fechados), cls: 'green' },
+      { l: 'Dias com pendências', v: nn(comPend), cls: comPend ? 'amber' : 'green' },
+      { l: 'Dias ainda não revisados', v: nn(abertos), cls: abertos ? 'blue' : 'green' },
+      { l: 'Fechamentos com dado novo depois', v: nn(desatualizados), cls: desatualizados ? 'red' : 'green', s: 'reabra e feche de novo' },
+    ]);
+    var rows = list.map(function (x) {
+      var dm = x.dm, rec = x.rec; var lbl = CLOSE_LABEL[x.statusAoVivo];
+      return '<tr' + (x.atualizadoDepois ? ' style="background:#fdf1e9"' : '') + '><td class="nowrap">' + dbr(dm.dateKey) + '</td><td class="nowrap">' + brl(dm.entradas) + '</td><td class="nowrap">' + brl(dm.saidas) + '</td><td class="nowrap">' + brl(dm.liquido) + '</td><td class="nowrap">' + brl(dm.conciliado) + '</td><td class="nowrap' + (dm.pendente ? ' neg' : '') + '">' + brl(dm.pendente) + ' (' + nn(dm.pendN) + ')</td><td><span class="tag ' + lbl[1] + '">' + lbl[0] + '</span>' + (x.atualizadoDepois ? ' <span class="tag warn">⚠ atualizado depois</span>' : '') + '</td><td>' + (rec ? esc(rec.closedBy) + ' · ' + new Date(rec.closedAt).toLocaleString('pt-BR') : '—') + '</td><td><button class="btn-sm" data-wclose="' + esc(dm.dateKey) + '">' + (rec ? 'Refazer' : 'Fechar o dia') + '</button></td></tr>';
+    }).join('');
+    var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Dia</th><th>Entradas</th><th>Saídas</th><th>Líquido</th><th>Conciliado</th><th>Pendente</th><th>Status</th><th>Fechado por</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+    return head + strip + table;
+  }
+  function bindWalletFechamento() {
+    app.querySelectorAll('[data-wclose]').forEach(function (b) { b.onclick = function () {
+      var dk = b.dataset.wclose; var dm = walletDayMetrics(dk);
+      var obs = null;
+      if (dm.pendN > 0) { obs = prompt(nn(dm.pendN) + ' lançamento(s) deste dia ainda não estão explicados (total ' + brl(dm.pendente) + '). Descreva o motivo para fechar mesmo assim com pendências:'); if (obs == null) return; }
+      walletCloseDay(dk, 'Operador', obs).then(function () { render(); toast('Fechamento registrado', dbr(dk) + (dm.pendN > 0 ? ' — com pendências' : ' — fechado')); });
+    }; });
+  }
+
   function renderCarteira() {
     app.innerHTML = devPeriodBar() +
-      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0">' + [['visao', 'Visão Geral'], ['mov', 'Movimentações'], ['ajustes', 'Ajustes e Divergências']].map(function (t) { return '<div class="subtab' + (walletSub === t[0] ? ' active' : '') + '" data-wsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-wimport="1">Importar extrato</button></div><div id="wbody" style="margin-top:14px"></div>';
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + [['visao', 'Visão Geral'], ['mov', 'Movimentações'], ['ajustes', 'Ajustes e Divergências'], ['pendencias', 'Central de Pendências'], ['fechamento', 'Fechamento de Caixa']].map(function (t) { return '<div class="subtab' + (walletSub === t[0] ? ' active' : '') + '" data-wsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-wimport="1">Importar extrato</button></div><div id="wbody" style="margin-top:14px"></div>';
     var body = document.getElementById('wbody');
     try {
       if (!wallet.length) body.innerHTML = secHead('SALDO DA CARTEIRA', 'Saldo da Carteira', 'Mostrar, medir, rastrear e reconciliar tudo que acontece no saldo da Shopee.') + emptyBox('Nenhum extrato importado. Clique em “Importar extrato” para carregar o relatório de transações do saldo Shopee.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="wimp">Importar extrato</button></div>';
       else if (walletSub === 'mov') body.innerHTML = walletMov();
       else if (walletSub === 'ajustes') body.innerHTML = walletAjustes();
+      else if (walletSub === 'pendencias') body.innerHTML = walletPendencias();
+      else if (walletSub === 'fechamento') body.innerHTML = walletFechamento();
       else body.innerHTML = walletVisao();
     } catch (e) { body.innerHTML = '<div class="form-err">Erro ao renderizar a Carteira: ' + esc(e.message || e) + '</div>'; }
     bindDevPeriodBar();
@@ -6371,6 +6464,8 @@ buffer/index.js:
     app.querySelectorAll('[data-wsig]').forEach(function (b) { b.onclick = function () { walletF = { search: '', cat: '', flow: '', sig: b.dataset.wsig }; walletSub = 'mov'; render(); }; });
     app.querySelectorAll('[data-wgo]').forEach(function (b) { b.onclick = function () { walletSub = b.dataset.wgo; render(); }; });
     if (walletSub === 'mov') bindWalletMov();
+    if (walletSub === 'pendencias') bindWalletPendencias();
+    if (walletSub === 'fechamento') bindWalletFechamento();
   }
   function walletVisao() {
     var m = walletMetrics(); var g = walletDiag(m);
@@ -8780,17 +8875,18 @@ buffer/index.js:
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
 
   // Abre o banco; se falhar (corrompido/bloqueado/privado), ativa o modo em memória e SEGUE —
   // o sistema sempre carrega e Produtos sempre abre (só não salva). Nunca dead-end / tela branca.
   openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose')]);
   }).then(function (r) {
     orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
     wallet = r[5] || [];
     walletCls = {}; (r[6] || []).forEach(function (c) { walletCls[c.id] = c; });
+    walletClose = {}; (r[19] || []).forEach(function (c) { walletClose[c.id] = c; });
     var settings = r[7] || [];
     devCustomStatus = (settings.filter(function (x) { return x.id === 'dev'; })[0] || {}).customStatus || [];
     acelera = r[8] || [];
