@@ -282,9 +282,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     mod
   ));
 
-  // ../../node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js
+  // node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js
   var require_base64_js = __commonJS({
-    "../../node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js"(exports) {
+    "node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js"(exports) {
       "use strict";
       exports.byteLength = byteLength;
       exports.toByteArray = toByteArray;
@@ -383,9 +383,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // ../../node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js
+  // node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js
   var require_ieee754 = __commonJS({
-    "../../node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js"(exports) {
+    "node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js"(exports) {
       exports.read = function(buffer, offset, isLE, mLen, nBytes) {
         var e, m;
         var eLen = nBytes * 8 - mLen - 1;
@@ -466,9 +466,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // ../../node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js
+  // node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js
   var require_buffer = __commonJS({
-    "../../node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js"(exports) {
+    "node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js"(exports) {
       "use strict";
       var base64 = require_base64_js();
       var ieee754 = require_ieee754();
@@ -1837,9 +1837,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // ../../packages/shared/dist/index.js
+  // packages/shared/dist/index.js
   var require_dist = __commonJS({
-    "../../packages/shared/dist/index.js"(exports) {
+    "packages/shared/dist/index.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.ImportIssueSeverity = exports.IMPORT_ROW_STATUS_LABELS = exports.ImportRowStatus = exports.IMPORT_BATCH_STATUS_LABELS = exports.ImportBatchStatus = exports.FileFormat = exports.REPORT_TYPE_LABELS = exports.ReportType = exports.AuditAction = exports.TemporalStatus = exports.ReconciliationState = exports.IngestionSource = exports.EntityStatus = exports.ROLE_LABELS = exports.Role = void 0;
@@ -1988,19 +1988,19 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // src/imports/parsing/browser/shim-xlsx.js
+  // apps/api/src/imports/parsing/browser/shim-xlsx.js
   var require_shim_xlsx = __commonJS({
-    "src/imports/parsing/browser/shim-xlsx.js"(exports, module) {
+    "apps/api/src/imports/parsing/browser/shim-xlsx.js"(exports, module) {
       "use strict";
       var XLSX2 = typeof globalThis !== "undefined" && globalThis.XLSX || {};
       module.exports = XLSX2;
     }
   });
 
-  // src/all/entry.ts
+  // apps/api/src/all/entry.ts
   var import_buffer = __toESM(require_buffer());
 
-  // src/imports/parsing/format.ts
+  // apps/api/src/imports/parsing/format.ts
   var import_shared = __toESM(require_dist());
   function detectFileFormat(buffer) {
     if (buffer.length >= 4) {
@@ -2023,7 +2023,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return !(ext === "csv" || ext === "txt" || ext === "tsv" || ext === "");
   }
 
-  // src/imports/parsing/workbook.ts
+  // apps/api/src/imports/parsing/workbook.ts
   var XLSX = __toESM(require_shim_xlsx());
   var import_shared2 = __toESM(require_dist());
   function sniffDelimiter(sample) {
@@ -2164,7 +2164,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { sheets };
   }
 
-  // src/imports/parsing/value-parsers.ts
+  // apps/api/src/imports/parsing/value-parsers.ts
   var NULLISH = /* @__PURE__ */ new Set(["", "-", "--", "\u2014", "n/a", "na", "null"]);
   function stripCurrency(input) {
     let s = input.trim().replace(/\u00a0/g, " ").trim();
@@ -2283,7 +2283,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return label.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
   }
 
-  // src/imports/parsing/row-accessor.ts
+  // apps/api/src/imports/parsing/row-accessor.ts
   var RowAccessor = class {
     constructor(headers, cells) {
       this.headers = headers;
@@ -2332,7 +2332,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   };
 
-  // src/imports/parsing/browser/shim-crypto.js
+  // apps/api/src/imports/parsing/browser/shim-crypto.js
   function sha256(bytes) {
     const K = [
       1116352408,
@@ -2484,7 +2484,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // src/imports/parsing/hashing.ts
+  // apps/api/src/imports/parsing/hashing.ts
   function sha2562(value) {
     return createHash("sha256").update(value).digest("hex");
   }
@@ -2492,7 +2492,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return sha2562(buffer);
   }
 
-  // src/products/parsing/product-sheet.ts
+  // apps/api/src/products/parsing/product-sheet.ts
   var SCAN_LIMIT = 40;
   var REQUIRED_LABELS = ["ID do Produto", "Nome do Produto"].map(normalizeLabel);
   var STRONG_LABELS = ["SKU", "Variante Identificador", "Pre\xE7o", "Estoque do Vendedor"].map(normalizeLabel);
@@ -2666,10 +2666,10 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // src/orders/parsing/orders-rows.ts
+  // apps/api/src/orders/parsing/orders-rows.ts
   var import_shared6 = __toESM(require_dist());
 
-  // src/imports/parsing/report-specs.ts
+  // apps/api/src/imports/parsing/report-specs.ts
   var import_shared3 = __toESM(require_dist());
   function canonicalDecimal(s) {
     if (s == null) return "";
@@ -3137,7 +3137,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return REPORT_SPECS.find((s) => s.type === type);
   }
 
-  // src/imports/parsing/detect.ts
+  // apps/api/src/imports/parsing/detect.ts
   var import_shared4 = __toESM(require_dist());
   var SCAN_LIMIT2 = 40;
   var ORDER_FAMILY = [
@@ -3287,7 +3287,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { columns, headerNames, dataStartRow: headerRow + 1 };
   }
 
-  // src/imports/parsing/analyze.ts
+  // apps/api/src/imports/parsing/analyze.ts
   var import_shared5 = __toESM(require_dist());
   var PERSONAL_DATA_LABELS = [
     "Telefone",
@@ -3367,7 +3367,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // src/orders/parsing/orders-rows.ts
+  // apps/api/src/orders/parsing/orders-rows.ts
   function first(acc, labels) {
     for (const l of labels) {
       const v = acc.get(l);
@@ -3519,7 +3519,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return null;
   }
 
-  // src/orders/status.ts
+  // apps/api/src/orders/status.ts
   var NORMALIZED_LABELS = {
     NAO_PAGO: "N\xE3o pago",
     A_ENVIAR: "A enviar",
@@ -3550,7 +3550,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return "OUTRO";
   }
 
-  // src/orders/finance.ts
+  // apps/api/src/orders/finance.ts
   var round2 = (n) => Math.round(n * 100) / 100;
   function computeOrderFinance(input) {
     const fees = round2(
@@ -3583,7 +3583,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // src/postsale/parsing/postsale-rows.ts
+  // apps/api/src/postsale/parsing/postsale-rows.ts
   var import_shared7 = __toESM(require_dist());
   var REPORT_OF = {
     RETURN_REFUND: import_shared7.ReportType.RETURN_REFUND,
@@ -3713,7 +3713,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { ...base, rows, periodStart, periodEnd };
   }
 
-  // src/postsale/exposure.ts
+  // apps/api/src/postsale/exposure.ts
   var norm2 = (s) => (s != null ? s : "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   function classifyExposureNumbers(status, requested, compensation) {
     const s = norm2(status);
@@ -3735,7 +3735,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
   var EXPOSURE_METHODOLOGY = "Classifica\xE7\xE3o por status Shopee: CANCELADA/RECUSADA/DESIST\xCANCIA = sem perda; COMPENSA\xC7\xC3O ao vendedor = recuperado; CONCLU\xCDDA/APROVADA/REEMBOLSADA = preju\xEDzo confirmado (solicitado \u2212 compensa\xE7\xE3o); EM AN\xC1LISE/PENDENTE/DISPUTA = em risco. Valor solicitado nunca \xE9 tratado automaticamente como preju\xEDzo.";
 
-  // src/all/entry.ts
+  // apps/api/src/all/entry.ts
   globalThis.Buffer = import_buffer.Buffer;
   var toBuf = (ab) => import_buffer.Buffer.from(new Uint8Array(ab));
   globalThis.SISTEMA = {
@@ -6382,6 +6382,15 @@ buffer/index.js:
   function acLiquidoCalc(r) { return r.antecipado - r.taxa; }
   function acLiquidoDiff(r) { return r.recebido - acLiquidoCalc(r); }
   function acLiquidoDivergente(r) { return Math.abs(acLiquidoDiff(r)) > 2; }
+  // §15 da correção: "Data do resgate rápido" chega como string pura YYYY-MM-DD, sem hora. new Date(str)
+  // interpreta isso como UTC meia-noite, que em fusos negativos (America/Sao_Paulo) pode exibir o dia
+  // anterior. Este helper força a interpretação como data LOCAL (nunca UTC) — usado só dentro do Acelera,
+  // nunca substitui o dbr() global (usado por outros módulos já aprovados).
+  function acLocalDate(dstr) { if (!dstr) return null; var x = new Date(String(dstr).slice(0, 10) + 'T00:00:00'); return isNaN(x) ? null : x; }
+  function acDbr(dstr) { var x = acLocalDate(dstr); return x ? x.toLocaleDateString('pt-BR') : '—'; }
+  // Mesma lógica de periodRange()/inPeriod(), mas usando acLocalDate() para nunca sofrer o desvio de
+  // fuso horário de datas sem hora — critério de aceite explícito para America/Sao_Paulo (§15).
+  function acInPeriod(dstr) { var r = periodRange(); var d = acLocalDate(dstr); if (!d) return true; if (r.from && d < r.from) return false; if (r.to && d > r.to) return false; return true; }
 
   // Parser do CSV/planilha real da Shopee (localiza cabeçalho dinamicamente; guarda o resumo da Shopee).
   function parseAceleraText(text) {
@@ -6451,25 +6460,35 @@ buffer/index.js:
   function saveAceleraCfg() { return putMany('settings', [{ id: 'aceleraCfg', data: aceleraCfg }]); }
 
   // ---- motor determinístico ----
-  // §11 da refatoração: chave lógica LOJA + ID_RESGATE + ID_PEDIDO. Agrupar por resgate NUNCA
-  // deduplica por data — vários resgates podem cair no mesmo dia, cada um contado uma vez.
+  // §11-13 da correção: chave lógica LOJA + ID_RESGATE + ID_PEDIDO. Agrupar por resgate NUNCA
+  // deduplica por data — vários resgates podem cair no mesmo dia, cada um contado uma vez. A data
+  // consolidada do resgate é a MÁXIMA entre as linhas do resgate (nunca a mínima) — validado contra
+  // a tela oficial da Shopee: um resgate aparece na UI oficial na data da sua ÚLTIMA linha, não da
+  // primeira. Usar o mínimo fragmenta visualmente resgates cujas linhas cruzam vários dias (§13).
   function aceleraByResgate(recs) {
-    var map = {}; recs.forEach(function (r) { var g = map[r.resgate] = map[r.resgate] || { resgate: r.resgate, data: r.data, n: 0, antec: 0, taxa: 0, receb: 0, reemb: 0, pend: 0, maxUlt: '' }; g.n++; g.antec += r.antecipado; g.taxa += r.taxa; g.receb += r.recebido; g.reemb += r.reembolsado; g.pend += r.pendente; if (r.data < g.data) g.data = r.data; if ((r.ultimaTransacao || '') > g.maxUlt) g.maxUlt = r.ultimaTransacao; });
+    var map = {}; recs.forEach(function (r) { var g = map[r.resgate] = map[r.resgate] || { resgate: r.resgate, data: r.data, n: 0, antec: 0, taxa: 0, receb: 0, reemb: 0, pend: 0, disp: 0, maxUlt: '' }; g.n++; g.antec += r.antecipado; g.taxa += r.taxa; g.receb += r.recebido; g.reemb += r.reembolsado; g.pend += r.pendente; g.disp += (r.disponivel || 0); if (r.data > g.data) g.data = r.data; if ((r.ultimaTransacao || '') > g.maxUlt) g.maxUlt = r.ultimaTransacao; });
     return Object.keys(map).map(function (k) { var g = map[k]; g.rate = g.antec ? g.taxa / g.antec : 0; g.aliqLabel = acAliqKey(g.rate); g.liquidoCalc = g.antec - g.taxa; g.liquidoDiff = g.receb - g.liquidoCalc; g.divergente = Math.abs(g.liquidoDiff) > 2; return g; }).sort(function (a, b) { return (a.data || '').localeCompare(b.data || ''); });
   }
-  // §7-8 da refatoração: agregação por DATA DO RESGATE — usada só para agrupar visualmente o
-  // gráfico/resumo "dia a dia"; nunca é a chave de deduplicação (essa é loja+resgate+pedido).
+  // §14 da correção: agregação por DIA — usada só para agrupar visualmente o gráfico/resumo "dia a
+  // dia"; nunca é a chave de deduplicação (essa é loja+resgate+pedido). Consolida por RESGATE
+  // primeiro (via aceleraByResgate) e só então agrupa por dia — um resgate nunca aparece dividido
+  // em dois dias diferentes, mesmo que suas linhas individuais carreguem datas distintas.
   function aceleraByDia(recs) {
+    var resgates = aceleraByResgate(recs);
     var map = {};
-    recs.forEach(function (r) {
-      var g = map[r.data] = map[r.data] || { data: r.data, pedidosSet: {}, resgatesSet: {}, antec: 0, taxa: 0, receb: 0, reemb: 0, pend: 0 };
-      g.pedidosSet[r.pedido] = 1; g.resgatesSet[r.resgate] = 1;
-      g.antec += r.antecipado; g.taxa += r.taxa; g.receb += r.recebido; g.reemb += r.reembolsado; g.pend += r.pendente;
+    resgates.forEach(function (g) {
+      var d = map[g.data] = map[g.data] || { data: g.data, nResgates: 0, pedidosSet: {}, antec: 0, taxa: 0, receb: 0, reemb: 0, pend: 0 };
+      d.nResgates++; d.antec += g.antec; d.taxa += g.taxa; d.receb += g.receb; d.reemb += g.reemb; d.pend += g.pend;
     });
+    // reconstruir pedidosSet corretamente: para cada resgate consolidado, contar os pedidos das
+    // linhas originais que pertencem a ele (não redistribuir por linha — a data já é a do resgate).
+    var recsByResgate = {}; recs.forEach(function (r) { (recsByResgate[r.resgate] = recsByResgate[r.resgate] || []).push(r); });
+    Object.keys(map).forEach(function (k) { map[k].pedidosSet = {}; });
+    resgates.forEach(function (g) { (recsByResgate[g.resgate] || []).forEach(function (r) { map[g.data].pedidosSet[r.pedido] = 1; }); });
     return Object.keys(map).sort().map(function (k) {
-      var g = map[k]; var pedidos = Object.keys(g.pedidosSet).length, resgates = Object.keys(g.resgatesSet).length;
+      var g = map[k]; var pedidos = Object.keys(g.pedidosSet).length;
       var liquidoCalc = g.antec - g.taxa;
-      return { data: g.data, pedidos: pedidos, resgates: resgates, antec: g.antec, taxa: g.taxa, receb: g.receb, liquidoCalc: liquidoCalc, liquidoDiff: g.receb - liquidoCalc, reemb: g.reemb, pend: g.pend, aliquota: g.antec ? g.taxa / g.antec : 0 };
+      return { data: g.data, pedidos: pedidos, resgates: g.nResgates, antec: g.antec, taxa: g.taxa, receb: g.receb, liquidoCalc: liquidoCalc, liquidoDiff: g.receb - liquidoCalc, reemb: g.reemb, pend: g.pend, aliquota: g.antec ? g.taxa / g.antec : 0 };
     });
   }
   function aceleraMetrics(recs) {
@@ -6495,10 +6514,18 @@ buffer/index.js:
     m.byResgate = aceleraByResgate(recs); m.byDia = aceleraByDia(recs);
     return m;
   }
-  // Filtra pelo período GLOBAL selecionado na barra de período (Hoje/7d/30d/mês/personalizado) —
-  // não é o período declarado no cabeçalho do relatório (esse nunca é usado para descartar linhas,
-  // conforme a regra original do módulo). São dois filtros diferentes e não conflitam.
-  function aceleraInPeriod() { return acelera.filter(function (r) { return inPeriod(r.data); }); }
+  // §11-13/§27 da correção: CORRIGIDO — o bug original filtrava as LINHAS cruas pela data individual
+  // ANTES de agrupar, o que fragmentava um resgate cujas linhas cruzam a borda do período (ex.: um
+  // resgate com linhas de 18/08 e 19/08 aparecia com poucos pedidos em 18/08 e o resto sumia). A
+  // ordem correta é: (1) agrupar TODAS as linhas (sem filtro) por resgate, (2) determinar a data
+  // consolidada de cada resgate (máxima das linhas), (3) filtrar os RESGATES consolidados pelo
+  // período, (4) só então devolver as linhas cruas que pertencem aos resgates que sobraram — um
+  // resgate nunca é cortado ao meio pelo filtro de período.
+  function aceleraInPeriod() {
+    var resgatesOk = {};
+    aceleraByResgate(acelera).forEach(function (g) { if (acInPeriod(g.data)) resgatesOk[g.resgate] = true; });
+    return acelera.filter(function (r) { return resgatesOk[r.resgate]; });
+  }
 
   function renderAcelera() {
     // Refatoração completa do módulo (prompt "REFATORAÇÃO COMPLETA DO MÓDULO SHOPEE ACELERA"):
@@ -6532,7 +6559,7 @@ buffer/index.js:
     var head = secHead('SHOPEE ACELERA', 'Antecipação de Recebíveis', 'Quanto a Shopee antecipou, quanto cobrou de taxa e quanto entrou líquido — dia a dia, resgate a resgate.');
     var strip1 = kstrip([
       { l: 'Pedidos antecipados', v: nn(m.nPedidos), cls: 'blue', s: nn(m.nResgates) + ' resgate(s)' },
-      { l: 'Valor antecipado', v: brlC(m.volume), cls: 'blue' },
+      { l: 'Valor bruto resgatado', v: brlC(m.volume), cls: 'blue', s: 'soma dos resgates rápidos (antes da taxa)' },
       { l: 'Taxa de serviço', v: brlC(m.taxa), cls: 'red' },
       { l: 'Alíquota efetiva', v: pct(r2(m.aliquota * 100)), cls: 'amber', s: 'taxa ÷ antecipado' },
     ]);
@@ -6561,7 +6588,7 @@ buffer/index.js:
       var liq = Math.max(0, d.liquidoCalc / 100), taxa = Math.max(0, d.taxa / 100);
       var hLiq = (liq / max) * ih, hTaxa = (taxa / max) * ih;
       var yLiq = y0 - hLiq, yTaxa = yLiq - hTaxa;
-      var tip = dbr(d.data) + '\n\nValor antecipado: ' + brl(d.antec / 100) + '\nTaxa: -' + brl(d.taxa / 100) + '\nLíquido recebido: ' + brl(d.receb / 100) + '\n\n' + d.pedidos + ' pedido' + (d.pedidos === 1 ? '' : 's') + '\n' + d.resgates + ' resgate' + (d.resgates === 1 ? '' : 's') + '\nAlíquota efetiva: ' + pct(r2(d.aliquota * 100));
+      var tip = acDbr(d.data) + '\n\nValor bruto resgatado: ' + brl(d.antec / 100) + '\nTaxa: -' + brl(d.taxa / 100) + '\nLíquido recebido: ' + brl(d.receb / 100) + '\n\n' + d.pedidos + ' pedido' + (d.pedidos === 1 ? '' : 's') + '\n' + d.resgates + ' resgate' + (d.resgates === 1 ? '' : 's') + '\nAlíquota efetiva: ' + pct(r2(d.aliquota * 100));
       return '<g style="cursor:pointer" data-acdia="' + esc(d.data) + '">' +
         '<rect x="' + x.toFixed(1) + '" y="' + yLiq.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + Math.max(0, hLiq).toFixed(1) + '" fill="#1fa971" opacity="0.9"/>' +
         '<rect x="' + x.toFixed(1) + '" y="' + yTaxa.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + Math.max(0, hTaxa).toFixed(1) + '" fill="#d13b3b" opacity="0.9"/>' +
@@ -6579,14 +6606,18 @@ buffer/index.js:
     if (!days.length) return emptyBox('Nenhum resgate no período selecionado.');
     var sorted = days.slice().sort(function (a, b) { return b.data.localeCompare(a.data); });
     var rows = sorted.map(function (d) {
-      return '<tr class="rowlink" data-acdia="' + esc(d.data) + '"><td class="nowrap">' + esc(dbr(d.data)) + '</td><td>' + nn(d.pedidos) + '</td><td>' + nn(d.resgates) + '</td><td class="nowrap">' + brlC(d.antec) + '</td><td class="nowrap">' + brlC(d.taxa) + '</td><td>' + pct(r2(d.aliquota * 100)) + '</td><td class="nowrap">' + brlC(d.receb) + '</td><td class="nowrap' + (d.reemb ? ' neg' : '') + '">' + brlC(d.reemb) + '</td><td><button class="btn-sm" data-acdia="' + esc(d.data) + '">Abrir</button></td></tr>';
+      return '<tr class="rowlink" data-acdia="' + esc(d.data) + '"><td class="nowrap">' + esc(acDbr(d.data)) + '</td><td>' + nn(d.pedidos) + '</td><td>' + nn(d.resgates) + '</td><td class="nowrap">' + brlC(d.antec) + '</td><td class="nowrap">' + brlC(d.taxa) + '</td><td>' + pct(r2(d.aliquota * 100)) + '</td><td class="nowrap">' + brlC(d.receb) + '</td><td class="nowrap' + (d.reemb ? ' neg' : '') + '">' + brlC(d.reemb) + '</td><td><button class="btn-sm" data-acdia="' + esc(d.data) + '">Abrir</button></td></tr>';
     }).join('');
     return '<div class="panel"><div class="ph"><h3>Resumo dia a dia</h3><span class="footnote" style="margin:0">mais de um resgate no mesmo dia não é duplicidade — a Shopee pode gerar vários lotes na mesma data</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Pedidos</th><th>Resgates</th><th>Antecipado</th><th>Taxa</th><th>Alíquota</th><th>Líquido</th><th>Reembolsado</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
   }
-  // §8-9: expansão do dia → resgates do dia → pedidos do resgate (reaproveita openAceleraResgate).
+  // §8-9/§22-24: expansão do dia → resgates do dia → pedidos do resgate (reaproveita openAceleraResgate).
+  // dateStr é sempre a DATA CONSOLIDADA do resgate (máxima das suas linhas) — por isso os resgates
+  // deste dia são obtidos filtrando aceleraByResgate por g.data, e as linhas cruas são as de TODOS
+  // os resgates que caíram neste dia (mesmo que alguma linha individual do resgate tenha outra data).
   function openAceleraDia(dateStr) {
-    var recs = acelera.filter(function (r) { return r.data === dateStr; });
-    var gs = aceleraByResgate(recs);
+    var gs = aceleraByResgate(acelera).filter(function (g) { return g.data === dateStr; });
+    var resgSet = {}; gs.forEach(function (g) { resgSet[g.resgate] = true; });
+    var recs = acelera.filter(function (r) { return resgSet[r.resgate]; });
     var pedidosSet = {}; recs.forEach(function (r) { pedidosSet[r.pedido] = 1; });
     var antecTot = recs.reduce(function (s, r) { return s + r.antecipado; }, 0);
     var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '760px'; panel.style.maxWidth = '97vw';
@@ -6597,7 +6628,7 @@ buffer/index.js:
         '<button class="btn-sm primary" data-acresg="' + esc(g.resgate) + '" style="margin-top:8px">Ver pedidos deste resgate</button>' +
         '</div></div>';
     }).join('');
-    panel.innerHTML = '<div class="dh"><div><b>' + esc(dbr(dateStr)) + '</b></div><button class="x">&times;</button></div><div class="dbd">' +
+    panel.innerHTML = '<div class="dh"><div><b>' + esc(acDbr(dateStr)) + '</b></div><button class="x">&times;</button></div><div class="dbd">' +
       '<div class="kstrip" style="margin-bottom:12px"><div class="kc"><div class="kl">Pedidos</div><div class="kv" style="font-size:18px">' + nn(Object.keys(pedidosSet).length) + '</div></div><div class="kc"><div class="kl">Resgates</div><div class="kv" style="font-size:18px">' + nn(gs.length) + '</div></div><div class="kc"><div class="kl">Antecipado</div><div class="kv" style="font-size:18px">' + brlC(antecTot) + '</div></div></div>' +
       resgateBlocks + '</div>';
     panel.querySelector('.x').onclick = function () { d.remove(); };
@@ -6635,7 +6666,7 @@ buffer/index.js:
     if (aceleraF.search) { var q = aceleraF.search.toLowerCase(); gs = gs.filter(function (g) { return g.resgate.toLowerCase().indexOf(q) >= 0; }); }
     var pages = Math.max(1, Math.ceil(gs.length / 25)); if (aceleraPage > pages) aceleraPage = pages; var slice = gs.slice((aceleraPage - 1) * 25, aceleraPage * 25);
     var head = secHead('ACELERA · ANTECIPAÇÕES', 'Auditoria por resgate', 'Cada lote de antecipação: valor, taxa, alíquota efetiva, líquido, reembolsado e pendente. Clique para ver os pedidos.');
-    var rows = slice.map(function (g) { return '<tr class="rowlink" data-acresg="' + esc(g.resgate) + '"><td class="nowrap">' + esc(dbr(g.data)) + '</td><td class="mono">' + esc(g.resgate) + '</td><td>' + nn(g.n) + '</td><td class="nowrap">' + brlC(g.antec) + '</td><td class="nowrap">' + brlC(g.taxa) + '</td><td><span class="tag' + (g.divergente ? ' warn' : '') + '">' + g.aliqLabel + '</span></td><td class="nowrap">' + brlC(g.receb) + '</td><td class="nowrap ' + (g.reemb ? 'neg' : '') + '">' + brlC(g.reemb) + '</td><td class="nowrap">' + brlC(g.pend) + '</td><td><button class="btn-sm" data-acresg="' + esc(g.resgate) + '">Abrir</button></td></tr>'; }).join('');
+    var rows = slice.map(function (g) { return '<tr class="rowlink" data-acresg="' + esc(g.resgate) + '"><td class="nowrap">' + esc(acDbr(g.data)) + '</td><td class="mono">' + esc(g.resgate) + '</td><td>' + nn(g.n) + '</td><td class="nowrap">' + brlC(g.disp) + '</td><td class="nowrap">' + brlC(g.antec) + '</td><td class="nowrap">' + brlC(g.taxa) + '</td><td><span class="tag' + (g.divergente ? ' warn' : '') + '">' + g.aliqLabel + '</span></td><td class="nowrap">' + brlC(g.receb) + '</td><td class="nowrap ' + (g.reemb ? 'neg' : '') + '">' + brlC(g.reemb) + '</td><td class="nowrap">' + brlC(g.pend) + '</td><td><button class="btn-sm" data-acresg="' + esc(g.resgate) + '">Abrir</button></td></tr>'; }).join('');
     var dist = aceleraAliquotaDist(recs);
     var aliqOptions = '<option value="">Todas</option>' + dist.map(function (a) { return '<option value="' + esc(a.label) + '"' + (aceleraF.aliq === a.label ? ' selected' : '') + '>' + esc(a.label) + '</option>'; }).join('');
     var distRows = dist.map(function (a) { return '<tr><td><span class="tag">' + esc(a.label) + '</span></td><td>' + nn(a.pedidos) + '</td><td>' + nn(a.resgates) + '</td><td class="nowrap">' + brlC(a.antec) + '</td><td class="nowrap">' + brlC(a.taxa) + '</td></tr>'; }).join('');
@@ -6643,7 +6674,7 @@ buffer/index.js:
     return head +
       '<div class="toolbar2" style="margin-top:8px;gap:10px;flex-wrap:wrap"><input class="input sm" id="acq" style="width:280px" placeholder="Buscar ID do resgate…" value="' + esc(aceleraF.search) + '"><select class="select sm" id="acaliqf" style="width:160px">' + aliqOptions + '</select></div>' +
       '<div class="count-line"><b>' + nn(gs.length) + '</b> resgates</div>' +
-      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>ID resgate</th><th>Pedidos</th><th>Antecipado</th><th>Taxa</th><th>Alíquota</th><th>Líquido</th><th>Reembolsado</th><th>Pendente</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="10" class="empty">Nenhum resgate neste filtro.</td></tr>') + '</tbody></table></div></div>' +
+      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>ID resgate</th><th>Pedidos</th><th>Disponível</th><th>Bruto resgatado</th><th>Taxa</th><th>Alíquota</th><th>Líquido</th><th>Reembolsado</th><th>Pendente</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="11" class="empty">Nenhum resgate neste filtro.</td></tr>') + '</tbody></table></div></div>' +
       (pages > 1 ? '<div style="display:flex;gap:8px;justify-content:flex-end;align-items:center"><button class="btn-sm" id="acprev"' + (aceleraPage <= 1 ? ' disabled' : '') + '>Anterior</button><span class="footnote" style="margin:0">página ' + aceleraPage + ' de ' + pages + '</span><button class="btn-sm" id="acnext"' + (aceleraPage >= pages ? ' disabled' : '') + '>Próxima</button></div>' : '') +
       distTable;
   }
@@ -6660,8 +6691,8 @@ buffer/index.js:
     var g = aceleraByResgate(recs)[0] || { antec: 0, taxa: 0, rate: 0, receb: 0, reemb: 0, pend: 0, aliqLabel: '—', divergente: false };
     var rows = recs.sort(function (a, b) { return b.antecipado - a.antecipado; }).slice(0, 400).map(function (r) { return '<tr class="rowlink" data-acped="' + esc(r.pedido) + '"><td class="mono">' + esc(r.pedido) + '</td><td class="nowrap">' + brlC(r.antecipado) + '</td><td class="nowrap">' + brlC(r.taxa) + '</td><td class="nowrap">' + brlC(r.recebido) + '</td><td class="nowrap ' + (r.reembolsado ? 'neg' : '') + '">' + brlC(r.reembolsado) + '</td><td class="nowrap">' + brlC(r.pendente) + '</td><td><span class="tag ' + (acIsReemb(r) ? 'warn' : acIsFullyPaid(r) ? 'ok' : 'neutral') + '">' + esc(acStatusLabel(r.status)) + '</span></td></tr>'; }).join('');
     panel.innerHTML = '<div class="dh"><div><b>Resgate ' + esc(rid) + '</b> <span class="tag' + (g.divergente ? ' warn' : '') + '" style="margin-left:6px">alíquota ' + g.aliqLabel + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
-      '<div class="kstrip" style="margin-bottom:12px"><div class="kc"><div class="kl">Antecipado</div><div class="kv" style="font-size:16px">' + brlC(g.antec) + '</div></div><div class="kc"><div class="kl">Taxa</div><div class="kv" style="font-size:16px">' + brlC(g.taxa) + '</div></div><div class="kc"><div class="kl">Líquido</div><div class="kv" style="font-size:16px">' + brlC(g.receb) + '</div></div><div class="kc"><div class="kl">Reembolsado</div><div class="kv" style="font-size:16px">' + brlC(g.reemb) + '</div></div></div>' +
-      '<div class="panel"><div class="ph"><h3>' + nn(recs.length) + ' pedidos neste resgate</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Antecipado</th><th>Taxa</th><th>Recebido</th><th>Reembolsado</th><th>Pendente</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div></div></div>';
+      '<div class="kstrip" style="margin-bottom:12px"><div class="kc"><div class="kl">Disponível</div><div class="kv" style="font-size:16px">' + brlC(g.disp) + '</div></div><div class="kc"><div class="kl">Bruto resgatado</div><div class="kv" style="font-size:16px">' + brlC(g.antec) + '</div></div><div class="kc"><div class="kl">Taxa</div><div class="kv" style="font-size:16px">' + brlC(g.taxa) + '</div></div><div class="kc"><div class="kl">Líquido</div><div class="kv" style="font-size:16px">' + brlC(g.receb) + '</div></div><div class="kc"><div class="kl">Reembolsado</div><div class="kv" style="font-size:16px">' + brlC(g.reemb) + '</div></div></div>' +
+      '<div class="panel"><div class="ph"><h3>' + nn(recs.length) + ' pedidos neste resgate</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Bruto resgatado</th><th>Taxa</th><th>Recebido</th><th>Reembolsado</th><th>Pendente</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div></div></div>';
     panel.querySelector('.x').onclick = function () { d.remove(); };
     panel.querySelectorAll('[data-acped]').forEach(function (b) { b.onclick = function () { openAceleraPedido(b.dataset.acped); }; });
   }
@@ -6675,9 +6706,9 @@ buffer/index.js:
     var antBlock;
     if (r) {
       var liqCalc = acLiquidoCalc(r); var liqDiff = acLiquidoDiff(r); var diverge = acLiquidoDivergente(r);
-      antBlock = '<div class="panel"><div class="ph"><h3>Antecipação</h3></div><div class="pb">' + kv('Resgate', r.resgate) + kv('Data', dbr(r.data)) + kv('Valor antecipado', brlC(r.antecipado)) + kv('Taxa', brlC(r.taxa)) + kv('Alíquota', pct(r2((r.antecipado ? r.taxa / r.antecipado : 0) * 100))) + kv('Líquido informado (Shopee)', brlC(r.recebido)) + kv('Líquido calculado (antecipado − taxa)', brlC(liqCalc)) + (diverge ? kv('Diferença', brlC(liqDiff)) : '') + '</div></div>' +
+      antBlock = '<div class="panel"><div class="ph"><h3>Antecipação</h3></div><div class="pb">' + kv('Resgate', r.resgate) + kv('Data', acDbr(r.data)) + kv('Valor disponível para resgate rápido', brlC(r.disponivel)) + kv('Valor bruto resgatado', brlC(r.antecipado)) + kv('Taxa', brlC(r.taxa)) + kv('Alíquota', pct(r2((r.antecipado ? r.taxa / r.antecipado : 0) * 100))) + kv('Líquido informado (Shopee)', brlC(r.recebido)) + kv('Líquido calculado (antecipado − taxa)', brlC(liqCalc)) + (diverge ? kv('Diferença', brlC(liqDiff)) : '') + '</div></div>' +
         (diverge ? callout('warn', '⚠ Líquido divergente', 'A Shopee informou um líquido diferente do calculado por antecipado − taxa. Diferença de ' + brlC(liqDiff) + '.') : '') +
-        '<div class="panel"><div class="ph"><h3>Depois da antecipação</h3></div><div class="pb">' + kv('Reembolsado', brlC(r.reembolsado)) + kv('Pendente', brlC(r.pendente)) + kv('Última transação', dbr(r.ultimaTransacao)) + kv('Vencimento', dbr(r.vencimento)) + (r.reembolsado > 0 ? '<div style="margin-top:4px"><span class="tag warn">Pedido posteriormente reembolsado</span></div>' : '') + '</div></div>' +
+        '<div class="panel"><div class="ph"><h3>Depois da antecipação</h3></div><div class="pb">' + kv('Reembolsado', brlC(r.reembolsado)) + kv('Pendente', brlC(r.pendente)) + kv('Última transação', acDbr(r.ultimaTransacao)) + kv('Vencimento', acDbr(r.vencimento)) + (r.reembolsado > 0 ? '<div style="margin-top:4px"><span class="tag warn">Pedido posteriormente reembolsado</span></div>' : '') + '</div></div>' +
         ((r.history && r.history.length) ? '<div class="panel"><div class="ph"><h3>Linha do tempo</h3></div><div class="pb">' + [{ at: r.firstImportAt, txt: 'Importado — ' + acStatusLabel(r.status) }].concat(r.history.map(function (h) { return { at: h.at, txt: acStatusLabel(h.statusOld) + ' → ' + acStatusLabel(h.statusNew) }; })).map(function (e) { return '<div class="fin-line"><span>' + esc(e.txt) + '</span><span class="footnote" style="margin:0">' + (e.at ? new Date(e.at).toLocaleDateString('pt-BR') : '') + '</span></div>'; }).join('') + '</div></div>' : '');
     } else {
       antBlock = callout('warn', 'Pedido não encontrado no Acelera', bip ? 'Expedido em ' + dbr(bip.bipedAt) + ', mas sem registro correspondente no relatório do Shopee Acelera importado.' : 'Sem registro no Shopee Acelera importado.');
@@ -6695,10 +6726,24 @@ buffer/index.js:
   // §2/§13 da refatoração — Expedidos × Acelera é a função mais importante do módulo: os pedidos
   // que saíram da empresa foram antecipados? Cruza pela ID do pedido, reaproveitando shipBip (a
   // MESMA fonte de expedição usada em Pedidos → Expedição — nunca uma segunda fonte paralela).
+  // §28-32: funil de 3 estágios, sempre mantidos conceitualmente distintos — nunca fundidos:
+  // (1) A Enviar = pedidos com status A_ENVIAR em Pedidos (ainda não bipados, portanto nunca podem
+  // estar no Acelera); (2) Bipado/Expedido = shipBip (confirmação de expedição própria); (3)
+  // Encontrado no Acelera = cruzamento por ID do pedido. Um pedido só avança de estágio por evento
+  // objetivo (bipe registrado, ou aparição no relatório do Acelera) — nunca é assumido.
+  function aceleraFunilStages() {
+    var aEnviar = orders.filter(function (o) { return o.normalizedStatus === 'A_ENVIAR'; }).length;
+    var bipados = Object.keys(shipBip).length;
+    var acPedidosSet = {}; acelera.forEach(function (r) { acPedidosSet[r.pedido] = 1; });
+    var encontrados = Object.keys(shipBip).filter(function (oid) { return acPedidosSet[oid]; }).length;
+    return { aEnviar: aEnviar, bipados: bipados, encontrados: encontrados };
+  }
   function aceleraExpedidos() {
     var head = secHead('SHOPEE ACELERA · EXPEDIDOS × ACELERA', 'Os pedidos expedidos foram antecipados?', 'Cruza a expedição (bipe, em Pedidos → Expedição) com os registros do Acelera pelo ID do pedido.');
+    var fun = aceleraFunilStages();
+    var funil = '<div class="panel"><div class="ph"><h3>Funil de conciliação (3 estágios, nunca fundidos)</h3></div><div class="pb"><div class="kstrip"><div class="kc"><div class="kl">① A Enviar (Pedidos)</div><div class="kv" style="font-size:16px">' + nn(fun.aEnviar) + '</div></div><div class="kc"><div class="kl">② Bipado/Expedido</div><div class="kv" style="font-size:16px">' + nn(fun.bipados) + '</div></div><div class="kc"><div class="kl">③ Encontrado no Acelera</div><div class="kv" style="font-size:16px">' + nn(fun.encontrados) + '</div></div></div><span class="footnote">① nunca aparece no Acelera (ainda não foi enviado); ② confirmação própria de despacho; ③ cruzamento por ID do pedido no relatório do Acelera — os três estágios nunca são somados nem confundidos entre si.</span></div></div>';
     var bips = Object.keys(shipBip);
-    if (!bips.length) return head + emptyBox('Nenhum pedido expedido (bipado) ainda. Registre a expedição em Pedidos → Expedição para habilitar este cruzamento.');
+    if (!bips.length) return head + funil + emptyBox('Nenhum pedido expedido (bipado) ainda. Registre a expedição em Pedidos → Expedição para habilitar este cruzamento.');
     var acByOrder = {}; acelera.forEach(function (r) { (acByOrder[r.pedido] = acByOrder[r.pedido] || []).push(r); });
     var tolMs = (aceleraCfg.aguardandoDias || 3) * 864e5;
     var rows = bips.map(function (oid) {
@@ -6726,11 +6771,11 @@ buffer/index.js:
     ]);
     var tableRows = rows.sort(function (a, b) { var ord = { NAO_ENCONTRADO: 0, AGUARDANDO: 1, CONCILIADO: 2 }; return ord[a.situacao] - ord[b.situacao] || b.bipedAt.localeCompare(a.bipedAt); }).slice(0, 400).map(function (r) {
       var rec = r.recs[0]; var o2 = orders.find(function (o) { return o.id === r.oid; });
-      return '<tr><td class="mono">' + esc(r.oid) + '</td><td class="nowrap">' + dbr(r.bipedAt) + '</td><td class="nowrap">' + (rec ? dbr(rec.data) : '—') + '</td><td class="nowrap">' + (rec ? brlC(rec.antecipado) : '—') + '</td><td class="nowrap">' + (rec ? brlC(rec.taxa) : '—') + '</td><td class="nowrap">' + (rec ? brlC(rec.recebido) : '—') + '</td><td class="mono">' + (rec ? esc(rec.resgate) : '—') + '</td><td>' + (o2 ? esc(S.pedidos.labels[o2.normalizedStatus] || o2.orderStatus) : '—') + '</td><td><span class="tag' + (r.situacao === 'NAO_ENCONTRADO' ? ' warn' : '') + '">' + r.badge + '</span></td><td><button class="btn-sm" data-acped="' + esc(r.oid) + '">Abrir</button></td></tr>';
+      return '<tr><td class="mono">' + esc(r.oid) + '</td><td class="nowrap">' + dbr(r.bipedAt) + '</td><td class="nowrap">' + (rec ? acDbr(rec.data) : '—') + '</td><td class="nowrap">' + (rec ? brlC(rec.antecipado) : '—') + '</td><td class="nowrap">' + (rec ? brlC(rec.taxa) : '—') + '</td><td class="nowrap">' + (rec ? brlC(rec.recebido) : '—') + '</td><td class="mono">' + (rec ? esc(rec.resgate) : '—') + '</td><td>' + (o2 ? esc(S.pedidos.labels[o2.normalizedStatus] || o2.orderStatus) : '—') + '</td><td><span class="tag' + (r.situacao === 'NAO_ENCONTRADO' ? ' warn' : '') + '">' + r.badge + '</span></td><td><button class="btn-sm" data-acped="' + esc(r.oid) + '">Abrir</button></td></tr>';
     }).join('');
     var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Data expedição</th><th>Data antecipação</th><th>Valor antecipado</th><th>Taxa</th><th>Líquido</th><th>ID resgate</th><th>Status</th><th>Situação</th><th></th></tr></thead><tbody>' + (tableRows || '<tr><td colspan="10" class="empty">Nenhum pedido.</td></tr>') + '</tbody></table></div></div>';
-    var acSemExpTable = acSemExp.length ? '<div class="panel"><div class="ph"><h3>⚠️ Acelera sem expedição localizada</h3><span class="footnote" style="margin:0">' + nn(acSemExp.length) + ' pedido(s) antecipados sem registro de expedição/bipe</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Data antecipação</th><th>Valor antecipado</th><th></th></tr></thead><tbody>' + acSemExp.slice(0, 200).map(function (oid) { var rr = acByOrder[oid][0]; return '<tr><td class="mono">' + esc(oid) + '</td><td class="nowrap">' + dbr(rr.data) + '</td><td class="nowrap">' + brlC(rr.antecipado) + '</td><td><button class="btn-sm" data-acped="' + esc(oid) + '">Abrir</button></td></tr>'; }).join('') + '</tbody></table></div></div>' : '';
-    return head + strip + table + acSemExpTable;
+    var acSemExpTable = acSemExp.length ? '<div class="panel"><div class="ph"><h3>⚠️ Acelera sem expedição localizada</h3><span class="footnote" style="margin:0">' + nn(acSemExp.length) + ' pedido(s) antecipados sem registro de expedição/bipe</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Data antecipação</th><th>Valor antecipado</th><th></th></tr></thead><tbody>' + acSemExp.slice(0, 200).map(function (oid) { var rr = acByOrder[oid][0]; return '<tr><td class="mono">' + esc(oid) + '</td><td class="nowrap">' + acDbr(rr.data) + '</td><td class="nowrap">' + brlC(rr.antecipado) + '</td><td><button class="btn-sm" data-acped="' + esc(oid) + '">Abrir</button></td></tr>'; }).join('') + '</tbody></table></div></div>' : '';
+    return head + funil + strip + table + acSemExpTable;
   }
   function bindAceleraExpedidos() { /* usa data-acped, já ligado globalmente em renderAcelera() */ }
 
@@ -6750,6 +6795,10 @@ buffer/index.js:
     // essa chave), então isto só aparece se dois registros distintos colidirem (ex.: multiloja futura).
     var byKey = {}; var duplicados = [];
     acelera.forEach(function (r) { var k = (r.storeId || 'default') + '|' + r.resgate + '|' + r.pedido; if (byKey[k]) duplicados.push(r); else byKey[k] = r; });
+    // §54: Income × Acelera — reaproveita aceleraConciliacaoPedido() (nunca reimporta Income aqui).
+    var pedidosSet = {}; recs.forEach(function (r) { pedidosSet[r.pedido] = true; });
+    var mrE = mrEngine(); var mrByOrderD = {}; mrE.orders.forEach(function (r) { mrByOrderD[r.orderId] = r; });
+    var incomeDivergente = Object.keys(pedidosSet).map(function (pid) { return aceleraConciliacaoPedido(pid, mrByOrderD); }).filter(function (r) { return r.status.code === 'DIVERGENTE' && r.temIncome; });
     var cats = [
       { key: 'expSemAc', label: 'Expedidos sem Acelera', n: expedidosSemAcelera.length, icon: '🔴' },
       { key: 'acSemExp', label: 'Acelera sem expedição', n: aceleraSemExpedicao.length, icon: '⚠️' },
@@ -6757,16 +6806,18 @@ buffer/index.js:
       { key: 'taxa', label: 'Taxa divergente', n: taxaDivergente.length, icon: '🔴' },
       { key: 'incompleto', label: 'Registro incompleto', n: incompletos.length, icon: '🟡' },
       { key: 'dup', label: 'Possível duplicidade', n: duplicados.length, icon: '🟡' },
+      { key: 'income', label: 'Income × Acelera não bate', n: incomeDivergente.length, icon: '🔴' },
     ];
     var strip = kstrip(cats.map(function (c) { return { l: c.icon + ' ' + c.label, v: nn(c.n), cls: c.n ? 'amber' : 'green' }; }));
     var sel = aceleraF.divCat || 'liq';
     var chips = cats.map(function (c) { return '<span class="chip' + (sel === c.key ? ' chip-on' : '') + '" data-acdivcat="' + c.key + '">' + c.icon + ' ' + c.label + ' (' + nn(c.n) + ')</span>'; }).join('');
     var body;
     if (sel === 'expSemAc') body = aceleraDivTable(expedidosSemAcelera.map(function (oid) { return { pedido: oid, motivo: 'Expedido em ' + dbr(shipBip[oid].bipedAt) + ', sem registro no Acelera' }; }));
-    else if (sel === 'acSemExp') body = aceleraDivTable(aceleraSemExpedicao.map(function (oid) { var r = acByOrder[oid][0]; return { pedido: oid, motivo: 'Antecipado em ' + dbr(r.data) + ', sem expedição/bipe registrado' }; }));
+    else if (sel === 'acSemExp') body = aceleraDivTable(aceleraSemExpedicao.map(function (oid) { var r = acByOrder[oid][0]; return { pedido: oid, motivo: 'Antecipado em ' + acDbr(r.data) + ', sem expedição/bipe registrado' }; }));
     else if (sel === 'liq') body = aceleraDivTable(liquidoDivergente.map(function (r) { return { pedido: r.pedido, resgate: r.resgate, motivo: 'Líquido informado ' + brlC(r.recebido) + ' ≠ calculado ' + brlC(acLiquidoCalc(r)) + ' (diferença ' + brlC(acLiquidoDiff(r)) + ')' }; }));
     else if (sel === 'taxa') body = aceleraDivTable(taxaDivergente.map(function (r) { return { pedido: r.pedido, resgate: r.resgate, motivo: r.taxa < 0 ? 'Taxa negativa: ' + brlC(r.taxa) : 'Taxa (' + brlC(r.taxa) + ') maior que o antecipado (' + brlC(r.antecipado) + ')' }; }));
     else if (sel === 'incompleto') body = aceleraDivTable(incompletos.map(function (r) { var faltando = []; if (!r.pedido) faltando.push('ID do pedido'); if (!r.resgate) faltando.push('ID do resgate'); if (!r.data) faltando.push('data'); if (!r.antecipado) faltando.push('valor antecipado'); return { pedido: r.pedido || '—', resgate: r.resgate || '—', motivo: 'Faltando: ' + faltando.join(', ') }; }));
+    else if (sel === 'income') body = aceleraDivTable(incomeDivergente.map(function (r) { return { pedido: r.pedido, resgate: '—', motivo: r.motivo }; }));
     else body = aceleraDivTable(duplicados.map(function (r) { return { pedido: r.pedido, resgate: r.resgate, motivo: 'Conflito na chave loja+resgate+pedido' }; }));
     return head + strip + '<div class="chips" style="margin-top:8px">' + chips + '</div>' + body;
   }
@@ -6779,6 +6830,55 @@ buffer/index.js:
 
   // §19 da refatoração: auditoria financeira (antecipado−taxa=líquido calculado × informado),
   // de contagem (brutos/únicos/novos/atualizados/inválidos) e de conciliação (expedição × Acelera).
+  // §33-60 da correção: "Conciliação Financeira por Pedido" — cruza Pedidos + Minha Renda/Income
+  // (reaproveitando a base já normalizada por mrEngine(), NUNCA reimportando Income dentro do
+  // Acelera — não existe "Income Acelera" como fonte separada) + Acelera pelo ID do pedido. Cascata:
+  // Venda [Income] → Líquido esperado [Income "Pagamento Liberado"] → Disponível p/ resgate rápido
+  // [Acelera] → Bruto resgatado → Taxa Acelera → Recebido. Duas verificações independentes e
+  // deterministas: (1) interna do Acelera (bruto − taxa = recebido, já usada em toda a Visão Geral),
+  // (2) cruzada Income × Acelera (líquido esperado × disponível para resgate). §47: pedido sem
+  // cobertura de Income NUNCA vira 🔴 — vira ⚪ "sem dados suficientes", nunca inventamos divergência
+  // por falta de dado.
+  function aceleraConciliacaoPedido(pid, mrByOrder) {
+    var acRecs = acelera.filter(function (r) { return r.pedido === pid; });
+    var mrRow = mrByOrder[pid];
+    var out = { pedido: pid, temAcelera: acRecs.length > 0, temIncome: !!mrRow };
+    if (!acRecs.length) { out.status = { code: 'SEM_ACELERA', label: '—' }; return out; }
+    var acAgg = acRecs.reduce(function (s, r) { s.disp += (r.disponivel || 0); s.antec += r.antecipado; s.taxa += r.taxa; s.receb += r.recebido; s.reemb += r.reembolsado; return s; }, { disp: 0, antec: 0, taxa: 0, receb: 0, reemb: 0 });
+    out.disponivel = acAgg.disp; out.bruto = acAgg.antec; out.taxaAcelera = acAgg.taxa; out.recebido = acAgg.receb;
+    out.internalOk = Math.abs(acAgg.receb - (acAgg.antec - acAgg.taxa)) <= 2;
+    if (!out.internalOk) { out.status = { code: 'DIVERGENTE', label: '🔴 Divergência financeira', motivo: 'Bruto resgatado − taxa ≠ recebido (verificação interna do próprio Acelera)' }; return out; }
+    if (!mrRow) { out.status = { code: 'SEM_DADOS', label: '⚪ Sem dados suficientes' }; return out; }
+    out.venda = mrRow.preco; out.liquidoEsperado = mrRow.liberado;
+    var diffLiq = acAgg.disp - mrRow.liberado; out.diffLiquido = diffLiq;
+    var tolerancia = Math.max(50, Math.round(Math.abs(mrRow.liberado) * 0.02)); // R$0,50 ou 2% — o maior
+    if (Math.abs(diffLiq) <= tolerancia) { out.status = { code: 'OK', label: '🟢 100% conciliado' }; return out; }
+    if (acAgg.reemb > 0) { out.status = { code: 'RESSALVA', label: '🟡 Conciliado com ressalva', motivo: 'Diferença explicada por reembolso identificado no Acelera (R$ ' + brl(acAgg.reemb / 100) + ')' }; return out; }
+    out.status = { code: 'DIVERGENTE', label: '🔴 Divergência financeira', motivo: 'Líquido esperado (Income) diverge do valor disponível para resgate rápido (Acelera) em R$ ' + brl(Math.abs(diffLiq) / 100) + ', sem evento explicativo (reembolso) encontrado' };
+    return out;
+  }
+  function aceleraConciliacaoTable() {
+    var recs = aceleraInPeriod();
+    var pedidosSet = {}; recs.forEach(function (r) { pedidosSet[r.pedido] = true; });
+    var pedidos = Object.keys(pedidosSet);
+    var mr = mrEngine(); var mrByOrder = {}; mr.orders.forEach(function (r) { mrByOrder[r.orderId] = r; });
+    var results = pedidos.map(function (pid) { return aceleraConciliacaoPedido(pid, mrByOrder); });
+    var counts = { OK: 0, RESSALVA: 0, DIVERGENTE: 0, SEM_DADOS: 0 };
+    results.forEach(function (r) { if (counts[r.status.code] != null) counts[r.status.code]++; });
+    var strip = kstrip([
+      { l: '🟢 100% conciliado', v: nn(counts.OK), cls: 'green' },
+      { l: '🟡 Conciliado com ressalva', v: nn(counts.RESSALVA), cls: counts.RESSALVA ? 'amber' : '' },
+      { l: '🔴 Divergência financeira', v: nn(counts.DIVERGENTE), cls: counts.DIVERGENTE ? 'red' : 'green' },
+      { l: '⚪ Sem dados suficientes (sem Income)', v: nn(counts.SEM_DADOS), cls: 'blue', s: 'não é erro — Income ainda não importado/não cobre o pedido' },
+    ]);
+    var divergentes = results.filter(function (r) { return r.status.code === 'DIVERGENTE' || r.status.code === 'RESSALVA'; }).slice(0, 300);
+    var rows = divergentes.map(function (r) {
+      return '<tr class="rowlink" data-acped="' + esc(r.pedido) + '"><td class="mono">' + esc(r.pedido) + '</td><td class="nowrap">' + (r.venda != null ? brlC(r.venda) : '—') + '</td><td class="nowrap">' + (r.liquidoEsperado != null ? brlC(r.liquidoEsperado) : '—') + '</td><td class="nowrap">' + brlC(r.disponivel) + '</td><td class="nowrap">' + brlC(r.bruto) + '</td><td class="nowrap">' + brlC(r.taxaAcelera) + '</td><td class="nowrap">' + brlC(r.recebido) + '</td><td>' + esc(r.status.label) + '</td><td class="cell-text">' + esc(r.motivo || '') + '</td></tr>';
+    }).join('');
+    var table = '<div class="panel"><div class="ph"><h3>Pedidos com ressalva ou divergência</h3><span class="footnote" style="margin:0">' + nn(divergentes.length) + ' de ' + nn(pedidos.length) + ' pedidos com Acelera no período (limitado a 300 na tabela)</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Venda (Income)</th><th>Líquido esperado (Income)</th><th>Disponível (Acelera)</th><th>Bruto resgatado</th><th>Taxa Acelera</th><th>Recebido</th><th>Status</th><th>Motivo</th></tr></thead><tbody>' + (rows || '<tr><td colspan="9" class="empty">Nenhum pedido com ressalva ou divergência. 🎉</td></tr>') + '</tbody></table></div></div>';
+    var nota = callout('', 'Conciliação Financeira por Pedido', 'Cruza Venda e Líquido esperado (Minha Renda/Income — reaproveitado, nunca reimportado aqui) com Disponível para resgate rápido, Bruto resgatado, Taxa e Recebido (Acelera), pedido a pedido. Pedidos sem cobertura de Income aparecem como ⚪ "sem dados suficientes" — nunca como divergência inventada.');
+    return nota + strip + table;
+  }
   function aceleraAuditoria() {
     var recs = aceleraInPeriod(); var m = aceleraMetrics(recs);
     var head = secHead('ACELERA · AUDITORIA', 'Rastreabilidade e qualidade dos dados', 'De onde saiu cada número — financeira, contagem e conciliação.');
@@ -6799,7 +6899,8 @@ buffer/index.js:
     var qual = '<div class="panel"><div class="ph"><h3>Qualidade dos dados — anomalias</h3><span class="footnote" style="margin:0">' + nn(an.length) + ' registro(s) marcados · nunca descartados</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Anomalia</th><th>Antecipado</th><th>Reembolsado</th><th>Pendente</th><th></th></tr></thead><tbody>' + (anRows || '<tr><td colspan="6" class="empty">Nenhuma anomalia detectada. 🎉</td></tr>') + '</tbody></table></div></div>';
     var pr = aceleraSummary ? aceleraSummary.periodReal : null;
     var periodo = aceleraSummary ? callout('', 'Auditoria de período', 'Declarado pela Shopee: <b>' + esc(aceleraSummary.periodDeclared || '—') + '</b> · Registros de <b>' + esc((pr && pr.min) || '—') + '</b> a <b>' + esc((pr && pr.max) || '—') + '</b> · Importado em ' + new Date(aceleraSummary.importedAt).toLocaleString('pt-BR') + '. Nenhum registro foi descartado por causa do período do cabeçalho.') : '';
-    return head + finBlock + cntBlock + concBlock + recon + periodo + qual;
+    var conciliacaoPedido = aceleraConciliacaoTable();
+    return head + finBlock + cntBlock + concBlock + recon + periodo + qual + conciliacaoPedido;
   }
 
   // §20 da refatoração: fala sobre ARQUIVOS (CSV/XLS), não sobre resgates — um mesmo arquivo pode
@@ -6821,7 +6922,7 @@ buffer/index.js:
     var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '480px'; panel.style.maxWidth = '96vw';
     d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
     panel.innerHTML = '<div class="dh"><div><b>' + esc(batch.filename) + '</b></div><button class="x">&times;</button></div><div class="dbd">' +
-      kv('Importado em', new Date(batch.createdAt).toLocaleString('pt-BR')) + kv('Linhas lidas', nn(batch.seen)) + kv('Pedidos únicos (neste arquivo)', batch.pedidosUnicos != null ? nn(batch.pedidosUnicos) : '—') + kv('Resgates únicos (neste arquivo)', batch.resgatesUnicos != null ? nn(batch.resgatesUnicos) : '—') + kv('Intervalo de datas', (batch.periodMin ? dbr(batch.periodMin) : '—') + ' a ' + (batch.periodMax ? dbr(batch.periodMax) : '—')) + kv('Novos', nn(batch.novo)) + kv('Atualizados', nn(batch.upd)) + kv('Sem alteração', nn(batch.unch)) +
+      kv('Importado em', new Date(batch.createdAt).toLocaleString('pt-BR')) + kv('Linhas lidas', nn(batch.seen)) + kv('Pedidos únicos (neste arquivo)', batch.pedidosUnicos != null ? nn(batch.pedidosUnicos) : '—') + kv('Resgates únicos (neste arquivo)', batch.resgatesUnicos != null ? nn(batch.resgatesUnicos) : '—') + kv('Intervalo de datas', (batch.periodMin ? acDbr(batch.periodMin) : '—') + ' a ' + (batch.periodMax ? acDbr(batch.periodMax) : '—')) + kv('Novos', nn(batch.novo)) + kv('Atualizados', nn(batch.upd)) + kv('Sem alteração', nn(batch.unch)) +
       '</div>';
     panel.querySelector('.x').onclick = function () { d.remove(); };
   }
