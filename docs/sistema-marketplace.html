@@ -4405,7 +4405,7 @@ buffer/index.js:
     var fullCount = orders.filter(function (o) { return o.isFbs; }).length;
     var list = orders.filter(function (o) { if (!pedExpF.includeFull && o.isFbs) return false; if (pedExpF.status === 'expedido' && !pedIsExpedido(o.id)) return false; if (pedExpF.status === 'pendente' && (pedIsExpedido(o.id) || o.normalizedStatus === 'CANCELADO')) return false; if (q && o.id.toLowerCase().indexOf(q) < 0 && (o.tracking || '').toLowerCase().indexOf(q) < 0) return false; return true; }).sort(function (a, b) { var ba = shipBip[a.id], bb = shipBip[b.id]; if (ba && bb) return bb.bipedAt.localeCompare(ba.bipedAt); if (ba) return -1; if (bb) return 1; return (b.createdAt || '').localeCompare(a.createdAt || ''); });
     var chips = [['', 'Todos'], ['expedido', 'Expedidos'], ['pendente', 'Pendentes']];
-    var rows = list.slice(0, 200).map(function (o) { var b = shipBip[o.id]; var st = b ? pedidoConciliacaoStatus(o.id) : null; return '<tr' + (b ? '' : ' style="background:#fff8ef"') + '><td class="mono">' + esc(o.id) + '</td><td class="mono">' + esc(o.tracking || '—') + '</td><td class="nowrap">' + dbr(o.createdAt) + '</td><td><span class="pill ' + o.normalizedStatus + '">' + esc(S.pedidos.labels[o.normalizedStatus] || o.normalizedStatus) + '</span></td><td>' + (b ? '<span class="tag ok">expedido</span> <span class="footnote" style="margin:0">' + new Date(b.bipedAt).toLocaleString('pt-BR') + '</span>' : '<span class="tag warn">pendente</span>') + '</td><td>' + (st ? '<span class="tag">' + esc(st.label) + '</span>' : '—') + '</td><td><button class="btn-sm" data-goped360="' + esc(o.id) + '">Ficha 360º</button></td></tr>'; }).join('');
+    var rows = list.slice(0, 200).map(function (o) { var b = shipBip[o.id]; var st = b ? pedidoConciliacaoStatus(o.id) : null; return '<tr' + (b ? '' : ' style="background:#fff8ef"') + '><td class="mono">' + esc(o.id) + '</td><td class="mono">' + esc(o.tracking || '—') + '</td><td class="nowrap">' + dbr(o.createdAt) + '</td><td><span class="pill ' + o.normalizedStatus + '">' + esc(S.pedidos.labels[o.normalizedStatus] || o.normalizedStatus) + '</span></td><td>' + (b ? '<span class="tag ok">expedido</span> <span class="footnote" style="margin:0">' + new Date(b.bipedAt).toLocaleString('pt-BR') + '</span>' : '<span class="tag warn">pendente</span>') + '</td><td>' + (st ? '<span class="tag">' + esc(st.label) + '</span>' : '—') + '</td><td><button class="btn-sm" data-goped360="' + esc(o.id) + '">Ficha do Pedido</button></td></tr>'; }).join('');
     return head + strip + bipe +
       '<div class="chips">' + chips.map(function (c) { return '<span class="chip' + (pedExpF.status === c[0] ? ' chip-on' : '') + '" data-expst="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '<span class="chip' + (pedExpF.includeFull ? ' chip-on' : '') + '" data-expfull="1" title="Full/FBS é despachado pelo centro de distribuição da Shopee — por padrão fica fora desta fila própria">Incluir Full (' + nn(fullCount) + ')</span></div>' +
       '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="expq" style="width:260px" placeholder="Buscar ID do pedido ou BR…" value="' + esc(pedExpF.search) + '"></div>' +
@@ -4733,6 +4733,23 @@ buffer/index.js:
     var margemPct = (resultadoC != null && receitaC) ? r2(resultadoC / receitaC * 100) : null;
     var taxasConf = mrRow ? conferencia(mrRow.liberado, mrRow.preco + taxasSomaC) : '';
 
+    // ---- §45-47: Devolução REABRE o resultado do pedido — nunca apaga o histórico original. Mostra
+    // a evolução Resultado original (antes da devolução) → Evento → Resultado atualizado. Não é um
+    // cálculo novo: resultadoAntes = resultadoC + devImpactoCents (o mesmo devImpactoCents já somado
+    // no Resultado final abaixo, só somado de volta para reconstruir o "antes").
+    var devReaberturaBlock = '';
+    if (occs.length && resultadoC != null) {
+      var resultadoAntes = r2(resultadoC + devImpactoCents);
+      if (Math.abs(devImpactoCents) > 1) {
+        devReaberturaBlock = '<div class="panel"><div class="ph"><h3>Devolução reabriu o resultado deste pedido</h3></div><div class="pb">' +
+          '<div class="fin-line"><span>Resultado original (venda, sem a devolução)</span><span class="' + (resultadoAntes < 0 ? 'neg' : 'pos') + '">' + brlC(resultadoAntes) + '</span></div>' +
+          occs.map(function (x) { var r = occResultadoDevolucao(x); return '<div class="fin-line"><span>↳ Evento: ' + esc(statusLabel(x.status)) + ' (' + esc(x.reason || 'motivo não informado') + ')' + (x.returnOpenedAt ? ' em ' + dbr(x.returnOpenedAt) : '') + ' <span class="tag ' + (r.status === 'confirmado' ? 'ok' : 'info') + '">' + (r.status === 'confirmado' ? 'confirmado' : 'provisório') + '</span></span><span class="neg">' + brl(r.perda) + '</span></div>'; }).join('') +
+          '<div class="fin-line total"><span>Resultado atualizado (com a devolução)</span><span class="' + (resultadoC < 0 ? 'neg' : 'pos') + '">' + brlC(resultadoC) + '</span></div>' +
+          '<div class="footnote" style="margin-top:6px">O histórico original não é apagado — este pedido continua registrado como vendido/expedido/conciliado normalmente; a devolução só ajusta o resultado financeiro final.</div>' +
+          '</div></div>';
+      }
+    }
+
     // ---- Margem antes do Acelera (Venda − Taxas Shopee − Custo de produção) — ponto de checagem
     // explícito pedido pelo usuário, ANTES de entrar Acelera/devolução/ajustes posteriores. Nunca
     // substitui o Resultado final (que segue exatamente a mesma fórmula já aprovada) — é só um
@@ -4770,7 +4787,7 @@ buffer/index.js:
       // 7) CARTEIRA
       wBlock +
       // 8) DEVOLUÇÃO
-      devBlock +
+      devBlock + devReaberturaBlock +
       // 9) RESULTADO FINAL
       '<div class="panel"><div class="ph"><h3>Resultado final</h3></div><div class="pb">' +
       fLine('Receita', receitaC) + fLine('+ Taxas Shopee (líquido, já negativo, inclui afiliados quando há Minha Renda)', taxasSomaC) + fLine('− Custo do produto', custoProdC != null ? -custoProdC : null) + (custoAfilCents ? fLine('− Custo de afiliados (sem Minha Renda para este pedido)', -custoAfilCents) : '') + fLine('− Taxa Acelera', -Math.abs(acTaxaCents)) + fLine('− Impacto de devolução (' + (devConfirmadoN === occs.length && occs.length ? 'confirmado' : occs.length ? 'parcialmente confirmado' : 'provisório') + ')', -devImpactoCents) + (adjRows.length ? fLine('+ Ajustes (Minha Renda)', adjTotalC) : '') +
@@ -6061,7 +6078,11 @@ buffer/index.js:
         '<div class="fin-line"><span>Valor reembolsado</span><span class="neg">' + brl(o.impact.refundedTotal) + '</span></div><div class="fin-line"><span>Compensação</span><span class="pos">-' + brl(o.impact.recoveredTotal) + '</span></div><div class="fin-line"><span>Custos adicionais</span><span class="neg">' + brl(o.impact.additionalCostTotal) + '</span></div><div class="fin-line total"><span>Impacto líquido conhecido</span><span class="neg">' + (o.impact.knownNetImpact == null ? '—' : brl(o.impact.knownNetImpact)) + '</span></div>' +
         inp('Valor recuperável (R$)', o.recoverableValue, 'recoverableValue', '0,00') +
         '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center"><select class="select sm" id="evtype">' + Object.keys(EVENT_META).map(function (k) { return '<option value="' + k + '">' + EVENT_META[k].label + '</option>'; }).join('') + '</select><input class="input sm" id="evamt" style="width:100px" placeholder="valor"><button class="btn-sm primary" id="evadd">+ Movimentação</button></div>' +
-        (o.events && o.events.length ? '<div style="margin-top:10px">' + o.events.map(function (e) { return '<div class="fin-line"><span>' + (EVENT_META[e.type] ? EVENT_META[e.type].label : e.type) + (e.note ? ' · ' + esc(e.note) : '') + '</span><span class="' + (e.direction === 'RECOVERY' ? 'pos' : 'neg') + '">' + (e.direction === 'RECOVERY' ? '-' : '') + brl(e.amount) + '</span></div>'; }).join('') + '</div>' : '') + '</div></div>' +
+        (o.events && o.events.length ? '<div style="margin-top:10px">' + o.events.map(function (e) { return '<div class="fin-line"><span>' + (EVENT_META[e.type] ? EVENT_META[e.type].label : e.type) + (e.note ? ' · ' + esc(e.note) : '') + '</span><span class="' + (e.direction === 'RECOVERY' ? 'pos' : 'neg') + '">' + (e.direction === 'RECOVERY' ? '-' : '') + brl(e.amount) + '</span></div>'; }).join('') + '</div>' : '') +
+        // §45-47: esta devolução reabre o resultado do pedido — o cálculo completo (venda → taxas →
+        // custo → resultado antes/depois da devolução) já existe na Ficha do Pedido, nunca duplicado aqui.
+        (o.orderId ? '<button class="btn-sm" style="margin-top:10px" data-goped360="' + esc(o.orderId) + '">Ver impacto no resultado do pedido</button>' : '') +
+        '</div></div>' +
         '</div></div>' +
         // ---- HISTÓRICO ----
         '<div class="panel"><div class="ph"><h3>Histórico</h3></div><div class="pb"><div style="display:flex;gap:6px;margin-bottom:10px"><input class="input sm" id="cmt" style="flex:1" placeholder="Adicionar comentário…"><button class="btn-sm" id="cmtadd">Comentar</button></div>' +
@@ -6077,6 +6098,7 @@ buffer/index.js:
         }).join('') : '<div class="footnote">Sem atividade ainda.</div>') + '</div></div>' +
         '</div>';
       panel.querySelector('.x').onclick = function () { d.remove(); };
+      var g360 = panel.querySelector('[data-goped360]'); if (g360) g360.onclick = function () { d.remove(); openPedidoFicha360(o.orderId); };
       var fb = panel.querySelector('#fichabaixa'); if (fb) fb.onclick = function () { openConferir(o.id, draw); };
       var fb2 = panel.querySelector('#fichabaixa2'); if (fb2) fb2.onclick = function () { openConferir(o.id, draw); };
       panel.querySelectorAll('[data-set]').forEach(function (s) { s.onchange = function () { setField(s.dataset.set, s.value || (s.dataset.set === 'merchandiseCondition' ? null : s.value)); }; });
@@ -7039,7 +7061,7 @@ buffer/index.js:
       antBlock = callout('warn', 'Pedido não encontrado no Acelera', bip ? 'Expedido em ' + dbr(bip.bipedAt) + ', mas sem registro correspondente no relatório do Shopee Acelera importado.' : 'Sem registro no Shopee Acelera importado.');
     }
     var it = ord ? (ord.items || [])[0] || {} : {};
-    var pedBlock = ord ? '<div class="panel"><div class="ph"><h3>Pedido (do módulo Pedidos)</h3></div><div class="pb">' + kv('Produto', it.productName || '—') + kv('SKU', it.sku || '—') + kv('Status', S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus || '—') + kv('Valor', brl(ord.totalAmount || 0)) + kv('Expedido', bip ? dbr(bip.bipedAt) : 'não registrado') + '<div style="display:flex;gap:8px;margin-top:8px"><button class="btn-sm" data-goped="' + esc(pid) + '">Ver pedido</button><button class="btn-sm primary" data-goped360="' + esc(pid) + '">Ficha Financeira 360º</button></div></div></div>' : '<div class="footnote">Pedido ' + esc(pid) + ' não importado no módulo Pedidos — SKU/produto indisponíveis.</div>';
+    var pedBlock = ord ? '<div class="panel"><div class="ph"><h3>Pedido (do módulo Pedidos)</h3></div><div class="pb">' + kv('Produto', it.productName || '—') + kv('SKU', it.sku || '—') + kv('Status', S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus || '—') + kv('Valor', brl(ord.totalAmount || 0)) + kv('Expedido', bip ? dbr(bip.bipedAt) : 'não registrado') + '<div style="display:flex;gap:8px;margin-top:8px"><button class="btn-sm" data-goped="' + esc(pid) + '">Ver pedido</button><button class="btn-sm primary" data-goped360="' + esc(pid) + '">Ficha do Pedido</button></div></div></div>' : '<div class="footnote">Pedido ' + esc(pid) + ' não importado no módulo Pedidos — SKU/produto indisponíveis.</div>';
     var devBlock = oc ? '<div class="panel"><div class="ph"><h3>Devolução vinculada</h3><span class="tag info">' + esc(statusLabel(oc.status)) + '</span></div><div class="pb">' + kv('Motivo', oc.reason || '—') + kv('Responsabilidade', (DEV.RESPONSIBILITY[oc.responsibility] || '—')) + '<button class="btn-sm" data-godev="' + esc(oc.id) + '">Ver devolução</button></div></div>' : '';
     panel.innerHTML = '<div class="dh"><div><b>Pedido ' + esc(pid) + '</b>' + (r ? ' <span class="tag ' + (acIsReemb(r) ? 'warn' : acIsFullyPaid(r) ? 'ok' : 'neutral') + '" style="margin-left:6px">' + esc(acStatusLabel(r.status)) + '</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' + antBlock + pedBlock + devBlock + '</div>';
     panel.querySelector('.x').onclick = function () { d.remove(); };
