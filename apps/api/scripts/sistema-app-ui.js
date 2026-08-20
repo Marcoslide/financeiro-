@@ -29,7 +29,7 @@
   var Produtos = null;
   var sub = { pedidos: 'pedidos', posvenda: 'visao' };
   var pedTab = 'ALL';
-  var devF = { search: '', internalStatus: '', disputeStatus: '', type: '', status: '', flag: '', jornada: '', motivo: '' }, devPage = 1;
+  var devF = { search: '', internalStatus: '', disputeStatus: '', type: '', status: '', flag: '', jornada: '', motivo: '', fase: '' }, devPage = 1;
   // Shopee Acelera / Antecipação de Recebíveis
   var acelera = [];                 // registros pedido-a-pedido do relatório de antecipação
   var aceleraSummary = null;        // resumo informado pela própria Shopee (para conciliar)
@@ -106,7 +106,7 @@
     OUTRO: { label: 'Outro', direction: 'NEUTRAL', bucket: 'none' },
   };
   function r2(n) { return Math.round(n * 100) / 100; }
-  function newOcc(uid, type) { return { id: uid, type: type, internalStatus: 'NOVA', priority: 'MEDIA', ownerName: null, internalCause: null, causeFamily: null, responsibility: 'NAO_IDENTIFICADA', merchandiseStatus: 'DESCONHECIDO', merchandiseCondition: null, recoverableValue: null, operatorNotes: null, hasDispute: false, disputeStatus: 'NAO_INICIADA', disputeDeadline: null, disputeRespondedAt: null, hasSellerWindow: false, disputeRecovered: null, disputeContested: null, disputeNote: null, disputeReason: null, reasonRevised: null, resolution: null, returnType: null, sellerNote: null, trackingStatus: null, tracking: null, occurredAt: null, orderCreatedAt: null, returnOpenedAt: null, sourceWatermark: null, lastImportAt: null, lastImportFile: null, isDemo: false, receiptState: null, receiptItems: null, receivedBy: null, receivedAt: null, receiptNote: null, events: [], activities: [], impact: { refundedTotal: 0, additionalCostTotal: 0, recoveredTotal: 0, knownNetImpact: 0, cmvAvailable: false } }; }
+  function newOcc(uid, type) { return { id: uid, type: type, internalStatus: 'NOVA', priority: 'MEDIA', ownerName: null, internalCause: null, causeFamily: null, responsibility: 'NAO_IDENTIFICADA', merchandiseStatus: 'DESCONHECIDO', merchandiseCondition: null, recoverableValue: null, operatorNotes: null, hasDispute: false, disputeStatus: 'NAO_INICIADA', disputeDeadline: null, disputeRespondedAt: null, hasSellerWindow: false, disputeRecovered: null, disputeContested: null, disputeNote: null, disputeReason: null, reasonRevised: null, resolution: null, returnType: null, sellerNote: null, trackingStatus: null, tracking: null, occurredAt: null, orderCreatedAt: null, returnOpenedAt: null, sourceWatermark: null, lastImportAt: null, lastImportFile: null, isDemo: false, receiptState: null, receiptItems: null, receivedBy: null, receivedAt: null, receiptNote: null, events: [], activities: [], impact: { refundedTotal: 0, additionalCostTotal: 0, recoveredTotal: 0, knownNetImpact: 0, cmvAvailable: false }, lastStatusAdvanceAt: null, lastViewedAt: null, needsReview: false }; }
   // Catálogo de status observados no campo "Status da Devolução / Reembolso" (§5,9,61).
   // Rótulo curto para apresentação; o TEXTO ORIGINAL é sempre preservado em o.status.
   function normStatus(s) { return (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase(); }
@@ -125,6 +125,26 @@
   };
   var SHOPEE_STATUS_KNOWN = SHOPEE_STATUS_MAP; // alias para a checagem de "status novo"
   function statusLabel(raw) { var m = SHOPEE_STATUS_MAP[normStatus(raw)]; return m ? m.label : (raw || '—'); }
+
+  // ---- Motor de transição de estados (§15-21 do prompt de remodelação de Devolução) ----
+  // Modelo: dados internos (status/decisão/notas/provas) PERSISTEM entre importações; eventos
+  // objetivos vindos da Shopee podem AVANÇAR o fluxo automaticamente, NUNCA retroceder, e só quando
+  // o texto do status é reconhecido com segurança (SHOPEE_STATUS_MAP). Status internos personalizados
+  // (CUSTOM_...) nunca são tocados pelo motor — fora da ordem conhecida, ficam sob controle manual.
+  var IST_ORDER = ['NOVA', 'ANALISE', 'AGUARDANDO_EVIDENCIA', 'EM_DISPUTA', 'AGUARDANDO_RESULTADO', 'AGUARDANDO_RETORNO', 'EM_TRANSITO', 'RECEBIDO', 'RESOLVIDA', 'ENCERRADA'];
+  var SHOPEE_GROUP_TO_IST = { analise: 'AGUARDANDO_RESULTADO', solicitado: 'ANALISE', devolucao: 'AGUARDANDO_RETORNO', validar: 'AGUARDANDO_RETORNO', coleta: 'AGUARDANDO_RETORNO', aprovada: 'RESOLVIDA', disputa: 'ENCERRADA', cancelado: 'ENCERRADA', cancelada: 'ENCERRADA' };
+  function aplicarTransicaoAutomatica(o) {
+    var mapped = SHOPEE_STATUS_MAP[normStatus(o.status)];
+    var grp = mapped ? mapped.group : null;
+    // §18-19: rejeição de disputa é o único sinal objetivo o bastante para fechar o resultado da
+    // disputa sozinho — "aprovada" nunca decide disputa automaticamente (pode não ter sido nossa disputa).
+    if (o.hasDispute && grp === 'disputa' && ['POSSIVEL', 'EM_PREPARACAO', 'RESPONDIDA', 'AGUARDANDO_SHOPEE'].indexOf(o.disputeStatus) >= 0) o.disputeStatus = 'PERDIDA';
+    var sugestao = grp ? SHOPEE_GROUP_TO_IST[grp] : null;
+    if (!sugestao) { o.needsReview = true; return; } // §21: status não reconhecido — nunca decide sozinho, só sinaliza revisão
+    var curIdx = IST_ORDER.indexOf(o.internalStatus), sugIdx = IST_ORDER.indexOf(sugestao);
+    if (curIdx < 0 || sugIdx < 0) return; // status interno customizado (CUSTOM_...) — motor não mexe
+    if (sugIdx > curIdx) { o.internalStatus = sugestao; o.needsReview = false; }
+  }
   // Casos DEMO isolados (§10-12): só existem para validar a interface de disputa. isDemo=true.
   // Nunca entram em cálculos, banco real, KPIs, análises. Fáceis de remover: apague este bloco.
   function makeDemoOcc(id, status, deadlineOffset, trkN, trkS, reason, product, sku, amount) {
@@ -352,7 +372,10 @@
       var groups = {};
       (parsed.rows || []).forEach(function (r) { var k = r.occurrenceKey; if (!k) return; (groups[k] = groups[k] || []).push(r); });
       var byId = {}; occ.forEach(function (o) { byId[o.id] = o; });
+      // §52-53: auditoria de importação / resumo pós-importação — contadores específicos além de
+      // novo/upd/unch genéricos, para responder "o que mudou desde ontem?" sem adivinhar.
       var novo = 0, upd = 0, unch = 0, stale = 0, itemsSeen = 0; var changed = []; var newStatuses = {};
+      var statusChanged = 0, novaCompensacao = 0, rastreioAtualizado = 0, dadosInternosPreservados = 0;
       var importedAt = new Date().toISOString();
       var batchId = 'b' + Date.now() + Math.round(performance.now());
       // "Fotografia" da fonte: relatório mais recente prevalece; um relatório antigo importado
@@ -394,15 +417,24 @@
         if (incoming.orderCreatedAt) ex.orderCreatedAt = incoming.orderCreatedAt;
         if (incoming.returnOpenedAt) ex.returnOpenedAt = incoming.returnOpenedAt;
         ex.items = occMapItems(g); ex.sourceWatermark = reportWM; ex.lastImportAt = importedAt; ex.lastImportFile = file.name;
+        // §14-16: dados internos (status/decisão/notas/provas) já foram preservados acima — só campos
+        // de SOURCE_FIELDS + datas foram tocados. O motor de transição pode AVANÇAR o status interno
+        // (nunca retroceder) quando o novo Status Shopee for reconhecido com segurança (§15-21).
+        if (diffs.some(function (d) { return d.label === 'Status Shopee'; })) { aplicarTransicaoAutomatica(ex); statusChanged++; }
+        if (incoming.compensation != null && incoming.compensation > 0 && (ex._prevCompensation || 0) <= 0) novaCompensacao++;
+        ex._prevCompensation = ex.compensation;
+        if (diffs.some(function (d) { return d.label === 'Rastreio' || d.label === 'Status do rastreio'; })) rastreioAtualizado++;
+        if (diffs.length) ex.lastStatusAdvanceAt = importedAt; // §24-25: marca "teve retorno" para o badge/filtro
+        dadosInternosPreservados++;
         finalizeOcc(ex);
         if (diffs.length) { diffs.forEach(function (d) { var fmt = function (v) { return v == null || v === '' ? '∅' : (typeof v === 'number' ? brl(v) : String(v)); }; addActivity(ex, 'SOURCE', { field: d.label, oldValue: fmt(d.old), newValue: fmt(d.nw), userName: 'Shopee', fileName: file.name, batchId: batchId }); }); upd++; } else { unch++; }
         byId[uid] = ex; changed.push(ex);
       });
       occ = Object.values(byId);
       var label = { RETURN_REFUND: 'Devoluções', ORDER_CANCELLATION: 'Cancelamentos', FAILED_DELIVERY: 'Falhas de entrega' }[type];
-      var batch = { id: batchId, module: 'Devolução · ' + label, filename: file.name, createdAt: importedAt, seen: Object.keys(groups).length, itemsSeen: itemsSeen, novo: novo, upd: upd, unch: unch, stale: stale, periodStart: parsed.periodStart ? new Date(parsed.periodStart).toISOString() : null, periodEnd: parsed.periodEnd ? new Date(parsed.periodEnd).toISOString() : null, newStatuses: Object.keys(newStatuses) };
+      var batch = { id: batchId, module: 'Devolução · ' + label, filename: file.name, createdAt: importedAt, seen: Object.keys(groups).length, itemsSeen: itemsSeen, novo: novo, upd: upd, unch: unch, stale: stale, periodStart: parsed.periodStart ? new Date(parsed.periodStart).toISOString() : null, periodEnd: parsed.periodEnd ? new Date(parsed.periodEnd).toISOString() : null, newStatuses: Object.keys(newStatuses), statusChanged: statusChanged, novaCompensacao: novaCompensacao, rastreioAtualizado: rastreioAtualizado, dadosInternosPreservados: dadosInternosPreservados };
       batches.unshift(batch); lastImportStamp = importedAt;
-      return Promise.all([putMany('occ', changed), putMany('batches', [batch])]).then(function () { return batch; });
+      return Promise.all([putMany('occ', changed), putMany('batches', [batch])]).then(function () { return { batch: batch, changed: changed }; });
     });
   }
   function fileInput(cb) { var inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.xlsx,.xls,.csv'; inp.onchange = function () { if (inp.files[0]) cb(inp.files[0]); }; inp.click(); }
@@ -949,6 +981,136 @@
   // inventamos um motivo que não existe nos dados.
   function casoMotivo(o) { return (o.reason || '').trim() || 'Motivo não informado'; }
 
+  // ---- Duas visões de tempo (§3-6 do prompt de remodelação de Devolução) — NUNCA confundir: ----
+  // "Data da venda/pagamento" vem do módulo PEDIDOS (cruzada por ID do pedido, preferindo a hora do
+  // pagamento) — responde "quando esse pedido pertenceu à operação de vendas". "Devolução aberta em"
+  // é o campo próprio da base de devolução (Tempo de envio de devolução → returnOpenedAt) — responde
+  // "quando o problema chegou até nós". São dimensões diferentes: a primeira alimenta a coorte de
+  // vendas (qualidade/produto/SKU), a segunda alimenta a carga operacional do período.
+  function occVendaData(o) {
+    var ord = orders.find(function (x) { return x.id === o.orderId; });
+    if (ord) return ord.paidAt || ord.createdAt || o.orderCreatedAt || null;
+    return o.orderCreatedAt || null;
+  }
+  function occAberturaData(o) { return o.returnOpenedAt || o.occurredAt || null; }
+  function occDiasVendaAteAbertura(o) {
+    var v = occVendaData(o), a = occAberturaData(o); if (!v || !a) return null;
+    var d = Math.round((new Date(a) - new Date(v)) / 864e5); return d >= 0 ? d : null;
+  }
+  var DIAS_FAIXAS = [[0, 7, '0–7 dias'], [8, 15, '8–15 dias'], [16, 30, '16–30 dias'], [31, 45, '31–45 dias'], [46, Infinity, '+45 dias']];
+  function occFaixaDias(dias) { if (dias == null) return null; for (var i = 0; i < DIAS_FAIXAS.length; i++) { if (dias >= DIAS_FAIXAS[i][0] && dias <= DIAS_FAIXAS[i][1]) return DIAS_FAIXAS[i][2]; } return null; }
+
+  // ---- Resultado do caso (§17-19) — SEPARADO de Status Shopee / Status interno / Disputa. Nunca
+  // confundir "Aprovada" (Shopee aprovou a devolução/reembolso) com "Disputa ganha" (nós recorremos
+  // e a Shopee nos deu razão) — só o campo disputeStatus decide se houve disputa e qual foi o resultado.
+  var RESULTADO_META = {
+    EM_ABERTO: 'Em aberto', SEM_DISPUTA: 'Sem disputa', DISPUTA_GANHA: 'Disputa ganha', DISPUTA_PERDIDA: 'Disputa perdida',
+    APROVADA_SHOPEE: 'Solicitação aprovada pela Shopee', REJEITADA: 'Solicitação rejeitada', CANCELADA_COMPRADOR: 'Cancelada pelo comprador',
+    COMPENSADO: 'Compensado pela Shopee', ENCERRADO_SEM_COMPENSACAO: 'Encerrado sem compensação',
+  };
+  function casoResultado(o) {
+    var st = normStatus(o.status || ''); var b = o.exposure ? o.exposure.bucket : null; var ds = o.disputeStatus;
+    if (/comprador/.test(st) && /cancel/.test(st)) return 'CANCELADA_COMPRADOR';
+    if (ds === 'GANHA' || ds === 'PARCIAL') return 'DISPUTA_GANHA';
+    if (ds === 'PERDIDA' || ds === 'PRAZO_PERDIDO') return 'DISPUTA_PERDIDA';
+    if (b === 'CANCELLED') return 'REJEITADA';
+    if (b === 'RECOVERED') return 'COMPENSADO';
+    if (b === 'CONFIRMED') { if (ds && ds !== 'NAO_INICIADA') return 'DISPUTA_PERDIDA'; return o.hasDispute ? 'ENCERRADO_SEM_COMPENSACAO' : (ds === 'NAO_INICIADA' ? 'APROVADA_SHOPEE' : 'SEM_DISPUTA'); }
+    return 'EM_ABERTO';
+  }
+
+  // ---- Prioridade operacional determinística (§55) — nunca LLM; só prazo + etapa da jornada. ----
+  var PRIORIDADE_META = { CRITICA: '🔴 Crítica', ALTA: '🟠 Alta', MEDIA: '🟡 Média', ACOMPANHAMENTO: '🔵 Acompanhamento', ENCERRADA: '⚪ Encerrada' };
+  function casoPrioridade(o) {
+    var j = casoJornada(o);
+    if (j === 'BAIXADA' || j === 'REJEITADA') return 'ENCERRADA';
+    if (j === 'ACAO_NECESSARIA' && o.disputeDeadline) {
+      var dias = Math.ceil((new Date(o.disputeDeadline) - Date.now()) / 864e5);
+      if (dias <= 0) return 'CRITICA';
+      if (dias <= 2) return 'ALTA';
+    }
+    if (j === 'NOVA') return 'MEDIA';
+    return 'ACOMPANHAMENTO';
+  }
+
+  // ---- Controle de prazo (§26-28) — "Ação do Vendedor solicitada até" comanda a fila. Prazo vencido
+  // NUNCA vira "disputa perdida" sozinho — é só um alerta operacional (§28).
+  function prazoDiasRestantes(deadlineIso) { if (!deadlineIso) return null; return Math.ceil((new Date(deadlineIso) - new Date(new Date().toDateString())) / 864e5); }
+  function prazoTexto(deadlineIso) {
+    var d = prazoDiasRestantes(deadlineIso); if (d == null) return 'Sem prazo informado';
+    if (d < 0) return 'Prazo vencido há ' + Math.abs(d) + ' dia' + (Math.abs(d) === 1 ? '' : 's');
+    if (d === 0) return 'Vence hoje';
+    if (d === 1) return 'Vence amanhã';
+    return 'Faltam ' + d + ' dias';
+  }
+  function prazoChip(o) {
+    if (!expectsAction(o)) return null;
+    var d = prazoDiasRestantes(o.disputeDeadline);
+    if (d == null) return 'sem_prazo';
+    if (d < 0) return 'vencido';
+    if (d === 0) return 'hoje';
+    if (d === 1) return 'amanha';
+    if (d <= 3) return 'ate3';
+    return null;
+  }
+  // Só pedidos que ainda pedem uma decisão nossa (janela do vendedor aberta) entram no controle de prazo.
+  function expectsAction(o) { return o.type !== 'FAILED_DELIVERY' && o.hasSellerWindow && !!o.disputeDeadline && casoJornada(o) === 'ACAO_NECESSARIA'; }
+
+  // ---- Fase operacional (§8-9,39-41) — a jornada mental de Casos: caixa de entrada → acompanhamento
+  // → encerrado. Calculada a partir da jornada já existente, nunca digitada.
+  var FASE_META = { SOLICITACOES: 'Solicitações', EM_ANDAMENTO: 'Em andamento', ENCERRADOS: 'Encerrados' };
+  function casoFase(o) {
+    var j = casoJornada(o);
+    if (j === 'BAIXADA' || j === 'REJEITADA') return 'ENCERRADOS';
+    if (j === 'NOVA' || j === 'ACAO_NECESSARIA') return 'SOLICITACOES';
+    if (j === 'AVALIACAO' && o.internalStatus === 'NOVA') return 'SOLICITACOES';
+    return 'EM_ANDAMENTO';
+  }
+
+  // ---- "Novo retorno" (§24-25) — a Shopee respondeu desde a última vez que o operador abriu o caso?
+  // o.lastStatusAdvanceAt é carimbado pelo motor de transição (§15-16, em importPosVenda) sempre que
+  // um evento objetivo da Shopee muda algo relevante; o.lastViewedAt é carimbado ao abrir a Ficha.
+  // Os dois persistem entre importações (nunca fazem parte de SOURCE_FIELDS).
+  function casoNovoRetorno(o) { return !!o.lastStatusAdvanceAt && (!o.lastViewedAt || o.lastStatusAdvanceAt > o.lastViewedAt); }
+  // §36 — situação financeira em linguagem simples, derivada do resultado + impacto já calculados.
+  function casoSituacaoFinanceira(o) {
+    var r = casoResultado(o); var net = o.impact ? o.impact.knownNetImpact : null;
+    if (r === 'DISPUTA_GANHA' || r === 'COMPENSADO') return (o.impact && o.impact.recoveredTotal > 0) ? 'Recuperado' : 'Compensação identificada';
+    if (r === 'CANCELADA_COMPRADOR') return 'Sem impacto';
+    if (r === 'EM_ABERTO') return net > 0 ? 'Valor em risco' : 'Em aberto';
+    if (net == null) return 'Em aberto';
+    if (net > 0) return 'Perdido';
+    if (net < 0) return 'Recuperado';
+    return 'Reembolso realizado';
+  }
+
+  // §53: resumo pós-importação — o que mudou nesta importação, com atalho para abrir cada caso.
+  // Reconstruído a partir das activities com este batchId — não depende de guardar o array de
+  // objetos alterados, então funciona também a partir do histórico de importações (§20/§61-63).
+  function openDevImportResumo(batch) {
+    var changed = occ.filter(function (o) { return (o.activities || []).some(function (a) { return a.batchId === batch.id; }); });
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '640px'; panel.style.maxWidth = '96vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    var atualizados = changed.filter(function (o) { return o.activities && o.activities.some(function (a) { return a.kind === 'SOURCE' && a.batchId === batch.id && a.field; }); });
+    var strip = kstrip([
+      { l: 'Casos novos', v: nn(batch.novo), cls: 'blue' },
+      { l: 'Casos atualizados', v: nn(batch.upd), cls: 'blue' },
+      { l: 'Mudança de status', v: nn(batch.statusChanged || 0), cls: (batch.statusChanged ? 'amber' : '') },
+      { l: 'Novas compensações', v: nn(batch.novaCompensacao || 0), cls: (batch.novaCompensacao ? 'green' : '') },
+      { l: 'Rastreio atualizado', v: nn(batch.rastreioAtualizado || 0), cls: '' },
+      { l: 'Dados internos preservados', v: nn(batch.dadosInternosPreservados || 0), cls: 'green', s: 'notas/status/decisões nunca apagados' },
+    ]);
+    var rows = atualizados.slice(0, 200).map(function (o) {
+      var diffsTxt = (o.activities || []).filter(function (a) { return a.kind === 'SOURCE' && a.batchId === batch.id && a.field; }).map(function (a) { return a.field + ': ' + a.oldValue + ' → ' + a.newValue; }).join(' · ');
+      return '<tr class="rowlink" data-oc="' + esc(o.id) + '"><td class="mono">' + esc(o.orderId || o.returnId || o.id) + '</td><td class="cell-text">' + esc(diffsTxt || '—') + '</td></tr>';
+    }).join('');
+    panel.innerHTML = '<div class="dh"><div><b>Atualização concluída</b></div><button class="x">&times;</button></div><div class="dbd">' + strip +
+      (rows ? '<div class="panel"><div class="ph"><h3>O que mudou</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Alterações</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>' : callout('green', '✓ Nenhum caso existente teve alteração de dados da Shopee', 'Só casos novos entraram nesta importação.')) +
+      '</div>';
+    panel.querySelector('.x').onclick = function () { d.remove(); };
+    panel.querySelectorAll('[data-oc]').forEach(function (b) { b.onclick = function () { d.remove(); openFicha(b.dataset.oc); }; });
+  }
+
   function renderPosVenda() {
     var tabs = [['visao', 'Visão Geral'], ['casos', 'Casos'], ['recebimentos', 'Recebimentos'], ['analises', 'Análises'], ['planos', 'Plano de Ação'], ['import', 'Importações']];
     // compat com chaves antigas
@@ -966,7 +1128,7 @@
       else body.innerHTML = devExec();
     } catch (e) { body.innerHTML = '<div class="form-err">Erro ao renderizar esta aba: ' + esc(e.message || e) + '</div>'; }
     bindDevPeriodBar();
-    app.querySelectorAll('[data-pv]').forEach(function (b) { b.onclick = function () { fileInput(function (f) { importPosVenda(b.dataset.pv, f).then(function (batch) { render(); toast('Importado', batch.novo + ' novas · ' + batch.upd + ' atualizadas · ' + batch.unch + ' sem alteração' + (batch.stale ? ' · ' + batch.stale + ' ignoradas (relatório antigo)' : '')); }).catch(function (e) { toast('Falha', e.message, true); }); }); }; });
+    app.querySelectorAll('[data-pv]').forEach(function (b) { b.onclick = function () { fileInput(function (f) { importPosVenda(b.dataset.pv, f).then(function (res) { render(); toast('Importação concluída', res.batch.novo + ' novos · ' + res.batch.upd + ' atualizados · ' + res.batch.unch + ' sem alteração' + (res.batch.statusChanged ? ' · ' + res.batch.statusChanged + ' c/ status alterado' : '') + (res.batch.stale ? ' · ' + res.batch.stale + ' ignorados (relatório antigo)' : '')); }).catch(function (e) { toast('Falha', e.message, true); }); }); }; });
     bindSubtabs('posvenda');
     app.querySelectorAll('[data-oc]').forEach(function (b) { b.onclick = function () { openFicha(b.dataset.oc, b.dataset.focus); }; });
     app.querySelectorAll('[data-go]').forEach(function (b) { b.onclick = function () {
@@ -986,6 +1148,7 @@
     if (t === 'recebimentos') bindRecebimentos();
     if (t === 'casos') bindDevOcc();
     if (t === 'analises') bindAnalises();
+    if (t === 'import') bindDevImportacoes();
     if (t === 'planos') bindPlanos();
   }
   // Barra de período compartilhada por todo o módulo Devolução (§18-19) + selo "atualizado até".
@@ -1209,10 +1372,14 @@
     var list = batches.filter(function (b) { return b.module.indexOf('Devolução') === 0 || b.module.indexOf('Pós-venda') === 0; });
     return secHead('DADOS', 'Importações', 'Carregue os três relatórios da Shopee. A reimportação é idempotente — nunca duplica ocorrências.') +
       '<div class="cards6">' + TYPES.map(function (x) { return '<div class="fcard"><div class="lbl">' + x[1] + '</div><button class="btn-sm primary" style="margin-top:10px" data-pv="' + x[0] + '">Importar</button></div>'; }).join('') + '</div>' +
-      '<div class="panel"><div class="ph"><h3>Histórico de importações</h3></div><div class="table-wrap"><table><thead><tr><th>Relatório</th><th>Arquivo</th><th>Ocorrências</th><th>Novas</th><th>Atualizadas</th><th>Itens</th><th>Data</th></tr></thead><tbody>' +
-      (list.length ? list.map(function (b) { return '<tr><td>' + esc(b.module.replace(/^Devolução · |^Pós-venda · /, '')) + '</td><td>' + esc(b.filename) + '</td><td>' + nn(b.seen) + '</td><td>' + nn(b.novo) + '</td><td>' + nn(b.upd) + '</td><td>' + nn(b.itemsSeen || 0) + '</td><td class="footnote" style="margin:0">' + new Date(b.createdAt).toLocaleString('pt-BR') + '</td></tr>'; }).join('') : '<tr><td colspan="7" class="empty">Nenhuma importação ainda.</td></tr>') +
+      '<div class="panel"><div class="ph"><h3>Histórico de importações</h3></div><div class="table-wrap"><table><thead><tr><th>Relatório</th><th>Arquivo</th><th>Ocorrências</th><th>Novas</th><th>Atualizadas</th><th>Mudança de status</th><th>Itens</th><th>Data</th><th></th></tr></thead><tbody>' +
+      (list.length ? list.map(function (b, i) { return '<tr><td>' + esc(b.module.replace(/^Devolução · |^Pós-venda · /, '')) + '</td><td>' + esc(b.filename) + '</td><td>' + nn(b.seen) + '</td><td>' + nn(b.novo) + '</td><td>' + nn(b.upd) + '</td><td>' + nn(b.statusChanged || 0) + '</td><td>' + nn(b.itemsSeen || 0) + '</td><td class="footnote" style="margin:0">' + new Date(b.createdAt).toLocaleString('pt-BR') + '</td><td>' + (b.upd ? '<button class="btn-sm" data-devresumo="' + i + '">Ver o que mudou</button>' : '') + '</td></tr>'; }).join('') : '<tr><td colspan="9" class="empty">Nenhuma importação ainda.</td></tr>') +
       '</tbody></table></div></div>' +
       '<div class="footnote">Saúde dos dados: ' + nn(occ.length) + ' ocorrências · ' + nn(occ.filter(function (o) { return (o.items || []).some(function (i) { return i.sku && !i.skuLinked; }); }).length) + ' com SKU não vinculado.</div>';
+  }
+  function bindDevImportacoes() {
+    var list = batches.filter(function (b) { return b.module.indexOf('Devolução') === 0 || b.module.indexOf('Pós-venda') === 0; });
+    app.querySelectorAll('[data-devresumo]').forEach(function (b) { b.onclick = function () { openDevImportResumo(list[parseInt(b.dataset.devresumo, 10)]); }; });
   }
 
   // ---- Causas, Achados e Plano de Ação (client-side, mesmas regras do backend) ----
@@ -1480,19 +1647,25 @@
 
   // Coorte por MÊS DO PEDIDO (playbook §4): atribui a devolução ao mês do pedido que a
   // originou (não ao mês em que a solicitação foi aberta). Taxa = devoluções ÷ pedidos do mês.
+  // §44-47 do prompt de remodelação de Devolução: "taxa de devolução por período de VENDA" — nunca
+  // por data de abertura. Um pedido pago em julho que devolve em agosto conta como devolução DA
+  // COORTE DE JULHO (§4-5). occVendaData() já prefere a data de pagamento (Pedidos), cruzada por ID.
   function devCohortData() {
-    var ordByMonth = {}; var ordById = {};
-    orders.forEach(function (o) { ordById[o.id] = o; if (o.createdAt) { var k = o.createdAt.slice(0, 7); ordByMonth[k] = (ordByMonth[k] || 0) + 1; } });
+    var ordByMonth = {};
+    orders.forEach(function (o) { var v = o.paidAt || o.createdAt; if (v) { var k = v.slice(0, 7); ordByMonth[k] = (ordByMonth[k] || 0) + 1; } });
     var map = {};
     occ.forEach(function (o) {
-      var ord = o.orderId ? ordById[o.orderId] : null;
-      var iso = (ord && ord.createdAt) || o.occurredAt; if (!iso) return;
+      if (o.isDemo) return;
+      var iso = occVendaData(o) || o.occurredAt; if (!iso) return;
       var k = iso.slice(0, 7);
       var m = map[k] = map[k] || { k: k, occ: 0, loss: 0 };
       m.occ++; m.loss += occEffectiveLoss(o);
     });
+    // §44: coorte imatura — meses recentes ainda não tiveram tempo hábil para gerar todas as devoluções.
+    var hojeKey = new Date().toISOString().slice(0, 7);
     return Object.values(map).sort(function (a, b) { return a.k.localeCompare(b.k); }).map(function (m) {
-      var ord = ordByMonth[m.k] || 0; m.orders = ord; m.taxa = ord ? r2(m.occ / ord * 100) : null; m.loss = r2(m.loss); return m;
+      var ord = ordByMonth[m.k] || 0; m.orders = ord; m.taxa = ord ? r2(m.occ / ord * 100) : null; m.loss = r2(m.loss);
+      m.imatura = m.k >= hojeKey; return m;
     });
   }
   function monthLabel(k) { var p = k.split('-'); var mm = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']; return p[1] ? (mm[+p[1] - 1] + '/' + p[0].slice(2)) : k; }
@@ -1505,10 +1678,11 @@
     // Panorama de gestão (§17-22): 4 indicadores + evolução + motivos + produtos + resumo financeiro + até 3 achados.
     var denomWarn = !agg.orders ? callout('red', 'Sem base de pedidos', 'Importe os <b>Pedidos</b> para calcular a taxa real de devolução. Sem o total de pedidos, a contagem mede volume, não qualidade.') : '';
     var cohort = devCohortData(); var hasTaxa = cohort.some(function (m) { return m.taxa != null; });
-    var chartRows = cohort.map(function (m) { return { label: monthLabel(m.k), bar: m.occ, line: hasTaxa ? (m.taxa || 0) : m.loss }; });
-    var trend = cohort.length >= 2 ? chartCard('Evolução das devoluções (por mês do pedido)',
+    var chartRows = cohort.map(function (m) { return { label: monthLabel(m.k) + (m.imatura ? '*' : ''), bar: m.occ, line: hasTaxa ? (m.taxa || 0) : m.loss }; });
+    var imaturaNote = cohort.some(function (m) { return m.imatura; }) ? '<div class="footnote" style="padding:4px 16px 0">* coorte ainda imatura — vendas recentes ainda não tiveram tempo hábil para gerar todas as devoluções.</div>' : '';
+    var trend = cohort.length >= 2 ? chartCard('Taxa de devolução por período de venda (coorte)',
       legendSwatch([['Devoluções', '#2b4bd6'], [hasTaxa ? 'Taxa de devolução %' : 'Perda R$', '#d13b3b']]) + ' <button class="link-btn" data-go="analises" data-asub="evolucao">detalhar</button>',
-      svgBarLine(chartRows, { barFmt: nn, lineFmt: hasTaxa ? function (v) { return pct(v); } : function (v) { return brl(v); } })) : '';
+      svgBarLine(chartRows, { barFmt: nn, lineFmt: hasTaxa ? function (v) { return pct(v); } : function (v) { return brl(v); } })) + imaturaNote : '';
     var motChart = motivos.length ? chartCard('Principais motivos', legendSwatch([['Perda R$', '#d13b3b']]) + ' <button class="link-btn" data-go="analises" data-asub="problemas">investigar</button>', svgHBars(motivos.slice(0, 6).map(function (m) { return { label: m.reason, value: m.loss, color: '#d13b3b' }; }), { fmt: function (v) { return brl(v); } })) : '';
     var byProd = {}; crit.forEach(function (s) { var k = s.product || s.sku; var p = byProd[k] = byProd[k] || { label: k, value: 0 }; p.value += s.loss; });
     var prodBars = Object.values(byProd).sort(function (a, b) { return b.value - a.value; }).slice(0, 6);
@@ -1527,7 +1701,24 @@
     // realmente SAIU da empresa (bipe), não só sobre o que foi vendido.
     var totalExpedidos = Object.keys(shipBip).length;
     var expKpi = totalExpedidos ? (function () { var devExpedidos = list.filter(function (o) { return o.orderId && pedIsExpedido(o.orderId); }).length; return { l: 'Taxa sobre expedidos', v: pct(r2(devExpedidos / totalExpedidos * 100)), cls: 'blue', s: nn(devExpedidos) + ' de ' + nn(totalExpedidos) + ' expedidos' }; })() : null;
+    // §43: em poucos segundos — "tenho N casos novos, X vencem hoje, Y aguardando Shopee..."
+    var opStrip = kstrip([
+      { l: 'Novos casos', v: nn(list.filter(function (o) { return casoJornada(o) === 'NOVA'; }).length), cls: 'blue' },
+      { l: 'Precisam de ação', v: nn(list.filter(function (o) { return casoJornada(o) === 'ACAO_NECESSARIA'; }).length), cls: 'amber' },
+      { l: 'Prazo vencendo (≤3d)', v: nn(list.filter(function (o) { return ['hoje', 'amanha', 'ate3'].indexOf(prazoChip(o)) >= 0; }).length), cls: 'red' },
+      { l: 'Em disputa', v: nn(list.filter(function (o) { return o.hasDispute && ['POSSIVEL', 'EM_PREPARACAO', 'RESPONDIDA', 'AGUARDANDO_SHOPEE'].indexOf(o.disputeStatus) >= 0; }).length), cls: 'blue' },
+      { l: 'Aguardando Shopee', v: nn(list.filter(function (o) { return casoJornada(o) === 'AGUARDANDO_SHOPEE'; }).length), cls: 'blue' },
+      { l: '🟣 Novo retorno', v: nn(list.filter(casoNovoRetorno).length), cls: 'amber', s: 'desde a última vez que você abriu o caso' },
+    ]);
+    var opStrip2 = kstrip([
+      { l: 'Compensações identificadas', v: nn(list.filter(function (o) { return o.compensation > 0; }).length), cls: 'green', s: brl(list.reduce(function (s, o) { return s + (o.compensation || 0); }, 0)) },
+      { l: 'Aguardando retorno físico', v: nn(list.filter(function (o) { return ['EM_TRANSITO', 'CHEGOU_CONFERIR'].indexOf(o.receiptState) >= 0; }).length), cls: 'amber' },
+      { l: 'Valor em risco', v: brl(atRisk), cls: 'amber' },
+      { l: 'Valor recuperado', v: brl(recovered), cls: 'green' },
+      { l: 'Valor perdido (confirmado)', v: brl(confirmed), cls: 'red' },
+    ]);
     return secHead('PANORAMA', 'Como estamos?', 'Estamos melhorando ou piorando, quanto perdemos, por quê e quanto recuperamos.') +
+      opStrip + opStrip2 +
       kstrip([
         { l: 'Taxa sobre vendidos', v: agg.orders ? pct(list.length / agg.orders * 100) : '—', cls: 'blue', s: agg.orders ? nn(list.length) + ' de ' + nn(agg.orders) + ' pedidos' : 'sem base de pedidos' },
       ].concat(expKpi ? [expKpi] : []).concat([
@@ -1549,18 +1740,25 @@
     // Contagem nos cabeçalhos por tipo (§11), sempre respeitando o período selecionado (§42).
     var typeCounts = { RETURN_REFUND: 0, ORDER_CANCELLATION: 0, FAILED_DELIVERY: 0 }; all.forEach(function (o) { if (typeCounts[o.type] != null) typeCounts[o.type]++; });
     var typed = devF.type ? all.filter(function (o) { return o.type === devF.type; }) : all;
+    // §8-9,39-41: FASE operacional — a jornada mental de Casos (caixa de entrada → acompanhamento →
+    // encerrado), sempre abaixo da categoria (tipo) na hierarquia de navegação.
+    var faseCounts = { SOLICITACOES: 0, EM_ANDAMENTO: 0, ENCERRADOS: 0 }; typed.forEach(function (o) { faseCounts[casoFase(o)]++; });
+    var faseList = devF.fase ? typed.filter(function (o) { return casoFase(o) === devF.fase; }) : typed;
     // Segunda linha DINÂMICA: status reais presentes na fonte selecionada (§4-15) — nunca inventa.
-    var statusCounts = {}; var novoStatus = {}; typed.forEach(function (o) { var raw = o.status || '(sem status)'; statusCounts[raw] = (statusCounts[raw] || 0) + 1; if (o.status && !SHOPEE_STATUS_MAP[normStatus(o.status)]) novoStatus[o.status] = true; });
+    var statusCounts = {}; var novoStatus = {}; faseList.forEach(function (o) { var raw = o.status || '(sem status)'; statusCounts[raw] = (statusCounts[raw] || 0) + 1; if (o.status && !SHOPEE_STATUS_MAP[normStatus(o.status)]) novoStatus[o.status] = true; });
     var statusList = Object.keys(statusCounts).sort();
     // Etapa da jornada (§10-15,18) — SEMPRE calculada, nunca digitada; nunca mistura com motivo/pendência.
-    var jornadaCounts = {}; typed.forEach(function (o) { var j = casoJornada(o); jornadaCounts[j] = (jornadaCounts[j] || 0) + 1; });
+    var jornadaCounts = {}; faseList.forEach(function (o) { var j = casoJornada(o); jornadaCounts[j] = (jornadaCounts[j] || 0) + 1; });
     var JORNADA_ORDEM = ['NOVA', 'AVALIACAO', 'ACAO_NECESSARIA', 'AGUARDANDO_SHOPEE', 'COLETA', 'FALHA_IDENTIFICADA', 'CONCILIACAO', 'TRANSPORTE', 'VALIDAR', 'BAIXADA', 'REJEITADA'];
     var jornadaKeys = JORNADA_ORDEM.filter(function (k) { return jornadaCounts[k]; });
     // Motivo (§16-17) — dimensão separada da jornada, construída só com o que existe em o.reason.
-    var motivoCounts = {}; typed.forEach(function (o) { var mv = casoMotivo(o); motivoCounts[mv] = (motivoCounts[mv] || 0) + 1; });
+    var motivoCounts = {}; faseList.forEach(function (o) { var mv = casoMotivo(o); motivoCounts[mv] = (motivoCounts[mv] || 0) + 1; });
     var motivoKeys = Object.keys(motivoCounts).sort(function (a, b) { return motivoCounts[b] - motivoCounts[a]; });
     var motivoTop = motivoKeys.slice(0, 8), motivoRest = motivoKeys.length - motivoTop.length;
-    var list = typed;
+    // §24-25: desde a última importação — teve atualização / novo retorno / compensação nova / rastreio.
+    var devLastBatch = batches.filter(function (b) { return b.module && b.module.indexOf('Devolução') === 0; }).sort(function (a, b) { return (b.createdAt || '').localeCompare(a.createdAt || ''); })[0];
+    function occTeveAtualizacao(o) { return !!devLastBatch && o.lastStatusAdvanceAt === devLastBatch.createdAt; }
+    var list = faseList;
     if (devF.status) list = list.filter(function (o) { return (o.status || '(sem status)') === devF.status; });
     if (devF.jornada) list = list.filter(function (o) { return casoJornada(o) === devF.jornada; });
     if (devF.motivo) list = list.filter(function (o) { return casoMotivo(o) === devF.motivo; });
@@ -1568,6 +1766,16 @@
     else if (devF.flag === 'semcausa') list = list.filter(function (o) { return !o.internalCause && !o.causeFamily; });
     else if (devF.flag === 'semresp') list = list.filter(function (o) { return !o.ownerName; });
     else if (devF.flag === 'naovinc') list = list.filter(function (o) { return (o.items || []).some(function (i) { return i.sku && !i.skuLinked; }); });
+    // §27: filtros de prazo (chips prioritários dentro de Solicitações). §28: vencido nunca é lido
+    // como "disputa perdida" — é só o alerta de prazo, o resultado continua exigindo revisão manual.
+    else if (devF.flag === 'venceHoje') list = list.filter(function (o) { return prazoChip(o) === 'hoje'; });
+    else if (devF.flag === 'venceAmanha') list = list.filter(function (o) { return prazoChip(o) === 'amanha'; });
+    else if (devF.flag === 'ate3') list = list.filter(function (o) { return ['hoje', 'amanha', 'ate3'].indexOf(prazoChip(o)) >= 0; });
+    else if (devF.flag === 'vencido') list = list.filter(function (o) { return prazoChip(o) === 'vencido'; });
+    else if (devF.flag === 'semprazo') list = list.filter(function (o) { return expectsAction(o) && prazoChip(o) === 'sem_prazo'; });
+    // §24-25: "o que mudou desde ontem?" — desde a última importação.
+    else if (devF.flag === 'novoretorno') list = list.filter(casoNovoRetorno);
+    else if (devF.flag === 'atualizado') list = list.filter(occTeveAtualizacao);
     // Filtro de status interno com MULTI-SELEÇÃO (§Casos): devF.istSet = {key:true}; compat com devF.internalStatus (único).
     var istSet = devF.istSet || {}; var istKeys = Object.keys(istSet).filter(function (k) { return istSet[k]; });
     if (!istKeys.length && devF.internalStatus) istKeys = [devF.internalStatus];
@@ -1580,14 +1788,15 @@
     var slice = list.slice((devPage - 1) * 25, devPage * 25);
     var ISTMAP = internalStatusMap();
     var typeChips = [['', 'Todas', all.length], ['RETURN_REFUND', 'Devoluções', typeCounts.RETURN_REFUND], ['ORDER_CANCELLATION', 'Cancelamentos', typeCounts.ORDER_CANCELLATION], ['FAILED_DELIVERY', 'Falhas de entrega', typeCounts.FAILED_DELIVERY]];
-    var demoN = typed.filter(function (o) { return o.isDemo; }).length;
+    var demoN = faseList.filter(function (o) { return o.isDemo; }).length;
+    var faseTabs = '<div class="tabs" style="margin-top:8px">' + [['', 'Todos', typed.length], ['SOLICITACOES', 'Solicitações', faseCounts.SOLICITACOES], ['EM_ANDAMENTO', 'Em andamento', faseCounts.EM_ANDAMENTO], ['ENCERRADOS', 'Encerrados', faseCounts.ENCERRADOS]].map(function (c) { return '<div class="tab' + (devF.fase === c[0] ? ' active' : '') + '" data-ocfase="' + c[0] + '">' + c[1] + ' <span class="tag">' + nn(c[2]) + '</span></div>'; }).join('') + '</div>';
     var statusRow = '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Status Shopee (bruto):</span><span class="chip' + (devF.status === '' ? ' chip-on' : '') + '" data-ocstatus="">Todos</span>' + statusList.map(function (raw) { var isNew = raw !== '(sem status)' && !SHOPEE_STATUS_MAP[normStatus(raw)]; return '<span class="chip' + (devF.status === raw ? ' chip-on' : '') + '" data-ocstatus="' + esc(raw) + '" title="' + esc(raw) + '">' + esc(statusLabel(raw)) + (isNew ? ' ✦' : '') + ' <b>' + nn(statusCounts[raw]) + '</b></span>'; }).join('') + '</div>';
-    var jornadaChips = '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Etapa da jornada:</span><span class="chip' + (!devF.jornada ? ' chip-on' : '') + '" data-ocjorn="">Todas <b>' + nn(typed.length) + '</b></span>' + jornadaKeys.map(function (k) { return '<span class="chip' + (devF.jornada === k ? ' chip-on' : '') + '" data-ocjorn="' + k + '">' + esc(JORNADA_META[k]) + ' <b>' + nn(jornadaCounts[k]) + '</b></span>'; }).join('') + '</div>';
+    var jornadaChips = '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Etapa da jornada:</span><span class="chip' + (!devF.jornada ? ' chip-on' : '') + '" data-ocjorn="">Todas <b>' + nn(faseList.length) + '</b></span>' + jornadaKeys.map(function (k) { return '<span class="chip' + (devF.jornada === k ? ' chip-on' : '') + '" data-ocjorn="' + k + '">' + esc(JORNADA_META[k]) + ' <b>' + nn(jornadaCounts[k]) + '</b></span>'; }).join('') + '</div>';
     var motivoChips = '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Motivo:</span><span class="chip' + (!devF.motivo ? ' chip-on' : '') + '" data-ocmotivo="">Todos</span>' + motivoTop.map(function (mv) { return '<span class="chip' + (devF.motivo === mv ? ' chip-on' : '') + '" data-ocmotivo="' + esc(mv) + '" title="' + esc(mv) + '">' + esc(mv.length > 26 ? mv.slice(0, 26) + '…' : mv) + ' <b>' + nn(motivoCounts[mv]) + '</b></span>'; }).join('') + (motivoRest > 0 ? '<span class="footnote" style="margin:0 0 0 6px">+' + motivoRest + ' outro(s) motivo(s)</span>' : '') + '</div>';
-    // "Pendências operacionais" (§12): qualidade de dado/prazo — NUNCA misturado com etapa ou motivo.
-    var flagChips = [['', 'Sem filtro'], ['prazo', '⚠️ Prazo p/ recorrer'], ['semcausa', 'Sem causa interna classificada'], ['semresp', 'Sem responsável'], ['naovinc', 'SKU não vinculado']];
+    // "Pendências operacionais" (§12,27): qualidade de dado/prazo — NUNCA misturado com etapa ou motivo.
+    var flagChips = [['', 'Sem filtro'], ['prazo', '⚠️ Precisa de ação'], ['venceHoje', 'Vence hoje'], ['venceAmanha', 'Vence amanhã'], ['ate3', 'Até 3 dias'], ['vencido', '🔴 Prazo vencido'], ['semprazo', 'Sem prazo'], ['novoretorno', '🟣 Novo retorno'], ['atualizado', 'Teve atualização'], ['semcausa', 'Sem causa interna classificada'], ['semresp', 'Sem responsável'], ['naovinc', 'SKU não vinculado']];
     // Filtro de status interno como chips de multi-seleção (marque quantos quiser).
-    var istCounts = {}; typed.forEach(function (o) { istCounts[o.internalStatus] = (istCounts[o.internalStatus] || 0) + 1; });
+    var istCounts = {}; faseList.forEach(function (o) { istCounts[o.internalStatus] = (istCounts[o.internalStatus] || 0) + 1; });
     var istOrder = Object.keys(ISTMAP).filter(function (k) { return istCounts[k]; }).sort(function (a, b) { return istCounts[b] - istCounts[a]; });
     devCustomStatus.forEach(function (s) { if (s && s.key && istOrder.indexOf(s.key) < 0) istOrder.push(s.key); }); // status personalizados sempre visíveis como filtro
     var istChips = '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Status interno (livre, editável):</span><span class="chip' + (!istKeys.length ? ' chip-on' : '') + '" data-ocist="">Todos</span>' + istOrder.map(function (k) { return '<span class="chip' + (istKeys.indexOf(k) >= 0 ? ' chip-on' : '') + '" data-ocist="' + esc(k) + '">' + esc(ISTMAP[k]) + ' <b>' + nn(istCounts[k]) + '</b></span>'; }).join('') + '<span class="chip" data-ocmanage="1" title="Criar, renomear ou remover status internos personalizados">⚙ Gerenciar status</span></div>';
@@ -1607,6 +1816,7 @@
     var allChecked = allSelectable.length && allSelectable.every(function (o) { return devSel[o.id]; });
     return secHead('CASOS', 'Casos', 'Todos os casos de devolução, cancelamento e falha de entrega em um só lugar. Etapa e motivo são filtros separados; a próxima ação diz o que fazer agora.') +
       '<div class="chips">' + typeChips.map(function (c) { return '<span class="chip' + (devF.type === c[0] ? ' chip-on' : '') + '" data-octype="' + c[0] + '">' + c[1] + ' <b>' + nn(c[2]) + '</b></span>'; }).join('') + '</div>' +
+      faseTabs +
       jornadaChips + motivoChips + statusRow +
       '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Pendências operacionais:</span>' + flagChips.map(function (c) { return '<span class="chip' + (devF.flag === c[0] ? ' chip-on' : '') + '" data-ocflag="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
       istChips +
@@ -1617,7 +1827,7 @@
       slice.map(function (o) { var it = (o.items || [])[0] || {}; var prod = (it.productName || '—') + (it.variationName ? ' · ' + it.variationName : '') + ((o.items || []).length > 1 ? ' (+' + (o.items.length - 1) + ')' : ''); var rl = REC_LABEL[recGroup(o)]; var pa = casoProximaAcao(o);
         var chk = o.isDemo ? '<span class="footnote" style="margin:0">—</span>' : '<input type="checkbox" class="devrowsel" data-selid="' + esc(o.id) + '"' + (devSel[o.id] ? ' checked' : '') + '>';
         var istCell = o.isDemo ? '<span class="pill st-int">' + esc(istLabel(o.internalStatus)) + '</span>' : '<select class="select sm devinlinest" data-inlid="' + esc(o.id) + '" style="min-width:150px">' + Object.keys(ISTMAP).map(function (k) { return '<option value="' + k + '"' + (o.internalStatus === k ? ' selected' : '') + '>' + ISTMAP[k] + '</option>'; }).join('') + '</select>';
-        return '<tr' + (o.isDemo ? ' style="background:#fff8ef"' : (devSel[o.id] ? ' style="background:var(--brand-soft,#f2f5ff)"' : '')) + '><td>' + chk + '</td><td class="mono">' + esc(o.orderId || '—') + (o.returnId ? '<div class="footnote" style="margin:0">' + esc(o.returnId) + '</div>' : '') + '</td><td>' + esc(TYPE_LABELS[o.type] || '—') + (o.isDemo ? ' <span class="tag warn">demo</span>' : '') + '</td><td class="cell-text">' + esc(prod) + '<div class="footnote" style="margin:0">' + esc(it.sku || '—') + '</div></td><td class="cell-text">' + esc(casoMotivo(o)) + '</td><td class="cell-text"><span class="tag ' + (pa.jornada === 'BAIXADA' ? 'ok' : pa.jornada === 'REJEITADA' ? 'neutral' : pa.jornada === 'ACAO_NECESSARIA' ? 'warn' : 'info') + '">' + esc(pa.label) + '</span></td><td class="cell-text">' + esc(pa.text) + '</td><td class="cell-text"><span class="tag ' + (normStatus(o.status).indexOf('disputa') >= 0 ? 'info' : 'neutral') + '">' + esc(statusLabel(o.status)) + '</span>' + prazoBadge(o) + '</td><td>' + istCell + '</td><td><span class="tag ' + rl[1] + '">' + rl[0] + '</span></td><td class="nowrap">' + brl(o.requested) + '</td><td><button class="btn-sm primary" data-oc="' + esc(o.id) + '">Abrir</button></td></tr>'; }).join('') +
+        return '<tr' + (o.isDemo ? ' style="background:#fff8ef"' : (devSel[o.id] ? ' style="background:var(--brand-soft,#f2f5ff)"' : '')) + '><td>' + chk + '</td><td class="mono">' + (casoNovoRetorno(o) ? '<span class="tag" style="background:#8a5cf6;color:#fff">🟣</span> ' : '') + esc(o.orderId || '—') + (o.returnId ? '<div class="footnote" style="margin:0">' + esc(o.returnId) + '</div>' : '') + '</td><td>' + esc(TYPE_LABELS[o.type] || '—') + (o.isDemo ? ' <span class="tag warn">demo</span>' : '') + '</td><td class="cell-text">' + esc(prod) + '<div class="footnote" style="margin:0">' + esc(it.sku || '—') + '</div></td><td class="cell-text">' + esc(casoMotivo(o)) + '</td><td class="cell-text"><span class="tag ' + (pa.jornada === 'BAIXADA' ? 'ok' : pa.jornada === 'REJEITADA' ? 'neutral' : pa.jornada === 'ACAO_NECESSARIA' ? 'warn' : 'info') + '">' + esc(pa.label) + '</span></td><td class="cell-text">' + esc(pa.text) + '</td><td class="cell-text"><span class="tag ' + (normStatus(o.status).indexOf('disputa') >= 0 ? 'info' : 'neutral') + '">' + esc(statusLabel(o.status)) + '</span>' + prazoBadge(o) + '</td><td>' + istCell + '</td><td><span class="tag ' + rl[1] + '">' + rl[0] + '</span></td><td class="nowrap">' + brl(o.requested) + '</td><td><button class="btn-sm primary" data-oc="' + esc(o.id) + '">Abrir</button></td></tr>'; }).join('') +
       '</tbody></table></div></div>' + (pages > 1 ? '<div style="display:flex;gap:8px;justify-content:flex-end;align-items:center"><button class="btn-sm" id="devprev"' + (devPage <= 1 ? ' disabled' : '') + '>Anterior</button><span class="footnote" style="margin:0">página ' + devPage + ' de ' + pages + '</span><button class="btn-sm" id="devnext"' + (devPage >= pages ? ' disabled' : '') + '>Próxima</button></div>' : '');
   }
   function bulkApplyDev(selIds, patch, ownerName) {
@@ -1666,6 +1876,7 @@
   function bindDevOcc() {
     var q = document.getElementById('devq'); if (q) { var t; q.oninput = function () { clearTimeout(t); t = setTimeout(function () { var v = q.value; devF.search = v; devPage = 1; render(); var el = document.getElementById('devq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
     app.querySelectorAll('[data-octype]').forEach(function (c) { c.onclick = function () { devF.type = c.dataset.octype; devF.status = ''; devF.jornada = ''; devF.motivo = ''; devPage = 1; render(); }; });
+    app.querySelectorAll('[data-ocfase]').forEach(function (c) { c.onclick = function () { devF.fase = c.dataset.ocfase; devF.status = ''; devF.jornada = ''; devF.motivo = ''; devPage = 1; render(); }; });
     app.querySelectorAll('[data-ocstatus]').forEach(function (c) { c.onclick = function () { devF.status = c.dataset.ocstatus; devPage = 1; render(); }; });
     app.querySelectorAll('[data-ocjorn]').forEach(function (c) { c.onclick = function () { devF.jornada = c.dataset.ocjorn; devPage = 1; render(); }; });
     app.querySelectorAll('[data-ocmotivo]').forEach(function (c) { c.onclick = function () { devF.motivo = c.dataset.ocmotivo; devPage = 1; render(); }; });
@@ -1934,6 +2145,9 @@
   // ---- Ficha operacional editável (§8-§19) ----
   function openFicha(id, focusBlock) {
     var o = occ.find(function (x) { return x.id === id; }); if (!o) return;
+    // §25: abrir a Ficha marca o "novo retorno" como visto — o badge não persegue o operador depois
+    // que ele já revisou o caso, mas o histórico do que mudou continua na Timeline.
+    if (casoNovoRetorno(o) || o.needsReview) { o.lastViewedAt = new Date().toISOString(); o.needsReview = false; saveOcc(o); }
     var d = document.createElement('div'); d.className = 'drawer drawer-wide';
     var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '940px'; panel.style.maxWidth = '97vw';
     d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
@@ -1943,34 +2157,44 @@
       var ord = orders.find(function (x) { return x.id === o.orderId; });
       var sel = function (label, val, map, field) { return '<label class="fld">' + label + '</label><select class="select" data-set="' + field + '" style="width:100%">' + Object.keys(map).map(function (k) { return '<option value="' + k + '"' + (val === k ? ' selected' : '') + '>' + map[k] + '</option>'; }).join('') + '</select>'; };
       var inp = function (label, val, field, ph) { return '<label class="fld">' + label + '</label><input class="input" data-inp="' + field + '" style="width:100%" value="' + esc(val || '') + '" placeholder="' + (ph || '') + '">'; };
-      panel.innerHTML = '<div class="dh"><div><b>Ficha — ' + esc(o.orderId || o.id) + '</b> <span class="pill st-int" style="margin-left:8px">' + istLabel(o.internalStatus) + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
-        '<div class="cards6">' + fcard('Reembolso', brl(o.impact.refundedTotal), 'red') + fcard('Custos adicionais', brl(o.impact.additionalCostTotal), 'amber') + fcard('Recuperado', brl(o.impact.recoveredTotal), 'green') + fcard('Impacto líquido', o.impact.knownNetImpact == null ? '—' : brl(o.impact.knownNetImpact), 'red', o.impact.cmvAvailable ? '' : 'CMV não disponível') + '</div>' +
+      var it0 = (o.items || [])[0] || {};
+      var fam = it0.sku ? (skuCost[it0.sku.toLowerCase()] && skuCost[it0.sku.toLowerCase()].familyName) : null;
+      var vendaData = occVendaData(o), aberturaData = occAberturaData(o), diasDepois = occDiasVendaAteAbertura(o);
+      var resultado = casoResultado(o); var jornadaTxt = casoProximaAcao(o);
+      var prazoTxt = o.disputeDeadline ? prazoTexto(o.disputeDeadline) : null;
+      panel.innerHTML = '<div class="dh"><div><b>Ficha — ' + esc(o.orderId || o.id) + '</b> <span class="pill st-int" style="margin-left:8px">' + istLabel(o.internalStatus) + '</span>' + (casoNovoRetorno(o) ? ' <span class="tag" style="background:#8a5cf6;color:#fff">🟣 Novo retorno</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' +
+        (function () { var pa = casoProximaAcao(o); return callout(pa.jornada === 'BAIXADA' || pa.jornada === 'REJEITADA' ? 'green' : 'warn', 'Etapa: ' + pa.label, 'Próxima ação: <b>' + esc(pa.text) + '</b>' + (o.needsReview ? ' · <span class="tag warn">⚠ Mudança Shopee detectada — revisar caso</span>' : '')); })() +
         '<div class="split"><div>' +
-        (function () { var pa = casoProximaAcao(o); return callout(pa.jornada === 'BAIXADA' || pa.jornada === 'REJEITADA' ? 'green' : 'warn', 'Etapa: ' + pa.label, 'Próxima ação: <b>' + esc(pa.text) + '</b>'); })() +
-        '<div class="panel"><div class="ph"><h3>Produto / retorno</h3><span class="tag ' + situacaoCaso(o)[1] + '">' + situacaoCaso(o)[0] + '</span></div><div class="pb">' + kv('Motivo (cliente)', o.reason) + kv('Situação do retorno', RECEIPT_LABELS[o.receiptState] || 'Não iniciado') + '<label class="fld">Itens</label>' + (o.items || []).map(function (i) { return '<div class="ro" style="margin-bottom:4px"><span class="mono">' + esc(i.sku || '—') + '</span> ' + esc(i.productName || '') + (i.variationName ? ' · ' + esc(i.variationName) : '') + (i.skuLinked ? '' : ' <span class="tag warn">não vinc.</span>') + '</div>'; }).join('') + (expectsReturn(o) && !receiptDone(o) ? '<button class="btn-sm primary" id="fichabaixa" style="margin-top:8px">📦 Dar baixa / Conferir recebimento</button>' : (o.recuperacao ? '<div class="footnote" style="margin-top:8px">Baixa registrada em ' + new Date(o.receivedAt).toLocaleString('pt-BR') + '. <button class="btn-sm" id="fichabaixa2">Reabrir conferência</button></div>' : '')) + '</div></div>' +
-        '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Ver dados originais (Shopee)</summary><div class="pb">' +
-        '<label class="fld">Identificação</label>' + kv('Pedido', o.orderId) + kv('Devolução', o.returnId) + (ord ? kv('Status do pedido', S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus || '—') : '') +
-        '<label class="fld">Solicitação</label>' + kv('Motivo', o.reason) + (o.reasonRevised ? kv('Motivo revisado', o.reasonRevised) : '') + (o.resolution ? kv('Solução', o.resolution) : '') + (o.returnType ? kv('Tipo', o.returnType) : '') + kv('Status Shopee', o.status) + kv('Data', dbr(o.occurredAt)) +
-        '<label class="fld">Logística</label>' + kv('Rastreio', o.tracking) + (o.trackingStatus ? kv('Status do rastreio', o.trackingStatus) : '') +
-        (o.hasSellerWindow || o.disputeDeadline ? '<label class="fld">Disputa</label>' + kv('Ação do vendedor até', dbr(o.disputeDeadline)) : '') +
-        (o.sellerNote ? '<label class="fld">Observações</label>' + kv('Nota', o.sellerNote) : '') +
-        '<label class="fld">Financeiro</label>' + kv('Reembolso solicitado', brl(o.requested)) + kv('Compensação', brl(o.compensation)) +
-        '</div></details>' +
-        '<div class="panel"><div class="ph"><h3>Impacto financeiro</h3></div><div class="pb">' +
+        // ---- VENDA ----
+        '<div class="panel"><div class="ph"><h3>Venda</h3></div><div class="pb">' + kv('Pedido', o.orderId) + kv('Data de criação', dbr(o.orderCreatedAt)) + kv('Data de pagamento', vendaData ? dbr(vendaData) : 'não localizada em Pedidos') + kv('Produto', it0.productName || '—') + kv('SKU', it0.sku || '—') + kv('Família', fam || '—') + kv('Valor', brl(o.requested)) + (ord ? kv('Status do pedido', S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus || '—') : '') + '</div></div>' +
+        // ---- DEVOLUÇÃO ----
+        '<div class="panel"><div class="ph"><h3>Devolução</h3><span class="tag ' + situacaoCaso(o)[1] + '">' + situacaoCaso(o)[0] + '</span></div><div class="pb">' + kv('Devolução aberta em', aberturaData ? dbr(aberturaData) : 'não informado') + kv('Venda → devolução', diasDepois != null ? diasDepois + ' dias (' + occFaixaDias(diasDepois) + ')' : 'não calculável') + kv('Motivo Shopee', o.reason) + (o.internalCause || o.causeFamily ? kv('Classificação interna', [o.causeFamily, o.internalCause].filter(Boolean).join(' — ')) : '') + kv('Solução', o.resolution || '—') + (o.returnType ? kv('Tipo', o.returnType) : '') + '<label class="fld">Itens</label>' + (o.items || []).map(function (i) { return '<div class="ro" style="margin-bottom:4px"><span class="mono">' + esc(i.sku || '—') + '</span> ' + esc(i.productName || '') + (i.variationName ? ' · ' + esc(i.variationName) : '') + (i.skuLinked ? '' : ' <span class="tag warn">não vinc.</span>') + '</div>'; }).join('') + '</div></div>' +
+        // ---- SITUAÇÃO SHOPEE ----
+        '<div class="panel"><div class="ph"><h3>Situação Shopee</h3></div><div class="pb">' + kv('Status atual', o.status) + (o.reasonRevised ? kv('Motivo revisado', o.reasonRevised) : '') + (o.sellerNote ? kv('Observação', o.sellerNote) : '') + kv('Ação do vendedor solicitada até', o.disputeDeadline ? dbr(o.disputeDeadline) : 'sem prazo informado') + (prazoTxt ? kv('Tempo restante', prazoTxt) : '') + '</div></div>' +
+        '</div><div>' +
+        // ---- NOSSA AÇÃO ----
+        '<div class="panel"><div class="ph"><h3>Nossa ação</h3></div><div class="pb">' + sel('Status operacional', o.internalStatus, internalStatusMap(), 'internalStatus') + sel('Prioridade', o.priority, DEV.PRIORITY, 'priority') + inp('Responsável', o.ownerName, 'ownerName', 'nome do responsável') + '<label class="fld">Resultado</label><div class="ro">' + esc(RESULTADO_META[resultado] || resultado) + '</div>' + inp('Causa interna', o.internalCause, 'internalCause', 'ex.: proteção insuficiente do vidro') + inp('Família da causa', o.causeFamily, 'causeFamily', 'ex.: Avaria / Embalagem') + sel('Responsabilidade', o.responsibility, DEV.RESPONSIBILITY, 'responsibility') + '<label class="fld">Notas internas</label><textarea class="input" data-inp="operatorNotes" rows="3" style="width:100%;resize:vertical" placeholder="Observações da equipe — nunca apagadas por reimportação">' + esc(o.operatorNotes || '') + '</textarea></div></div>' +
+        '<div class="panel" id="fichaDisputa"><div class="ph"><h3>Disputa</h3><span class="tag info">' + DEV.DISPUTE_STATUS[o.disputeStatus] + '</span></div><div class="pb"><select class="select" id="dispsel" style="width:100%">' + Object.keys(DEV.DISPUTE_STATUS).map(function (k) { return '<option value="' + k + '"' + (o.disputeStatus === k ? ' selected' : '') + '>' + DEV.DISPUTE_STATUS[k] + '</option>'; }).join('') + '</select><div id="dispextra"></div><button class="btn-sm primary" id="dispsave" style="margin-top:8px">Salvar disputa</button></div></div>' +
+        // ---- RETORNO FÍSICO ----
+        '<div class="panel"><div class="ph"><h3>Retorno físico</h3></div><div class="pb">' + kv('Número de rastreamento', o.tracking || '—') + kv('Status de rastreamento', o.trackingStatus || '—') + kv('Situação na empresa', RECEIPT_LABELS[o.receiptState] || 'Não iniciado') + (o.receivedAt ? kv('Recebido em', new Date(o.receivedAt).toLocaleString('pt-BR')) : '') + sel('Condição (se recebida)', o.merchandiseCondition || '', Object.assign({ '': '—' }, DEV.MERCH_COND), 'merchandiseCondition') + (expectsReturn(o) && !receiptDone(o) ? '<button class="btn-sm primary" id="fichabaixa" style="margin-top:8px">📦 Dar baixa / Conferir recebimento</button>' : (o.recuperacao ? '<div class="footnote" style="margin-top:8px">Baixa registrada em ' + new Date(o.receivedAt).toLocaleString('pt-BR') + '. <button class="btn-sm" id="fichabaixa2">Reabrir conferência</button></div>' : '')) + '</div></div>' +
+        // ---- FINANCEIRO ----
+        '<div class="panel"><div class="ph"><h3>Financeiro</h3></div><div class="pb">' +
         (function () { var r = occResultadoDevolucao(o); return '<div class="fin-line total"><span>Resultado da devolução — <span class="tag ' + (r.status === 'confirmado' ? 'ok' : 'info') + '">' + (r.status === 'confirmado' ? 'Confirmado (baixa feita)' : 'Provisório (aguardando baixa)') + '</span></span><span class="neg">' + brl(r.perda) + '</span></div>' + (r.status === 'confirmado' ? '<div class="footnote" style="margin:2px 0 8px">Custo do produto ' + brl(r.custoTotal) + ' − valor reaproveitável ' + brl(r.valorReaproveitavel) + ' = perda confirmada ' + brl(r.perda) + '.</div>' : '<div class="footnote" style="margin:2px 0 8px">Baseado no reembolso pago menos compensação — vira "confirmado" quando a mercadoria voltar e você conferir/der baixa.</div>'); })() +
-        '<div class="fin-line"><span>Reembolso pago</span><span class="neg">' + brl(o.impact.refundedTotal) + '</span></div><div class="fin-line"><span>Custos adicionais</span><span class="neg">' + brl(o.impact.additionalCostTotal) + '</span></div><div class="fin-line"><span>Recuperações</span><span class="pos">-' + brl(o.impact.recoveredTotal) + '</span></div><div class="fin-line total"><span>Impacto líquido conhecido</span><span class="neg">' + (o.impact.knownNetImpact == null ? '—' : brl(o.impact.knownNetImpact)) + '</span></div>' +
+        '<div class="fin-line"><span>Situação financeira</span><span class="tag">' + esc(casoSituacaoFinanceira(o)) + '</span></div>' +
+        '<div class="fin-line"><span>Valor reembolsado</span><span class="neg">' + brl(o.impact.refundedTotal) + '</span></div><div class="fin-line"><span>Compensação</span><span class="pos">-' + brl(o.impact.recoveredTotal) + '</span></div><div class="fin-line"><span>Custos adicionais</span><span class="neg">' + brl(o.impact.additionalCostTotal) + '</span></div><div class="fin-line total"><span>Impacto líquido conhecido</span><span class="neg">' + (o.impact.knownNetImpact == null ? '—' : brl(o.impact.knownNetImpact)) + '</span></div>' +
+        inp('Valor recuperável (R$)', o.recoverableValue, 'recoverableValue', '0,00') +
         '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center"><select class="select sm" id="evtype">' + Object.keys(EVENT_META).map(function (k) { return '<option value="' + k + '">' + EVENT_META[k].label + '</option>'; }).join('') + '</select><input class="input sm" id="evamt" style="width:100px" placeholder="valor"><button class="btn-sm primary" id="evadd">+ Movimentação</button></div>' +
-        (o.events && o.events.length ? '<div style="margin-top:10px">' + o.events.map(function (e) { return '<div class="fin-line"><span>' + (EVENT_META[e.type] ? EVENT_META[e.type].label : e.type) + (e.note ? ' · ' + esc(e.note) : '') + '</span><span class="' + (e.direction === 'RECOVERY' ? 'pos' : 'neg') + '">' + (e.direction === 'RECOVERY' ? '-' : '') + brl(e.amount) + '</span></div>'; }).join('') + '</div>' : '') + '</div></div></div>' +
-        '<div><div class="panel"><div class="ph"><h3>Controle interno</h3></div><div class="pb">' + sel('Status interno', o.internalStatus, internalStatusMap(), 'internalStatus') + sel('Prioridade', o.priority, DEV.PRIORITY, 'priority') + inp('Responsável', o.ownerName, 'ownerName', 'nome do responsável') + inp('Causa interna', o.internalCause, 'internalCause', 'ex.: proteção insuficiente do vidro') + inp('Família da causa', o.causeFamily, 'causeFamily', 'ex.: Avaria / Embalagem') + sel('Responsabilidade', o.responsibility, DEV.RESPONSIBILITY, 'responsibility') + sel('Situação da mercadoria', o.merchandiseStatus, DEV.MERCH_STATUS, 'merchandiseStatus') + sel('Condição (se recebida)', o.merchandiseCondition || '', Object.assign({ '': '—' }, DEV.MERCH_COND), 'merchandiseCondition') + inp('Valor recuperável (R$)', o.recoverableValue, 'recoverableValue', '0,00') + '</div></div>' +
-        '<div class="panel" id="fichaDisputa"><div class="ph"><h3>Disputa</h3><span class="tag info">' + DEV.DISPUTE_STATUS[o.disputeStatus] + '</span></div><div class="pb"><select class="select" id="dispsel" style="width:100%">' + Object.keys(DEV.DISPUTE_STATUS).map(function (k) { return '<option value="' + k + '"' + (o.disputeStatus === k ? ' selected' : '') + '>' + DEV.DISPUTE_STATUS[k] + '</option>'; }).join('') + '</select><div id="dispextra"></div><button class="btn-sm primary" id="dispsave" style="margin-top:8px">Salvar disputa</button></div></div></div></div>' +
-        '<div class="panel"><div class="ph"><h3>Timeline & auditoria</h3></div><div class="pb"><div style="display:flex;gap:6px;margin-bottom:10px"><input class="input sm" id="cmt" style="flex:1" placeholder="Adicionar comentário…"><button class="btn-sm" id="cmtadd">Comentar</button></div>' +
+        (o.events && o.events.length ? '<div style="margin-top:10px">' + o.events.map(function (e) { return '<div class="fin-line"><span>' + (EVENT_META[e.type] ? EVENT_META[e.type].label : e.type) + (e.note ? ' · ' + esc(e.note) : '') + '</span><span class="' + (e.direction === 'RECOVERY' ? 'pos' : 'neg') + '">' + (e.direction === 'RECOVERY' ? '-' : '') + brl(e.amount) + '</span></div>'; }).join('') + '</div>' : '') + '</div></div>' +
+        '</div></div>' +
+        // ---- HISTÓRICO ----
+        '<div class="panel"><div class="ph"><h3>Histórico</h3></div><div class="pb"><div style="display:flex;gap:6px;margin-bottom:10px"><input class="input sm" id="cmt" style="flex:1" placeholder="Adicionar comentário…"><button class="btn-sm" id="cmtadd">Comentar</button></div>' +
         ((o.activities || []).length ? o.activities.map(function (a) {
           var body = a.kind === 'COMMENT' ? '💬 ' + esc(a.message)
             : a.kind === 'FINANCIAL' ? '💰 ' + esc(a.message)
             : a.kind === 'RECEIPT' ? '📦 ' + esc(a.message || 'Recebimento')
-            : a.kind === 'SOURCE' ? '🛰️ Shopee' + (a.field ? ' · ' + esc(a.field) + ': ' + esc(a.oldValue || '∅') + ' → ' + esc(a.newValue || '∅') : ' · ' + esc(a.message || '')) + (a.fileName ? ' <span class="footnote" style="margin:0">(' + esc(a.fileName) + ')</span>' : '')
-            : a.kind === 'DISPUTE' ? '⚖️ ' + esc(a.field || '') + ': ' + esc(a.oldValue || '∅') + ' → ' + esc(a.newValue || '∅') + (a.message ? ' · ' + esc(a.message) : '')
-            : esc(a.field || '') + ': ' + esc(a.oldValue || '∅') + ' → ' + esc(a.newValue || '∅');
+            : a.kind === 'SOURCE' ? '🛰️ Automático — Shopee' + (a.field ? ' · ' + esc(a.field) + ': ' + esc(a.oldValue || '∅') + ' → ' + esc(a.newValue || '∅') : ' · ' + esc(a.message || '')) + (a.fileName ? ' <span class="footnote" style="margin:0">(' + esc(a.fileName) + ')</span>' : '')
+            : a.kind === 'DISPUTE' ? '⚖️ Manual — Operação · ' + esc(a.field || '') + ': ' + esc(a.oldValue || '∅') + ' → ' + esc(a.newValue || '∅') + (a.message ? ' · ' + esc(a.message) : '')
+            : '✏️ Manual — Operação · ' + esc(a.field || '') + ': ' + esc(a.oldValue || '∅') + ' → ' + esc(a.newValue || '∅');
           var who = a.userName === 'Shopee' ? '' : (a.userName ? ' — ' + esc(a.userName) : '');
           return '<div class="fin-line"><span>' + body + who + '</span><span class="footnote" style="margin:0">' + new Date(a.createdAt).toLocaleString('pt-BR') + '</span></div>';
         }).join('') : '<div class="footnote">Sem atividade ainda.</div>') + '</div></div>' +
@@ -1979,7 +2203,7 @@
       var fb = panel.querySelector('#fichabaixa'); if (fb) fb.onclick = function () { openConferir(o.id, draw); };
       var fb2 = panel.querySelector('#fichabaixa2'); if (fb2) fb2.onclick = function () { openConferir(o.id, draw); };
       panel.querySelectorAll('[data-set]').forEach(function (s) { s.onchange = function () { setField(s.dataset.set, s.value || (s.dataset.set === 'merchandiseCondition' ? null : s.value)); }; });
-      panel.querySelectorAll('[data-inp]').forEach(function (i) { i.onblur = function () { var field = i.dataset.inp; var val = field === 'recoverableValue' ? (i.value === '' ? null : Number(i.value.replace(',', '.'))) : (i.value || null); setField(field, val); }; });
+      panel.querySelectorAll('[data-inp]').forEach(function (i) { var ev = i.tagName === 'TEXTAREA' ? 'onblur' : 'onblur'; i[ev] = function () { var field = i.dataset.inp; var val = field === 'recoverableValue' ? (i.value === '' ? null : Number(i.value.replace(',', '.'))) : (i.value || null); setField(field, val); }; });
       var evadd = panel.querySelector('#evadd'); evadd.onclick = function () { var type = panel.querySelector('#evtype').value; var amt = Number((panel.querySelector('#evamt').value || '').replace(',', '.')); if (!amt || amt < 0) { toast('Valor inválido', 'Informe um valor.', true); return; } putEvent(o, 'manual:' + type + ':' + Date.now(), type, EVENT_META[type].direction, amt, 'MANUAL'); persist({ kind: 'FINANCIAL', message: (EVENT_META[type].label) + ': ' + brl(amt), userName: 'Operador' }); toast('Movimentação lançada', EVENT_META[type].label + ' · ' + brl(amt)); };
       var dispsel = panel.querySelector('#dispsel'); var dispExtra = panel.querySelector('#dispextra');
       function drawDisp() { dispExtra.innerHTML = (dispsel.value === 'GANHA' || dispsel.value === 'PARCIAL') ? '<div style="display:flex;gap:6px;margin-top:6px"><input class="input sm" id="drec" style="flex:1" placeholder="valor recuperado"><input class="input sm" id="dcomp" style="flex:1" placeholder="compensação"></div>' : ''; }
