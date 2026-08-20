@@ -3807,9 +3807,13 @@ buffer/index.js:
   var aceleraSummary = null;        // resumo informado pela própria Shopee (para conciliar)
   var aceleraSub = 'visao';         // sub-aba do módulo
   var aceleraPage = 1;
-  var aceleraF = { search: '', status: '', band: '', maturity: '', flag: '' };
+  var aceleraF = { search: '', aliq: '', divCat: '' };
   var aceleraSel = { resgate: null };
-  var aceleraCfg = { cohortDays: 60, ticketRisco: 25000, metaAntecip: 0.5, aliquotaAlvo: 0.025, limiteDevol: 0.15, capitalProprio: 0, custoOportAA: 0.12, bancoTaxaAM: 0.02, metaCobertura: 12.8, tolAliquota: 0.0015 }; // valores em centavos p/ dinheiro
+  // Refatoração completa do Acelera: fora vai capital/coorte/custo de oportunidade — o módulo vira
+  // conciliação pura (Expedição → Antecipação → Taxa → Líquido → Conferência). Únicas premissas que
+  // sobrevivem: tolerância de alíquota (deduplicação de arredondamento) e janela de "aguardando
+  // antecipação" antes de marcar um pedido expedido como não encontrado (§16 do prompt de refatoração).
+  var aceleraCfg = { tolAliquota: 0.0015, aguardandoDias: 3 };
   // Afiliados
   var affConv = [], affRpa = [], affVb = [], affMaster = {};
   var affSub = 'visao', affPage = 1;
@@ -6144,9 +6148,16 @@ buffer/index.js:
   function acIsReemb(r) { return /reembols/.test(normStatus(r.status)); }
   function acIsFullyPaid(r) { return normStatus(r.status).indexOf('totalmente pago') >= 0; }
   function acIsSettled(r) { return acIsFullyPaid(r) || acIsReemb(r); }
-  function acBand(rate) { var tol = aceleraCfg.tolAliquota; if (rate === 0) return '—'; if (Math.abs(rate - 0.025) <= tol) return '2.5%'; if (Math.abs(rate - 0.035) <= tol) return '3.5%'; if (Math.abs(rate - 0.02) <= tol) return '2.0%'; return 'outra'; }
+  // Alíquota agrupada pela taxa efetiva encontrada nos dados (taxa ÷ antecipado) — nunca assumimos
+  // faixas fixas como 2,5%/3,5%: a distribuição é sempre a dos dados reais (§21 da refatoração).
+  function acAliqKey(rate) { return (rate == null) ? '—' : pct(r2(rate * 100)); }
   var AC_STATUS_LABELS = { 'antecipacao paga': 'Antecipação paga', 'totalmente pago': 'Totalmente pago', 'antecipacao parcialmente reembolsada': 'Parcialmente reembolsada', 'antecipacao totalmente reembolsada': 'Totalmente reembolsada' };
   function acStatusLabel(s) { return AC_STATUS_LABELS[normStatus(s)] || s || '—'; }
+  // Líquido calculado deterministicamente (antecipado − taxa), conferido contra o líquido informado
+  // pela própria Shopee (campo "Recebido") — tolerância de 2 centavos por arredondamento.
+  function acLiquidoCalc(r) { return r.antecipado - r.taxa; }
+  function acLiquidoDiff(r) { return r.recebido - acLiquidoCalc(r); }
+  function acLiquidoDivergente(r) { return Math.abs(acLiquidoDiff(r)) > 2; }
 
   // Parser do CSV/planilha real da Shopee (localiza cabeçalho dinamicamente; guarda o resumo da Shopee).
   function parseAceleraText(text) {
@@ -6205,7 +6216,10 @@ buffer/index.js:
       });
       acelera = Object.values(byId);
       aceleraSummary = { summary: parsed.summary, periodDeclared: parsed.periodDeclared, periodReal: parsed.periodReal, importedAt: importedAt, fileName: file.name, rowsSeen: parsed.rows.length };
-      var batch = { id: 'ac' + Date.now() + Math.round(performance.now()), module: 'Shopee Acelera', filename: file.name, createdAt: importedAt, seen: parsed.rows.length, novo: novo, upd: upd, unch: unch, itemsSeen: parsed.rows.length };
+      // §20: metadados do ARQUIVO (não do resgate) para a aba Importações — computados uma vez aqui,
+      // a partir de TODAS as linhas deste arquivo (novas + atualizadas + sem alteração).
+      var pedSet = {}, resgSet = {}; parsed.rows.forEach(function (row) { pedSet[row.pedido] = 1; resgSet[row.resgate] = 1; });
+      var batch = { id: 'ac' + Date.now() + Math.round(performance.now()), module: 'Shopee Acelera', filename: file.name, createdAt: importedAt, seen: parsed.rows.length, novo: novo, upd: upd, unch: unch, itemsSeen: parsed.rows.length, pedidosUnicos: Object.keys(pedSet).length, resgatesUnicos: Object.keys(resgSet).length, periodMin: parsed.periodReal ? parsed.periodReal.min : null, periodMax: parsed.periodReal ? parsed.periodReal.max : null };
       batches.unshift(batch); lastImportStamp = importedAt;
       return Promise.all([putMany('acelera', changed), putMany('batches', [batch]), putMany('settings', [{ id: 'aceleraSummary', data: aceleraSummary }])]).then(function () { return { batch: batch, novo: novo, upd: upd, unch: unch }; });
     });
@@ -6213,118 +6227,160 @@ buffer/index.js:
   function saveAceleraCfg() { return putMany('settings', [{ id: 'aceleraCfg', data: aceleraCfg }]); }
 
   // ---- motor determinístico ----
+  // §11 da refatoração: chave lógica LOJA + ID_RESGATE + ID_PEDIDO. Agrupar por resgate NUNCA
+  // deduplica por data — vários resgates podem cair no mesmo dia, cada um contado uma vez.
   function aceleraByResgate(recs) {
     var map = {}; recs.forEach(function (r) { var g = map[r.resgate] = map[r.resgate] || { resgate: r.resgate, data: r.data, n: 0, antec: 0, taxa: 0, receb: 0, reemb: 0, pend: 0, maxUlt: '' }; g.n++; g.antec += r.antecipado; g.taxa += r.taxa; g.receb += r.recebido; g.reemb += r.reembolsado; g.pend += r.pendente; if (r.data < g.data) g.data = r.data; if ((r.ultimaTransacao || '') > g.maxUlt) g.maxUlt = r.ultimaTransacao; });
-    return Object.keys(map).map(function (k) { var g = map[k]; g.rate = g.antec ? g.taxa / g.antec : 0; g.band = acBand(g.rate); return g; }).sort(function (a, b) { return (a.data || '').localeCompare(b.data || ''); });
+    return Object.keys(map).map(function (k) { var g = map[k]; g.rate = g.antec ? g.taxa / g.antec : 0; g.aliqLabel = acAliqKey(g.rate); g.liquidoCalc = g.antec - g.taxa; g.liquidoDiff = g.receb - g.liquidoCalc; g.divergente = Math.abs(g.liquidoDiff) > 2; return g; }).sort(function (a, b) { return (a.data || '').localeCompare(b.data || ''); });
+  }
+  // §7-8 da refatoração: agregação por DATA DO RESGATE — usada só para agrupar visualmente o
+  // gráfico/resumo "dia a dia"; nunca é a chave de deduplicação (essa é loja+resgate+pedido).
+  function aceleraByDia(recs) {
+    var map = {};
+    recs.forEach(function (r) {
+      var g = map[r.data] = map[r.data] || { data: r.data, pedidosSet: {}, resgatesSet: {}, antec: 0, taxa: 0, receb: 0, reemb: 0, pend: 0 };
+      g.pedidosSet[r.pedido] = 1; g.resgatesSet[r.resgate] = 1;
+      g.antec += r.antecipado; g.taxa += r.taxa; g.receb += r.recebido; g.reemb += r.reembolsado; g.pend += r.pendente;
+    });
+    return Object.keys(map).sort().map(function (k) {
+      var g = map[k]; var pedidos = Object.keys(g.pedidosSet).length, resgates = Object.keys(g.resgatesSet).length;
+      var liquidoCalc = g.antec - g.taxa;
+      return { data: g.data, pedidos: pedidos, resgates: resgates, antec: g.antec, taxa: g.taxa, receb: g.receb, liquidoCalc: liquidoCalc, liquidoDiff: g.receb - liquidoCalc, reemb: g.reemb, pend: g.pend, aliquota: g.antec ? g.taxa / g.antec : 0 };
+    });
   }
   function aceleraMetrics(recs) {
-    var m = { n: recs.length, volume: 0, taxa: 0, receb: 0, reemb: 0, pend: 0, restante: 0, taxaReemb: 0, taxaRisco: 0 };
+    var m = { n: recs.length, volume: 0, taxa: 0, receb: 0, reemb: 0, pend: 0, restante: 0 };
     var status = {}, anomalies = [];
-    var reembF = 0, riscoF = 0;
+    var pedidosSet = {}, resgatesSet = {};
     recs.forEach(function (r) {
       m.volume += r.antecipado; m.taxa += r.taxa; m.receb += r.recebido; m.reemb += r.reembolsado; m.pend += r.pendente; m.restante += r.restante;
+      pedidosSet[r.pedido] = 1; resgatesSet[r.resgate] = 1;
       status[normStatus(r.status)] = (status[normStatus(r.status)] || 0) + 1;
-      if (r.antecipado > 0) { reembF += r.taxa * r.reembolsado / r.antecipado; riscoF += r.taxa * r.pendente / r.antecipado; }
       var an = null;
       if (r.antecipado <= 0) an = 'Valor antecipado zero ou negativo';
       else if (r.reembolsado > r.antecipado + 1) an = 'Reembolso maior que o antecipado';
       else if (r.pendente > r.antecipado + 1) an = 'Pendência maior que o antecipado';
       else if (r.taxa < 0) an = 'Taxa negativa';
-      else if (acBand(r.antecipado ? r.taxa / r.antecipado : 0) === 'outra') an = 'Alíquota fora dos padrões (investigar)';
+      else if (acLiquidoDivergente(r)) an = 'Líquido informado diverge do calculado (antecipado − taxa)';
       if (an) anomalies.push({ r: r, type: an });
     });
-    m.taxaReemb = Math.round(reembF); m.taxaRisco = Math.round(riscoF);
+    m.nPedidos = Object.keys(pedidosSet).length; m.nResgates = Object.keys(resgatesSet).length;
+    m.liquidoCalc = m.volume - m.taxa; m.liquidoDiff = m.receb - m.liquidoCalc;
     m.aliquota = m.volume ? m.taxa / m.volume : 0;
     m.status = status; m.anomalies = anomalies;
-    m.byResgate = aceleraByResgate(recs);
-    // dias até liquidação
-    var diasPago = [], diasReemb = [], idadePend = [];
-    recs.forEach(function (r) { if (acIsFullyPaid(r)) { var d = acDays(r.data, r.ultimaTransacao); if (d != null && d >= 0) diasPago.push(d); } else if (acIsReemb(r)) { var d2 = acDays(r.data, r.ultimaTransacao); if (d2 != null && d2 >= 0) diasReemb.push(d2); } else { var a = acAgeDays(r.data); if (a != null) idadePend.push(a); } });
-    var avg = function (a) { return a.length ? a.reduce(function (s, x) { return s + x; }, 0) / a.length : null; };
-    var med = function (a) { if (!a.length) return null; var s = a.slice().sort(function (x, y) { return x - y; }); var mid = Math.floor(s.length / 2); return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2; };
-    m.diasPagoAvg = avg(diasPago); m.diasPagoMed = med(diasPago); m.diasReembAvg = avg(diasReemb); m.idadePendAvg = avg(idadePend); m.nPago = diasPago.length; m.nReemb = diasReemb.length; m.nPend = idadePend.length;
-    // coorte madura
-    var mad = recs.filter(function (r) { return acAgeDays(r.data) != null && acAgeDays(r.data) >= aceleraCfg.cohortDays; });
-    var madAntec = mad.reduce(function (s, r) { return s + r.antecipado; }, 0), madReemb = mad.reduce(function (s, r) { return s + r.reembolsado; }, 0);
-    m.cohortMaduraN = mad.length; m.cohortMaduraAntec = madAntec; m.cohortMaduraReemb = madReemb; m.cohortDevolRate = madAntec ? madReemb / madAntec : 0;
-    // custo equivalente anual (usa dias médios de pedidos pagos)
-    var diasEq = m.diasPagoAvg || m.diasPagoMed || null;
-    m.custoEquivAnual = (diasEq && m.aliquota < 1 && diasEq > 0) ? (Math.pow(1 / (1 - m.aliquota), 365 / diasEq) - 1) : null;
-    m.diasEq = diasEq;
-    // custo projetado 12m: média mensal da taxa * 12
-    var months = aceleraMonths(recs); m.monthsSpan = months.length || 1;
-    m.taxaMensalMedia = Math.round(m.taxa / m.monthsSpan); m.custoProj12m = m.taxaMensalMedia * 12;
-    m.volumeMensalMedio = Math.round(m.volume / m.monthsSpan);
-    // capital necessário para independência (receita realizável média/30 * prazo médio liberação)
-    var realizavelMensal = Math.round(m.volumeMensalMedio * (1 - m.cohortDevolRate));
-    var prazo = m.diasPagoMed || m.diasPagoAvg || 0;
-    m.capitalNecessario = Math.round(realizavelMensal / 30 * prazo);
-    m.prazoLiberacao = prazo; m.realizavelMensal = realizavelMensal;
-    m.capitalProprio = aceleraCfg.capitalProprio || 0;
-    m.coberturaDias = realizavelMensal ? (m.capitalProprio / (realizavelMensal / 30)) : 0;
+    m.byResgate = aceleraByResgate(recs); m.byDia = aceleraByDia(recs);
     return m;
   }
-  function aceleraMonths(recs) { var mm = {}; recs.forEach(function (r) { if (r.data) mm[r.data.slice(0, 7)] = 1; }); return Object.keys(mm).sort(); }
   // Filtra pelo período GLOBAL selecionado na barra de período (Hoje/7d/30d/mês/personalizado) —
   // não é o período declarado no cabeçalho do relatório (esse nunca é usado para descartar linhas,
   // conforme a regra original do módulo). São dois filtros diferentes e não conflitam.
   function aceleraInPeriod() { return acelera.filter(function (r) { return inPeriod(r.data); }); }
 
   function renderAcelera() {
-    // §34-35 do prompt "Alterações — Sistema Marketplace Líder": Coortes e Plano de Ação saem da
-    // navegação (junto com Capital/Simulador, já removidos antes) — módulo fica focado em
-    // Visão Geral, Antecipações/Conferência (Pedidos Expedidos × Acelera), Divergências
-    // (Devoluções & Desperdício / Alíquotas), Auditoria e Configurações/Importações.
-    var tabs = [['visao', 'Visão Geral'], ['antecipacoes', 'Antecipações'], ['bipados', 'Pedidos Expedidos × Acelera'], ['desperdicio', 'Devoluções & Desperdício'], ['aliquotas', 'Alíquotas'], ['auditoria', 'Auditoria'], ['config', 'Configurações']];
+    // Refatoração completa do módulo (prompt "REFATORAÇÃO COMPLETA DO MÓDULO SHOPEE ACELERA"):
+    // função única — Expedição → Antecipação → Taxa → Líquido recebido → Conferência. Fora ficam
+    // capital, coorte, custo de oportunidade e qualquer recomendação de decisão financeira.
+    var tabs = [['visao', 'Visão Geral'], ['antecipacoes', 'Antecipações'], ['expedidos', 'Expedidos × Acelera'], ['divergencias', 'Divergências'], ['auditoria', 'Auditoria'], ['import', 'Importações']];
     app.innerHTML = devPeriodBar() + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + tabs.map(function (t) { return '<div class="subtab' + (aceleraSub === t[0] ? ' active' : '') + '" data-acsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-acimport="1">Importar Shopee Acelera</button></div><div id="acbody" style="margin-top:14px"></div>';
     var body = document.getElementById('acbody');
     try {
-      if (!acelera.length && aceleraSub !== 'config' && aceleraSub !== 'bipados') body.innerHTML = secHead('SHOPEE ACELERA', 'Antecipação de Recebíveis', 'Quanto antecipamos, quanto pagamos, qual a alíquota real, quanto disso virou desperdício com devolução — e a conferência entre pedido expedido e antecipação.') + emptyBox('Nenhum relatório Shopee Acelera importado. Clique em “Importar Shopee Acelera” e envie o CSV de antecipação de recebíveis.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="acimp">Importar primeiro relatório</button></div>';
-      else body.innerHTML = ({ visao: aceleraVisao, antecipacoes: aceleraAntecipacoes, bipados: aceleraBipados, desperdicio: aceleraDesperdicio, aliquotas: aceleraAliquotas, auditoria: aceleraAuditoria, config: aceleraConfig }[aceleraSub] || aceleraVisao)();
+      if (!acelera.length && aceleraSub !== 'expedidos' && aceleraSub !== 'import') body.innerHTML = secHead('SHOPEE ACELERA', 'Antecipação de Recebíveis', 'Expedição → Antecipação → Taxa → Líquido recebido → Conferência.') + emptyBox('Nenhum relatório Shopee Acelera importado. Clique em “Importar Shopee Acelera” e envie o CSV de antecipação de recebíveis.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="acimp">Importar primeiro relatório</button></div>';
+      else body.innerHTML = ({ visao: aceleraVisao, antecipacoes: aceleraAntecipacoes, expedidos: aceleraExpedidos, divergencias: aceleraDivergencias, auditoria: aceleraAuditoria, import: aceleraImportacoes }[aceleraSub] || aceleraVisao)();
     } catch (e) { body.innerHTML = '<div class="form-err">Erro ao renderizar o Shopee Acelera: ' + esc(e.message || e) + '</div>'; }
     bindDevPeriodBar();
     app.querySelectorAll('[data-acsub]').forEach(function (b) { b.onclick = function () { aceleraSub = b.dataset.acsub; aceleraPage = 1; render(); }; });
     var imp = function () { fileInput(function (f) { importAcelera(f).then(function (b) { render(); toast('Importação concluída', b.novo + ' novos · ' + b.upd + ' atualizados · ' + b.unch + ' sem alteração'); }).catch(function (e) { toast('Falha', e.message, true); }); }); };
     app.querySelectorAll('[data-acimport]').forEach(function (b) { b.onclick = imp; });
     var ai = document.getElementById('acimp'); if (ai) ai.onclick = imp;
-    app.querySelectorAll('[data-acgo]').forEach(function (b) { b.onclick = function () { aceleraSub = b.dataset.acgo; if (b.dataset.acflag != null) aceleraF.flag = b.dataset.acflag; render(); }; });
+    app.querySelectorAll('[data-acgo]').forEach(function (b) { b.onclick = function () { aceleraSub = b.dataset.acgo; render(); }; });
     app.querySelectorAll('[data-acresg]').forEach(function (b) { b.onclick = function () { aceleraSel.resgate = b.dataset.acresg; openAceleraResgate(b.dataset.acresg); }; });
     app.querySelectorAll('[data-acped]').forEach(function (b) { b.onclick = function () { openAceleraPedido(b.dataset.acped); }; });
+    app.querySelectorAll('[data-acdia]').forEach(function (b) { b.onclick = function () { openAceleraDia(b.dataset.acdia); }; });
     if (aceleraSub === 'antecipacoes') bindAceleraAntec();
-    if (aceleraSub === 'config') bindAceleraConfig();
-    if (aceleraSub === 'auditoria') bindAceleraAud();
+    if (aceleraSub === 'expedidos') bindAceleraExpedidos();
+    if (aceleraSub === 'divergencias') bindAceleraDivergencias();
+    if (aceleraSub === 'import') bindAceleraImportacoes();
   }
-
-  function acKpiHelp(label, help) { return '<span title="' + esc(help) + '" style="cursor:help;border-bottom:1px dotted var(--muted)">' + esc(label) + '</span>'; }
+  // §4/§6/§7 da refatoração: KPIs + gráfico "Antecipações dia a dia" + resumo dia a dia. Sem
+  // recomendação de capital/coorte/custo de oportunidade — só os fatos calculados dos dados.
   function aceleraVisao() {
-    var m = aceleraMetrics(aceleraInPeriod());
-    var recon = aceleraReconcile(m);
-    var head = secHead('SHOPEE ACELERA', 'Antecipação de Recebíveis', 'Central de inteligência da antecipação: quanto pagamos, por quê, quais pedidos originaram o custo, quanto voltou, quanto está em risco e qual decisão de capital é mais barata.');
+    var recs = aceleraInPeriod(); var m = aceleraMetrics(recs);
+    var head = secHead('SHOPEE ACELERA', 'Antecipação de Recebíveis', 'Quanto a Shopee antecipou, quanto cobrou de taxa e quanto entrou líquido — dia a dia, resgate a resgate.');
     var strip1 = kstrip([
-      { l: 'Volume antecipado', v: brlC(m.volume), cls: 'blue', s: nn(m.n) + ' pedidos · ' + nn(m.byResgate.length) + ' resgates' },
-      { l: 'Taxa paga', v: brlC(m.taxa), cls: 'red' },
-      { l: 'Alíquota efetiva', v: pct(r2(m.aliquota * 100)), cls: 'amber', s: 'média ponderada' },
-      { l: 'Líquido recebido', v: brlC(m.receb), cls: 'green' },
-      { l: 'Reembolsado', v: brlC(m.reemb), cls: 'amber' },
-      { l: 'Pendente', v: brlC(m.pend), cls: 'blue' },
+      { l: 'Pedidos antecipados', v: nn(m.nPedidos), cls: 'blue', s: nn(m.nResgates) + ' resgate(s)' },
+      { l: 'Valor antecipado', v: brlC(m.volume), cls: 'blue' },
+      { l: 'Taxa de serviço', v: brlC(m.taxa), cls: 'red' },
+      { l: 'Alíquota efetiva', v: pct(r2(m.aliquota * 100)), cls: 'amber', s: 'taxa ÷ antecipado' },
     ]);
+    var liqDivergente = Math.abs(m.liquidoDiff) > 100;
     var strip2 = kstrip([
-      { l: 'Taxa vinculada a reembolsos', v: brlC(m.taxaReemb), cls: 'red', s: pct(r2(m.taxa ? m.taxaReemb / m.taxa * 100 : 0)) + ' da taxa' },
-      { l: 'Taxa em risco (pendências)', v: brlC(m.taxaRisco), cls: 'amber', s: 'não é perda realizada' },
-      { l: 'Custo projetado 12 meses', v: brlC(m.custoProj12m), cls: 'red', s: brlC(m.taxaMensalMedia) + '/mês' },
-      { l: 'Custo equivalente a.a.', v: m.custoEquivAnual == null ? 'sem base' : pct(r2(m.custoEquivAnual * 100)), cls: 'amber', s: m.diasEq ? 'p/ ' + Math.round(m.diasEq) + ' dias médios' : '' },
-      { l: 'Capital p/ independência', v: brlC(m.capitalNecessario), cls: 'blue', s: Math.round(m.prazoLiberacao) + ' dias de liberação' },
-      { l: 'Devolução coorte madura', v: pct(r2(m.cohortDevolRate * 100)), cls: 'amber', s: nn(m.cohortMaduraN) + ' pedidos ≥' + aceleraCfg.cohortDays + 'd' },
+      { l: 'Valor líquido recebido', v: brlC(m.receb), cls: 'green', s: liqDivergente ? '⚠ calculado (antecipado − taxa): ' + brlC(m.liquidoCalc) : 'confere com antecipado − taxa' },
+      { l: 'Valor reembolsado', v: brlC(m.reemb), cls: m.reemb ? 'amber' : '' },
+      { l: 'Pendente', v: brlC(m.pend), cls: m.pend ? 'blue' : '' },
+      { l: 'Resgates', v: nn(m.nResgates), cls: 'blue' },
     ]);
-    // onde está vazando
-    var leaks = aceleraLeaks(m);
-    var leakRows = leaks.map(function (l, i) { return '<tr class="rowlink"' + (l.go ? ' data-acgo="' + l.go + '"' : '') + '><td>' + (i + 1) + '</td><td>' + esc(l.label) + '</td><td class="neg"><b>' + (l.money ? brlC(l.money) : esc(l.txt || '')) + '</b></td><td class="cell-text footnote" style="margin:0">' + esc(l.hint || '') + '</td></tr>'; }).join('');
-    var vaz = '<div class="panel"><div class="ph"><h3>Onde está vazando o dinheiro</h3><span class="footnote" style="margin:0">ordenado por impacto</span></div><div class="table-wrap"><table class="report"><thead><tr><th>#</th><th>Causa</th><th>Impacto</th><th>Observação</th></tr></thead><tbody>' + (leakRows || '<tr><td colspan="4" class="empty">Sem dados.</td></tr>') + '</tbody></table></div></div>';
-    // o que fazer agora
-    var acts = aceleraActions(m);
-    var doNow = acts.length ? '<div class="panel"><div class="ph"><h3>O que fazer agora?</h3></div><div class="pb">' + acts.map(function (a) { return '<div class="fin-line"><span>' + a.icon + ' ' + a.text + '</span>' + (a.go ? '<button class="btn-sm" data-acgo="' + a.go + '">abrir</button>' : '') + '</div>'; }).join('') + '</div></div>' : '';
-    return head + recon + strip1 + strip2 + vaz + doNow;
+    var liqWarn = liqDivergente ? callout('warn', '⚠ Líquido recebido diverge do calculado', 'A Shopee informou <b>' + brlC(m.receb) + '</b> de líquido recebido no período; antecipado − taxa calculado pelo sistema dá <b>' + brlC(m.liquidoCalc) + '</b> — diferença de <b>' + brlC(m.liquidoDiff) + '</b>. Veja o detalhe em Divergências.') : '';
+    var chart = m.byDia.length ? chartCard('Antecipações dia a dia', legendSwatch([['Líquido recebido', '#1fa971'], ['Taxa', '#d13b3b']]), svgAcDia(m.byDia)) : '';
+    var resumo = aceleraResumoDiaTable(m.byDia);
+    return head + strip1 + strip2 + liqWarn + chart + resumo;
   }
+  // Gráfico de barras empilhadas (líquido + taxa = antecipado) por data do resgate, com tooltip
+  // nativo (<title>) mostrando data, valor antecipado, taxa, líquido, pedidos, resgates e alíquota.
+  function svgAcDia(days) {
+    if (!days.length) return '<div class="footnote">Sem dados no período.</div>';
+    var W = Math.max(560, days.length * 46), H = 260, padL = 56, padR = 20, padB = 34, padT = 16;
+    var max = Math.max.apply(null, days.map(function (d) { return d.antec / 100; }).concat([1]));
+    var step = (W - padL - padR) / days.length, bw = Math.min(34, step * 0.62);
+    var y0 = H - padB, ih = H - padB - padT;
+    var body = days.map(function (d, i) {
+      var x = padL + i * step + (step - bw) / 2;
+      var liq = Math.max(0, d.liquidoCalc / 100), taxa = Math.max(0, d.taxa / 100);
+      var hLiq = (liq / max) * ih, hTaxa = (taxa / max) * ih;
+      var yLiq = y0 - hLiq, yTaxa = yLiq - hTaxa;
+      var tip = dbr(d.data) + '\n\nValor antecipado: ' + brl(d.antec / 100) + '\nTaxa: -' + brl(d.taxa / 100) + '\nLíquido recebido: ' + brl(d.receb / 100) + '\n\n' + d.pedidos + ' pedido' + (d.pedidos === 1 ? '' : 's') + '\n' + d.resgates + ' resgate' + (d.resgates === 1 ? '' : 's') + '\nAlíquota efetiva: ' + pct(r2(d.aliquota * 100));
+      return '<g style="cursor:pointer" data-acdia="' + esc(d.data) + '">' +
+        '<rect x="' + x.toFixed(1) + '" y="' + yLiq.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + Math.max(0, hLiq).toFixed(1) + '" fill="#1fa971" opacity="0.9"/>' +
+        '<rect x="' + x.toFixed(1) + '" y="' + yTaxa.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + Math.max(0, hTaxa).toFixed(1) + '" fill="#d13b3b" opacity="0.9"/>' +
+        '<rect x="' + x.toFixed(1) + '" y="' + padT + '" width="' + bw.toFixed(1) + '" height="' + (y0 - padT) + '" fill="transparent"><title>' + esc(tip) + '</title></rect>' +
+        '</g>';
+    }).join('');
+    var step2 = Math.max(1, Math.ceil(days.length / 10));
+    var labels = days.map(function (d, i) { if (i % step2 !== 0 && i !== days.length - 1) return ''; var x = padL + i * step + step / 2; return '<text x="' + x.toFixed(1) + '" y="' + (H - 10) + '" font-size="10" fill="#64708a" text-anchor="middle">' + esc(monthDayLabel(d.data)) + '</text>'; }).join('');
+    var yl = '<text x="6" y="' + (padT + 4) + '" font-size="10" fill="#64708a">' + brl(max) + '</text><text x="6" y="' + (y0 + 4) + '" font-size="10" fill="#64708a">R$ 0</text>';
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="max-width:' + W + 'px">' + body + labels + yl + '</svg>';
+  }
+  // §7: "mais de um resgate no mesmo dia não significa duplicação" — a tabela nunca deduplica por
+  // data; ela só agrupa visualmente, mostrando explicitamente a contagem de resgates por dia.
+  function aceleraResumoDiaTable(days) {
+    if (!days.length) return emptyBox('Nenhum resgate no período selecionado.');
+    var sorted = days.slice().sort(function (a, b) { return b.data.localeCompare(a.data); });
+    var rows = sorted.map(function (d) {
+      return '<tr class="rowlink" data-acdia="' + esc(d.data) + '"><td class="nowrap">' + esc(dbr(d.data)) + '</td><td>' + nn(d.pedidos) + '</td><td>' + nn(d.resgates) + '</td><td class="nowrap">' + brlC(d.antec) + '</td><td class="nowrap">' + brlC(d.taxa) + '</td><td>' + pct(r2(d.aliquota * 100)) + '</td><td class="nowrap">' + brlC(d.receb) + '</td><td class="nowrap' + (d.reemb ? ' neg' : '') + '">' + brlC(d.reemb) + '</td><td><button class="btn-sm" data-acdia="' + esc(d.data) + '">Abrir</button></td></tr>';
+    }).join('');
+    return '<div class="panel"><div class="ph"><h3>Resumo dia a dia</h3><span class="footnote" style="margin:0">mais de um resgate no mesmo dia não é duplicidade — a Shopee pode gerar vários lotes na mesma data</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Pedidos</th><th>Resgates</th><th>Antecipado</th><th>Taxa</th><th>Alíquota</th><th>Líquido</th><th>Reembolsado</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+  }
+  // §8-9: expansão do dia → resgates do dia → pedidos do resgate (reaproveita openAceleraResgate).
+  function openAceleraDia(dateStr) {
+    var recs = acelera.filter(function (r) { return r.data === dateStr; });
+    var gs = aceleraByResgate(recs);
+    var pedidosSet = {}; recs.forEach(function (r) { pedidosSet[r.pedido] = 1; });
+    var antecTot = recs.reduce(function (s, r) { return s + r.antecipado; }, 0);
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '760px'; panel.style.maxWidth = '97vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    var resgateBlocks = gs.map(function (g) {
+      return '<div class="panel"><div class="ph"><h3>Resgate <span class="mono">' + esc(g.resgate) + '</span></h3><span class="tag' + (g.divergente ? ' warn' : '') + '">alíquota ' + pct(r2(g.rate * 100)) + '</span></div><div class="pb">' +
+        kv('Pedidos', nn(g.n)) + kv('Antecipado', brlC(g.antec)) + kv('Taxa', brlC(g.taxa)) + kv('Líquido', brlC(g.receb)) + (g.reemb ? kv('Reembolsado', brlC(g.reemb)) : '') + (g.pend ? kv('Pendente', brlC(g.pend)) : '') +
+        '<button class="btn-sm primary" data-acresg="' + esc(g.resgate) + '" style="margin-top:8px">Ver pedidos deste resgate</button>' +
+        '</div></div>';
+    }).join('');
+    panel.innerHTML = '<div class="dh"><div><b>' + esc(dbr(dateStr)) + '</b></div><button class="x">&times;</button></div><div class="dbd">' +
+      '<div class="kstrip" style="margin-bottom:12px"><div class="kc"><div class="kl">Pedidos</div><div class="kv" style="font-size:18px">' + nn(Object.keys(pedidosSet).length) + '</div></div><div class="kc"><div class="kl">Resgates</div><div class="kv" style="font-size:18px">' + nn(gs.length) + '</div></div><div class="kc"><div class="kl">Antecipado</div><div class="kv" style="font-size:18px">' + brlC(antecTot) + '</div></div></div>' +
+      resgateBlocks + '</div>';
+    panel.querySelector('.x').onclick = function () { d.remove(); };
+    panel.querySelectorAll('[data-acresg]').forEach(function (b) { b.onclick = function () { d.remove(); openAceleraResgate(b.dataset.acresg); }; });
+  }
+  // §1 pergunta 10: os valores calculados pelo sistema batem com o resumo que a própria Shopee
+  // escreveu no cabeçalho do arquivo? (usado na aba Auditoria, não mais na Visão Geral.)
   function aceleraReconcile(m) {
     if (!aceleraSummary || !aceleraSummary.summary) return '';
     var s = aceleraSummary.summary; var rows = [];
@@ -6337,42 +6393,39 @@ buffer/index.js:
     var body = '<div class="table-wrap"><table class="report"><thead><tr><th>Indicador</th><th>Sistema</th><th>Shopee (resumo)</th><th>Diferença</th></tr></thead><tbody>' + rows.map(function (r) { return '<tr><td>' + esc(r.label) + '</td><td class="nowrap">' + brlC(r.sys) + '</td><td class="nowrap">' + brlC(r.shopee) + '</td><td class="nowrap ' + (Math.abs(r.diff) > 100 ? 'neg' : '') + '">' + (r.diff === 0 ? 'R$ 0,00' : brlC(r.diff)) + '</td></tr>'; }).join('') + '</tbody></table></div>';
     return callout(ok ? 'green' : 'warn', ok ? '✓ Conciliado com o resumo da Shopee' : '⚠ Divergência com o resumo da Shopee', 'Comparação entre o que o sistema somou linha a linha e o resumo que a própria Shopee escreveu no arquivo.' + audit + body);
   }
-  function aceleraLeaks(m) {
-    var leaks = [];
-    if (m.taxaReemb > 0) leaks.push({ label: 'Taxa paga em pedidos que depois devolveram', money: m.taxaReemb, go: 'desperdicio', hint: 'antecipamos e pagamos taxa, mas o pedido voltou' });
-    // impacto de alíquota (3.5 vs 2.5)
-    var band35 = m.byResgate.filter(function (g) { return g.band === '3.5%'; }); var vol35 = band35.reduce(function (s, g) { return s + g.antec; }, 0);
-    if (vol35 > 0) { var econ = Math.round(vol35 * (0.035 - 0.025)); leaks.push({ label: 'Alíquota a 3,5% (vs 2,5%) sobre ' + brlC(vol35), money: econ, go: 'aliquotas', hint: 'diferença de alíquota no volume já antecipado a 3,5%' }); }
-    if (m.taxaRisco > 0) leaks.push({ label: 'Taxa em risco por pendências em aberto', money: m.taxaRisco, go: 'desperdicio', hint: 'ainda não é perda — depende do desfecho' });
-    return leaks.sort(function (a, b) { return (b.money || 0) - (a.money || 0); }).slice(0, 6);
-  }
-  function aceleraActions(m) {
-    var a = [];
-    var band35 = m.byResgate.filter(function (g) { return g.band === '3.5%'; }); var vol35 = band35.reduce(function (s, g) { return s + g.antec; }, 0);
-    if (vol35 > 0) a.push({ icon: '🔴', text: 'A alíquota atual inclui 3,5%. Voltar a 2,5% no volume atual economizaria ~' + brlC(Math.round(vol35 * (0.035 - 0.025))) + ' no período.', go: 'aliquotas' });
-    if (m.taxaReemb > 0) a.push({ icon: '🟠', text: brlC(m.taxaReemb) + ' de taxa foram pagos em pedidos que depois devolveram. Ver os piores produtos/faixas.', go: 'desperdicio' });
-    if (m.capitalProprio > 0 && m.capitalNecessario > 0 && m.capitalProprio < m.capitalNecessario) a.push({ icon: '🟢', text: 'Faltam ' + brlC(m.capitalNecessario - m.capitalProprio) + ' de colchão para reduzir a dependência da antecipação.', go: 'config' });
-    return a;
-  }
 
+  // §21: distribuição das alíquotas dentro de Antecipações (não é mais aba isolada) — calculada dos
+  // dados reais, nunca assumindo faixas fixas.
+  function aceleraAliquotaDist(recs) {
+    var gs = aceleraByResgate(recs);
+    var byResgateKey = {}; gs.forEach(function (g) { byResgateKey[g.resgate] = g.aliqLabel; });
+    var map = {};
+    gs.forEach(function (g) { var key = g.aliqLabel; var b = map[key] = map[key] || { label: key, pedidosSet: {}, resgates: 0, antec: 0, taxa: 0, order: g.rate }; b.resgates++; b.antec += g.antec; b.taxa += g.taxa; });
+    recs.forEach(function (r) { var key = byResgateKey[r.resgate]; if (!key || !map[key]) return; map[key].pedidosSet[r.pedido] = 1; });
+    return Object.values(map).map(function (b) { return { label: b.label, pedidos: Object.keys(b.pedidosSet).length, resgates: b.resgates, antec: b.antec, taxa: b.taxa, order: b.order }; }).sort(function (a, b) { return a.order - b.order; });
+  }
   function aceleraAntecipacoes() {
-    var gs = aceleraByResgate(aceleraInPeriod()).sort(function (a, b) { return (b.data || '').localeCompare(a.data || ''); });
-    if (aceleraF.band) gs = gs.filter(function (g) { return g.band === aceleraF.band; });
+    var recs = aceleraInPeriod();
+    var gs = aceleraByResgate(recs).sort(function (a, b) { return (b.data || '').localeCompare(a.data || ''); });
+    if (aceleraF.aliq) gs = gs.filter(function (g) { return g.aliqLabel === aceleraF.aliq; });
     if (aceleraF.search) { var q = aceleraF.search.toLowerCase(); gs = gs.filter(function (g) { return g.resgate.toLowerCase().indexOf(q) >= 0; }); }
     var pages = Math.max(1, Math.ceil(gs.length / 25)); if (aceleraPage > pages) aceleraPage = pages; var slice = gs.slice((aceleraPage - 1) * 25, aceleraPage * 25);
-    var bands = [['', 'Todas'], ['2.5%', '2,5%'], ['3.5%', '3,5%'], ['outra', 'Outra / investigar']];
     var head = secHead('ACELERA · ANTECIPAÇÕES', 'Auditoria por resgate', 'Cada lote de antecipação: valor, taxa, alíquota efetiva, líquido, reembolsado e pendente. Clique para ver os pedidos.');
-    var rows = slice.map(function (g) { return '<tr class="rowlink" data-acresg="' + esc(g.resgate) + '"><td class="nowrap">' + esc(dbr(g.data)) + '</td><td class="mono">' + esc(g.resgate) + '</td><td>' + nn(g.n) + '</td><td class="nowrap">' + brlC(g.antec) + '</td><td class="nowrap">' + brlC(g.taxa) + '</td><td><span class="tag ' + (g.band === 'outra' ? 'warn' : 'neutral') + '">' + pct(r2(g.rate * 100)) + (g.band !== 'outra' && g.band !== '—' ? ' (' + g.band + ')' : '') + '</span></td><td class="nowrap">' + brlC(g.receb) + '</td><td class="nowrap ' + (g.reemb ? 'neg' : '') + '">' + brlC(g.reemb) + '</td><td class="nowrap">' + brlC(g.pend) + '</td><td><button class="btn-sm" data-acresg="' + esc(g.resgate) + '">Abrir</button></td></tr>'; }).join('');
+    var rows = slice.map(function (g) { return '<tr class="rowlink" data-acresg="' + esc(g.resgate) + '"><td class="nowrap">' + esc(dbr(g.data)) + '</td><td class="mono">' + esc(g.resgate) + '</td><td>' + nn(g.n) + '</td><td class="nowrap">' + brlC(g.antec) + '</td><td class="nowrap">' + brlC(g.taxa) + '</td><td><span class="tag' + (g.divergente ? ' warn' : '') + '">' + g.aliqLabel + '</span></td><td class="nowrap">' + brlC(g.receb) + '</td><td class="nowrap ' + (g.reemb ? 'neg' : '') + '">' + brlC(g.reemb) + '</td><td class="nowrap">' + brlC(g.pend) + '</td><td><button class="btn-sm" data-acresg="' + esc(g.resgate) + '">Abrir</button></td></tr>'; }).join('');
+    var dist = aceleraAliquotaDist(recs);
+    var aliqOptions = '<option value="">Todas</option>' + dist.map(function (a) { return '<option value="' + esc(a.label) + '"' + (aceleraF.aliq === a.label ? ' selected' : '') + '>' + esc(a.label) + '</option>'; }).join('');
+    var distRows = dist.map(function (a) { return '<tr><td><span class="tag">' + esc(a.label) + '</span></td><td>' + nn(a.pedidos) + '</td><td>' + nn(a.resgates) + '</td><td class="nowrap">' + brlC(a.antec) + '</td><td class="nowrap">' + brlC(a.taxa) + '</td></tr>'; }).join('');
+    var distTable = '<div class="panel"><div class="ph"><h3>Distribuição das alíquotas</h3><span class="footnote" style="margin:0">calculada a partir dos dados — não assume faixas fixas</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Alíquota</th><th>Pedidos</th><th>Resgates</th><th>Antecipado</th><th>Taxa</th></tr></thead><tbody>' + (distRows || '<tr><td colspan="5" class="empty">Sem dados.</td></tr>') + '</tbody></table></div></div>';
     return head +
-      '<div class="chips">' + bands.map(function (c) { return '<span class="chip' + (aceleraF.band === c[0] ? ' chip-on' : '') + '" data-acband="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
-      '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="acq" style="width:280px" placeholder="Buscar ID do resgate…" value="' + esc(aceleraF.search) + '"></div>' +
+      '<div class="toolbar2" style="margin-top:8px;gap:10px;flex-wrap:wrap"><input class="input sm" id="acq" style="width:280px" placeholder="Buscar ID do resgate…" value="' + esc(aceleraF.search) + '"><select class="select sm" id="acaliqf" style="width:160px">' + aliqOptions + '</select></div>' +
       '<div class="count-line"><b>' + nn(gs.length) + '</b> resgates</div>' +
-      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>ID resgate</th><th>Pedidos</th><th>Antecipado</th><th>Taxa</th><th>Alíquota</th><th>Recebido</th><th>Reembolsado</th><th>Pendente</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="10" class="empty">Nenhum resgate neste filtro.</td></tr>') + '</tbody></table></div></div>' +
-      (pages > 1 ? '<div style="display:flex;gap:8px;justify-content:flex-end;align-items:center"><button class="btn-sm" id="acprev"' + (aceleraPage <= 1 ? ' disabled' : '') + '>Anterior</button><span class="footnote" style="margin:0">página ' + aceleraPage + ' de ' + pages + '</span><button class="btn-sm" id="acnext"' + (aceleraPage >= pages ? ' disabled' : '') + '>Próxima</button></div>' : '');
+      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>ID resgate</th><th>Pedidos</th><th>Antecipado</th><th>Taxa</th><th>Alíquota</th><th>Líquido</th><th>Reembolsado</th><th>Pendente</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="10" class="empty">Nenhum resgate neste filtro.</td></tr>') + '</tbody></table></div></div>' +
+      (pages > 1 ? '<div style="display:flex;gap:8px;justify-content:flex-end;align-items:center"><button class="btn-sm" id="acprev"' + (aceleraPage <= 1 ? ' disabled' : '') + '>Anterior</button><span class="footnote" style="margin:0">página ' + aceleraPage + ' de ' + pages + '</span><button class="btn-sm" id="acnext"' + (aceleraPage >= pages ? ' disabled' : '') + '>Próxima</button></div>' : '') +
+      distTable;
   }
   function bindAceleraAntec() {
-    app.querySelectorAll('[data-acband]').forEach(function (c) { c.onclick = function () { aceleraF.band = c.dataset.acband; aceleraPage = 1; render(); }; });
     var q = document.getElementById('acq'); if (q) { var t; q.oninput = function () { clearTimeout(t); t = setTimeout(function () { var v = q.value; aceleraF.search = v; aceleraPage = 1; render(); var el = document.getElementById('acq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
+    var af = document.getElementById('acaliqf'); if (af) af.onchange = function () { aceleraF.aliq = af.value; aceleraPage = 1; render(); };
     var pv = document.getElementById('acprev'); if (pv) pv.onclick = function () { if (aceleraPage > 1) { aceleraPage--; render(); } };
     var nx = document.getElementById('acnext'); if (nx) nx.onclick = function () { aceleraPage++; render(); };
   }
@@ -6380,163 +6433,174 @@ buffer/index.js:
     var recs = acelera.filter(function (r) { return r.resgate === rid; });
     var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '820px'; panel.style.maxWidth = '97vw';
     d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
-    var g = aceleraByResgate(recs)[0] || { antec: 0, taxa: 0, rate: 0, receb: 0, reemb: 0, pend: 0 };
+    var g = aceleraByResgate(recs)[0] || { antec: 0, taxa: 0, rate: 0, receb: 0, reemb: 0, pend: 0, aliqLabel: '—', divergente: false };
     var rows = recs.sort(function (a, b) { return b.antecipado - a.antecipado; }).slice(0, 400).map(function (r) { return '<tr class="rowlink" data-acped="' + esc(r.pedido) + '"><td class="mono">' + esc(r.pedido) + '</td><td class="nowrap">' + brlC(r.antecipado) + '</td><td class="nowrap">' + brlC(r.taxa) + '</td><td class="nowrap">' + brlC(r.recebido) + '</td><td class="nowrap ' + (r.reembolsado ? 'neg' : '') + '">' + brlC(r.reembolsado) + '</td><td class="nowrap">' + brlC(r.pendente) + '</td><td><span class="tag ' + (acIsReemb(r) ? 'warn' : acIsFullyPaid(r) ? 'ok' : 'neutral') + '">' + esc(acStatusLabel(r.status)) + '</span></td></tr>'; }).join('');
-    panel.innerHTML = '<div class="dh"><div><b>Resgate ' + esc(rid) + '</b> <span class="tag ' + (g.band === 'outra' ? 'warn' : 'neutral') + '" style="margin-left:6px">alíquota ' + pct(r2(g.rate * 100)) + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
-      '<div class="kstrip" style="margin-bottom:12px"><div class="kc"><div class="kl">Antecipado</div><div class="kv" style="font-size:16px">' + brlC(g.antec) + '</div></div><div class="kc"><div class="kl">Taxa</div><div class="kv" style="font-size:16px">' + brlC(g.taxa) + '</div></div><div class="kc"><div class="kl">Recebido</div><div class="kv" style="font-size:16px">' + brlC(g.receb) + '</div></div><div class="kc"><div class="kl">Reembolsado</div><div class="kv" style="font-size:16px">' + brlC(g.reemb) + '</div></div></div>' +
+    panel.innerHTML = '<div class="dh"><div><b>Resgate ' + esc(rid) + '</b> <span class="tag' + (g.divergente ? ' warn' : '') + '" style="margin-left:6px">alíquota ' + g.aliqLabel + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
+      '<div class="kstrip" style="margin-bottom:12px"><div class="kc"><div class="kl">Antecipado</div><div class="kv" style="font-size:16px">' + brlC(g.antec) + '</div></div><div class="kc"><div class="kl">Taxa</div><div class="kv" style="font-size:16px">' + brlC(g.taxa) + '</div></div><div class="kc"><div class="kl">Líquido</div><div class="kv" style="font-size:16px">' + brlC(g.receb) + '</div></div><div class="kc"><div class="kl">Reembolsado</div><div class="kv" style="font-size:16px">' + brlC(g.reemb) + '</div></div></div>' +
       '<div class="panel"><div class="ph"><h3>' + nn(recs.length) + ' pedidos neste resgate</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Antecipado</th><th>Taxa</th><th>Recebido</th><th>Reembolsado</th><th>Pendente</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div></div></div>';
     panel.querySelector('.x').onclick = function () { d.remove(); };
     panel.querySelectorAll('[data-acped]').forEach(function (b) { b.onclick = function () { openAceleraPedido(b.dataset.acped); }; });
   }
+  // §9/§18/§22: detalhe de um pedido — antecipação (ou "não encontrado", útil para as divergências
+  // "expedido sem Acelera"), depois-da-antecipação (reembolso §24), pedido central e Ficha 360º.
   function openAceleraPedido(pid) {
-    var recs = acelera.filter(function (r) { return r.pedido === pid; }); if (!recs.length) return; var r = recs[0];
-    var ord = orders.find(function (o) { return o.id === pid; }); var oc = occ.find(function (o) { return !o.isDemo && o.orderId === pid; });
+    var recs = acelera.filter(function (r) { return r.pedido === pid; }); var r = recs[0];
+    var ord = orders.find(function (o) { return o.id === pid; }); var oc = occ.find(function (o) { return !o.isDemo && o.orderId === pid; }); var bip = shipBip[pid];
     var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '640px'; panel.style.maxWidth = '96vw';
     d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
-    var taxaReemb = r.antecipado ? Math.round(r.taxa * r.reembolsado / r.antecipado) : 0; var taxaRisco = r.antecipado ? Math.round(r.taxa * r.pendente / r.antecipado) : 0;
+    var antBlock;
+    if (r) {
+      var liqCalc = acLiquidoCalc(r); var liqDiff = acLiquidoDiff(r); var diverge = acLiquidoDivergente(r);
+      antBlock = '<div class="panel"><div class="ph"><h3>Antecipação</h3></div><div class="pb">' + kv('Resgate', r.resgate) + kv('Data', dbr(r.data)) + kv('Valor antecipado', brlC(r.antecipado)) + kv('Taxa', brlC(r.taxa)) + kv('Alíquota', pct(r2((r.antecipado ? r.taxa / r.antecipado : 0) * 100))) + kv('Líquido informado (Shopee)', brlC(r.recebido)) + kv('Líquido calculado (antecipado − taxa)', brlC(liqCalc)) + (diverge ? kv('Diferença', brlC(liqDiff)) : '') + '</div></div>' +
+        (diverge ? callout('warn', '⚠ Líquido divergente', 'A Shopee informou um líquido diferente do calculado por antecipado − taxa. Diferença de ' + brlC(liqDiff) + '.') : '') +
+        '<div class="panel"><div class="ph"><h3>Depois da antecipação</h3></div><div class="pb">' + kv('Reembolsado', brlC(r.reembolsado)) + kv('Pendente', brlC(r.pendente)) + kv('Última transação', dbr(r.ultimaTransacao)) + kv('Vencimento', dbr(r.vencimento)) + (r.reembolsado > 0 ? '<div style="margin-top:4px"><span class="tag warn">Pedido posteriormente reembolsado</span></div>' : '') + '</div></div>' +
+        ((r.history && r.history.length) ? '<div class="panel"><div class="ph"><h3>Linha do tempo</h3></div><div class="pb">' + [{ at: r.firstImportAt, txt: 'Importado — ' + acStatusLabel(r.status) }].concat(r.history.map(function (h) { return { at: h.at, txt: acStatusLabel(h.statusOld) + ' → ' + acStatusLabel(h.statusNew) }; })).map(function (e) { return '<div class="fin-line"><span>' + esc(e.txt) + '</span><span class="footnote" style="margin:0">' + (e.at ? new Date(e.at).toLocaleDateString('pt-BR') : '') + '</span></div>'; }).join('') + '</div></div>' : '');
+    } else {
+      antBlock = callout('warn', 'Pedido não encontrado no Acelera', bip ? 'Expedido em ' + dbr(bip.bipedAt) + ', mas sem registro correspondente no relatório do Shopee Acelera importado.' : 'Sem registro no Shopee Acelera importado.');
+    }
     var it = ord ? (ord.items || [])[0] || {} : {};
-    var pedBlock = ord ? '<div class="panel"><div class="ph"><h3>Pedido (do módulo Pedidos)</h3></div><div class="pb">' + kv('Produto', it.productName || '—') + kv('SKU', it.sku || '—') + kv('Status', S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus || '—') + kv('Valor', brl(ord.totalAmount || 0)) + '<button class="btn-sm" data-goped="' + esc(pid) + '">Ver pedido</button></div></div>' : '<div class="footnote">Pedido ' + esc(pid) + ' não importado no módulo Pedidos — SKU/produto indisponíveis.</div>';
+    var pedBlock = ord ? '<div class="panel"><div class="ph"><h3>Pedido (do módulo Pedidos)</h3></div><div class="pb">' + kv('Produto', it.productName || '—') + kv('SKU', it.sku || '—') + kv('Status', S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus || '—') + kv('Valor', brl(ord.totalAmount || 0)) + kv('Expedido', bip ? dbr(bip.bipedAt) : 'não registrado') + '<div style="display:flex;gap:8px;margin-top:8px"><button class="btn-sm" data-goped="' + esc(pid) + '">Ver pedido</button><button class="btn-sm primary" data-goped360="' + esc(pid) + '">Ficha Financeira 360º</button></div></div></div>' : '<div class="footnote">Pedido ' + esc(pid) + ' não importado no módulo Pedidos — SKU/produto indisponíveis.</div>';
     var devBlock = oc ? '<div class="panel"><div class="ph"><h3>Devolução vinculada</h3><span class="tag info">' + esc(statusLabel(oc.status)) + '</span></div><div class="pb">' + kv('Motivo', oc.reason || '—') + kv('Responsabilidade', (DEV.RESPONSIBILITY[oc.responsibility] || '—')) + '<button class="btn-sm" data-godev="' + esc(oc.id) + '">Ver devolução</button></div></div>' : '';
-    var hist = (r.history && r.history.length) ? '<div class="panel"><div class="ph"><h3>Linha do tempo financeira</h3></div><div class="pb">' + [{ at: r.firstImportAt, txt: 'Importado — ' + acStatusLabel(r.status) }].concat(r.history.map(function (h) { return { at: h.at, txt: acStatusLabel(h.statusOld) + ' → ' + acStatusLabel(h.statusNew) + (h.reembNew !== h.reembOld ? ' · reembolso ' + brlC(h.reembOld) + '→' + brlC(h.reembNew) : '') }; })).map(function (e) { return '<div class="fin-line"><span>' + esc(e.txt) + '</span><span class="footnote" style="margin:0">' + (e.at ? new Date(e.at).toLocaleDateString('pt-BR') : '') + '</span></div>'; }).join('') + '</div></div>' : '';
-    panel.innerHTML = '<div class="dh"><div><b>Pedido ' + esc(pid) + '</b> <span class="tag ' + (acIsReemb(r) ? 'warn' : acIsFullyPaid(r) ? 'ok' : 'neutral') + '" style="margin-left:6px">' + esc(acStatusLabel(r.status)) + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
-      '<div class="panel"><div class="ph"><h3>Antecipação</h3></div><div class="pb">' + kv('Resgate', r.resgate) + kv('Data', dbr(r.data)) + kv('Disponível', brlC(r.disponivel)) + kv('% antecipado', r.pctAntecip != null ? pct(r.pctAntecip * 100) : '—') + kv('Valor antecipado', brlC(r.antecipado)) + kv('Taxa', brlC(r.taxa)) + kv('Alíquota', pct(r2((r.antecipado ? r.taxa / r.antecipado : 0) * 100))) + kv('Líquido recebido', brlC(r.recebido)) + '</div></div>' +
-      '<div class="panel"><div class="ph"><h3>Depois da antecipação</h3></div><div class="pb">' + kv('Reembolsado', brlC(r.reembolsado)) + kv('Pendente', brlC(r.pendente)) + kv('Última transação', dbr(r.ultimaTransacao)) + kv('Vencimento', dbr(r.vencimento)) + '</div></div>' +
-      '<div class="panel"><div class="ph"><h3>Impacto financeiro</h3></div><div class="pb">' + kv('Taxa vinculada ao reembolso', brlC(taxaReemb)) + kv('Taxa em risco (pendência)', brlC(taxaRisco)) + kv('Dias antecipado', (acDays(r.data, r.ultimaTransacao) != null ? acDays(r.data, r.ultimaTransacao) + ' dias' : (acAgeDays(r.data) + ' dias (em aberto)'))) + '</div></div>' +
-      pedBlock + devBlock + hist + '</div>';
+    panel.innerHTML = '<div class="dh"><div><b>Pedido ' + esc(pid) + '</b>' + (r ? ' <span class="tag ' + (acIsReemb(r) ? 'warn' : acIsFullyPaid(r) ? 'ok' : 'neutral') + '" style="margin-left:6px">' + esc(acStatusLabel(r.status)) + '</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' + antBlock + pedBlock + devBlock + '</div>';
     panel.querySelector('.x').onclick = function () { d.remove(); };
     var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { d.remove(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
+    var g360 = panel.querySelector('[data-goped360]'); if (g360) g360.onclick = function () { d.remove(); openPedidoFicha360(pid); };
     var gd = panel.querySelector('[data-godev]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev; d.remove(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
   }
 
-  function aceleraDesperdicio() {
-    var m = aceleraMetrics(aceleraInPeriod());
-    var head = secHead('ACELERA · DEVOLUÇÕES & DESPERDÍCIO', 'Taxa que virou desperdício', 'Taxa de antecipação paga em pedidos que depois foram reembolsados — calculada pedido a pedido. Separamos perda realizada de risco em aberto.');
-    var strip = kstrip([
-      { l: 'Antecipado que voltou (reembolso)', v: brlC(m.reemb), cls: 'amber' },
-      { l: 'Taxa desperdiçada (realizada)', v: brlC(m.taxaReemb), cls: 'red', s: 'perda já concretizada' },
-      { l: 'Taxa em risco (pendências)', v: brlC(m.taxaRisco), cls: 'amber', s: 'ainda não é perda' },
-      { l: 'Pedidos reembolsados', v: nn(m.status['antecipacao totalmente reembolsada'] || 0) + ' / ' + nn(m.status['antecipacao parcialmente reembolsada'] || 0), cls: 'blue', s: 'total / parcial' },
-    ]);
-    // faixas de ticket (por valor antecipado do pedido)
-    var faixas = [[0, 5000, 'até R$50'], [5000, 10000, 'R$50–100'], [10000, 15000, 'R$100–150'], [15000, 25000, 'R$150–250'], [25000, 40000, 'R$250–400'], [40000, Infinity, 'acima de R$400']];
-    var fd = faixas.map(function (f) { return { label: f[2], min: f[0], max: f[1], n: 0, antec: 0, reemb: 0, taxaW: 0, pend: 0 }; });
-    acelera.forEach(function (r) { var t = r.antecipado; var fx = fd.find(function (f) { return t >= f.min && t < f.max; }); if (!fx) return; fx.n++; fx.antec += r.antecipado; fx.reemb += r.reembolsado; fx.pend += r.pendente; if (r.antecipado > 0) fx.taxaW += r.taxa * r.reembolsado / r.antecipado; });
-    var totAntec = m.volume || 1;
-    var frows = fd.map(function (f) { return '<tr><td>' + esc(f.label) + '</td><td>' + nn(f.n) + '</td><td class="nowrap">' + brlC(f.antec) + '</td><td>' + pct(r2(f.antec / totAntec * 100)) + '</td><td class="nowrap ' + (f.reemb ? 'neg' : '') + '">' + brlC(f.reemb) + '</td><td>' + pct(r2(f.antec ? f.reemb / f.antec * 100 : 0)) + '</td><td class="nowrap"><b>' + brlC(Math.round(f.taxaW)) + '</b></td><td class="nowrap">' + brlC(f.pend) + '</td></tr>'; }).join('');
-    var faixaTable = '<div class="panel"><div class="ph"><h3>Por faixa de ticket</h3><span class="footnote" style="margin:0">taxa desperdiçada calculada pedido a pedido</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Faixa</th><th>Pedidos</th><th>Antecipado</th><th>% do volume</th><th>Reembolsado</th><th>% reemb.</th><th>Taxa desperdiçada</th><th>Pendente</th></tr></thead><tbody>' + frows + '</tbody></table></div></div>';
-    // integração com devoluções por responsabilidade (por ID do pedido)
-    var byResp = {}; var semOcc = { n: 0, taxaW: 0 };
-    acelera.forEach(function (r) { if (r.reembolsado <= 0) return; var taxaW = r.antecipado ? r.taxa * r.reembolsado / r.antecipado : 0; var oc = occ.find(function (o) { return !o.isDemo && o.orderId === r.pedido; }); if (oc) { var key = oc.responsibility || 'NAO_IDENTIFICADA'; var g = byResp[key] = byResp[key] || { n: 0, taxaW: 0 }; g.n++; g.taxaW += taxaW; } else { semOcc.n++; semOcc.taxaW += taxaW; } });
-    var respRows = Object.keys(byResp).sort(function (a, b) { return byResp[b].taxaW - byResp[a].taxaW; }).map(function (k) { return '<tr><td>' + esc(DEV.RESPONSIBILITY[k] || k) + '</td><td>' + nn(byResp[k].n) + '</td><td class="nowrap"><b>' + brlC(Math.round(byResp[k].taxaW)) + '</b></td></tr>'; }).join('');
-    var respTable = '<div class="panel"><div class="ph"><h3>Taxa desperdiçada por responsabilidade da devolução</h3><span class="footnote" style="margin:0">cruzando o módulo Devoluções por ID do pedido</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Responsabilidade</th><th>Pedidos</th><th>Taxa desperdiçada</th></tr></thead><tbody>' + (respRows || '') + (semOcc.n ? '<tr><td>Sem devolução importada</td><td>' + nn(semOcc.n) + '</td><td class="nowrap">' + brlC(Math.round(semOcc.taxaW)) + '</td></tr>' : '') + (respRows || semOcc.n ? '' : '<tr><td colspan="3" class="empty">Nenhum pedido reembolsado encontrado nas devoluções. Importe o módulo Devoluções para cruzar responsabilidade.</td></tr>') + '</tbody></table></div></div>';
-    var sep = callout('', 'Perda realizada × risco (não confundir)', '<b>' + brlC(m.taxaReemb) + '</b> já é desperdício concretizado (o pedido devolveu). <b>' + brlC(m.taxaRisco) + '</b> é apenas <b>risco</b> associado a valores ainda pendentes — pode ou não virar perda. Nunca somamos os dois como "dinheiro perdido".');
-    return head + strip + sep + faixaTable + respTable;
-  }
-
-  function aceleraAliquotas() {
-    var m = aceleraMetrics(aceleraInPeriod()); var gs = m.byResgate;
-    var head = secHead('ACELERA · ALÍQUOTAS', 'Qual taxa está sendo cobrada — e quando mudou', 'A alíquota é calculada (Taxa ÷ Valor antecipado), por resgate. Pequenas variações por arredondamento são agrupadas nas faixas contratuais.');
-    var bmap = {}; gs.forEach(function (g) { var b = bmap[g.band] = bmap[g.band] || { band: g.band, n: 0, antec: 0, taxa: 0 }; b.n++; b.antec += g.antec; b.taxa += g.taxa; });
-    var bands = Object.values(bmap).sort(function (a, b) { return a.band.localeCompare(b.band); });
-    var strip = kstrip(bands.map(function (b) { return { l: 'Faixa ' + b.band, v: nn(b.n) + ' resgates', cls: b.band === 'outra' ? 'red' : 'blue', s: brlC(b.antec) + ' · taxa ' + brlC(b.taxa) }; }));
-    // timeline de mudança de alíquota
-    var tl = gs.slice().sort(function (a, b) { return (a.data || '').localeCompare(b.data || ''); });
-    var segs = [], cur = null;
-    tl.forEach(function (g) { if (!cur || cur.band !== g.band) { cur = { band: g.band, from: g.data, to: g.data, antec: 0, taxa: 0 }; segs.push(cur); } cur.to = g.data; cur.antec += g.antec; cur.taxa += g.taxa; });
-    var tlRows = segs.map(function (s) { return '<tr><td><span class="tag ' + (s.band === 'outra' ? 'warn' : 'neutral') + '">' + esc(s.band) + '</span></td><td class="nowrap">' + esc(dbr(s.from)) + ' → ' + esc(dbr(s.to)) + '</td><td class="nowrap">' + brlC(s.antec) + '</td><td class="nowrap">' + brlC(s.taxa) + '</td></tr>'; }).join('');
-    // evento de mudança
-    var changeNote = '';
-    for (var i = 1; i < segs.length; i++) { if (segs[i].band !== segs[i - 1].band && segs[i].band !== '—' && segs[i - 1].band !== '—') { var prev = parseFloat(segs[i - 1].band), now = parseFloat(segs[i].band); if (!isNaN(prev) && !isNaN(now) && now > prev) { var impactoMes = Math.round(m.volumeMensalMedio * (now - prev) / 100); changeNote = callout('warn', '🔴 Alíquota aumentou: ' + segs[i - 1].band + ' → ' + segs[i].band, 'Considerando seu volume médio de ' + brlC(m.volumeMensalMedio) + '/mês, essa mudança adiciona aproximadamente <b>' + brlC(impactoMes) + '/mês</b> (~' + brlC(impactoMes * 12) + '/ano) ao custo de antecipação.'); } } }
-    var chart = chartCard('Volume antecipado por faixa de alíquota', legendSwatch([['Antecipado', '#2b4bd6']]), svgHBars(bands.map(function (b) { return { label: 'Faixa ' + b.band, value: b.antec / 100 }; }), { fmt: function (v) { return brl(v); } }));
-    return head + strip + changeNote + chart + '<div class="panel"><div class="ph"><h3>Linha do tempo da alíquota</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Faixa</th><th>Período</th><th>Antecipado</th><th>Taxa</th></tr></thead><tbody>' + tlRows + '</tbody></table></div></div>';
-  }
-
-
-  // Cruza os pedidos EXPEDIDOS (bipe, módulo Pedidos) com o Shopee Acelera: os que deveriam ter
-  // sido antecipados foram encontrados? §3 do prompt de reorganização financeira e operacional.
-  function aceleraBipados() {
-    var head = secHead('SHOPEE ACELERA · PEDIDOS EXPEDIDOS × ACELERA', 'Os pedidos que saíram da empresa foram antecipados?', 'Cruza a expedição (bipe, em Pedidos → Expedição) com os registros do Acelera. Só considera pedidos com expedição registrada.');
+  // §2/§13 da refatoração — Expedidos × Acelera é a função mais importante do módulo: os pedidos
+  // que saíram da empresa foram antecipados? Cruza pela ID do pedido, reaproveitando shipBip (a
+  // MESMA fonte de expedição usada em Pedidos → Expedição — nunca uma segunda fonte paralela).
+  function aceleraExpedidos() {
+    var head = secHead('SHOPEE ACELERA · EXPEDIDOS × ACELERA', 'Os pedidos expedidos foram antecipados?', 'Cruza a expedição (bipe, em Pedidos → Expedição) com os registros do Acelera pelo ID do pedido.');
     var bips = Object.keys(shipBip);
     if (!bips.length) return head + emptyBox('Nenhum pedido expedido (bipado) ainda. Registre a expedição em Pedidos → Expedição para habilitar este cruzamento.');
     var acByOrder = {}; acelera.forEach(function (r) { (acByOrder[r.pedido] = acByOrder[r.pedido] || []).push(r); });
-    var localizados = [], naoLocalizados = [];
-    bips.forEach(function (oid) { var recs = acByOrder[oid]; var ord = orders.find(function (o) { return o.id === oid; }); if (recs && recs.length) localizados.push({ oid: oid, recs: recs, ord: ord }); else naoLocalizados.push({ oid: oid, ord: ord }); });
-    var valorEsperado = 0; naoLocalizados.forEach(function (x) { if (x.ord) valorEsperado += Math.round(orderFinance(x.ord).revenue * 100); });
-    var valorAntecipado = 0; localizados.forEach(function (x) { x.recs.forEach(function (r) { valorAntecipado += r.antecipado; }); });
-    var pctConferido = bips.length ? r2(localizados.length / bips.length * 100) : 0;
+    var tolMs = (aceleraCfg.aguardandoDias || 3) * 864e5;
+    var rows = bips.map(function (oid) {
+      var b = shipBip[oid]; var recs = acByOrder[oid]; var situacao, badge;
+      if (recs && recs.length) { situacao = 'CONCILIADO'; badge = '🟢 Conciliado'; }
+      else {
+        var idade = Date.now() - new Date(b.bipedAt).getTime();
+        // §16: janela operacional antes de marcar como problema — não é um prazo oficial da Shopee,
+        // é uma tolerância ajustável (aceleraCfg.aguardandoDias) para não gerar alarme falso cedo demais.
+        if (idade < tolMs) { situacao = 'AGUARDANDO'; badge = '🟡 Aguardando antecipação'; }
+        else { situacao = 'NAO_ENCONTRADO'; badge = '🔴 Expedido, não encontrado no Acelera'; }
+      }
+      return { oid: oid, bipedAt: b.bipedAt, recs: recs || [], situacao: situacao, badge: badge };
+    });
+    var acSemExp = Object.keys(acByOrder).filter(function (oid) { return !shipBip[oid]; });
+    var conciliados = rows.filter(function (r) { return r.situacao === 'CONCILIADO'; });
+    var naoEncontrados = rows.filter(function (r) { return r.situacao === 'NAO_ENCONTRADO'; });
+    var pctConc = bips.length ? r2(conciliados.length / bips.length * 100) : 0;
     var strip = kstrip([
-      { l: 'Pedidos expedidos', v: nn(bips.length), cls: 'blue' },
-      { l: 'Encontrados no Acelera', v: nn(localizados.length), cls: 'green' },
-      { l: 'Não encontrados', v: nn(naoLocalizados.length), cls: naoLocalizados.length ? 'red' : 'green' },
-      { l: '% conferido', v: pct(pctConferido), cls: 'blue' },
-      { l: 'Valor antecipado (localizados)', v: brlC(valorAntecipado), cls: 'green' },
-      { l: 'Valor esperado (não localizados)', v: brlC(valorEsperado), cls: 'amber', s: 'estimado pela venda em Pedidos' },
+      { l: 'Pedidos expedidos/bipados', v: nn(bips.length), cls: 'blue' },
+      { l: 'Encontrados no Acelera', v: nn(conciliados.length), cls: 'green' },
+      { l: 'Não encontrados no Acelera', v: nn(naoEncontrados.length), cls: naoEncontrados.length ? 'red' : 'green' },
+      { l: 'Acelera sem confirmação de expedição', v: nn(acSemExp.length), cls: acSemExp.length ? 'amber' : 'green' },
+      { l: '% conciliado', v: pct(pctConc), cls: 'blue', s: nn(conciliados.length) + ' de ' + nn(bips.length) + ' expedidos (denominador = todos os expedidos)' },
     ]);
-    var rows = naoLocalizados.map(function (x) { return '<tr><td class="mono">' + esc(x.oid) + '</td><td>SIM</td><td>' + (x.ord ? 'SIM' : 'talvez') + '</td><td>NÃO</td><td class="nowrap">' + (x.ord ? brl(orderFinance(x.ord).revenue) : '—') + '</td><td><span class="tag warn">INVESTIGAR</span></td></tr>'; }).join('');
-    var excTable = naoLocalizados.length ? '<div class="panel"><div class="ph"><h3>Exceções — expedidos e não encontrados no Acelera</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Expedido</th><th>Acelera esperado</th><th>Encontrado</th><th>Valor esperado</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>' : callout('green', '✓ Todos os pedidos expedidos foram localizados no Acelera', '');
-    return head + strip + excTable;
+    var tableRows = rows.sort(function (a, b) { var ord = { NAO_ENCONTRADO: 0, AGUARDANDO: 1, CONCILIADO: 2 }; return ord[a.situacao] - ord[b.situacao] || b.bipedAt.localeCompare(a.bipedAt); }).slice(0, 400).map(function (r) {
+      var rec = r.recs[0]; var o2 = orders.find(function (o) { return o.id === r.oid; });
+      return '<tr><td class="mono">' + esc(r.oid) + '</td><td class="nowrap">' + dbr(r.bipedAt) + '</td><td class="nowrap">' + (rec ? dbr(rec.data) : '—') + '</td><td class="nowrap">' + (rec ? brlC(rec.antecipado) : '—') + '</td><td class="nowrap">' + (rec ? brlC(rec.taxa) : '—') + '</td><td class="nowrap">' + (rec ? brlC(rec.recebido) : '—') + '</td><td class="mono">' + (rec ? esc(rec.resgate) : '—') + '</td><td>' + (o2 ? esc(S.pedidos.labels[o2.normalizedStatus] || o2.orderStatus) : '—') + '</td><td><span class="tag' + (r.situacao === 'NAO_ENCONTRADO' ? ' warn' : '') + '">' + r.badge + '</span></td><td><button class="btn-sm" data-acped="' + esc(r.oid) + '">Abrir</button></td></tr>';
+    }).join('');
+    var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Data expedição</th><th>Data antecipação</th><th>Valor antecipado</th><th>Taxa</th><th>Líquido</th><th>ID resgate</th><th>Status</th><th>Situação</th><th></th></tr></thead><tbody>' + (tableRows || '<tr><td colspan="10" class="empty">Nenhum pedido.</td></tr>') + '</tbody></table></div></div>';
+    var acSemExpTable = acSemExp.length ? '<div class="panel"><div class="ph"><h3>⚠️ Acelera sem expedição localizada</h3><span class="footnote" style="margin:0">' + nn(acSemExp.length) + ' pedido(s) antecipados sem registro de expedição/bipe</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Data antecipação</th><th>Valor antecipado</th><th></th></tr></thead><tbody>' + acSemExp.slice(0, 200).map(function (oid) { var rr = acByOrder[oid][0]; return '<tr><td class="mono">' + esc(oid) + '</td><td class="nowrap">' + dbr(rr.data) + '</td><td class="nowrap">' + brlC(rr.antecipado) + '</td><td><button class="btn-sm" data-acped="' + esc(oid) + '">Abrir</button></td></tr>'; }).join('') + '</tbody></table></div></div>' : '';
+    return head + strip + table + acSemExpTable;
   }
+  function bindAceleraExpedidos() { /* usa data-acped, já ligado globalmente em renderAcelera() */ }
+
+  // §17-18 da refatoração: tela operacional de exceções, categorizada — nunca marca "possível
+  // duplicidade" só porque existem dois resgates na mesma data.
+  function aceleraDivergencias() {
+    var recs = aceleraInPeriod();
+    var head = secHead('ACELERA · DIVERGÊNCIAS', 'Exceções que precisam de revisão', 'Separadas por categoria — nunca marcamos "possível duplicidade" só porque existem dois resgates na mesma data.');
+    var acByOrder = {}; acelera.forEach(function (r) { (acByOrder[r.pedido] = acByOrder[r.pedido] || []).push(r); });
+    var bips = Object.keys(shipBip);
+    var expedidosSemAcelera = bips.filter(function (oid) { return !acByOrder[oid]; });
+    var aceleraSemExpedicao = Object.keys(acByOrder).filter(function (oid) { return !shipBip[oid]; });
+    var liquidoDivergente = recs.filter(acLiquidoDivergente);
+    var taxaDivergente = recs.filter(function (r) { return r.taxa < 0 || (r.antecipado > 0 && r.taxa > r.antecipado); });
+    var incompletos = acelera.filter(function (r) { return !r.pedido || !r.resgate || !r.data || !r.antecipado; });
+    // Possível duplicidade real na chave loja+resgate+pedido — a importação já impede (upsert por
+    // essa chave), então isto só aparece se dois registros distintos colidirem (ex.: multiloja futura).
+    var byKey = {}; var duplicados = [];
+    acelera.forEach(function (r) { var k = (r.storeId || 'default') + '|' + r.resgate + '|' + r.pedido; if (byKey[k]) duplicados.push(r); else byKey[k] = r; });
+    var cats = [
+      { key: 'expSemAc', label: 'Expedidos sem Acelera', n: expedidosSemAcelera.length, icon: '🔴' },
+      { key: 'acSemExp', label: 'Acelera sem expedição', n: aceleraSemExpedicao.length, icon: '⚠️' },
+      { key: 'liq', label: 'Líquido divergente', n: liquidoDivergente.length, icon: '🔴' },
+      { key: 'taxa', label: 'Taxa divergente', n: taxaDivergente.length, icon: '🔴' },
+      { key: 'incompleto', label: 'Registro incompleto', n: incompletos.length, icon: '🟡' },
+      { key: 'dup', label: 'Possível duplicidade', n: duplicados.length, icon: '🟡' },
+    ];
+    var strip = kstrip(cats.map(function (c) { return { l: c.icon + ' ' + c.label, v: nn(c.n), cls: c.n ? 'amber' : 'green' }; }));
+    var sel = aceleraF.divCat || 'liq';
+    var chips = cats.map(function (c) { return '<span class="chip' + (sel === c.key ? ' chip-on' : '') + '" data-acdivcat="' + c.key + '">' + c.icon + ' ' + c.label + ' (' + nn(c.n) + ')</span>'; }).join('');
+    var body;
+    if (sel === 'expSemAc') body = aceleraDivTable(expedidosSemAcelera.map(function (oid) { return { pedido: oid, motivo: 'Expedido em ' + dbr(shipBip[oid].bipedAt) + ', sem registro no Acelera' }; }));
+    else if (sel === 'acSemExp') body = aceleraDivTable(aceleraSemExpedicao.map(function (oid) { var r = acByOrder[oid][0]; return { pedido: oid, motivo: 'Antecipado em ' + dbr(r.data) + ', sem expedição/bipe registrado' }; }));
+    else if (sel === 'liq') body = aceleraDivTable(liquidoDivergente.map(function (r) { return { pedido: r.pedido, resgate: r.resgate, motivo: 'Líquido informado ' + brlC(r.recebido) + ' ≠ calculado ' + brlC(acLiquidoCalc(r)) + ' (diferença ' + brlC(acLiquidoDiff(r)) + ')' }; }));
+    else if (sel === 'taxa') body = aceleraDivTable(taxaDivergente.map(function (r) { return { pedido: r.pedido, resgate: r.resgate, motivo: r.taxa < 0 ? 'Taxa negativa: ' + brlC(r.taxa) : 'Taxa (' + brlC(r.taxa) + ') maior que o antecipado (' + brlC(r.antecipado) + ')' }; }));
+    else if (sel === 'incompleto') body = aceleraDivTable(incompletos.map(function (r) { var faltando = []; if (!r.pedido) faltando.push('ID do pedido'); if (!r.resgate) faltando.push('ID do resgate'); if (!r.data) faltando.push('data'); if (!r.antecipado) faltando.push('valor antecipado'); return { pedido: r.pedido || '—', resgate: r.resgate || '—', motivo: 'Faltando: ' + faltando.join(', ') }; }));
+    else body = aceleraDivTable(duplicados.map(function (r) { return { pedido: r.pedido, resgate: r.resgate, motivo: 'Conflito na chave loja+resgate+pedido' }; }));
+    return head + strip + '<div class="chips" style="margin-top:8px">' + chips + '</div>' + body;
+  }
+  function aceleraDivTable(items) {
+    if (!items.length) return callout('green', '✓ Nenhuma divergência nesta categoria', '');
+    var rows = items.slice(0, 300).map(function (it) { return '<tr class="rowlink" data-acped="' + esc(it.pedido) + '"><td class="mono">' + esc(it.pedido) + '</td><td class="mono">' + esc(it.resgate || '—') + '</td><td class="cell-text">' + esc(it.motivo) + '</td></tr>'; }).join('');
+    return '<div class="panel" style="margin-top:8px"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Resgate</th><th>Motivo</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="footnote" style="padding:8px 16px">Clique numa linha para ver o detalhe (esperado × encontrado).</div></div>';
+  }
+  function bindAceleraDivergencias() { app.querySelectorAll('[data-acdivcat]').forEach(function (c) { c.onclick = function () { aceleraF.divCat = c.dataset.acdivcat; render(); }; }); }
+
+  // §19 da refatoração: auditoria financeira (antecipado−taxa=líquido calculado × informado),
+  // de contagem (brutos/únicos/novos/atualizados/inválidos) e de conciliação (expedição × Acelera).
   function aceleraAuditoria() {
-    var m = aceleraMetrics(aceleraInPeriod());
-    var subhead = secHead('ACELERA · AUDITORIA', 'Rastreabilidade e qualidade dos dados', 'Resumo Shopee × sistema, importações, anomalias e a base histórica do estudo para comparação.');
-    // qualidade / anomalias
+    var recs = aceleraInPeriod(); var m = aceleraMetrics(recs);
+    var head = secHead('ACELERA · AUDITORIA', 'Rastreabilidade e qualidade dos dados', 'De onde saiu cada número — financeira, contagem e conciliação.');
+    var finDivergentes = recs.filter(acLiquidoDivergente); var finOk = recs.length - finDivergentes.length;
+    var diffAcumulada = recs.reduce(function (s, r) { return s + acLiquidoDiff(r); }, 0);
+    var finBlock = '<div class="panel"><div class="ph"><h3>Auditoria financeira</h3><span class="footnote" style="margin:0">antecipado − taxa = líquido calculado, comparado ao líquido informado pela Shopee (tolerância de 2 centavos)</span></div><div class="pb">' + kv('Registros corretos', nn(finOk)) + kv('Registros divergentes', nn(finDivergentes.length)) + kv('Diferença acumulada', brlC(diffAcumulada)) + '</div></div>';
+    var imps = batches.filter(function (b) { return b.module === 'Shopee Acelera'; });
+    var totalNovo = imps.reduce(function (s, b) { return s + (b.novo || 0); }, 0); var totalUpd = imps.reduce(function (s, b) { return s + (b.upd || 0); }, 0);
+    var incompletos = acelera.filter(function (r) { return !r.pedido || !r.resgate || !r.data || !r.antecipado; });
+    var cntBlock = '<div class="panel"><div class="ph"><h3>Auditoria de contagem</h3></div><div class="pb">' + kv('Registros brutos importados (total)', nn(acelera.length)) + kv('Pedidos únicos (no período)', nn(m.nPedidos)) + kv('Resgates únicos (no período)', nn(m.nResgates)) + kv('Registros novos (histórico de importações)', nn(totalNovo)) + kv('Registros atualizados', nn(totalUpd)) + kv('Registros inválidos/incompletos', nn(incompletos.length)) + '</div></div>';
+    var bips = Object.keys(shipBip); var acByOrder = {}; acelera.forEach(function (r) { (acByOrder[r.pedido] = acByOrder[r.pedido] || []).push(r); });
+    var encontrados = bips.filter(function (oid) { return acByOrder[oid]; }).length; var naoEncontrados = bips.length - encontrados;
+    var acSemExp = Object.keys(acByOrder).filter(function (oid) { return !shipBip[oid]; }).length;
+    var concBlock = '<div class="panel"><div class="ph"><h3>Auditoria de conciliação</h3></div><div class="pb">' + kv('Expedidos', nn(bips.length)) + kv('Encontrados no Acelera', nn(encontrados)) + kv('Não encontrados', nn(naoEncontrados)) + kv('Acelera sem expedição', nn(acSemExp)) + '<button class="btn-sm" data-acgo="expedidos" style="margin-top:8px">Ver Expedidos × Acelera</button></div></div>';
+    var recon = aceleraReconcile(m); // §1 pergunta 10: bate com o resumo que a Shopee escreveu no arquivo?
     var an = m.anomalies;
     var anRows = an.slice(0, 200).map(function (x) { return '<tr><td class="mono">' + esc(x.r.pedido) + '</td><td class="cell-text">' + esc(x.type) + '</td><td class="nowrap">' + brlC(x.r.antecipado) + '</td><td class="nowrap">' + brlC(x.r.reembolsado) + '</td><td class="nowrap">' + brlC(x.r.pendente) + '</td><td><button class="btn-sm" data-acped="' + esc(x.r.pedido) + '">Abrir</button></td></tr>'; }).join('');
     var qual = '<div class="panel"><div class="ph"><h3>Qualidade dos dados — anomalias</h3><span class="footnote" style="margin:0">' + nn(an.length) + ' registro(s) marcados · nunca descartados</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Anomalia</th><th>Antecipado</th><th>Reembolsado</th><th>Pendente</th><th></th></tr></thead><tbody>' + (anRows || '<tr><td colspan="6" class="empty">Nenhuma anomalia detectada. 🎉</td></tr>') + '</tbody></table></div></div>';
-    // importações
-    var imps = batches.filter(function (b) { return b.module === 'Shopee Acelera'; });
-    var impRows = imps.slice(0, 30).map(function (b) { return '<tr><td class="nowrap">' + new Date(b.createdAt).toLocaleString('pt-BR') + '</td><td class="cell-text">' + esc(b.filename) + '</td><td>' + nn(b.seen) + '</td><td>' + nn(b.novo) + '</td><td>' + nn(b.upd) + '</td><td>' + nn(b.unch) + '</td></tr>'; }).join('');
-    var impTable = '<div class="panel"><div class="ph"><h3>Histórico de importações</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Quando</th><th>Arquivo</th><th>Linhas</th><th>Novos</th><th>Atualizados</th><th>Sem alteração</th></tr></thead><tbody>' + (impRows || '<tr><td colspan="6" class="empty">Sem importações.</td></tr>') + '</tbody></table></div></div>';
-    // período de auditoria
     var pr = aceleraSummary ? aceleraSummary.periodReal : null;
     var periodo = aceleraSummary ? callout('', 'Auditoria de período', 'Declarado pela Shopee: <b>' + esc(aceleraSummary.periodDeclared || '—') + '</b> · Registros de <b>' + esc((pr && pr.min) || '—') + '</b> a <b>' + esc((pr && pr.max) || '—') + '</b> · Importado em ' + new Date(aceleraSummary.importedAt).toLocaleString('pt-BR') + '. Nenhum registro foi descartado por causa do período do cabeçalho.') : '';
-    // base histórica do estudo (estático, claramente rotulado)
-    var estudo = '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Base histórica — Estudo Ago/2026 (referência) × Atual (dados reais)</summary><div class="table-wrap"><table class="report"><thead><tr><th>Indicador</th><th>Estudo (ref.)</th><th>Atual (importado)</th></tr></thead><tbody>' +
-      '<tr><td>Alíquota efetiva</td><td>3,5%</td><td>' + pct(r2(m.aliquota * 100)) + '</td></tr>' +
-      '<tr><td>Devolução coorte madura</td><td>17,3%</td><td>' + pct(r2(m.cohortDevolRate * 100)) + '</td></tr>' +
-      '<tr><td>Dias até liquidação (pago)</td><td>12,8 dias</td><td>' + (m.diasPagoMed != null ? Math.round(m.diasPagoMed) + ' dias' : '—') + '</td></tr>' +
-      '<tr><td>Dias até liquidação (devolvido)</td><td>45,9 dias</td><td>' + (m.diasReembAvg != null ? Math.round(m.diasReembAvg) + ' dias' : '—') + '</td></tr>' +
-      '<tr><td>Volume antecipado (mês)</td><td>~R$352 mil</td><td>' + brlC(m.volumeMensalMedio) + '</td></tr>' +
-      '</tbody></table></div><div class="footnote" style="padding:0 16px 12px">Coluna “Estudo” é referência fixa do PDF; “Atual” é sempre recalculada dos dados importados.</div></details>';
-    return subhead + periodo + qual + impTable + estudo;
+    return head + finBlock + cntBlock + concBlock + recon + periodo + qual;
   }
 
-  function aceleraConfig() {
-    var head = secHead('ACELERA · CONFIGURAÇÕES', 'Premissas do módulo', 'Nada é fixo escondido. Ajuste as premissas — tudo é recalculado a partir dos dados importados.');
-    var f = function (id, label, val, help) { return '<div><label class="fld">' + esc(label) + (help ? ' <span title="' + esc(help) + '" style="cursor:help">ⓘ</span>' : '') + '</label><input class="input sm" id="' + id + '" value="' + esc(val) + '" style="width:160px"></div>'; };
-    return head + '<div class="panel"><div class="pb"><div style="display:flex;gap:14px;flex-wrap:wrap">' +
-      f('cfgcohort', 'Coorte madura (dias)', aceleraCfg.cohortDays, 'Idade mínima para considerar o ciclo de devolução encerrado.') +
-      f('cfgticket', 'Ticket de risco (R$)', (aceleraCfg.ticketRisco / 100), 'Acima disso o pedido é considerado de maior risco.') +
-      f('cfgmeta', 'Meta de antecipação (%)', r2(aceleraCfg.metaAntecip * 100), 'Percentual alvo do volume a antecipar.') +
-      f('cfgalvo', 'Alíquota alvo (%)', r2(aceleraCfg.aliquotaAlvo * 100)) +
-      f('cfglimdev', 'Limite de devolução (%)', r2(aceleraCfg.limiteDevol * 100)) +
-      f('cfgcapital', 'Capital próprio (R$)', (aceleraCfg.capitalProprio / 100)) +
-      f('cfgopp', 'Custo de oportunidade (% a.a.)', r2(aceleraCfg.custoOportAA * 100)) +
-      f('cfgbanco', 'Taxa bancária (% a.m.)', r2(aceleraCfg.bancoTaxaAM * 100)) +
-      f('cfgcob', 'Meta de cobertura (dias)', aceleraCfg.metaCobertura) +
-      f('cfgtol', 'Tolerância de alíquota (%)', r2(aceleraCfg.tolAliquota * 100)) +
-      '</div><div style="margin-top:12px"><button class="btn-sm primary" id="cfgsave">Salvar configurações</button></div>' +
-      '<div class="footnote" style="margin-top:8px">As configurações persistem no navegador e alimentam a Visão Geral (capital para independência, alíquota) e as Antecipações.</div></div></div>';
+  // §20 da refatoração: fala sobre ARQUIVOS (CSV/XLS), não sobre resgates — um mesmo arquivo pode
+  // conter vários dias, vários resgates e vários pedidos.
+  function aceleraImportacoes() {
+    var head = secHead('ACELERA · IMPORTAÇÕES', 'Arquivos importados', 'Um arquivo pode conter vários dias, vários resgates e vários pedidos — arquivo (CSV/XLS) e resgate (lote financeiro) são conceitos diferentes.');
+    var imps = batches.filter(function (b) { return b.module === 'Shopee Acelera'; });
+    if (!imps.length) return head + emptyBox('Nenhum arquivo importado ainda.');
+    var rows = imps.map(function (b, i) { return '<tr class="rowlink" data-acimpopen="' + i + '"><td class="nowrap">' + new Date(b.createdAt).toLocaleString('pt-BR') + '</td><td class="cell-text">' + esc(b.filename) + '</td><td>' + nn(b.seen) + '</td><td>' + nn(b.novo) + '</td><td>' + nn(b.upd) + '</td><td>' + nn(b.unch) + '</td><td>' + nn(b.erros || 0) + '</td><td><button class="btn-sm">Detalhe</button></td></tr>'; }).join('');
+    var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Data importação</th><th>Arquivo</th><th>Registros lidos</th><th>Novos</th><th>Atualizados</th><th>Ignorados</th><th>Erros</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+    return head + table;
   }
-  function bindAceleraConfig() {
-    var s = document.getElementById('cfgsave'); if (!s) return;
-    s.onclick = function () {
-      var g = function (id) { var el = document.getElementById(id); return el ? parseFloat((el.value || '').replace(',', '.')) : null; };
-      var v;
-      if ((v = g('cfgcohort')) != null && !isNaN(v)) aceleraCfg.cohortDays = Math.round(v);
-      if ((v = g('cfgticket')) != null && !isNaN(v)) aceleraCfg.ticketRisco = Math.round(v * 100);
-      if ((v = g('cfgmeta')) != null && !isNaN(v)) aceleraCfg.metaAntecip = v / 100;
-      if ((v = g('cfgalvo')) != null && !isNaN(v)) aceleraCfg.aliquotaAlvo = v / 100;
-      if ((v = g('cfglimdev')) != null && !isNaN(v)) aceleraCfg.limiteDevol = v / 100;
-      if ((v = g('cfgcapital')) != null && !isNaN(v)) aceleraCfg.capitalProprio = Math.round(v * 100);
-      if ((v = g('cfgopp')) != null && !isNaN(v)) aceleraCfg.custoOportAA = v / 100;
-      if ((v = g('cfgbanco')) != null && !isNaN(v)) aceleraCfg.bancoTaxaAM = v / 100;
-      if ((v = g('cfgcob')) != null && !isNaN(v)) aceleraCfg.metaCobertura = v;
-      if ((v = g('cfgtol')) != null && !isNaN(v)) aceleraCfg.tolAliquota = v / 100;
-      saveAceleraCfg().then(function () { render(); toast('Configurações salvas', ''); });
-    };
+  function bindAceleraImportacoes() {
+    var imps = batches.filter(function (b) { return b.module === 'Shopee Acelera'; });
+    app.querySelectorAll('[data-acimpopen]').forEach(function (b) { b.onclick = function () { openAceleraImportDetail(imps[parseInt(b.dataset.acimpopen, 10)]); }; });
   }
-  function bindAceleraAud() { /* handlers de anomalia usam data-acped, já ligados no render */ }
+  function openAceleraImportDetail(batch) {
+    if (!batch) return;
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '480px'; panel.style.maxWidth = '96vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    panel.innerHTML = '<div class="dh"><div><b>' + esc(batch.filename) + '</b></div><button class="x">&times;</button></div><div class="dbd">' +
+      kv('Importado em', new Date(batch.createdAt).toLocaleString('pt-BR')) + kv('Linhas lidas', nn(batch.seen)) + kv('Pedidos únicos (neste arquivo)', batch.pedidosUnicos != null ? nn(batch.pedidosUnicos) : '—') + kv('Resgates únicos (neste arquivo)', batch.resgatesUnicos != null ? nn(batch.resgatesUnicos) : '—') + kv('Intervalo de datas', (batch.periodMin ? dbr(batch.periodMin) : '—') + ' a ' + (batch.periodMax ? dbr(batch.periodMax) : '—')) + kv('Novos', nn(batch.novo)) + kv('Atualizados', nn(batch.upd)) + kv('Sem alteração', nn(batch.unch)) +
+      '</div>';
+    panel.querySelector('.x').onclick = function () { d.remove(); };
+  }
 
   // ============================= AFILIADOS =============================
   // Motor determinístico. Dinheiro em DÉCIMOS DE MILÉSIMO (u4 = R$ ×10000) para não perder precisão
@@ -6916,14 +6980,63 @@ buffer/index.js:
     var n = parseFloat(t); return isNaN(n) ? 0 : Math.round(n * 100) * (neg ? -1 : 1);
   }
   function mrIsIncome(wb) { var n = wb.SheetNames.map(function (x) { return normStatus(x); }); return n.indexOf('renda') >= 0 || n.some(function (x) { return x.indexOf('shipping fee') >= 0; }) || n.some(function (x) { return x.indexOf('service fee') >= 0; }); }
+  // §38: mapa de campos da aba "Renda" do Income — índice da coluna → campo normalizado. Índices
+  // 0-10/35/37/38/40-42/45 são identificadores/texto (sem valor monetário) e ficam em MR_TEXT_COLS
+  // para não entrar em "Campos ainda não classificados" por engano. Qualquer coluna numérica FORA
+  // destes dois mapas (ex.: uma coluna nova em versão futura do relatório) cai automaticamente em
+  // outros{} — nunca é descartada silenciosamente (§46).
+  var MR_NAMED_COLS = { 11: 'liberado', 12: 'preco', 13: 'reembolso', 14: 'pix', 15: 'cupom', 16: 'fretePagoComprador', 17: 'freteParceiro', 18: 'descontoFrete', 19: 'envioReverso', 20: 'taxaDevolucaoVendedor', 21: 'incentivoAcaoComercial', 22: 'voucherSeller', 23: 'voucherCompartilhado', 24: 'incentivoCupom', 25: 'coinCashbackSeller', 26: 'coinCashbackCompartilhado', 27: 'comissao', 28: 'servico', 29: 'transacao', 30: 'afiliado', 31: 'taxaDevolucaoFacil', 32: 'amp', 33: 'deducaoAmp', 34: 'taxaRecargaAutomatica', 36: 'quantiaPagaComprador', 39: 'promocaoDescontoFrete', 43: 'comissaoBruta', 44: 'servicoBruta', 46: 'ajusteAcaoComercial', 47: 'compensacaoPerdida', 48: 'reembolsoComprador', 49: 'moedasResgatadasDevolucao', 50: 'cupomDevolucao', 51: 'promoBancoDevolucao', 52: 'promoShopeeDevolucao', 53: 'pixAjusteAdicional' };
+  var MR_TEXT_COLS = { 8: 1, 9: 1, 10: 1, 35: 1, 37: 1, 38: 1, 40: 1, 41: 1, 42: 1, 45: 1 };
+  var MR_FIELD_MAP = [
+    ['ID do pedido', 'orderId', 'cruzamento com Pedidos/Financeiro'], ['SKU', 'sku', 'Produtos e SKUs'], ['Data de criação do pedido', 'dataCriacao', 'referência (Visão Geral/DRE usam a data de PAGAMENTO do pedido, do módulo Pedidos)'], ['Data de conclusão do pagamento', 'dataConclusao', 'drill-down'],
+    ['Quantia total lançada (R$)', 'liberado', 'Receita Líquida / Pagamento Liberado'], ['Preço do produto', 'preco', 'Categorias · Receitas'], ['Valor do Reembolso', 'reembolso', 'DRE · Devoluções e Reembolsos'], ['Ajuste por pagamento via PIX', 'pix', 'DRE · Descontos Comerciais'], ['Cupom', 'cupom', 'DRE · Descontos Comerciais'],
+    ['Frete cobrado pelo parceiro logístico', 'freteParceiro', 'Taxas Shopee'], ['Desconto de frete pela Shopee', 'descontoFrete', 'Taxas Shopee'], ['Taxa de envio reverso', 'envioReverso', 'Taxas Shopee'],
+    ['Taxa de comissão líquida', 'comissao', 'Taxas Shopee'], ['Taxa de serviço líquida', 'servico', 'Taxas Shopee'], ['Taxa de transação', 'transacao', 'Taxas Shopee'], ['Taxa de comissão Afiliados do Vendedor', 'afiliado', 'Afiliados'],
+    ['Taxa de comissão bruta', 'comissaoBruta', 'Ficha 360º — composição bruta→líquida'], ['Taxa de serviço bruta', 'servicoBruta', 'Ficha 360º — composição bruta→líquida'],
+    ['Incentivo Shopee para ação comercial', 'incentivoAcaoComercial', 'Taxas Shopee · Ação comercial'], ['Ajuste por participação em ação comercial', 'ajusteAcaoComercial', 'Taxas Shopee · Ação comercial'],
+    ['Taxa de devolução do vendedor', 'taxaDevolucaoVendedor', 'auditoria (ainda não somado no DRE)'], ['Taxa de Devolução Fácil Shopee', 'taxaDevolucaoFacil', 'auditoria (ainda não somado no DRE)'], ['Acréscimo por Método de Pagamento (AMP)', 'amp', 'auditoria'], ['Dedução de AMP', 'deducaoAmp', 'auditoria'], ['Taxa da Recarga Automática (Pedido)', 'taxaRecargaAutomatica', 'auditoria'], ['Promoção de Desconto no Frete', 'promocaoDescontoFrete', 'auditoria'], ['Compensação perdida', 'compensacaoPerdida', 'auditoria'],
+    ['Voucher subsidiado pelo Seller', 'voucherSeller', 'auditoria'], ['Voucher compartilhado subsidiado pelo Seller', 'voucherCompartilhado', 'auditoria'], ['Incentivo de cupom', 'incentivoCupom', 'auditoria'], ['Coin Cashback subsidiado pelo Seller', 'coinCashbackSeller', 'auditoria'], ['Coin Cashback compartilhado subsidiado pelo Seller', 'coinCashbackCompartilhado', 'auditoria'],
+    ['Valor Reembolsado ao Comprador', 'reembolsoComprador', 'auditoria'], ['Moedas Resgatadas dos Itens Devolvidos', 'moedasResgatadasDevolucao', 'auditoria'], ['Cupom da Shopee de Itens Devolvidos', 'cupomDevolucao', 'auditoria'], ['Pro-rated Bank/Shopee Payment Channel Promotion (devolução)', 'promoBancoDevolucao/promoShopeeDevolucao', 'auditoria'], ['Ajuste por pagamento via PIX (2ª coluna)', 'pixAjusteAdicional', 'auditoria'], ['Quantia paga pelo comprador', 'quantiaPagaComprador', 'auditoria'],
+  ];
   function mrAoa(wb, name) { var sn = wb.SheetNames.filter(function (x) { return normStatus(x) === normStatus(name) || normStatus(x).indexOf(normStatus(name)) >= 0; })[0]; return sn ? XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: false, defval: '' }) : null; }
   function mrParseIncome(ab, filename) {
     var wb = XLSX.read(new Uint8Array(ab), { type: 'array' }); if (!mrIsIncome(wb)) return { notRecognized: true };
     var out = { notRecognized: false, renda: [], ship: [], adj: [], svc: [], summary: {}, period: {} };
     // Summary (totais declarados pela Shopee)
     var sm = mrAoa(wb, 'Summary'); if (sm) { sm.forEach(function (r) { var lab = normStatus(r[0]); var val = null; for (var c = 1; c < r.length; c++) { if (String(r[c]).trim() !== '') { val = r[c]; } } if (lab.indexOf('receita total') >= 0) out.summary.receita = mrCents(r[1]); if (lab.indexOf('quantidade total liberada') >= 0) out.summary.liberado = mrCents(val); if (lab.indexOf('despesas totais') >= 0) out.summary.despesas = mrCents(val); if (lab === 'de') out.period.from = String(r[1]).trim(); if (lab === 'para') out.period.to = String(r[1]).trim(); }); }
-    // Renda
-    var rd = mrAoa(wb, 'Renda'); if (rd) { var hi = rd.findIndex(function (r) { return normStatus(r[2]) === 'id do pedido'; }); if (hi >= 0) { for (var i = hi + 1; i < rd.length; i++) { var r = rd[i]; var oid = String(r[2] || '').trim(); if (!oid) continue; var ver = /sku/i.test(String(r[1])) ? 'Sku' : 'Order'; out.renda.push({ ver: ver, orderId: oid, refundId: String(r[3] || '').trim(), sku: String(r[4] || '').trim(), produto: String(r[5] || '').trim(), dataCriacao: String(r[6] || '').trim(), dataConclusao: String(r[7] || '').trim(), canal: String(r[8] || '').trim(), tipoPedido: String(r[9] || '').trim(), liberado: mrCents(r[11]), preco: mrCents(r[12]), reembolso: mrCents(r[13]), pix: mrCents(r[14]), cupom: mrCents(r[15]), fretePagoComprador: mrCents(r[16]), freteParceiro: mrCents(r[17]), descontoFrete: mrCents(r[18]), envioReverso: mrCents(r[19]), comissao: mrCents(r[27]), servico: mrCents(r[28]), transacao: mrCents(r[29]), afiliado: mrCents(r[30]), comissaoBruta: mrCents(r[43]), servicoBruta: mrCents(r[44]) }); } } }
+    // Renda — §35-38 do prompt "correção crítica Minha Renda": mapeamento por índice de coluna já
+    // validado contra o cabeçalho real (não alterado — os campos abaixo já liam certo). Adicionamos
+    // SÓ campos novos, financeiros e ainda não usados no sistema (ação comercial, vouchers, cashback,
+    // AMP, taxas de devolução, recarga automática, promoção de frete, compensação, reembolso ao
+    // comprador, itens da devolução) — nunca descartados, mesmo os que ainda não alimentam nenhuma
+    // tela (ficam disponíveis para auditoria em "Campos ainda não classificados", §46).
+    var rd = mrAoa(wb, 'Renda');
+    if (rd) {
+      var hi = rd.findIndex(function (r) { return normStatus(r[2]) === 'id do pedido'; });
+      if (hi >= 0) {
+        var headerRow = rd[hi] || []; var headerLen = headerRow.length;
+        for (var i = hi + 1; i < rd.length; i++) {
+          var r = rd[i]; var oid = String(r[2] || '').trim(); if (!oid) continue;
+          var ver = /sku/i.test(String(r[1])) ? 'Sku' : 'Order';
+          var outros = {};
+          for (var ci = 11; ci < headerLen; ci++) {
+            if (MR_NAMED_COLS[ci] || MR_TEXT_COLS[ci]) continue;
+            var raw = r[ci]; if (raw == null || String(raw).trim() === '') continue;
+            var val = mrCents(raw); if (!val) continue;
+            var colLabel = String(headerRow[ci] || ('coluna ' + ci)).trim();
+            outros[colLabel] = (outros[colLabel] || 0) + val;
+          }
+          out.renda.push({
+            ver: ver, orderId: oid, refundId: String(r[3] || '').trim(), sku: String(r[4] || '').trim(), produto: String(r[5] || '').trim(), dataCriacao: String(r[6] || '').trim(), dataConclusao: String(r[7] || '').trim(), canal: String(r[8] || '').trim(), tipoPedido: String(r[9] || '').trim(),
+            liberado: mrCents(r[11]), preco: mrCents(r[12]), reembolso: mrCents(r[13]), pix: mrCents(r[14]), cupom: mrCents(r[15]), fretePagoComprador: mrCents(r[16]), freteParceiro: mrCents(r[17]), descontoFrete: mrCents(r[18]), envioReverso: mrCents(r[19]), comissao: mrCents(r[27]), servico: mrCents(r[28]), transacao: mrCents(r[29]), afiliado: mrCents(r[30]), comissaoBruta: mrCents(r[43]), servicoBruta: mrCents(r[44]),
+            // novos — §36-37: ação comercial (incentivo + ajuste) integrada à Taxa de Serviço; demais
+            // campos ficam disponíveis para auditoria/consulta, sem entrar no total canônico de taxas.
+            taxaDevolucaoVendedor: mrCents(r[20]), incentivoAcaoComercial: mrCents(r[21]), voucherSeller: mrCents(r[22]), voucherCompartilhado: mrCents(r[23]), incentivoCupom: mrCents(r[24]), coinCashbackSeller: mrCents(r[25]), coinCashbackCompartilhado: mrCents(r[26]), taxaDevolucaoFacil: mrCents(r[31]), amp: mrCents(r[32]), deducaoAmp: mrCents(r[33]), taxaRecargaAutomatica: mrCents(r[34]), quantiaPagaComprador: mrCents(r[36]), promocaoDescontoFrete: mrCents(r[39]), ajusteAcaoComercial: mrCents(r[46]), compensacaoPerdida: mrCents(r[47]), reembolsoComprador: mrCents(r[48]), moedasResgatadasDevolucao: mrCents(r[49]), cupomDevolucao: mrCents(r[50]), promoBancoDevolucao: mrCents(r[51]), promoShopeeDevolucao: mrCents(r[52]), pixAjusteAdicional: mrCents(r[53]),
+            outros: outros,
+          });
+        }
+      }
+    }
     // Shipping Fee Discrepancy
     var sh = mrAoa(wb, 'Shipping Fee Discrepancy'); if (sh) { var shi = sh.findIndex(function (r) { return normStatus(r[0]) === 'id do pedido'; }); if (shi >= 0) { for (var j = shi + 1; j < sh.length; j++) { var s2 = sh[j]; var oid2 = String(s2[0] || '').trim(); if (!oid2) continue; out.ship.push({ orderId: oid2, esperado: mrCents(s2[1]), real: mrCents(s2[2]), motivo: String(s2[3] || '').trim() }); } } }
     // Adjustment
@@ -7081,7 +7194,10 @@ buffer/index.js:
     var prevTo = new Date(r.from.getTime() - 1); var prevFrom = new Date(prevTo.getTime() - spanMs);
     return { from: prevFrom, to: prevTo };
   }
-  var MR_FIELDS = ['preco', 'liberado', 'reembolso', 'pix', 'cupom', 'comissao', 'servico', 'transacao', 'afiliado', 'freteParceiro', 'descontoFrete', 'envioReverso'];
+  // §37: "Participação em ação comercial" entra como componente próprio da Taxa de Serviço, com
+  // origem real na fonte (incentivo + ajuste, colunas 21/46 do Income) — soma automaticamente junto
+  // com os demais campos por já estar no array agregado por mrPeriodEngine().
+  var MR_FIELDS = ['preco', 'liberado', 'reembolso', 'pix', 'cupom', 'comissao', 'servico', 'transacao', 'afiliado', 'freteParceiro', 'descontoFrete', 'envioReverso', 'incentivoAcaoComercial', 'ajusteAcaoComercial'];
   function mrPeriodEngine(range) {
     var within = mrRange(range);
     var e = mrEngine(); var mrByOrder = {}; e.orders.forEach(function (r) { mrByOrder[r.orderId] = r; });
@@ -7135,7 +7251,11 @@ buffer/index.js:
       if (cross.reliable) { var fc = skuCost[String(g.sku).toLowerCase()]; g.familia = fc ? (fc.familyName || null) : null; }
       return g;
     });
-    var taxasShopeeTotal = t.comissao + t.servico + t.transacao + t.freteParceiro + t.descontoFrete + t.envioReverso;
+    // §37: "ação comercial" (incentivo + ajuste, colunas reais do Income) faz parte do total canônico
+    // de Taxas Shopee — testado contra o arquivo real: sem esses dois campos a conferência com o
+    // Pagamento Liberado tinha um resíduo de ~8,5% do liberado; com eles, cai para ~0,2% (§18 nunca
+    // soma total + componente — aqui os dois campos SÃO o componente, somados uma única vez aqui).
+    var taxasShopeeTotal = t.comissao + t.servico + t.transacao + t.freteParceiro + t.descontoFrete + t.envioReverso + t.incentivoAcaoComercial + t.ajusteAcaoComercial;
     var descontosComerciais = t.cupom + t.pix;
     var receitaLiquida = t.preco + descontosComerciais + taxasShopeeTotal + t.afiliado + t.reembolso; // deve ≈ t.liberado
     var custoCoveragePct = custoItemsTotal ? r2(custoItemsKnown / custoItemsTotal * 100) : 0;
@@ -7242,7 +7362,7 @@ buffer/index.js:
     app.innerHTML = dadosAtualizadosAteBadge() + devPeriodBar() + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + tabs.map(function (t) { return '<div class="subtab' + (mrSub === t[0] ? ' active' : '') + '" data-mrsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-mrimport="1">Importar Income / Declaração</button></div><div id="mrbody" style="margin-top:14px"></div>';
     var body = document.getElementById('mrbody');
     try {
-      if (!mrRenda.length && !mrShip.length && !mrPdf.length && mrSub !== 'meta') body.innerHTML = secHead('MINHA RENDA', 'Consolidação Financeira Shopee', 'Quanto vendemos, quanto foi descontado, para onde foi o dinheiro e quanto a Shopee liberou — do agregado até o pedido.') + emptyBox('Nenhum relatório importado. Envie o Income (XLSX) e/ou a Declaração de Renda (PDF) da Shopee. O tipo é detectado automaticamente.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="mrimp">Importar primeiro relatório</button></div>';
+      if (!mrRenda.length && !mrShip.length && !mrPdf.length && mrSub !== 'meta') body.innerHTML = secHead('MINHA RENDA', 'Consolidação Financeira Shopee', 'Quanto vendemos, quanto foi descontado, para onde foi o dinheiro e quanto a Shopee liberou — do agregado até o pedido.') + emptyBox('Nenhum relatório importado. Envie o Income (XLSX) da Shopee — é a única fonte necessária. A Declaração de Renda (PDF) é opcional, só para uma conferência extra na aba Conciliação. O tipo é detectado automaticamente.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="mrimp">Importar primeiro relatório</button></div>';
       else body.innerHTML = ({ visao: mrVisao, dre: mrDRE, taxas: mrTaxas, categorias: mrCategorias, produto: mrProduto, lucroprejuizo: mrLucroPrejuizo, tendencias: mrTendencias, frete: mrFrete, ajustes: mrAjustes, conciliacao: mrConciliacao, auditoria: mrAuditoria, meta: mrMeta }[mrSub] || mrVisao)();
     } catch (e) { body.innerHTML = '<div class="form-err">Erro ao renderizar Minha Renda: ' + esc(e.message || e) + '</div>'; }
     app.querySelectorAll('[data-mrsub]').forEach(function (b) { b.onclick = function () { mrSub = b.dataset.mrsub; mrPage = 1; render(); }; });
@@ -7266,7 +7386,7 @@ buffer/index.js:
   }
   function mrWaterfall(t) {
     // do preço (bruto) até o liberado
-    var steps = [['Preço do produto', t.preco, 'base'], ['Reembolso', t.reembolso, 'neg'], ['PIX', t.pix, 'neg'], ['Cupom', t.cupom, 'neg'], ['Comissão', t.comissao, 'neg'], ['Serviço', t.servico, 'neg'], ['Afiliados', t.afiliado, 'neg'], ['Frete parceiro', t.freteParceiro, 'neg'], ['Desconto frete (Shopee)', t.descontoFrete, 'pos'], ['Envio reverso', t.envioReverso, 'neg']];
+    var steps = [['Preço do produto', t.preco, 'base'], ['Reembolso', t.reembolso, 'neg'], ['PIX', t.pix, 'neg'], ['Cupom', t.cupom, 'neg'], ['Comissão', t.comissao, 'neg'], ['Serviço', t.servico, 'neg'], ['Ação comercial (incentivo + ajuste)', t.incentivoAcaoComercial + t.ajusteAcaoComercial, 'neg'], ['Afiliados', t.afiliado, 'neg'], ['Frete parceiro', t.freteParceiro, 'neg'], ['Desconto frete (Shopee)', t.descontoFrete, 'pos'], ['Envio reverso', t.envioReverso, 'neg']];
     var rows = steps.map(function (s) { return '<tr class="rowlink"><td>' + esc(s[0]) + '</td><td class="nowrap ' + (s[1] < 0 ? 'neg' : s[1] > 0 ? 'pos' : '') + '">' + brlC(s[1]) + '</td></tr>'; }).join('');
     return '<div class="panel"><div class="ph"><h3>Para onde foi o dinheiro</h3><span class="footnote" style="margin:0">do preço do produto ao pagamento liberado</span></div><div class="table-wrap"><table class="report"><tbody>' + rows + '<tr style="border-top:2px solid var(--line)"><td><b>Pagamento liberado</b></td><td class="nowrap"><b>' + brlC(t.liberado) + '</b></td></tr></tbody></table></div></div>';
   }
@@ -7613,7 +7733,7 @@ buffer/index.js:
     var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { d.remove(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
     var gd = panel.querySelector('[data-godev]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev; d.remove(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
   }
-  var MR_TAXA_CATS = [['comissao', 'Comissão'], ['servico', 'Serviço'], ['transacao', 'Transação'], ['freteParceiro', 'Programa de frete'], ['descontoFrete', 'Ajuste de frete'], ['envioReverso', 'Envio reverso'], ['afiliado', 'Afiliados']];
+  var MR_TAXA_CATS = [['comissao', 'Comissão'], ['servico', 'Serviço'], ['transacao', 'Transação'], ['freteParceiro', 'Programa de frete'], ['descontoFrete', 'Ajuste de frete'], ['envioReverso', 'Envio reverso'], ['afiliado', 'Afiliados'], ['incentivoAcaoComercial', 'Ação comercial (incentivo)'], ['ajusteAcaoComercial', 'Ação comercial (ajuste)']];
   // Categorias reais de taxas Shopee, no período — cada linha traz pedidos afetados, média/pedido
   // e a variação contra o período anterior de mesma duração (§6 do prompt de alterações pontuais).
   function mrTaxasCategorias(pe, prevPe) {
@@ -7669,7 +7789,7 @@ buffer/index.js:
       return '<div class="panel"><div class="ph"><h3>' + esc(title) + '</h3><b class="' + (tot < 0 ? 'neg' : 'pos') + '">' + brlC(tot) + '</b></div><div class="pb">' + rows + '</div></div>';
     }
     var receitas = grp('RECEITAS', [['Vendas (preço do produto)', t.preco, 'preco'], ['Desconto de frete recebido da Shopee', t.descontoFrete > 0 ? t.descontoFrete : 0, 'descontoFrete']]);
-    var taxas = grp('TAXAS SHOPEE', [['Comissão', t.comissao, 'comissao'], ['Serviço', t.servico, 'servico'], ['Transação', t.transacao, 'transacao'], ['Programa de frete (frete parceiro)', t.freteParceiro, 'freteParceiro'], ['Ajuste de frete (quando custo)', t.descontoFrete < 0 ? t.descontoFrete : 0, 'descontoFrete']]);
+    var taxas = grp('TAXAS SHOPEE', [['Comissão', t.comissao, 'comissao'], ['Serviço', t.servico, 'servico'], ['Transação', t.transacao, 'transacao'], ['Ação comercial (incentivo)', t.incentivoAcaoComercial, 'incentivoAcaoComercial'], ['Ação comercial (ajuste)', t.ajusteAcaoComercial, 'ajusteAcaoComercial'], ['Programa de frete (frete parceiro)', t.freteParceiro, 'freteParceiro'], ['Ajuste de frete (quando custo)', t.descontoFrete < 0 ? t.descontoFrete : 0, 'descontoFrete']]);
     var comercial = grp('COMERCIAL', [['Afiliados', t.afiliado, 'afiliado'], ['Cupom', t.cupom, 'cupom']]);
     var posVenda = grp('PÓS-VENDA', [['Devoluções/Reembolso', t.reembolso, 'reembolso'], ['PIX', t.pix, 'pix'], ['Envio reverso', t.envioReverso, 'envioReverso']]);
     var financeiro = grp('FINANCEIRO', [['Ajustes (Adjustment, total importado)', pe.adjTot, 'adjustes']]);
@@ -7803,8 +7923,8 @@ buffer/index.js:
   }
   function bindMrProduto() { app.querySelectorAll('[data-mrprodf]').forEach(function (b) { b.onclick = function () { mrProdFilter = b.dataset.mrprodf; render(); }; }); }
   function mrConciliacao() {
-    var e = mrEngine(); var t = e.tot; var head = secHead('MINHA RENDA · CONCILIAÇÃO DA DECLARAÇÃO', 'XLSX × Declaração (PDF)', 'Compara o que o sistema somou do Income com a Declaração oficial da Shopee (PDF). Períodos diferentes são sinalizados — não forçamos R$ 0.');
-    if (!mrPdf.length) return head + callout('warn', 'Importe a Declaração (PDF)', 'Envie o PDF da Declaração de Renda da Shopee para conciliar com o XLSX. A leitura do PDF é feita no próprio navegador (sem enviar a lugar nenhum).');
+    var e = mrEngine(); var t = e.tot; var head = secHead('MINHA RENDA · CONCILIAÇÃO DA DECLARAÇÃO', 'XLSX × Declaração (PDF) — 100% opcional', 'A planilha Income (XLSX) é a única fonte do Minha Renda — esta aba só serve para uma conferência EXTRA e opcional contra a Declaração PDF da Shopee. Nenhum outro indicador do sistema depende deste PDF.');
+    if (!mrPdf.length) return head + callout('', 'PDF não importado — e não é necessário', 'O Minha Renda funciona por completo só com o Income (XLSX). Envie o PDF da Declaração de Renda da Shopee aqui apenas se quiser uma conferência extra opcional. A leitura do PDF é feita no próprio navegador (sem enviar a lugar nenhum).');
     var pdf = mrPdf[0]; var d = pdf.decl;
     var xlsxPeriod = mrSummary && mrSummary.period ? (mrSummary.period.from + ' a ' + mrSummary.period.to) : '—';
     var periodMismatch = pdf.period && mrSummary && mrSummary.period && (pdf.period.indexOf('07') >= 0);
@@ -7813,13 +7933,54 @@ buffer/index.js:
     var rows = cmp('Pagamento liberado', t.liberado, d.liberado) + cmp('Preço do produto', t.preco, d.produto) + cmp('Reembolso', -Math.abs(t.reembolso), d.reembolso) + cmp('PIX', -Math.abs(t.pix), d.pix) + cmp('Cupom', -Math.abs(t.cupom), d.cupom) + cmp('Comissão', -Math.abs(t.comissao), d.comissao) + cmp('Serviço', -Math.abs(t.servico), d.servico) + cmp('Afiliados', -Math.abs(t.afiliado), d.afiliados);
     return head + note + '<div class="panel"><div class="ph"><h3>Declaração Shopee (PDF) × Sistema (XLSX)</h3><span class="footnote" style="margin:0">PDF: ' + esc(pdf.fileName) + '</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Componente</th><th>Sistema (XLSX)</th><th>Declaração (PDF)</th><th>Diferença</th></tr></thead><tbody>' + rows + '</tbody></table></div>' + (pdf.ok ? '' : '<div class="footnote" style="padding:0 16px 12px">⚠ Alguns campos do PDF não foram reconhecidos automaticamente (layout diferente). Os que foram lidos estão acima.</div>') + '</div>';
   }
+  // §39: agrega o outros{} (colunas financeiras do Income sem destino ainda) de todas as linhas
+  // Order — nunca descartado, sempre auditável (§46).
+  function mrCamposNaoClassificados() {
+    var e = mrEngine(); var agg = {};
+    e.orders.forEach(function (o) { if (!o.outros) return; Object.keys(o.outros).forEach(function (k) { var g = agg[k] = agg[k] || { nome: k, soma: 0, n: 0 }; g.soma += o.outros[k]; g.n++; }); });
+    return Object.values(agg).sort(function (a, b) { return Math.abs(b.soma) - Math.abs(a.soma); });
+  }
+  // §40: "o arquivo foi importado, mas os números chegaram ao dashboard?" — compara o total BRUTO
+  // de todas as linhas Order do Income com o total que efetivamente aparece no dashboard (pedidos
+  // pagos + Minha Renda cruzada por ID, todo o período). A diferença é esperada quando um pedido do
+  // Income não tem correspondência em Pedidos, ou não tem data de pagamento — e fica declarada.
+  function mrDiagnosticoIntegridade() {
+    var e = mrEngine();
+    var brutoPreco = 0, brutoLiberado = 0; e.orders.forEach(function (o) { brutoPreco += o.preco; brutoLiberado += o.liberado; });
+    var peAll = mrPeriodEngine({});
+    return { linhasLidas: mrRenda.length, pedidosUnicosIncome: e.orders.length, brutoPreco: brutoPreco, brutoLiberado: brutoLiberado, dashPreco: peAll.t.preco, dashLiberado: peAll.t.liberado, pedidosNoDash: peAll.t.nMR, diffPreco: brutoPreco - peAll.t.preco, diffLiberado: brutoLiberado - peAll.t.liberado };
+  }
   function mrAuditoria() {
-    var head = secHead('MINHA RENDA · AUDITORIA', 'Proveniência e importações', 'Cada número tem origem rastreável: arquivo, aba, tipo, pedido.');
+    var head = secHead('MINHA RENDA · AUDITORIA', 'Proveniência, mapa de campos e integridade', 'Cada número tem origem rastreável: arquivo, aba, tipo, pedido. A Declaração PDF é só uma conciliação opcional — nenhum indicador do Minha Renda depende dela.');
     var imps = batches.filter(function (b) { return b.module === 'Minha Renda'; });
     var impRows = imps.slice(0, 30).map(function (b) { return '<tr><td class="nowrap">' + new Date(b.createdAt).toLocaleString('pt-BR') + '</td><td class="cell-text">' + esc(b.filename) + '</td><td>' + nn(b.seen) + '</td><td>' + nn(b.novo) + '</td></tr>'; }).join('');
     var e = mrEngine();
-    var counts = kstrip([{ l: 'Linhas Order', v: nn(e.orders.length), cls: 'blue' }, { l: 'Linhas SKU', v: nn(mrRenda.length - e.orders.length), cls: 'blue' }, { l: 'Divergências de frete', v: nn(mrShip.length), cls: 'amber' }, { l: 'Ajustes', v: nn(mrAdj.length), cls: 'amber' }, { l: 'Service Fee (linhas)', v: nn(mrSvc.length), cls: 'blue' }, { l: 'Declarações PDF', v: nn(mrPdf.length), cls: 'green' }]);
-    return head + counts + '<div class="panel"><div class="ph"><h3>Importações</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Quando</th><th>Arquivo</th><th>Linhas</th><th>Novos</th></tr></thead><tbody>' + (impRows || '<tr><td colspan="4" class="empty">—</td></tr>') + '</tbody></table></div></div>';
+    var counts = kstrip([{ l: 'Linhas Order', v: nn(e.orders.length), cls: 'blue' }, { l: 'Linhas SKU', v: nn(mrRenda.length - e.orders.length), cls: 'blue' }, { l: 'Divergências de frete', v: nn(mrShip.length), cls: 'amber' }, { l: 'Ajustes', v: nn(mrAdj.length), cls: 'amber' }, { l: 'Service Fee (linhas)', v: nn(mrSvc.length), cls: 'blue' }, { l: 'Declarações PDF (opcional)', v: nn(mrPdf.length), cls: 'green' }]);
+    // §39 — Auditoria da planilha Income
+    var pedidosUnicosIncome = {}; e.orders.forEach(function (o) { pedidosUnicosIncome[o.orderId] = 1; });
+    var datas = e.orders.map(function (o) { return o.dataConclusao || o.dataCriacao; }).filter(Boolean).sort();
+    var incomeAudit = mrSummary ? '<div class="panel"><div class="ph"><h3>Auditoria da planilha Income</h3></div><div class="pb">' +
+      kv('Arquivo carregado', mrSummary.fileName || '—') + kv('Importado em', mrSummary.importedAt ? new Date(mrSummary.importedAt).toLocaleString('pt-BR') : '—') + kv('Linhas lidas (Order + Sku)', nn(mrRenda.length)) + kv('Pedidos únicos (linhas Order)', nn(Object.keys(pedidosUnicosIncome).length)) + kv('Período encontrado', datas.length ? (dbr(datas[0]) + ' a ' + dbr(datas[datas.length - 1])) : '—') + kv('Campos financeiros reconhecidos', nn(MR_FIELD_MAP.length) + ' mapeados por nome') +
+      '</div></div>' : '';
+    // §38 — mapa de campos
+    var mapRows = MR_FIELD_MAP.map(function (f) { return '<tr><td class="cell-text">' + esc(f[0]) + '</td><td class="mono">' + esc(f[1]) + '</td><td class="cell-text">' + esc(f[2]) + '</td></tr>'; }).join('');
+    var fieldMap = '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Mapa de campos — Income → sistema (' + nn(MR_FIELD_MAP.length) + ')</summary><div class="table-wrap"><table class="report"><thead><tr><th>Campo original (Income)</th><th>Campo normalizado</th><th>Usado em</th></tr></thead><tbody>' + mapRows + '</tbody></table></div></details>';
+    // §46 — campos ainda não classificados
+    var naoClass = mrCamposNaoClassificados();
+    var naoClassBlock = naoClass.length ? '<div class="panel"><div class="ph"><h3>Campos ainda não classificados</h3><span class="footnote" style="margin:0">colunas financeiras do Income com valor real, ainda sem destino em nenhuma tela — não descartadas</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Coluna original</th><th>Registros com valor</th><th>Soma</th></tr></thead><tbody>' + naoClass.map(function (c) { return '<tr><td class="cell-text">' + esc(c.nome) + '</td><td>' + nn(c.n) + '</td><td class="nowrap">' + brlC(c.soma) + '</td></tr>'; }).join('') + '</tbody></table></div></div>' : callout('green', '✓ Nenhuma coluna financeira sem classificação', 'Todas as colunas com valor real encontradas nesta planilha já têm um destino mapeado.');
+    // §40 — diagnóstico de integridade
+    var diag = e.orders.length ? mrDiagnosticoIntegridade() : null;
+    var diagBlock = diag ? (function () {
+      var okPreco = Math.abs(diag.diffPreco) <= diag.brutoPreco * 0.02 + 100; // tolerância: 2% + arredondamento
+      return '<div class="panel"><div class="ph"><h3>Diagnóstico de integridade — o arquivo chegou ao dashboard?</h3></div><div class="pb">' +
+        '<div class="fin-line"><span><b>Income (bruto, todas as linhas Order importadas)</b></span></div>' +
+        kv('Linhas lidas', nn(diag.linhasLidas)) + kv('Pedidos únicos', nn(diag.pedidosUnicosIncome)) + kv('Preço do produto (bruto)', brlC(diag.brutoPreco)) + kv('Pagamento liberado (bruto)', brlC(diag.brutoLiberado)) +
+        '<div class="fin-line" style="margin-top:8px"><span><b>Dashboard (todo o período — pedidos pagos cruzados com Minha Renda)</b></span></div>' +
+        kv('Pedidos cruzados no dashboard', nn(diag.pedidosNoDash)) + kv('Preço do produto (usado no dashboard)', brlC(diag.dashPreco)) + kv('Pagamento liberado (usado no dashboard)', brlC(diag.dashLiberado)) +
+        '</div></div>' +
+        callout(okPreco ? 'green' : 'warn', okPreco ? '✓ Sem divergência relevante de processamento' : '🔴 Divergência de processamento', 'Diferença de Preço do produto: <b>' + brlC(diag.diffPreco) + '</b> · diferença de Pagamento Liberado: <b>' + brlC(diag.diffLiberado) + '</b>. ' + (okPreco ? 'Dentro da tolerância esperada.' : 'Motivo provável: pedidos do Income sem pedido correspondente em Pedidos, ou sem "Hora do pagamento do pedido" preenchida (não entram na base de pedidos pagos).'));
+    })() : '';
+    return head + counts + incomeAudit + diagBlock + fieldMap + naoClassBlock + '<div class="panel"><div class="ph"><h3>Importações</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Quando</th><th>Arquivo</th><th>Linhas</th><th>Novos</th></tr></thead><tbody>' + (impRows || '<tr><td colspan="4" class="empty">—</td></tr>') + '</tbody></table></div></div>';
   }
 
   // ---------- INTELIGÊNCIA ----------
