@@ -8033,6 +8033,20 @@ buffer/index.js:
       if (mrRow) { g.nMR++; g.liberado += mrRow.liberado; g.taxasShopee += (mrRow.comissao + mrRow.servico + mrRow.transacao + mrRow.freteParceiro + mrRow.descontoFrete + mrRow.envioReverso); g.custoAfiliado += mrRow.afiliado; }
       if (p.known) { lucro += p.lucro; lucroN++; g.lucro += p.lucro; g.lucroN++; } else { pendN++; g.pendN++; }
     });
+    // §31: O INCOME É A FONTE FINANCEIRA PRINCIPAL E AUTOSSUFICIENTE — a ausência de um pedido pago
+    // cruzado (não importado em Pedidos, ou com "Hora do pagamento" fora deste período) NUNCA pode
+    // fazer uma taxa real do Income desaparecer da Minha Renda. Passo 2: soma também as linhas do
+    // Income cuja PRÓPRIA data (conclusão do pagamento, senão criação) cai no período mas que não
+    // foram cobertas no passo 1 acima (para não somar duas vezes o mesmo pedido). Isso NÃO altera
+    // Faturamento Bruto/Custo do Produto/Lucro (que continuam exclusivamente de Pedidos, por regra
+    // §13/§16) — só entra nos totais financeiros que já vêm do próprio Income (t[k]/MR_FIELDS).
+    var jaSomado = {}; list.forEach(function (o) { jaSomado[o.id] = true; });
+    var incomeExtra = e.orders.filter(function (r) {
+      if (jaSomado[r.orderId]) return false;
+      var d = r.dataConclusao || r.dataCriacao;
+      return d && within(d);
+    });
+    incomeExtra.forEach(function (r) { MR_FIELDS.forEach(function (k) { t[k] += r[k]; }); mrRows.push(r); });
     var cross = mrSkuCrossCheck();
     if (cross.reliable) {
       list.forEach(function (o) { var key0 = (o.items[0] && o.items[0].sku) || '(sem sku)'; var g = bySku[key0]; if (g) o.items.forEach(function (it) { if (it.sku === key0) g.units += it.qty; }); });
@@ -8060,6 +8074,7 @@ buffer/index.js:
       range: within, n: list.length, t: t, faturamento: faturamento, lucro: lucro, lucroN: lucroN, pendN: pendN,
       custoProd: custoProd, custoProdN: custoOrdersFullN, custoItemsKnown: custoItemsKnown, custoItemsTotal: custoItemsTotal, custoCoveragePct: custoCoveragePct,
       skuList: skuList, adjTot: e.adjTot, taxasShopeeTotal: taxasShopeeTotal, descontosComerciais: descontosComerciais, receitaLiquida: receitaLiquida, cross: cross, rows: mrRows,
+      nIncomeExtra: incomeExtra.length,
     };
   }
   // §25: cobertura financeira do período (pedidos pagos × MR localizada × custo cadastrado × taxas
@@ -8224,7 +8239,7 @@ buffer/index.js:
       { l: 'Devoluções', v: brlC(devolucoesAbs), cls: 'red', drill: t.nMR ? 'reembolso' : null, drillLabel: 'Devoluções' },
       { l: 'Outros Descontos/Ajustes', v: brlC(outrosAbs), cls: 'amber' },
     ]);
-    var coverage = t.nMR < pe.n ? callout('warn', 'Cobertura da Minha Renda no período', '<b>' + nn(t.nMR) + '</b> de <b>' + nn(pe.n) + '</b> pedidos pagos têm dados reais da Shopee (Income) no período. Faturamento Bruto/Ticket Médio já vêm de Pedidos (sempre completos); Taxas Shopee/Afiliados/Devoluções/Receita Líquida acima refletem <b>só</b> os pedidos cobertos pela Minha Renda — nunca estimados.') : '';
+    var coverage = t.nMR < pe.n ? callout('warn', 'Cobertura da Minha Renda no período', '<b>' + nn(t.nMR) + '</b> de <b>' + nn(pe.n) + '</b> pedidos pagos têm dados reais da Shopee (Income) cruzados por pedido no período. Faturamento Bruto/Ticket Médio já vêm de Pedidos (sempre completos); Taxas Shopee/Afiliados/Devoluções/Receita Líquida acima refletem os pedidos cobertos pela Minha Renda' + (pe.nIncomeExtra ? ' <b>mais</b> ' + nn(pe.nIncomeExtra) + ' lançamento(s) do Income com data própria no período mas sem pedido pago correspondente (§31 — o Income é fonte autossuficiente, nunca some por falta de cruzamento)' : '') + ' — nunca estimados.') : (pe.nIncomeExtra ? callout('', 'Income além dos pedidos pagos', '<b>' + nn(pe.nIncomeExtra) + '</b> lançamento(s) do Income entram nos totais de Taxas/Receita Líquida acima por data própria (conclusão do pagamento/criação), mesmo sem um pedido pago correspondente no módulo Pedidos neste período — a taxa é real e não pode desaparecer por falta de cruzamento.') : '');
     var cobertura = mrCoberturaBox();
     var tendLink = callout('', 'Comparações e tendências', 'A comparação com o período anterior agora tem aba própria. <button class="btn-sm" data-mrgo="tendencias">Ver Tendências</button>');
     var e = mrEngine();
@@ -8767,11 +8782,25 @@ buffer/index.js:
   // de todas as linhas Order do Income com o total que efetivamente aparece no dashboard (pedidos
   // pagos + Minha Renda cruzada por ID, todo o período). A diferença é esperada quando um pedido do
   // Income não tem correspondência em Pedidos, ou não tem data de pagamento — e fica declarada.
+  // §34 — diagnóstico determinístico: para cada campo financeiro do Income, RAW (bruto, todas as
+  // linhas Order importadas, sem nenhum filtro) precisa bater com o motor (mrPeriodEngine em todo o
+  // período) — se não bater, é sinal de que alguma taxa real está sendo perdida por falta de
+  // cruzamento com Pedidos. Testa os campos citados no §34: preço/liberado (já existia) + comissão,
+  // serviço, transação, afiliado, frete parceiro, desconto de frete, envio reverso, incentivo/ajuste
+  // de ação comercial e reembolso.
+  var MR_DIAG_FIELDS = [['preco', 'Preço do produto'], ['liberado', 'Pagamento liberado'], ['comissao', 'Comissão'], ['servico', 'Serviço'], ['transacao', 'Transação'], ['afiliado', 'Afiliados'], ['freteParceiro', 'Frete parceiro'], ['descontoFrete', 'Desconto de frete'], ['envioReverso', 'Envio reverso'], ['incentivoAcaoComercial', 'Incentivo ação comercial'], ['ajusteAcaoComercial', 'Ajuste ação comercial'], ['reembolso', 'Reembolso']];
   function mrDiagnosticoIntegridade() {
     var e = mrEngine();
-    var brutoPreco = 0, brutoLiberado = 0; e.orders.forEach(function (o) { brutoPreco += o.preco; brutoLiberado += o.liberado; });
+    var bruto = {}; MR_DIAG_FIELDS.forEach(function (f) { bruto[f[0]] = 0; });
+    e.orders.forEach(function (o) { MR_DIAG_FIELDS.forEach(function (f) { bruto[f[0]] += (o[f[0]] || 0); }); });
     var peAll = mrPeriodEngine({});
-    return { linhasLidas: mrRenda.length, pedidosUnicosIncome: e.orders.length, brutoPreco: brutoPreco, brutoLiberado: brutoLiberado, dashPreco: peAll.t.preco, dashLiberado: peAll.t.liberado, pedidosNoDash: peAll.t.nMR, diffPreco: brutoPreco - peAll.t.preco, diffLiberado: brutoLiberado - peAll.t.liberado };
+    var campos = MR_DIAG_FIELDS.map(function (f) { var raw = bruto[f[0]]; var motor = peAll.t[f[0]] || 0; return { key: f[0], label: f[1], raw: raw, motor: motor, diff: raw - motor, ok: Math.abs(raw - motor) <= 100 }; });
+    return {
+      linhasLidas: mrRenda.length, pedidosUnicosIncome: e.orders.length,
+      brutoPreco: bruto.preco, brutoLiberado: bruto.liberado, dashPreco: peAll.t.preco, dashLiberado: peAll.t.liberado,
+      pedidosNoDash: peAll.t.nMR, nIncomeExtra: peAll.nIncomeExtra, diffPreco: bruto.preco - peAll.t.preco, diffLiberado: bruto.liberado - peAll.t.liberado,
+      campos: campos,
+    };
   }
   function mrAuditoria() {
     var head = secHead('MINHA RENDA · AUDITORIA', 'Proveniência, mapa de campos e integridade', 'Cada número tem origem rastreável: arquivo, aba, tipo, pedido. A Declaração PDF é só uma conciliação opcional — nenhum indicador do Minha Renda depende dela.');
@@ -8799,9 +8828,12 @@ buffer/index.js:
         '<div class="fin-line"><span><b>Income (bruto, todas as linhas Order importadas)</b></span></div>' +
         kv('Linhas lidas', nn(diag.linhasLidas)) + kv('Pedidos únicos', nn(diag.pedidosUnicosIncome)) + kv('Preço do produto (bruto)', brlC(diag.brutoPreco)) + kv('Pagamento liberado (bruto)', brlC(diag.brutoLiberado)) +
         '<div class="fin-line" style="margin-top:8px"><span><b>Dashboard (todo o período — pedidos pagos cruzados com Minha Renda)</b></span></div>' +
-        kv('Pedidos cruzados no dashboard', nn(diag.pedidosNoDash)) + kv('Preço do produto (usado no dashboard)', brlC(diag.dashPreco)) + kv('Pagamento liberado (usado no dashboard)', brlC(diag.dashLiberado)) +
+        kv('Pedidos cruzados no dashboard', nn(diag.pedidosNoDash) + (diag.nIncomeExtra ? ' (+ ' + nn(diag.nIncomeExtra) + ' linha(s) do Income somadas por data própria, sem pedido pago cruzado)' : '')) + kv('Preço do produto (usado no dashboard)', brlC(diag.dashPreco)) + kv('Pagamento liberado (usado no dashboard)', brlC(diag.dashLiberado)) +
         '</div></div>' +
-        callout(okPreco ? 'green' : 'warn', okPreco ? '✓ Sem divergência relevante de processamento' : '🔴 Divergência de processamento', 'Diferença de Preço do produto: <b>' + brlC(diag.diffPreco) + '</b> · diferença de Pagamento Liberado: <b>' + brlC(diag.diffLiberado) + '</b>. ' + (okPreco ? 'Dentro da tolerância esperada.' : 'Motivo provável: pedidos do Income sem pedido correspondente em Pedidos, ou sem "Hora do pagamento do pedido" preenchida (não entram na base de pedidos pagos).'));
+        callout(okPreco ? 'green' : 'warn', okPreco ? '✓ Sem divergência relevante de processamento' : '🔴 Divergência de processamento', 'Diferença de Preço do produto: <b>' + brlC(diag.diffPreco) + '</b> · diferença de Pagamento Liberado: <b>' + brlC(diag.diffLiberado) + '</b>. ' + (okPreco ? 'Dentro da tolerância esperada.' : 'Motivo provável: pedidos do Income sem "Data de conclusão do pagamento" nem "Data de criação" preenchidas.')) +
+        '<div class="panel"><div class="ph"><h3>RAW × Motor, por campo financeiro (§34)</h3><span class="footnote" style="margin:0">bruto de todas as linhas Order do Income × total usado pela Minha Renda em todo o período — precisam bater</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Campo</th><th>RAW Income (bruto)</th><th>Motor (todo o período)</th><th>Diferença</th><th></th></tr></thead><tbody>' +
+        diag.campos.map(function (c) { return '<tr><td class="cell-text">' + esc(c.label) + '</td><td class="nowrap">' + brlC(c.raw) + '</td><td class="nowrap">' + brlC(c.motor) + '</td><td class="nowrap' + (c.ok ? '' : ' neg') + '">' + brlC(c.diff) + '</td><td>' + (c.ok ? '<span class="tag ok">bate</span>' : '<span class="tag warn">divergente</span>') + '</td></tr>'; }).join('') +
+        '</tbody></table></div></div>';
     })() : '';
     return head + counts + incomeAudit + diagBlock + fieldMap + naoClassBlock + '<div class="panel"><div class="ph"><h3>Importações</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Quando</th><th>Arquivo</th><th>Linhas</th><th>Novos</th></tr></thead><tbody>' + (impRows || '<tr><td colspan="4" class="empty">—</td></tr>') + '</tbody></table></div></div>';
   }
