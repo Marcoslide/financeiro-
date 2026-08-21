@@ -1121,31 +1121,31 @@
     // agora entra na lista — antes ficava fora da ficha por engano, embora já contasse no total de
     // Minha Renda (§37 do prompt: alinhar a ficha ao mesmo total já aprovado na Visão Geral).
     var taxaRows = [];
-    function addTaxa(label, valor, subs, origem) { if (valor == null) return; taxaRows.push({ label: label, valor: valor, subs: subs || [], origem: origem }); }
+    function addTaxa(label, valor, subs, origem, fieldKey) { if (valor == null) return; var cl = finClassifica(fieldKey, valor); taxaRows.push({ label: label, valor: valor, subs: subs || [], origem: origem, fieldKey: fieldKey, nat: cl.nat }); }
     var adjRows = mrAdj.filter(function (a) { return a.orderId === orderId; });
     if (mrRow) {
       var comSubs = (mrRow.comissaoBruta != null && mrRow.comissaoBruta !== 0 && mrRow.comissaoBruta !== mrRow.comissao) ? [['Comissão bruta', mrRow.comissaoBruta], ['Desconto/ajuste aplicado pela Shopee', mrRow.comissao - mrRow.comissaoBruta]] : [];
-      addTaxa('Comissão Shopee', mrRow.comissao, comSubs, 'Income');
+      addTaxa('Comissão Shopee', mrRow.comissao, comSubs, 'Income', 'comissao');
       var svcSubs = [];
       if (svcRows.length) { var svcT = { afil: 0, trans: 0, item: 0 }; svcRows.forEach(function (v) { svcT.afil += v.afiliadosVendedor; svcT.trans += v.transacao; svcT.item += v.porItem; }); svcSubs = [['Afiliados do vendedor', svcT.afil], ['Transação', svcT.trans], ['Por item vendido', svcT.item]]; }
-      addTaxa('Taxa de serviço', mrRow.servico, svcSubs, svcRows.length ? 'Income / Service Fee Details' : 'Income');
-      addTaxa('Taxa de transação', mrRow.transacao, [], 'Income');
-      addTaxa('Participação em ação comercial (incentivo)', mrRow.incentivoAcaoComercial, [], 'Income');
-      addTaxa('Participação em ação comercial (ajuste)', mrRow.ajusteAcaoComercial, [], 'Income');
-      addTaxa('Programa de frete (frete parceiro)', mrRow.freteParceiro, [], 'Income');
-      addTaxa('Desconto de frete (Shopee)', mrRow.descontoFrete, [], 'Income');
-      addTaxa('Envio reverso', mrRow.envioReverso, [], 'Income');
-      addTaxa('Afiliado (Minha Renda)', mrRow.afiliado, [], 'Income');
-      addTaxa('Cupom', mrRow.cupom, [], 'Income');
-      addTaxa('Ajuste PIX', mrRow.pix, [], 'Income');
-      addTaxa('Reembolso', mrRow.reembolso, [], 'Income');
+      addTaxa('Taxa de serviço', mrRow.servico, svcSubs, svcRows.length ? 'Income / Service Fee Details' : 'Income', 'servico');
+      addTaxa('Taxa de transação', mrRow.transacao, [], 'Income', 'transacao');
+      addTaxa('Participação em ação comercial (incentivo)', mrRow.incentivoAcaoComercial, [], 'Income', 'incentivoAcaoComercial');
+      addTaxa('Participação em ação comercial (ajuste)', mrRow.ajusteAcaoComercial, [], 'Income', 'ajusteAcaoComercial');
+      addTaxa('Programa de frete (frete parceiro)', mrRow.freteParceiro, [], 'Income', 'freteParceiro');
+      addTaxa('Desconto de frete (Shopee)', mrRow.descontoFrete, [], 'Income', 'descontoFrete');
+      addTaxa('Envio reverso', mrRow.envioReverso, [], 'Income', 'envioReverso');
+      addTaxa('Afiliado (Minha Renda)', mrRow.afiliado, [], 'Income', 'afiliado');
+      addTaxa('Cupom', mrRow.cupom, [], 'Income', 'cupom');
+      addTaxa('Ajuste PIX', mrRow.pix, [], 'Income', 'pix');
+      addTaxa('Reembolso', mrRow.reembolso, [], 'Income', 'reembolso');
     } else if (ord) {
-      addTaxa('Comissão (aproximado)', -Math.round((ord.commissionNet || 0) * 100), [], 'Pedidos — sem Minha Renda para este pedido');
-      addTaxa('Taxa de serviço (aproximado)', -Math.round((ord.serviceFeeNet || 0) * 100), [], 'Pedidos — sem Minha Renda para este pedido');
-      addTaxa('Taxa de transação (aproximado)', -Math.round((ord.transactionFee || 0) * 100), [], 'Pedidos — sem Minha Renda para este pedido');
-      addTaxa('Frete reverso (aproximado)', -Math.round((ord.reverseShippingFee || 0) * 100), [], 'Pedidos — sem Minha Renda para este pedido');
+      addTaxa('Comissão (aproximado)', -Math.round((ord.commissionNet || 0) * 100), [], 'Pedidos — sem Minha Renda para este pedido', 'comissao');
+      addTaxa('Taxa de serviço (aproximado)', -Math.round((ord.serviceFeeNet || 0) * 100), [], 'Pedidos — sem Minha Renda para este pedido', 'servico');
+      addTaxa('Taxa de transação (aproximado)', -Math.round((ord.transactionFee || 0) * 100), [], 'Pedidos — sem Minha Renda para este pedido', 'transacao');
+      addTaxa('Frete reverso (aproximado)', -Math.round((ord.reverseShippingFee || 0) * 100), [], 'Pedidos — sem Minha Renda para este pedido', 'envioReverso');
     }
-    adjRows.forEach(function (a) { addTaxa(a.desc || 'Ajuste', a.valor, [], 'Adjustment'); });
+    adjRows.forEach(function (a) { addTaxa(a.desc || 'Ajuste', a.valor, [], 'Adjustment', 'ajusteGenerico'); });
     var adjTotalC = adjRows.reduce(function (s, a) { return s + a.valor; }, 0);
     var taxasSomaC = taxaRows.reduce(function (s, r) { return s + r.valor; }, 0);
     var taxasConf = mrRow ? conferencia(mrRow.liberado, mrRow.preco + taxasSomaC) : '';
@@ -1153,8 +1153,23 @@
       var sub = r.subs.length ? '<div class="footnote" style="margin:2px 0 6px">' + r.subs.map(function (s) { return '↳ ' + esc(s[0]) + ': ' + brlC(s[1]); }).join(' · ') + '</div>' : '';
       return '<div class="fin-line rowlink" title="Fonte: ' + esc(r.origem) + '"><span>' + esc(r.label) + '</span><b class="' + (r.valor < 0 ? 'neg' : r.valor > 0 ? 'pos' : '') + '">' + brlC(r.valor) + '</b></div>' + sub;
     };
+    // §80-90 do prompt Full/FBS: a lista deixa de ser um monte único — separa TAXAS COBRADAS DE
+    // NÓS (débitos reais do vendedor, sempre visível primeiro) de DESCONTOS COMERCIAIS e
+    // CRÉDITOS/INCENTIVOS (subseções só aparecem quando têm conteúdo). A SOMA dos três grupos +
+    // reembolso continua sendo exatamente taxasSomaC — nenhum valor foi recalculado, só reagrupado.
+    var gTaxas = taxaRows.filter(function (r) { return r.nat === 'DEBITO_VENDEDOR'; });
+    var gDescontos = taxaRows.filter(function (r) { return r.nat === 'DESCONTO_COMERCIAL_VENDEDOR'; });
+    var gCreditos = taxaRows.filter(function (r) { return r.nat === 'CREDITO_VENDEDOR'; });
+    var gOutros = taxaRows.filter(function (r) { return ['DEBITO_VENDEDOR', 'DESCONTO_COMERCIAL_VENDEDOR', 'CREDITO_VENDEDOR'].indexOf(r.nat) < 0; });
+    var somaGrupo = function (g) { return g.reduce(function (s, r) { return s + r.valor; }, 0); };
+    var grupoBlock = function (titulo, g, sempreMostra) {
+      if (!g.length && !sempreMostra) return '';
+      var soma = somaGrupo(g);
+      return '<div style="margin-top:10px"><div class="footnote" style="margin:0 0 4px;text-transform:uppercase;letter-spacing:.02em">' + esc(titulo) + '</div>' + (g.length ? g.map(taxaLine).join('') + '<div class="fin-line" style="margin-top:2px"><span>Subtotal — ' + esc(titulo.toLowerCase()) + '</span><b class="' + (soma < 0 ? 'neg' : soma > 0 ? 'pos' : '') + '">' + brlC(soma) + '</b></div>' : '<span class="tag neutral">nenhum lançamento deste tipo neste pedido</span>') + '</div>';
+    };
     var taxasBlock = '<div class="panel"><div class="ph"><h3>Taxas e Descontos</h3>' + taxasConf + '</div><div class="pb">' +
-      (taxaRows.length ? taxaRows.map(taxaLine).join('') + '<div class="fin-line total" style="margin-top:6px"><span>Total de taxas/descontos</span><b class="' + (taxasSomaC < 0 ? 'neg' : 'pos') + '">' + brlC(taxasSomaC) + '</b></div>' : '<span class="tag neutral">sem dados de taxas para este pedido</span>') +
+      (taxaRows.length ? grupoBlock('Taxas cobradas de nós', gTaxas, true) + grupoBlock('Descontos comerciais', gDescontos, false) + grupoBlock('Créditos / incentivos', gCreditos, false) + grupoBlock('Reembolsos e outros ajustes', gOutros, false) +
+        '<div class="fin-line total" style="margin-top:10px"><span>Total (todos os grupos)</span><b class="' + (taxasSomaC < 0 ? 'neg' : 'pos') + '">' + brlC(taxasSomaC) + '</b></div>' : '<span class="tag neutral">sem dados de taxas para este pedido</span>') +
       (shipRow ? '<div class="footnote" style="margin-top:8px">Frete — divergência sobre o esperado (não somada ao total acima): esperado ' + brl(shipRow.esperado) + ' · real ' + brl(shipRow.real) + ' · diferença ' + brl(shipRow.real - shipRow.esperado) + '.</div>' : '') +
       '<div class="footnote" style="margin-top:6px">' + (mrRow ? 'Origem principal: Minha Renda (Income) · Pedido ' + esc(orderId) : ord ? 'Origem: Pedidos (aproximado — sem Minha Renda para este pedido)' : 'sem fonte') + '</div>' +
       '</div></div>';
@@ -1231,8 +1246,12 @@
     // provisório — occResultadoDevolucao() cai para occEffectiveLoss() automaticamente.
     var devImpactoCents = occs.length ? Math.round(occs.reduce(function (s, x) { return s + occResultadoDevolucao(x).perda; }, 0) * 100) : 0;
     var devConfirmadoN = occs.filter(function (x) { return occResultadoDevolucao(x).status === 'confirmado'; }).length;
+    // Correção (prompt Full/FBS §80-90 — "nunca duplicar contagem"): os ajustes de mrAdj (Adjustment)
+    // já entram em taxaRows/taxasSomaC (grupo Taxas cobradas ou Créditos, conforme o sinal) desde
+    // a construção da lista acima — somar adjTotalC de novo aqui contava a mesma compensação DUAS
+    // vezes no lucro. taxasSomaC já é a soma completa; não soma-se nada além dela.
     var resultadoC = null;
-    if (receitaC != null && custoProdC != null) { resultadoC = receitaC + taxasSomaC - custoProdC - custoAfilCents - acTaxaCents - devImpactoCents + adjTotalC; }
+    if (receitaC != null && custoProdC != null) { resultadoC = receitaC + taxasSomaC - custoProdC - custoAfilCents - acTaxaCents - devImpactoCents; }
     var margemPct = (resultadoC != null && receitaC) ? r2(resultadoC / receitaC * 100) : null;
     // §7 do prompt de reorganização: "Lucro provisório" sempre que algum componente do resultado
     // ainda depende de estimativa (sem Minha Renda cruzada, ou devolução ainda não confirmada pela
@@ -1259,14 +1278,22 @@
     // compensações (quando aplicável) = Lucro atual / Margem atual. Mesma fórmula do topo — nunca
     // uma segunda conta divergente.
     var lucroHeroTag = lucroProvisorio ? ' <span class="tag warn">provisório</span>' : '';
+    // §80-90 do prompt Full/FBS: cascata mais granular — mostra separadamente descontos comerciais
+    // do vendedor, taxas realmente cobradas e créditos/incentivos, com um subtotal "Pagamento
+    // líquido Shopee" intermediário, em vez de uma única linha "Taxas Shopee" misturando tudo.
+    // A soma dos 4 grupos é idêntica a taxasSomaC (nada foi recalculado, só exibido em mais linhas).
+    var pagamentoLiquidoC = receitaC != null ? receitaC + taxasSomaC : null;
     var resultadoBlock = '<div class="panel"><div class="ph"><h3>Resultado do Pedido</h3></div><div class="pb">' +
       fLine('Venda', receitaC) +
-      fLine('− Taxas Shopee (líquido, inclui afiliados quando há Minha Renda)', taxasSomaC) +
+      (gDescontos.length ? fLine('− Descontos comerciais do vendedor', somaGrupo(gDescontos)) : '') +
+      fLine('− Taxas cobradas do vendedor', somaGrupo(gTaxas)) +
+      (gCreditos.length ? fLine('+ Créditos / incentivos Shopee', somaGrupo(gCreditos)) : '') +
+      (gOutros.length ? fLine('− Reembolsos e outros ajustes', somaGrupo(gOutros)) : '') +
+      fLine('= Pagamento líquido Shopee (subtotal)', pagamentoLiquidoC, { total: true }) +
       fLine('− Custo do produto', custoProdC != null ? -custoProdC : null) +
       (custoAfilCents ? fLine('− Custo de afiliados (sem Minha Renda para este pedido)', -custoAfilCents) : '') +
       (acRows.length ? fLine('− Taxa Acelera', -Math.abs(acTaxaCents)) : '') +
       (occs.length ? fLine('− Devolução/perdas (' + (devConfirmadoN === occs.length ? 'confirmado' : 'provisório') + ')', -devImpactoCents) : '') +
-      (adjRows.length ? fLine('+ Compensações/ajustes (Minha Renda)', adjTotalC) : '') +
       '<div class="fin-line total"><span>Lucro atual' + lucroHeroTag + '</span><span class="' + (resultadoC != null && resultadoC < 0 ? 'neg' : 'pos') + '">' + (resultadoC != null ? brlC(resultadoC) : 'aguardando custo do produto') + '</span></div>' +
       '<div class="fin-line"><span>Margem atual</span><span>' + (margemPct != null ? pct(margemPct) : '—') + '</span></div>' +
       '</div></div>' +
@@ -4271,6 +4298,43 @@
     ['Voucher subsidiado pelo Seller', 'voucherSeller', 'auditoria'], ['Voucher compartilhado subsidiado pelo Seller', 'voucherCompartilhado', 'auditoria'], ['Incentivo de cupom', 'incentivoCupom', 'auditoria'], ['Coin Cashback subsidiado pelo Seller', 'coinCashbackSeller', 'auditoria'], ['Coin Cashback compartilhado subsidiado pelo Seller', 'coinCashbackCompartilhado', 'auditoria'],
     ['Valor Reembolsado ao Comprador', 'reembolsoComprador', 'auditoria'], ['Moedas Resgatadas dos Itens Devolvidos', 'moedasResgatadasDevolucao', 'auditoria'], ['Cupom da Shopee de Itens Devolvidos', 'cupomDevolucao', 'auditoria'], ['Pro-rated Bank/Shopee Payment Channel Promotion (devolução)', 'promoBancoDevolucao/promoShopeeDevolucao', 'auditoria'], ['Ajuste por pagamento via PIX (2ª coluna)', 'pixAjusteAdicional', 'auditoria'], ['Quantia paga pelo comprador', 'quantiaPagaComprador', 'auditoria'],
   ];
+  // ============================================================ CAMADA DE NATUREZA FINANCEIRA
+  // (prompt §42-70/§80-90): fonte ÚNICA de classificação, compartilhada por Ficha do Pedido,
+  // Minha Renda/Financeiro, Carteira e Inteligência — um campo nunca é "taxa" numa tela e
+  // "crédito" noutra. Não recalcula nada: os valores continuam exatamente os já aprovados
+  // (mrPeriodEngine/openMrDrill); isto só decide EM QUE GRUPO cada linha aparece.
+  // "SIGN" = a natureza real só se decide pelo sinal do valor NESTE pedido/período — nunca um
+  // rótulo fixo (ex.: incentivo de ação comercial pode ser desconto pago por nós OU crédito da
+  // Shopee, dependendo do lançamento real).
+  var FIN_NATUREZA_MAP = {
+    comissao: { nat: 'DEBITO_VENDEDOR', suporta: 'VENDEDOR' },
+    servico: { nat: 'DEBITO_VENDEDOR', suporta: 'VENDEDOR' },
+    transacao: { nat: 'DEBITO_VENDEDOR', suporta: 'VENDEDOR' },
+    freteParceiro: { nat: 'DEBITO_VENDEDOR', suporta: 'VENDEDOR' },
+    envioReverso: { nat: 'DEBITO_VENDEDOR', suporta: 'VENDEDOR' },
+    afiliado: { nat: 'DEBITO_VENDEDOR', suporta: 'VENDEDOR' },
+    cupom: { nat: 'DESCONTO_COMERCIAL_VENDEDOR', suporta: 'VENDEDOR' },
+    reembolso: { nat: 'REEMBOLSO_DEVOLUCAO', suporta: 'COMPARTILHADO' },
+    incentivoAcaoComercial: { nat: 'SIGN' },
+    ajusteAcaoComercial: { nat: 'SIGN' },
+    pix: { nat: 'SIGN' },
+    descontoFrete: { nat: 'SIGN' }, // "Desconto de frete pela Shopee" — tipicamente um crédito, mas o sinal real decide
+    ajusteGenerico: { nat: 'SIGN' }, // ajustes avulsos (mrAdj) — sem nome de campo Income fixo, classificados pelo próprio sinal
+    estimatedShipping: { nat: 'INFORMATIVO', suporta: 'DESCONHECIDO' }, // "Valor estimado do frete" — nunca entra em cálculo de custo
+    buyerPaidShipping: { nat: 'PAGO_COMPRADOR', suporta: 'COMPRADOR' }, // frete pago pelo comprador — nunca é custo nosso
+  };
+  function finClassifica(fieldKey, valor) {
+    var meta = FIN_NATUREZA_MAP[fieldKey];
+    if (!meta) return { nat: 'NAO_CLASSIFICADO', suporta: 'DESCONHECIDO', impacta: 'AINDA_NAO' };
+    if (meta.nat === 'SIGN') {
+      if (valor > 0) return { nat: 'CREDITO_VENDEDOR', suporta: 'SHOPEE', impacta: 'SIM' };
+      if (valor < 0) return { nat: 'DEBITO_VENDEDOR', suporta: 'VENDEDOR', impacta: 'SIM' };
+      return { nat: 'AJUSTE_NEUTRO', suporta: 'DESCONHECIDO', impacta: 'NAO' };
+    }
+    var impacta = (meta.nat === 'INFORMATIVO' || meta.nat === 'PAGO_COMPRADOR') ? 'NAO' : 'SIM';
+    return { nat: meta.nat, suporta: meta.suporta, impacta: impacta };
+  }
+  var FIN_NATUREZA_LABEL = { DEBITO_VENDEDOR: 'Débito do vendedor', CREDITO_VENDEDOR: 'Crédito do vendedor', DESCONTO_COMERCIAL_VENDEDOR: 'Desconto comercial do vendedor', RECEITA: 'Receita', SUBSIDIO_SHOPEE: 'Subsídio/crédito Shopee', PAGO_COMPRADOR: 'Pago pelo comprador', INFORMATIVO: 'Informativo', REEMBOLSO_DEVOLUCAO: 'Reembolso/devolução', AJUSTE_NEUTRO: 'Ajuste neutro/reconciliação', NAO_CLASSIFICADO: 'Não classificado' };
   function mrAoa(wb, name) { var sn = wb.SheetNames.filter(function (x) { return normStatus(x) === normStatus(name) || normStatus(x).indexOf(normStatus(name)) >= 0; })[0]; return sn ? XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: false, defval: '' }) : null; }
   function mrParseIncome(ab, filename) {
     var wb = XLSX.read(new Uint8Array(ab), { type: 'array' }); if (!mrIsIncome(wb)) return { notRecognized: true };
@@ -4639,10 +4703,28 @@
     return head + strip1 + mrQualidadeConciliacaoBox() + strip2 + strip3 + coverage + mrWaterfall(t) + evoBlock + goFinanceiro + mrAlertas();
   }
   // ---- Resultado detalhado (DRE completo) embutido na Visão Geral (§39) ----
+  // §80-90 do prompt Full/FBS: campos ambíguos (ação comercial, PIX, desconto de frete) deixam de
+  // ser somados como débito fixo — sua natureza real é o próprio sinal do lançamento, pedido a
+  // pedido. Isto SÓ reagrupa a mesma soma total já aprovada (taxasShopeeTotal+afiliado+cupom+pix)
+  // em "Taxas Shopee" (débito real) × "Créditos/Recuperações" (quando a Shopee credita) — a soma
+  // dos dois grupos permanece matematicamente idêntica à soma antiga (nenhum valor recalculado).
+  var FIN_SIGN_FIELDS = ['incentivoAcaoComercial', 'ajusteAcaoComercial', 'pix', 'descontoFrete'];
+  function mrSplitPorNatureza(pe) {
+    var creditos = 0, debitos = 0;
+    (pe.rows || []).forEach(function (r) { FIN_SIGN_FIELDS.forEach(function (f) { var v = r[f] || 0; if (v > 0) creditos += v; else debitos += v; }); });
+    return { creditos: creditos, debitosSignAware: debitos };
+  }
   function mrResultadoDetalhado(pe, asDetails) {
     asDetails = asDetails !== false;
     var t = pe.t;
     var receitaBruta = pe.faturamento;
+    // §80-90: total de "Taxas Shopee" e "Receita Líquida" continuam EXATAMENTE os mesmos já
+    // aprovados/reconciliados (pe.taxasShopeeTotal+afiliado) — nunca recalculados aqui, para nunca
+    // divergir do drill-down (openMrDrill) nem de mrSaidasPorCategoria/mrTaxasCategorias/waterfall,
+    // que também usam esta mesma soma. A camada de natureza só ACRESCENTA a decomposição
+    // crédito×débito de ação comercial/PIX/desconto de frete como informação adicional (split),
+    // nunca troca o número oficial da linha "Taxas Shopee".
+    var split = mrSplitPorNatureza(pe);
     var descComerciais = t.cupom + t.pix;
     var taxasShopee = pe.taxasShopeeTotal + t.afiliado;
     var devolucoes = t.reembolso;
@@ -4657,9 +4739,13 @@
     var line = function (label, v, opts) { opts = opts || {}; var drillAttr = opts.drill && v != null ? ' rowlink" data-mrdrill="' + esc(opts.drill) + '" data-mrdrilllabel="' + esc(label) : ''; return '<div class="fin-line' + (opts.total ? ' total' : '') + drillAttr + '"><span>' + (opts.op ? '<b>' + opts.op + '</b> ' : '') + esc(label) + (opts.warn ? ' <span class="tag warn">parcial</span>' : '') + (opts.note ? ' <span class="footnote" style="margin:0">' + esc(opts.note) + '</span>' : '') + '</span><b class="' + (v == null ? '' : v < 0 ? 'neg' : v > 0 ? 'pos' : '') + '">' + (v == null ? 'não disponível' : brlC(v)) + '</b></div>'; };
     var custoNote = !custoTemDado ? 'Motivo: nenhum custo de produto foi encontrado para os pedidos pagos deste período.' : (nn(pe.custoItemsKnown) + ' de ' + nn(pe.custoItemsTotal) + ' itens com custo cadastrado (' + pct(pe.custoCoveragePct) + ')');
     var taxasNote = 'comissão, serviço, transação, frete parceiro, ajuste de frete, envio reverso e afiliados. ' + (mrParcial ? nn(t.nMR) + ' de ' + nn(pe.n) + ' pedidos pagos com dados da Minha Renda cruzados.' : 'todos os pedidos pagos cruzados.');
+    // Nota informativa (§80-90): dentro do valor de "Taxas Shopee" acima, quanto é efetivamente
+    // débito nosso (Shopee cobrou) × quanto é crédito/subsídio (Shopee creditou) nos campos
+    // ambíguos por sinal — não recalcula a linha, só explica sua composição.
+    var splitNote = (split.creditos !== 0 || split.debitosSignAware !== 0) ? '<div class="fin-line" style="padding-left:14px"><span class="footnote" style="margin:0">↳ dos quais, ação comercial/PIX/desconto de frete: débito real ' + brlC(split.debitosSignAware) + ' · crédito/subsídio Shopee ' + brlC(split.creditos) + '</span></div>' : '';
     var cascata = line('Receita Bruta (Faturamento)', receitaBruta, { note: nn(pe.n) + ' pedidos pagos no período (Pedidos, preço acordado × qtd)', drill: 'faturamento' }) +
-      line('Descontos Comerciais', descComerciais, { op: '−', note: 'cupom + PIX', warn: mrParcial }) +
-      line('Taxas Shopee', taxasShopee, { op: '−', note: taxasNote, drill: 'taxasShopee', warn: mrParcial }) +
+      line('Descontos Comerciais do Vendedor', descComerciais, { op: '−', note: 'cupom (financiado pelo vendedor) + PIX', warn: mrParcial }) +
+      line('Taxas Shopee', taxasShopee, { op: '−', note: taxasNote, drill: 'taxasShopee', warn: mrParcial }) + splitNote +
       line('Devoluções e Reembolsos', devolucoes, { op: '−', drill: 'reembolso', warn: mrParcial }) +
       line('Outros Ajustes/Descontos', outrosAj, { op: '−', note: 'aba Adjustment — total importado, sem data confiável para restringir ao período', drill: 'adjustes' }) +
       line('Receita Líquida', receitaLiquida, { total: true, op: '=', drill: 'receitaLiquida', warn: mrParcial }) +
@@ -5208,7 +5294,12 @@
     var fieldMap = '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Mapa de campos — Income → sistema (' + nn(MR_FIELD_MAP.length) + ')</summary><div class="table-wrap"><table class="report"><thead><tr><th>Campo original (Income)</th><th>Campo normalizado</th><th>Usado em</th></tr></thead><tbody>' + mapRows + '</tbody></table></div></details>';
     // §46 — campos ainda não classificados
     var naoClass = mrCamposNaoClassificados();
-    var naoClassBlock = naoClass.length ? '<div class="panel"><div class="ph"><h3>Campos ainda não classificados</h3><span class="footnote" style="margin:0">colunas financeiras do Income com valor real, ainda sem destino em nenhuma tela — não descartadas</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Coluna original</th><th>Registros com valor</th><th>Soma</th></tr></thead><tbody>' + naoClass.map(function (c) { return '<tr><td class="cell-text">' + esc(c.nome) + '</td><td>' + nn(c.n) + '</td><td class="nowrap">' + brlC(c.soma) + '</td></tr>'; }).join('') + '</tbody></table></div></div>' : callout('green', '✓ Nenhuma coluna financeira sem classificação', 'Todas as colunas com valor real encontradas nesta planilha já têm um destino mapeado.');
+    // §80-90 do prompt Full/FBS: além de "não mapeado" (coluna fora do MR_NAMED_COLS), a auditoria
+    // ganha as colunas pedidas — Sinal predominante / Impacta Pagamento Liberado? / Classificação
+    // atual. Como estas colunas nunca entram em nenhuma soma do sistema (por definição, é isto que
+    // as torna "ainda não classificadas"), a resposta honesta de "impacta?" é sempre Não — nunca
+    // inventamos um "sim" para parecer mais completo.
+    var naoClassBlock = naoClass.length ? '<div class="panel"><div class="ph"><h3>Campos ainda não classificados</h3><span class="footnote" style="margin:0">colunas financeiras do Income com valor real, ainda sem destino em nenhuma tela — não descartadas</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Coluna original</th><th>Fonte</th><th>Registros com valor</th><th>Soma</th><th>Sinal predominante</th><th>Impacta Pagamento Liberado?</th><th>Classificação atual</th></tr></thead><tbody>' + naoClass.map(function (c) { return '<tr><td class="cell-text">' + esc(c.nome) + '</td><td>Income · Renda</td><td>' + nn(c.n) + '</td><td class="nowrap">' + brlC(c.soma) + '</td><td>' + (c.soma > 0 ? 'positivo' : c.soma < 0 ? 'negativo' : 'neutro') + '</td><td>Não</td><td><span class="tag warn">' + esc(FIN_NATUREZA_LABEL.NAO_CLASSIFICADO) + '</span></td></tr>'; }).join('') + '</tbody></table></div></div>' : callout('green', '✓ Nenhuma coluna financeira sem classificação', 'Todas as colunas com valor real encontradas nesta planilha já têm um destino mapeado.');
     // §40 — diagnóstico de integridade
     var diag = e.orders.length ? mrDiagnosticoIntegridade() : null;
     var diagBlock = diag ? (function () {
