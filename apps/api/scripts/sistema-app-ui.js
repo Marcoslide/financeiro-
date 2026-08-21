@@ -34,6 +34,10 @@
   // Carteira. Snapshot nunca é reescrito silenciosamente; evento posterior vira anotação à parte.
   var caixaClose = {};
   var caixaDashDate = null; // null = hoje
+  // Camada 1 (Saldo do Dia): "Transferência para o banco" — evento manual PURO Carteira→Banco.
+  // Nunca altera Acelera/Pedido/receita/lucro — só registra que dinheiro saiu da carteira para o
+  // banco, com histórico. Lista simples (não indexada por dia: pode ser lançada a qualquer momento).
+  var bankTransfers = []; // { id, valor(R$), quando(ISO), conta, observacao, criadoPor, createdAt }
   var walletF = { search: '', cat: '', flow: '' }; // filtros da tabela de movimentações
   var walletStamp = null;     // "atualizado até" da carteira
   var Produtos = null;
@@ -245,7 +249,7 @@
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -5766,6 +5770,35 @@
     var fin = caixaDayVendas(dateKey).pendFin;
     return { operacionais: pend, financeiras: fin, total: pend.length + fin.length };
   }
+  // Pendências da Carteira NESTE DIA — mesmos blocos atômicos já aprovados (walletOrigin/wEffCat/
+  // wgetCls/walletInCoverage/WALLET_ORIGEM_CATS), só sem passar pelo filtro de período global (o
+  // dia do fechamento é fixo, não deve mudar se o usuário tiver outro período selecionado alhures).
+  // Não recria walletOrigemDiag — monta o mesmo raciocínio escopado a um único dia.
+  function caixaDayPendenciasCarteira(dateKey) {
+    if (!wallet.length) return { total: 0, itens: [] };
+    var txs = wallet.filter(function (t) { return t.origin === 'SHOPEE' && t.date && t.date.slice(0, 10) === dateKey; });
+    var coverage = walletSourceCoverage(); var itens = [];
+    txs.forEach(function (t) {
+      var cat = wEffCat(t); var c = wgetCls(t.id) || {};
+      if (c.flagDuplicidade) { itens.push({ t: t, tipo: 'DUPLICIDADE', motivo: 'Possível duplicidade (marcada manualmente)' }); return; }
+      if (c.flagDescontoIndevido) { itens.push({ t: t, tipo: 'DESCONTO_INDEVIDO', motivo: 'Possível desconto indevido (marcado manualmente)' }); return; }
+      if (!WALLET_ORIGEM_CATS[cat]) return; // sem fonte de comparação — nunca vira pendência por engano
+      var o = walletOrigin(t);
+      if (o && o.confidence === 'alta' && o.tier === 'ID exato') { if (!o.ok) itens.push({ t: t, tipo: 'DIVERGENCIA_VALOR', motivo: 'Diferença de valor — ' + o.fonte }); return; }
+      if (o) return; // candidato/estimativa — nunca fecha pendência dura sozinho
+      var inCov = walletInCoverage(t, cat, coverage);
+      if (inCov === false || inCov === null) return; // fora da cobertura — não é pendência
+      itens.push({ t: t, tipo: t.amount < 0 ? 'SEM_ORIGEM' : 'CREDITO_SEM_ORIGEM', motivo: (t.amount < 0 ? 'Débito' : 'Crédito') + ' sem origem identificada (' + wcatLabel(cat) + ')' });
+    });
+    return { total: itens.length, itens: itens };
+  }
+  // Camada 1 — registra uma transferência da Carteira para o banco. Evento manual PURO: nunca toca
+  // Acelera/Pedido/receita/lucro — só um log auditável de "dinheiro saiu da carteira para o banco".
+  function caixaRegistrarTransferenciaBanco(valor, quandoISO, conta, observacao) {
+    var rec = { id: 'BT-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8), valor: r2(valor), quando: quandoISO, conta: conta || null, observacao: observacao || null, criadoPor: 'Operador', createdAt: new Date().toISOString() };
+    bankTransfers = [rec].concat(bankTransfers);
+    return putMany('banktransfers', [rec]).then(function () { return rec; });
+  }
   function caixaDiasComMovimento() {
     var days = {};
     orders.forEach(function (o) { if (o.paidAt) days[o.paidAt.slice(0, 10)] = 1; });
@@ -5778,20 +5811,22 @@
   var CAIXA_LABEL = { ABERTO: ['Aberto', 'neutral'], FECHADO: ['Fechado', 'ok'], FECHADO_COM_RESSALVA: ['Fechado com ressalva', 'warn'], REVISAO_NECESSARIA: ['Revisão necessária', 'warn'] };
   function caixaDayStatus(dateKey) {
     var pend = caixaDayPendencias(dateKey);
+    var pendCart = caixaDayPendenciasCarteira(dateKey);
     var rec = caixaClose[dateKey] || null;
     var closed = rec && (rec.status === 'FECHADO' || rec.status === 'FECHADO_COM_RESSALVA');
     // §20-21: fechamento é uma fotografia — se pendências mudaram de contagem depois de fechado
-    // (movimento posterior), nunca reescreve o snapshot; só sinaliza revisão necessária.
-    var novoDepois = !!(closed && rec.snapshot && rec.snapshot.pendTotal !== pend.total);
+    // (movimento posterior), nunca reescreve o snapshot; só sinaliza revisão necessária. Camada 4
+    // (Carteira) entra na mesma checagem — as duas famílias de pendência protegem o fechamento.
+    var novoDepois = !!(closed && rec.snapshot && (rec.snapshot.pendTotal !== pend.total || (rec.snapshot.pendCartTotal || 0) !== pendCart.total));
     var status = !closed ? 'ABERTO' : (novoDepois ? 'REVISAO_NECESSARIA' : rec.status);
-    return { pend: pend, rec: rec, novoDepois: novoDepois, status: status };
+    return { pend: pend, pendCart: pendCart, rec: rec, novoDepois: novoDepois, status: status };
   }
   function caixaCloseDay(dateKey, status, userName, justificativa) {
-    var vendas = caixaDayVendas(dateKey); var exp = caixaDayExpedicao(dateKey); var ac = caixaDayAcelera(dateKey); var pend = caixaDayPendencias(dateKey);
+    var vendas = caixaDayVendas(dateKey); var exp = caixaDayExpedicao(dateKey); var ac = caixaDayAcelera(dateKey); var pend = caixaDayPendencias(dateKey); var pendCart = caixaDayPendenciasCarteira(dateKey);
     var rec = caixaClose[dateKey] || { id: dateKey, history: [], eventosPosteriores: [] };
     var at = new Date().toISOString();
     rec.status = status; rec.closedBy = userName || 'Operador'; rec.closedAt = at;
-    rec.snapshot = { vendasN: vendas.n, vendasValor: vendas.valor, lucroC: vendas.nLucroConhecido ? vendas.lucroC : null, expEsperados: exp.esperados, expExpedidos: exp.expedidos, acN: ac.n || 0, pendTotal: pend.total };
+    rec.snapshot = { vendasN: vendas.n, vendasValor: vendas.valor, lucroC: vendas.nLucroConhecido ? vendas.lucroC : null, expEsperados: exp.esperados, expExpedidos: exp.expedidos, acN: ac.n || 0, pendTotal: pend.total, pendCartTotal: pendCart.total };
     rec.justificativa = justificativa || null;
     rec.history = (rec.history || []).concat([{ at: at, user: rec.closedBy, status: status, justificativa: justificativa || null, pendTotal: pend.total }]);
     caixaClose[dateKey] = rec; return putMany('caixafechamentos', [rec]);
@@ -5891,10 +5926,32 @@
     function refresh() { panel.innerHTML = body(); wire(); }
     function body() {
       var st = caixaDayStatus(dateKey); var lbl = CAIXA_LABEL[st.status];
-      var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = caixaDayAcelera(dateKey), pend = st.pend;
+      var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = caixaDayAcelera(dateKey), pend = st.pend, pendCart = st.pendCart;
       var margem = vendas.valor ? r2(vendas.lucroC / 100 / vendas.valor * 100) : null;
       var custoConhecido = vendas.pedidos.filter(function (o) { return pedidoComposicaoFinanceira(o.id).custoProdC != null; }).length;
       var naoClass = caixaCamposNaoClassificadosCount();
+      // Camada 1 — Saldo do Dia: recebido via Acelera (rastreável até resgate→pedidos, nunca digitado
+      // à mão) + transferências para o banco (evento manual PURO Carteira→Banco — nunca altera
+      // Acelera/Pedido/receita/lucro). São duas movimentações SEPARADAS, nunca somadas/subtraídas
+      // silenciosamente uma da outra a menos que ambas existam de fato neste dia (§87).
+      var dayTransfers = bankTransfers.filter(function (t) { return t.quando && t.quando.slice(0, 10) === dateKey; });
+      var totalTransferido = dayTransfers.reduce(function (s, t) { return s + t.valor; }, 0);
+      var permanencia = (ac.liquido != null && dayTransfers.length) ? r2(ac.liquido / 100 - totalTransferido) : null;
+      var transfRows = dayTransfers.map(function (t) { return '<div class="fin-line"><span>' + new Date(t.quando).toLocaleString('pt-BR') + (t.conta ? ' · ' + esc(t.conta) : '') + (t.observacao ? ' <span class="footnote" style="margin:0">' + esc(t.observacao) + '</span>' : '') + '</span><b>' + brl(t.valor) + '</b></div>'; }).join('');
+      var blocoSaldo = '<div class="panel"><div class="ph"><h3>0. Saldo do Dia</h3></div><div class="pb">' +
+        (ac.n ? (kv('Recebido via Acelera (bruto antecipado)', brlC(ac.antec)) + kv('Taxa Acelera', brlC(ac.taxa)) + kv('Valor líquido recebido', brlC(ac.liquido))) : '<div class="footnote" style="padding:0 0 10px">Nenhum resgate do Acelera consolidado nesta data.</div>') +
+        '<div style="margin-top:8px"><b>Transferências para o banco registradas neste dia</b></div>' +
+        (transfRows || '<div class="footnote" style="margin:4px 0">Nenhuma transferência registrada para este dia.</div>') +
+        (dayTransfers.length ? '<div class="fin-line total"><span>Total transferido</span><b>' + brl(totalTransferido) + '</b></div>' : '') +
+        (permanencia != null ? '<div class="fin-line"><span>Recebido via Acelera − Transferido ao banco</span><b>' + brl(permanencia) + '</b></div><div class="footnote" style="margin:2px 0 8px">= permanência operacional na carteira (não é lucro nem pendência — só o que ainda não saiu para o banco)</div>' : '') +
+        '<div class="panel" style="margin-top:10px;background:var(--bg2,#f7f8fa)"><div class="pb" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">' +
+        '<div><label class="fld">Valor (R$)</label><input class="input sm" id="bt-valor" style="width:120px" placeholder="0,00"></div>' +
+        '<div><label class="fld">Data/hora</label><input class="input sm" type="datetime-local" id="bt-quando" value="' + esc(dateKey) + 'T12:00" style="width:190px"></div>' +
+        '<div><label class="fld">Conta / banco (opcional)</label><input class="input sm" id="bt-conta" style="width:160px"></div>' +
+        '<div style="flex:1;min-width:160px"><label class="fld">Observação (opcional)</label><input class="input sm" id="bt-obs" style="width:100%"></div>' +
+        '<button class="btn-sm primary" id="bt-registrar">Registrar transferência</button>' +
+        '</div></div>' +
+        '</div></div>';
       var blocoVendas = '<div class="panel"><div class="ph"><h3>1. Vendas</h3></div><div class="pb">' + kv('Pedidos pagos', nn(vendas.n)) + kv('Faturamento', brl(vendas.valor)) + kv('Lucro atual', vendas.nLucroConhecido ? brlC(vendas.lucroC) : 'aguardando custo') + kv('Margem', margem != null ? pct(margem) : '—') + kv('Composição financeira conferida', (vendas.n - vendas.pendFin.length) + ' de ' + vendas.n + ' pedidos') + '</div></div>';
       var blocoExp = '<div class="panel"><div class="ph"><h3>2. Expedição</h3></div><div class="pb">' + (exp.temSessao ? (kv('Esperados', nn(exp.esperados)) + kv('Confirmados', nn(exp.expedidos)) + kv('Faltaram', nn(exp.faltaram))) : callout('', 'Sem Sessão de Expedição registrada para este dia', 'Contagem por confirmação de saída (bipe/Full) datada neste dia: ' + nn(exp.expedidos) + '.')) + '</div></div>';
       var blocoAc = !acelera.length ? '' : ('<div class="panel"><div class="ph"><h3>3. Acelera</h3></div><div class="pb">' + (ac.n ? (kv('Resgates', nn(ac.n)) + kv('Valor antecipado', brlC(ac.antec)) + kv('Taxa Acelera', brlC(ac.taxa)) + kv('Valor recebido', brlC(ac.liquido))) : '<div class="footnote" style="padding:0 16px 12px">Nenhum resgate do Acelera consolidado nesta data.</div>') + '</div></div>');
@@ -5902,8 +5959,15 @@
       var dreBlock = caixaDreBlock(caixaDreDia(dateKey));
       var pendRows = pend.operacionais.slice(0, 60).map(function (i) { return '<tr><td class="mono">' + esc(i.orderId) + '</td><td class="cell-text">' + esc(i.motivo) + '</td><td><button class="btn-sm" data-caixapendop="' + esc(i.orderId) + '">Resolver</button></td></tr>'; }).join('') +
         pend.financeiras.slice(0, 60).map(function (f) { return '<tr><td class="mono">' + esc(f.orderId) + '</td><td class="cell-text">' + esc(f.motivo) + '</td><td><button class="btn-sm" data-goped360="' + esc(f.orderId) + '">Ver pedido</button> <button class="btn-sm" data-caixapendfin="' + esc(f.orderId) + '">Resolver</button></td></tr>'; }).join('');
-      var pendTable = '<div class="panel"><div class="ph"><h3>5. Pendências</h3><span class="footnote" style="margin:0">' + nn(pend.total) + ' no total</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Problema</th><th></th></tr></thead><tbody>' + (pendRows || '<tr><td colspan="3" class="empty">Nenhuma pendência neste dia. 🎉</td></tr>') + '</tbody></table></div></div>';
-      var podeFechar = pend.total === 0;
+      var pendTable = '<div class="panel"><div class="ph"><h3>5. Pendências do Fluxo</h3><span class="footnote" style="margin:0">' + nn(pend.total) + ' no total</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Problema</th><th></th></tr></thead><tbody>' + (pendRows || '<tr><td colspan="3" class="empty">Nenhuma pendência neste dia. 🎉</td></tr>') + '</tbody></table></div></div>';
+      var pendCartRows = pendCart.itens.slice(0, 60).map(function (it) { return '<tr class="rowlink" data-wtx="' + esc(it.t.id) + '"><td class="mono">' + esc(wOrderId(it.t) || '— Não identificado') + '</td><td class="cell-text">' + esc(it.motivo) + '</td><td class="nowrap">' + brl(it.t.amount) + '</td><td><button class="btn-sm" data-wtx="' + esc(it.t.id) + '">Classificar / Resolver</button></td></tr>'; }).join('');
+      var pendCartTable = '<div class="panel"><div class="ph"><h3>6. Pendências da Carteira</h3><span class="footnote" style="margin:0">' + nn(pendCart.total) + ' no total</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Problema</th><th>Valor</th><th></th></tr></thead><tbody>' + (pendCartRows || '<tr><td colspan="4" class="empty">Nenhuma pendência da carteira neste dia. 🎉</td></tr>') + '</tbody></table></div></div>';
+      // §68-72: checklist visual das duas famílias de pendência ANTES de fechar — nunca esconde.
+      var checklist = '<div class="panel"><div class="ph"><h3>Checklist de fechamento</h3></div><div class="pb"><div class="kstrip" style="flex-wrap:wrap">' +
+        [['PEDIDOS', vendas.pendFin.length], ['EXPEDIÇÃO', pend.operacionais.length], ['ACELERA', pend.operacionais.filter(function (i) { return i.origem === 'ACELERA'; }).length], ['CARTEIRA', pendCart.total]].map(function (x) {
+          return '<div class="kc"><div class="kl">' + x[0] + '</div><div class="kv" style="font-size:15px">' + (x[1] ? '🔴 ' + nn(x[1]) + ' pendência(s)' : '✅ ok') + '</div></div>';
+        }).join('') + '</div></div></div>';
+      var podeFechar = pend.total === 0 && pendCart.total === 0;
       var footer = '<div class="panel"><div class="pb" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
         '<button class="btn-sm' + (podeFechar ? ' primary' : '') + '"' + (podeFechar ? '' : ' disabled title="Só é possível Fechar sem pendências — use Fechar com ressalva"') + ' id="caixa-close">Fechar Caixa</button>' +
         '<button class="btn-sm' + (podeFechar ? '' : ' primary') + '" id="caixa-closeress">Fechar com ressalva</button>' +
@@ -5911,7 +5975,7 @@
         '<button class="btn-sm" id="caixa-print" title="Abre a impressão do navegador — use \'Salvar como PDF\' para gerar o documento de auditoria">Imprimir / PDF</button>' +
         (st.rec ? '<span class="footnote" style="margin:0">último registro: ' + esc(CAIXA_LABEL[st.rec.status] ? CAIXA_LABEL[st.rec.status][0] : st.rec.status) + ' por ' + esc(st.rec.closedBy || '—') + ' em ' + new Date(st.rec.closedAt).toLocaleString('pt-BR') + '</span>' : '') +
         '</div>' + (st.rec && st.rec.eventosPosteriores && st.rec.eventosPosteriores.length ? '<div class="pb" style="padding-top:0"><div class="footnote"><b>Eventos posteriores:</b> ' + st.rec.eventosPosteriores.map(function (e) { return esc(e.orderId) + ' — ' + esc(e.descricao) + ' (' + new Date(e.at).toLocaleDateString('pt-BR') + ')'; }).join(' · ') + '</div></div>' : '') + '</div>';
-      return '<div class="dh"><div><b>FECHAMENTO — ' + esc(dbr(dateKey)) + '</b> <span class="tag ' + lbl[1] + '" style="margin-left:6px">' + lbl[0] + '</span>' + (st.status === 'REVISAO_NECESSARIA' ? ' <span class="footnote" style="margin:0">⚠ movimento posterior a este fechamento</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' + blocoVendas + blocoExp + blocoAc + blocoFin + dreBlock + pendTable + footer + '</div>';
+      return '<div class="dh"><div><b>FECHAMENTO — ' + esc(dbr(dateKey)) + '</b> <span class="tag ' + lbl[1] + '" style="margin-left:6px">' + lbl[0] + '</span>' + (st.status === 'REVISAO_NECESSARIA' ? ' <span class="footnote" style="margin:0">⚠ movimento posterior a este fechamento</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' + blocoSaldo + blocoVendas + blocoExp + blocoAc + blocoFin + dreBlock + pendTable + pendCartTable + checklist + footer + '</div>';
     }
     function wire() {
       panel.querySelector('.x').onclick = function () { d.remove(); };
@@ -5935,13 +5999,24 @@
       });
       var cl = panel.querySelector('#caixa-close'); if (cl && !cl.disabled) cl.onclick = function () { caixaCloseDay(dateKey, 'FECHADO', 'Operador', null).then(function () { toast('Caixa fechado', dbr(dateKey)); refresh(); render(); }); };
       var cr = panel.querySelector('#caixa-closeress'); if (cr) cr.onclick = function () {
-        var pendAtual = caixaDayPendencias(dateKey);
-        var justificativa = prompt((pendAtual.total ? nn(pendAtual.total) + ' pendência(s) deste dia ainda em aberto. ' : '') + 'Descreva o motivo para fechar mesmo assim:');
+        var pendAtual = caixaDayPendencias(dateKey); var pendCartAtual = caixaDayPendenciasCarteira(dateKey);
+        var msg = []; if (pendAtual.total) msg.push(nn(pendAtual.total) + ' pendência(s) do fluxo'); if (pendCartAtual.total) msg.push(nn(pendCartAtual.total) + ' pendência(s) da carteira');
+        var justificativa = prompt((msg.length ? msg.join(' e ') + ' ainda em aberto. ' : '') + 'Descreva o motivo para fechar mesmo assim:');
         if (justificativa == null || !justificativa.trim()) return;
         caixaCloseDay(dateKey, 'FECHADO_COM_RESSALVA', 'Operador', justificativa.trim()).then(function () { toast('Caixa fechado com ressalva', dbr(dateKey)); refresh(); render(); });
       };
       var xl = panel.querySelector('#caixa-xlsx'); if (xl) xl.onclick = function () { caixaExportarXlsx(dateKey); toast('Planilha gerada', 'Fechamento_Caixa_' + dateKey + '.xlsx'); };
       var pr = panel.querySelector('#caixa-print'); if (pr) pr.onclick = function () { window.print(); };
+      var btReg = panel.querySelector('#bt-registrar'); if (btReg) btReg.onclick = function () {
+        var valor = walletNum(panel.querySelector('#bt-valor').value);
+        if (valor == null || valor <= 0) { toast('Informe um valor válido', '', true); return; }
+        var quando = panel.querySelector('#bt-quando').value; if (!quando) { toast('Informe a data/hora', '', true); return; }
+        var conta = panel.querySelector('#bt-conta').value.trim() || null; var obs = panel.querySelector('#bt-obs').value.trim() || null;
+        caixaRegistrarTransferenciaBanco(valor, new Date(quando).toISOString(), conta, obs).then(function () { toast('Transferência registrada', brl(valor)); refresh(); render(); });
+      };
+      // Pendências da Carteira: reaproveita o MESMO drawer de classificação da Carteira (openWalletTx)
+      // — nunca um segundo mecanismo de resolução, e nunca altera pedido/bip/Acelera/devolução/Income.
+      panel.querySelectorAll('[data-wtx]').forEach(function (b) { b.onclick = function () { openWalletTx(b.dataset.wtx, function () { refresh(); render(); }); }; });
     }
     refresh();
   }
@@ -6057,7 +6132,7 @@
   // o sistema sempre carrega e Produtos sempre abre (só não salva). Nunca dead-end / tela branca.
   openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers')]);
   }).then(function (r) {
     orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
     wallet = r[5] || [];
@@ -6076,6 +6151,7 @@
     expSessions = (r[20] || []).sort(function (a, b) { return b.horaInicio.localeCompare(a.horaInicio); });
     var pendR = settings.filter(function (x) { return x.id === 'pendResolucoes'; })[0]; if (pendR && pendR.data) pendResolucoes = pendR.data;
     caixaClose = {}; (r[21] || []).forEach(function (c) { caixaClose[c.id] = c; });
+    bankTransfers = (r[22] || []).sort(function (a, b) { return (b.quando || '').localeCompare(a.quando || ''); });
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
     plans = (r[4] || []).map(function (p) { if (PLAN_MIGR[p.status]) p.status = PLAN_MIGR[p.status]; if (p.scopeSkus == null && p.relatedSkus) p.scopeSkus = p.relatedSkus; if (p.indicatorKind == null) p.indicatorKind = 'liquido'; return p; });
     occ = occ.filter(function (o) { return !o.isDemo; }); // higiene: nunca deixar demo no banco real
