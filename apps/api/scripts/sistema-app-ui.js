@@ -1278,10 +1278,10 @@
       if (dest === 'ocorrencias') dest = 'casos';
       if (dest === 'areceber' || dest === 'conferir') dest = 'recebimentos';
       if (dest === 'financeiro') { analiseSub = 'financeiro'; dest = 'analises'; }
-      if (dest === 'disputas') { dest = 'casos'; devF.type = 'RETURN_REFUND'; devF.status = ''; devF.flag = 'prazo'; devF.search = ''; devPage = 1; }
+      if (dest === 'disputas') { dest = 'casos'; devF.type = 'RETURN_REFUND'; devF.status = ''; devF.precisaAcao = true; devF.search = ''; devPage = 1; }
       if (b.dataset.arf) arF = b.dataset.arf;
       if (b.dataset.asub) analiseSub = b.dataset.asub;
-      if (dest === 'casos' && b.dataset.go !== 'disputas') { devF.internalStatus = ''; devF.disputeStatus = ''; devF.search = ''; devF.type = b.dataset.oct || ''; devF.status = ''; devF.flag = b.dataset.ocf || ''; devPage = 1; }
+      if (dest === 'casos' && b.dataset.go !== 'disputas') { devF.internalStatus = ''; devF.disputeStatus = ''; devF.search = ''; devF.type = b.dataset.oct || ''; devF.status = ''; devF.precisaAcao = !!b.dataset.ocf; devPage = 1; }
       if (dest === 'analises') { if (b.dataset.reason != null) analiseReason = b.dataset.reason || null; }
       sub.posvenda = dest; render();
     }; });
@@ -1876,78 +1876,68 @@
 
   var FLAG_LABELS = { semcausa: 'Sem causa', nova: 'Novas', semresp: 'Sem responsável', naovinc: 'SKU não vinculado', prazo: 'Prazo p/ recorrer' };
   function prazoBadge(o) { if (!o.hasSellerWindow || !o.disputeDeadline) return ''; var dl = new Date(o.disputeDeadline); var days = Math.ceil((dl - Date.now()) / 864e5); if (days < 0) return ' <span class="tag warn">🔴 prazo vencido</span>'; if (days <= 0) return ' <span class="tag warn">⚠️ responder hoje</span>'; if (days <= 3) return ' <span class="tag warn">⚠️ ' + days + 'd p/ recorrer</span>'; return ' <span class="tag info">recorrer até ' + dbr(o.disputeDeadline) + '</span>'; }
+  // §4-8 do prompt de simplificação: Casos volta a ser uma tela operacional simples — 1 pergunta
+  // ("qual caso eu preciso tratar agora?"), 1 barra de filtros, 1 tabela, 1 ação por linha. As
+  // dimensões que existiam como filas de chips separadas (etapa/jornada, motivo, prazo, pendência,
+  // status interno) continuam calculadas exatamente como antes — só deixam de ocupar uma fileira
+  // inteira cada uma. Etapa/motivo/prazo viram colunas da própria tabela; status interno continua
+  // editável inline (já era); "Precisa da minha ação" vira um único alternador.
+  function devPrecisaAcao(o) { return casoFase(o) === 'SOLICITACOES'; }
   function devOcc() {
     var all = occInPeriodAll().slice();
     if (!all.length) return secHead('CASOS', 'Casos', 'Todos os casos de devolução, cancelamento e falha de entrega em um só lugar.') + emptyBox('Nenhum caso. Importe os relatórios na aba Importações.');
-    // Contagem nos cabeçalhos por tipo (§11), sempre respeitando o período selecionado (§42).
     var typeCounts = { RETURN_REFUND: 0, ORDER_CANCELLATION: 0, FAILED_DELIVERY: 0 }; all.forEach(function (o) { if (typeCounts[o.type] != null) typeCounts[o.type]++; });
     var typed = devF.type ? all.filter(function (o) { return o.type === devF.type; }) : all;
-    // §8-9,39-41: FASE operacional — a jornada mental de Casos (caixa de entrada → acompanhamento →
-    // encerrado), sempre abaixo da categoria (tipo) na hierarquia de navegação.
-    var faseCounts = { SOLICITACOES: 0, EM_ANDAMENTO: 0, ENCERRADOS: 0 }; typed.forEach(function (o) { faseCounts[casoFase(o)]++; });
-    var faseList = devF.fase ? typed.filter(function (o) { return casoFase(o) === devF.fase; }) : typed;
-    // Segunda linha DINÂMICA: status reais presentes na fonte selecionada (§4-15) — nunca inventa.
-    var statusCounts = {}; var novoStatus = {}; faseList.forEach(function (o) { var raw = o.status || '(sem status)'; statusCounts[raw] = (statusCounts[raw] || 0) + 1; if (o.status && !SHOPEE_STATUS_MAP[normStatus(o.status)]) novoStatus[o.status] = true; });
+    // Status Shopee real presente na fonte — nunca inventado (§5).
+    var statusCounts = {}; var novoStatus = {}; typed.forEach(function (o) { var raw = o.status || '(sem status)'; statusCounts[raw] = (statusCounts[raw] || 0) + 1; if (o.status && !SHOPEE_STATUS_MAP[normStatus(o.status)]) novoStatus[o.status] = true; });
     var statusList = Object.keys(statusCounts).sort();
-    // Etapa da jornada (§10-15,18) — SEMPRE calculada, nunca digitada; nunca mistura com motivo/pendência.
-    var jornadaCounts = {}; faseList.forEach(function (o) { var j = casoJornada(o); jornadaCounts[j] = (jornadaCounts[j] || 0) + 1; });
-    var JORNADA_ORDEM = ['NOVA', 'AVALIACAO', 'ACAO_NECESSARIA', 'AGUARDANDO_SHOPEE', 'COLETA', 'FALHA_IDENTIFICADA', 'CONCILIACAO', 'TRANSPORTE', 'VALIDAR', 'BAIXADA', 'REJEITADA'];
-    var jornadaKeys = JORNADA_ORDEM.filter(function (k) { return jornadaCounts[k]; });
-    // Motivo (§16-17) — dimensão separada da jornada, construída só com o que existe em o.reason.
-    var motivoCounts = {}; faseList.forEach(function (o) { var mv = casoMotivo(o); motivoCounts[mv] = (motivoCounts[mv] || 0) + 1; });
-    var motivoKeys = Object.keys(motivoCounts).sort(function (a, b) { return motivoCounts[b] - motivoCounts[a]; });
-    var motivoTop = motivoKeys.slice(0, 8), motivoRest = motivoKeys.length - motivoTop.length;
-    // §24-25: desde a última importação — teve atualização / novo retorno / compensação nova / rastreio.
+    // "Solução" (o.resolution) — mesmo princípio: só valores reais encontrados nos dados (§5).
+    var resolCounts = {}; typed.forEach(function (o) { var r = (o.resolution || '').trim(); if (r) resolCounts[r] = (resolCounts[r] || 0) + 1; });
+    var resolList = Object.keys(resolCounts).sort();
     var devLastBatch = batches.filter(function (b) { return b.module && b.module.indexOf('Devolução') === 0; }).sort(function (a, b) { return (b.createdAt || '').localeCompare(a.createdAt || ''); })[0];
     function occTeveAtualizacao(o) { return !!devLastBatch && o.lastStatusAdvanceAt === devLastBatch.createdAt; }
-    var list = faseList;
+    var list = typed;
     if (devF.status) list = list.filter(function (o) { return (o.status || '(sem status)') === devF.status; });
-    if (devF.jornada) list = list.filter(function (o) { return casoJornada(o) === devF.jornada; });
-    if (devF.motivo) list = list.filter(function (o) { return casoMotivo(o) === devF.motivo; });
-    if (devF.flag === 'prazo') list = list.filter(function (o) { return o.hasSellerWindow && o.disputeDeadline; });
-    else if (devF.flag === 'semcausa') list = list.filter(function (o) { return !o.internalCause && !o.causeFamily; });
-    else if (devF.flag === 'semresp') list = list.filter(function (o) { return !o.ownerName; });
-    else if (devF.flag === 'naovinc') list = list.filter(function (o) { return (o.items || []).some(function (i) { return i.sku && !i.skuLinked; }); });
-    // §27: filtros de prazo (chips prioritários dentro de Solicitações). §28: vencido nunca é lido
-    // como "disputa perdida" — é só o alerta de prazo, o resultado continua exigindo revisão manual.
-    else if (devF.flag === 'venceHoje') list = list.filter(function (o) { return prazoChip(o) === 'hoje'; });
-    else if (devF.flag === 'venceAmanha') list = list.filter(function (o) { return prazoChip(o) === 'amanha'; });
-    else if (devF.flag === 'ate3') list = list.filter(function (o) { return ['hoje', 'amanha', 'ate3'].indexOf(prazoChip(o)) >= 0; });
-    else if (devF.flag === 'vencido') list = list.filter(function (o) { return prazoChip(o) === 'vencido'; });
-    else if (devF.flag === 'semprazo') list = list.filter(function (o) { return expectsAction(o) && prazoChip(o) === 'sem_prazo'; });
-    // §24-25: "o que mudou desde ontem?" — desde a última importação.
-    else if (devF.flag === 'novoretorno') list = list.filter(casoNovoRetorno);
-    else if (devF.flag === 'atualizado') list = list.filter(occTeveAtualizacao);
-    // Filtro de status interno com MULTI-SELEÇÃO (§Casos): devF.istSet = {key:true}; compat com devF.internalStatus (único).
+    if (devF.resolucao) list = list.filter(function (o) { return (o.resolution || '').trim() === devF.resolucao; });
+    if (devF.precisaAcao) list = list.filter(devPrecisaAcao);
+    // Filtro de status interno com MULTI-SELEÇÃO — continua existindo (§7), só não é mais chip visível
+    // no cabeçalho; é acionado a partir da própria coluna/ficha (ex.: clicar num status na ficha).
     var istSet = devF.istSet || {}; var istKeys = Object.keys(istSet).filter(function (k) { return istSet[k]; });
     if (!istKeys.length && devF.internalStatus) istKeys = [devF.internalStatus];
     if (istKeys.length) list = list.filter(function (o) { return istKeys.indexOf(o.internalStatus) >= 0; });
-    if (devF.search) { var s = devF.search.toLowerCase(); list = list.filter(function (o) { return (o.orderId || '').toLowerCase().indexOf(s) >= 0 || (o.returnId || '').toLowerCase().indexOf(s) >= 0 || (o.reason || '').toLowerCase().indexOf(s) >= 0 || (o.items || []).some(function (i) { return (i.sku || '').toLowerCase().indexOf(s) >= 0 || (i.productName || '').toLowerCase().indexOf(s) >= 0; }); }); }
-    // prazo mais curto primeiro quando filtrando prazo; senão mais recentes
-    if (devF.flag === 'prazo') list = list.slice().sort(function (a, b) { return (a.disputeDeadline || '9999').localeCompare(b.disputeDeadline || '9999'); });
-    else list = list.slice().sort(devF.sort === 'impact' ? function (a, b) { return occEffectiveLoss(b) - occEffectiveLoss(a); } : function (a, b) { return (b.occurredAt || '').localeCompare(a.occurredAt || ''); });
+    // Busca única — corrigida para cobrir rastreio (pedido e devolução), não só ID/motivo/SKU (§5).
+    if (devF.search) { var s = devF.search.toLowerCase(); list = list.filter(function (o) { return (o.orderId || '').toLowerCase().indexOf(s) >= 0 || (o.returnId || '').toLowerCase().indexOf(s) >= 0 || (o.tracking || '').toLowerCase().indexOf(s) >= 0 || (o.reason || '').toLowerCase().indexOf(s) >= 0 || (o.items || []).some(function (i) { return (i.sku || '').toLowerCase().indexOf(s) >= 0 || (i.productName || '').toLowerCase().indexOf(s) >= 0; }); }); }
+    // Ordenar: Mais recente | Mais antigo | Prazo de ação mais próximo | Maior valor (§5).
+    var SORT_FNS = {
+      recent: function (a, b) { return (b.occurredAt || '').localeCompare(a.occurredAt || ''); },
+      antigo: function (a, b) { return (a.occurredAt || '').localeCompare(b.occurredAt || ''); },
+      prazo: function (a, b) { return (a.disputeDeadline || '9999').localeCompare(b.disputeDeadline || '9999'); },
+      valor: function (a, b) { return (b.requested || 0) - (a.requested || 0); },
+    };
+    list = list.slice().sort(SORT_FNS[devF.sort] || SORT_FNS.recent);
     var pages = Math.max(1, Math.ceil(list.length / 25)); if (devPage > pages) devPage = pages;
     var slice = list.slice((devPage - 1) * 25, devPage * 25);
     var ISTMAP = internalStatusMap();
     var typeChips = [['', 'Todas', all.length], ['RETURN_REFUND', 'Devoluções', typeCounts.RETURN_REFUND], ['ORDER_CANCELLATION', 'Cancelamentos', typeCounts.ORDER_CANCELLATION], ['FAILED_DELIVERY', 'Falhas de entrega', typeCounts.FAILED_DELIVERY]];
-    var demoN = faseList.filter(function (o) { return o.isDemo; }).length;
-    var faseTabs = '<div class="tabs" style="margin-top:8px">' + [['', 'Todos', typed.length], ['SOLICITACOES', 'Solicitações', faseCounts.SOLICITACOES], ['EM_ANDAMENTO', 'Em andamento', faseCounts.EM_ANDAMENTO], ['ENCERRADOS', 'Encerrados', faseCounts.ENCERRADOS]].map(function (c) { return '<div class="tab' + (devF.fase === c[0] ? ' active' : '') + '" data-ocfase="' + c[0] + '">' + c[1] + ' <span class="tag">' + nn(c[2]) + '</span></div>'; }).join('') + '</div>';
-    var statusRow = '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Status Shopee (bruto):</span><span class="chip' + (devF.status === '' ? ' chip-on' : '') + '" data-ocstatus="">Todos</span>' + statusList.map(function (raw) { var isNew = raw !== '(sem status)' && !SHOPEE_STATUS_MAP[normStatus(raw)]; return '<span class="chip' + (devF.status === raw ? ' chip-on' : '') + '" data-ocstatus="' + esc(raw) + '" title="' + esc(raw) + '">' + esc(statusLabel(raw)) + (isNew ? ' ✦' : '') + ' <b>' + nn(statusCounts[raw]) + '</b></span>'; }).join('') + '</div>';
-    var jornadaChips = '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Etapa da jornada:</span><span class="chip' + (!devF.jornada ? ' chip-on' : '') + '" data-ocjorn="">Todas <b>' + nn(faseList.length) + '</b></span>' + jornadaKeys.map(function (k) { return '<span class="chip' + (devF.jornada === k ? ' chip-on' : '') + '" data-ocjorn="' + k + '">' + esc(JORNADA_META[k]) + ' <b>' + nn(jornadaCounts[k]) + '</b></span>'; }).join('') + '</div>';
-    var motivoChips = '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Motivo:</span><span class="chip' + (!devF.motivo ? ' chip-on' : '') + '" data-ocmotivo="">Todos</span>' + motivoTop.map(function (mv) { return '<span class="chip' + (devF.motivo === mv ? ' chip-on' : '') + '" data-ocmotivo="' + esc(mv) + '" title="' + esc(mv) + '">' + esc(mv.length > 26 ? mv.slice(0, 26) + '…' : mv) + ' <b>' + nn(motivoCounts[mv]) + '</b></span>'; }).join('') + (motivoRest > 0 ? '<span class="footnote" style="margin:0 0 0 6px">+' + motivoRest + ' outro(s) motivo(s)</span>' : '') + '</div>';
-    // "Pendências operacionais" (§12,27): qualidade de dado/prazo — NUNCA misturado com etapa ou motivo.
-    var flagChips = [['', 'Sem filtro'], ['prazo', '⚠️ Precisa de ação'], ['venceHoje', 'Vence hoje'], ['venceAmanha', 'Vence amanhã'], ['ate3', 'Até 3 dias'], ['vencido', '🔴 Prazo vencido'], ['semprazo', 'Sem prazo'], ['novoretorno', '🟣 Novo retorno'], ['atualizado', 'Teve atualização'], ['semcausa', 'Sem causa interna classificada'], ['semresp', 'Sem responsável'], ['naovinc', 'SKU não vinculado']];
-    // Filtro de status interno como chips de multi-seleção (marque quantos quiser).
-    var istCounts = {}; faseList.forEach(function (o) { istCounts[o.internalStatus] = (istCounts[o.internalStatus] || 0) + 1; });
-    var istOrder = Object.keys(ISTMAP).filter(function (k) { return istCounts[k]; }).sort(function (a, b) { return istCounts[b] - istCounts[a]; });
-    devCustomStatus.forEach(function (s) { if (s && s.key && istOrder.indexOf(s.key) < 0) istOrder.push(s.key); }); // status personalizados sempre visíveis como filtro
-    var istChips = '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Status interno (livre, editável):</span><span class="chip' + (!istKeys.length ? ' chip-on' : '') + '" data-ocist="">Todos</span>' + istOrder.map(function (k) { return '<span class="chip' + (istKeys.indexOf(k) >= 0 ? ' chip-on' : '') + '" data-ocist="' + esc(k) + '">' + esc(ISTMAP[k]) + ' <b>' + nn(istCounts[k]) + '</b></span>'; }).join('') + '<span class="chip" data-ocmanage="1" title="Criar, renomear ou remover status internos personalizados">⚙ Gerenciar status</span></div>';
+    var demoN = typed.filter(function (o) { return o.isDemo; }).length;
+    var precisaAcaoN = typed.filter(devPrecisaAcao).length;
+    var statusOptions = '<option value="">Todos os status</option>' + statusList.map(function (raw) { var isNew = raw !== '(sem status)' && !SHOPEE_STATUS_MAP[normStatus(raw)]; return '<option value="' + esc(raw) + '"' + (devF.status === raw ? ' selected' : '') + '>' + esc(statusLabel(raw)) + (isNew ? ' ✦' : '') + ' (' + nn(statusCounts[raw]) + ')</option>'; }).join('');
+    var resolOptions = '<option value="">Solução: todas</option>' + resolList.map(function (r) { return '<option value="' + esc(r) + '"' + (devF.resolucao === r ? ' selected' : '') + '>' + esc(r) + ' (' + nn(resolCounts[r]) + ')</option>'; }).join('');
     var novoNote = Object.keys(novoStatus).length ? callout('warn', 'Novo status da Shopee detectado', 'Valores nunca vistos antes (mostrados com ✦): ' + Object.keys(novoStatus).map(function (s) { return '<b>' + esc(s) + '</b>'; }).join(', ') + '. Estão preservados e visíveis; ainda não foram agrupados.') : '';
     var demoNote = demoN ? '<div class="callout warn" style="padding:8px 14px"><div class="cbody">🧪 ' + nn(demoN) + ' caso(s) demonstrativos para validação da interface — não entram em KPIs, financeiro nem análises.</div></div>' : '';
+    // §8 — atalho de baixa: busca exata (rastreio/ID devolução/ID pedido) apontando para 1 único caso
+    // com retorno físico esperado e ainda não recebido → ação rápida sem duplicar Recebimentos.
+    var baixaShortcut = '';
+    if (devF.search && devF.search.trim().length >= 4) {
+      var qExact = devF.search.trim().toLowerCase();
+      var exact = all.filter(function (o) { return (o.orderId || '').toLowerCase() === qExact || (o.returnId || '').toLowerCase() === qExact || (o.tracking || '').toLowerCase() === qExact; });
+      if (exact.length === 1 && expectsReturn(exact[0]) && !receiptDone(exact[0])) {
+        baixaShortcut = callout('', '📦 Retorno físico localizado', 'Pedido <b>' + esc(exact[0].orderId || '—') + '</b> tem retorno esperado e ainda não foi conferido. <button class="btn-sm primary" data-ocbaixa="' + esc(exact[0].id) + '">Dar baixa</button> <button class="btn-sm" data-ocrec="' + esc(exact[0].id) + '">Abrir em Recebimentos</button>');
+      }
+    }
     // Ações em massa: aplicam sobre os casos reais selecionados (demo não é selecionável nem persistido).
     var selIds = Object.keys(devSel).filter(function (id) { return devSel[id]; });
     var istOpt = function (sel) { return '<option value="">— manter —</option>' + Object.keys(ISTMAP).map(function (k) { return '<option value="' + k + '"' + (sel === k ? ' selected' : '') + '>' + ISTMAP[k] + '</option>'; }).join(''); };
-    var mapOpt = function (m) { return '<option value="">— manter —</option>' + Object.keys(m).map(function (k) { return '<option value="' + k + '">' + m[k] + '</option>'; }).join(''); };
     var bulkBar = selIds.length ? '<div class="panel" style="border:1.5px solid var(--brand);background:var(--brand-soft,#f2f5ff)"><div class="pb" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="font-size:13px">' + nn(selIds.length) + ' selecionado(s):</b>' +
       '<select class="select sm" id="blkist">' + istOpt('') + '</select>' +
       '<select class="select sm" id="blkresp"><option value="">Responsabilidade — manter —</option>' + Object.keys(DEV.RESPONSIBILITY).map(function (k) { return '<option value="' + k + '">' + DEV.RESPONSIBILITY[k] + '</option>'; }).join('') + '</select>' +
@@ -1956,20 +1946,22 @@
       '<button class="btn-sm primary" id="blkapply">Aplicar aos ' + nn(selIds.length) + '</button><button class="btn-sm" id="blkclear">Limpar seleção</button></div></div>' : '';
     var allSelectable = slice.filter(function (o) { return !o.isDemo; });
     var allChecked = allSelectable.length && allSelectable.every(function (o) { return devSel[o.id]; });
-    return secHead('CASOS', 'Casos', 'Todos os casos de devolução, cancelamento e falha de entrega em um só lugar. Etapa e motivo são filtros separados; a próxima ação diz o que fazer agora.') +
+    return secHead('CASOS', 'Casos', 'Qual caso eu preciso tratar agora?') +
       '<div class="chips">' + typeChips.map(function (c) { return '<span class="chip' + (devF.type === c[0] ? ' chip-on' : '') + '" data-octype="' + c[0] + '">' + c[1] + ' <b>' + nn(c[2]) + '</b></span>'; }).join('') + '</div>' +
-      faseTabs +
-      jornadaChips + motivoChips + statusRow +
-      '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Pendências operacionais:</span>' + flagChips.map(function (c) { return '<span class="chip' + (devF.flag === c[0] ? ' chip-on' : '') + '" data-ocflag="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
-      istChips +
-      '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="devq" style="width:260px" placeholder="Buscar ID da devolução, pedido, produto ou SKU…" value="' + esc(devF.search) + '">' +
-      '<select class="select sm" id="devsort"><option value="recent"' + (devF.sort === 'recent' ? ' selected' : '') + '>Mais recentes</option><option value="impact"' + (devF.sort === 'impact' ? ' selected' : '') + '>Maior impacto</option></select></div>' +
-      novoNote + demoNote + '<div class="count-line"><b>' + nn(list.length) + '</b> casos' + (selIds.length ? ' · <b>' + nn(selIds.length) + '</b> selecionado(s)' : '') + '</div>' + bulkBar +
-      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th style="width:34px"><input type="checkbox" id="devselall"' + (allChecked ? ' checked' : '') + ' title="Selecionar os desta página"></th><th>Pedido / Devolução</th><th>Tipo</th><th>Produto</th><th>Motivo</th><th>Etapa</th><th>Próxima ação</th><th>Status Shopee</th><th>Status interno</th><th>Recebimento</th><th>Valor</th><th>Ação</th></tr></thead><tbody>' +
+      '<div class="toolbar2" style="margin-top:10px;flex-wrap:wrap">' +
+      '<input class="input sm" id="devq" style="width:280px" placeholder="Buscar pedido, devolução, rastreio, SKU ou produto…" value="' + esc(devF.search) + '">' +
+      '<select class="select sm" id="devstatus" style="width:220px">' + statusOptions + '</select>' +
+      '<select class="select sm" id="devresol" style="width:200px">' + resolOptions + '</select>' +
+      '<select class="select sm" id="devsort"><option value="recent"' + (devF.sort === 'recent' ? ' selected' : '') + '>Mais recentes</option><option value="antigo"' + (devF.sort === 'antigo' ? ' selected' : '') + '>Mais antigos</option><option value="prazo"' + (devF.sort === 'prazo' ? ' selected' : '') + '>Prazo de ação mais próximo</option><option value="valor"' + (devF.sort === 'valor' ? ' selected' : '') + '>Maior valor</option></select>' +
+      '<span class="chip' + (devF.precisaAcao ? ' chip-on' : '') + '" data-ocprecisa="1" style="cursor:pointer">⚠️ Precisa da minha ação <b>' + nn(precisaAcaoN) + '</b></span>' +
+      '<span class="chip" data-ocmanage="1" title="Criar, renomear ou remover status internos personalizados" style="cursor:pointer">⚙ Status internos</span>' +
+      '</div>' +
+      baixaShortcut + novoNote + demoNote + '<div class="count-line"><b>' + nn(list.length) + '</b> casos' + (selIds.length ? ' · <b>' + nn(selIds.length) + '</b> selecionado(s)' : '') + '</div>' + bulkBar +
+      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th style="width:34px"><input type="checkbox" id="devselall"' + (allChecked ? ' checked' : '') + ' title="Selecionar os desta página"></th><th>Pedido / Devolução</th><th>Tipo</th><th>Produto</th><th>Etapa / Próxima ação</th><th>Status Shopee</th><th>Status interno</th><th>Recebimento</th><th>Valor</th><th>Ação</th></tr></thead><tbody>' +
       slice.map(function (o) { var it = (o.items || [])[0] || {}; var prod = (it.productName || '—') + (it.variationName ? ' · ' + it.variationName : '') + ((o.items || []).length > 1 ? ' (+' + (o.items.length - 1) + ')' : ''); var rl = REC_LABEL[recGroup(o)]; var pa = casoProximaAcao(o);
         var chk = o.isDemo ? '<span class="footnote" style="margin:0">—</span>' : '<input type="checkbox" class="devrowsel" data-selid="' + esc(o.id) + '"' + (devSel[o.id] ? ' checked' : '') + '>';
         var istCell = o.isDemo ? '<span class="pill st-int">' + esc(istLabel(o.internalStatus)) + '</span>' : '<select class="select sm devinlinest" data-inlid="' + esc(o.id) + '" style="min-width:150px">' + Object.keys(ISTMAP).map(function (k) { return '<option value="' + k + '"' + (o.internalStatus === k ? ' selected' : '') + '>' + ISTMAP[k] + '</option>'; }).join('') + '</select>';
-        return '<tr' + (o.isDemo ? ' style="background:#fff8ef"' : (devSel[o.id] ? ' style="background:var(--brand-soft,#f2f5ff)"' : '')) + '><td>' + chk + '</td><td class="mono">' + (casoNovoRetorno(o) ? '<span class="tag" style="background:#8a5cf6;color:#fff">🟣</span> ' : '') + esc(o.orderId || '—') + (o.returnId ? '<div class="footnote" style="margin:0">' + esc(o.returnId) + '</div>' : '') + '</td><td>' + esc(TYPE_LABELS[o.type] || '—') + (o.isDemo ? ' <span class="tag warn">demo</span>' : '') + '</td><td class="cell-text">' + esc(prod) + '<div class="footnote" style="margin:0">' + esc(it.sku || '—') + '</div></td><td class="cell-text">' + esc(casoMotivo(o)) + '</td><td class="cell-text"><span class="tag ' + (pa.jornada === 'BAIXADA' ? 'ok' : pa.jornada === 'REJEITADA' ? 'neutral' : pa.jornada === 'ACAO_NECESSARIA' ? 'warn' : 'info') + '">' + esc(pa.label) + '</span></td><td class="cell-text">' + esc(pa.text) + '</td><td class="cell-text"><span class="tag ' + (normStatus(o.status).indexOf('disputa') >= 0 ? 'info' : 'neutral') + '">' + esc(statusLabel(o.status)) + '</span>' + prazoBadge(o) + '</td><td>' + istCell + '</td><td><span class="tag ' + rl[1] + '">' + rl[0] + '</span></td><td class="nowrap">' + brl(o.requested) + '</td><td><button class="btn-sm primary" data-oc="' + esc(o.id) + '">Abrir</button></td></tr>'; }).join('') +
+        return '<tr' + (o.isDemo ? ' style="background:#fff8ef"' : (devSel[o.id] ? ' style="background:var(--brand-soft,#f2f5ff)"' : '')) + '><td>' + chk + '</td><td class="mono">' + (casoNovoRetorno(o) ? '<span class="tag" style="background:#8a5cf6;color:#fff">🟣</span> ' : '') + esc(o.orderId || '—') + (o.returnId ? '<div class="footnote" style="margin:0">' + esc(o.returnId) + '</div>' : '') + '</td><td>' + esc(TYPE_LABELS[o.type] || '—') + (o.isDemo ? ' <span class="tag warn">demo</span>' : '') + '</td><td class="cell-text">' + esc(prod) + '<div class="footnote" style="margin:0">' + esc(it.sku || '—') + '</div></td><td class="cell-text"><span class="tag ' + (pa.jornada === 'BAIXADA' ? 'ok' : pa.jornada === 'REJEITADA' ? 'neutral' : pa.jornada === 'ACAO_NECESSARIA' ? 'warn' : 'info') + '">' + esc(pa.label) + '</span><div class="footnote" style="margin:2px 0 0">' + esc(pa.text) + '</div></td><td class="cell-text"><span class="tag ' + (normStatus(o.status).indexOf('disputa') >= 0 ? 'info' : 'neutral') + '">' + esc(statusLabel(o.status)) + '</span>' + prazoBadge(o) + '</td><td>' + istCell + '</td><td><span class="tag ' + rl[1] + '">' + rl[0] + '</span></td><td class="nowrap">' + brl(o.requested) + '</td><td><button class="btn-sm primary" data-oc="' + esc(o.id) + '">Abrir</button></td></tr>'; }).join('') +
       '</tbody></table></div></div>' + (pages > 1 ? '<div style="display:flex;gap:8px;justify-content:flex-end;align-items:center"><button class="btn-sm" id="devprev"' + (devPage <= 1 ? ' disabled' : '') + '>Anterior</button><span class="footnote" style="margin:0">página ' + devPage + ' de ' + pages + '</span><button class="btn-sm" id="devnext"' + (devPage >= pages ? ' disabled' : '') + '>Próxima</button></div>' : '');
   }
   function bulkApplyDev(selIds, patch, ownerName) {
@@ -2017,13 +2009,12 @@
   }
   function bindDevOcc() {
     var q = document.getElementById('devq'); if (q) { var t; q.oninput = function () { clearTimeout(t); t = setTimeout(function () { var v = q.value; devF.search = v; devPage = 1; render(); var el = document.getElementById('devq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
-    app.querySelectorAll('[data-octype]').forEach(function (c) { c.onclick = function () { devF.type = c.dataset.octype; devF.status = ''; devF.jornada = ''; devF.motivo = ''; devPage = 1; render(); }; });
-    app.querySelectorAll('[data-ocfase]').forEach(function (c) { c.onclick = function () { devF.fase = c.dataset.ocfase; devF.status = ''; devF.jornada = ''; devF.motivo = ''; devPage = 1; render(); }; });
-    app.querySelectorAll('[data-ocstatus]').forEach(function (c) { c.onclick = function () { devF.status = c.dataset.ocstatus; devPage = 1; render(); }; });
-    app.querySelectorAll('[data-ocjorn]').forEach(function (c) { c.onclick = function () { devF.jornada = c.dataset.ocjorn; devPage = 1; render(); }; });
-    app.querySelectorAll('[data-ocmotivo]').forEach(function (c) { c.onclick = function () { devF.motivo = c.dataset.ocmotivo; devPage = 1; render(); }; });
-    app.querySelectorAll('[data-ocflag]').forEach(function (c) { c.onclick = function () { devF.flag = c.dataset.ocflag; devPage = 1; render(); }; });
-    app.querySelectorAll('[data-ocist]').forEach(function (c) { c.onclick = function () { var k = c.dataset.ocist; devF.internalStatus = ''; if (!k) { devF.istSet = {}; } else { devF.istSet = devF.istSet || {}; devF.istSet[k] = !devF.istSet[k]; } devPage = 1; render(); }; });
+    app.querySelectorAll('[data-octype]').forEach(function (c) { c.onclick = function () { devF.type = c.dataset.octype; devF.status = ''; devF.resolucao = ''; devPage = 1; render(); }; });
+    var dst = document.getElementById('devstatus'); if (dst) dst.onchange = function () { devF.status = dst.value; devPage = 1; render(); };
+    var dre = document.getElementById('devresol'); if (dre) dre.onchange = function () { devF.resolucao = dre.value; devPage = 1; render(); };
+    var dpa = app.querySelector('[data-ocprecisa]'); if (dpa) dpa.onclick = function () { devF.precisaAcao = !devF.precisaAcao; devPage = 1; render(); };
+    var ocb = app.querySelector('[data-ocbaixa]'); if (ocb) ocb.onclick = function () { openConferir(ocb.dataset.ocbaixa); };
+    var ocr = app.querySelector('[data-ocrec]'); if (ocr) ocr.onclick = function () { sub.posvenda = 'recebimentos'; recSearch = document.getElementById('devq') ? document.getElementById('devq').value : ''; render(); };
     var mg = app.querySelector('[data-ocmanage]'); if (mg) mg.onclick = function () { openManageStatus(); };
     var so = document.getElementById('devsort'); if (so) so.onchange = function () { devF.sort = so.value; render(); };
     var pv = document.getElementById('devprev'); if (pv) pv.onclick = function () { if (devPage > 1) { devPage--; render(); } };
