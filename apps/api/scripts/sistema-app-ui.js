@@ -762,8 +762,16 @@
     var h = Math.floor(ms / 36e5), m = Math.floor((ms % 36e5) / 6e4);
     return (neg ? '-' : '') + h + 'h' + (m < 10 ? '0' : '') + m + 'min';
   }
-  // Fila operacional: só pedidos com prazo de envio informado e ainda não cancelados/devolvidos.
-  function teQueue() { return pedidosInPeriod().filter(function (o) { return o.shipByDate && !pedidoIsRetornoCancelado(o); }); }
+  // Correção do usuário — timestamp canônico do prazo: nunca ordenar pelo texto de apresentação
+  // ("09h"/"20h"/"35h"), sempre por este número. Datas inválidas/ausentes vão para o fim (nunca
+  // quebram nem embaralham a ordenação — Number.MAX_SAFE_INTEGER nunca fica "antes" de nada real).
+  function shipDeadlineTs(o) { if (!o.shipByDate) return Number.MAX_SAFE_INTEGER; var t = new Date(o.shipByDate).getTime(); return isNaN(t) ? Number.MAX_SAFE_INTEGER : t; }
+  // Correção do usuário (§2): a fila operacional de despacho é SOMENTE o que a Shopee ainda marca
+  // como A ENVIAR — "deveria sair". Pedidos Enviado/Concluído/Não pago/Cancelado/Retorno nunca
+  // entram aqui, mesmo que tenham shipByDate preenchido (misturá-los foi a causa raiz do problema:
+  // a coluna "restante" mostrava data de envio já ocorrida ao lado de contagens regressivas reais,
+  // fazendo a ordem cronológica correta parecer embaralhada na leitura visual).
+  function teQueue() { return pedidosInPeriod().filter(function (o) { return o.shipByDate && o.normalizedStatus === 'A_ENVIAR'; }); }
   var teF = { classe: '', preset: '', full: '', modalidade: '', search: '', sort: 'prazo' };
   function pedidosTempoEnvio() {
     var head = secHead('PEDIDOS · TEMPO DE ENVIO', 'Evitar atraso e penalização da Shopee', 'Prazo real vem da planilha (Data prevista de envio). Ordena por padrão quem vence primeiro.');
@@ -780,9 +788,16 @@
     else if (teF.full === 'nfull') list = list.filter(function (o) { return !o.isFbs; });
     if (teF.modalidade) list = list.filter(function (o) { return o.shippingOption === teF.modalidade; });
     if (teF.search) { var q = teF.search.toLowerCase(); list = list.filter(function (o) { return o.id.toLowerCase().indexOf(q) >= 0 || (o.tracking || '').toLowerCase().indexOf(q) >= 0 || o.items.some(function (i) { return (i.sku || '').toLowerCase().indexOf(q) >= 0 || (i.productName || '').toLowerCase().indexOf(q) >= 0; }); }); }
+    // Correção do usuário (§1/§3): ordenação SEMPRE pelo timestamp canônico (shipDeadlineTs), nunca
+    // por texto de apresentação. Novas opções pedidas: vence primeiro/último, pagamento antigo/
+    // recente, pedido antigo/recente — além das já existentes (produto/modalidade/full/status).
     var SORTS = {
-      prazo: function (a, b) { return new Date(a.shipByDate) - new Date(b.shipByDate); },
+      prazo: function (a, b) { return shipDeadlineTs(a) - shipDeadlineTs(b); },
+      prazo_desc: function (a, b) { return shipDeadlineTs(b) - shipDeadlineTs(a); },
       pagamento: function (a, b) { return (a.paidAt || '').localeCompare(b.paidAt || ''); },
+      pagamento_desc: function (a, b) { return (b.paidAt || '').localeCompare(a.paidAt || ''); },
+      criacao: function (a, b) { return (a.createdAt || '').localeCompare(b.createdAt || ''); },
+      criacao_desc: function (a, b) { return (b.createdAt || '').localeCompare(a.createdAt || ''); },
       produto: function (a, b) { return ((a.items[0] && a.items[0].productName) || '').localeCompare((b.items[0] && b.items[0].productName) || ''); },
       modalidade: function (a, b) { return (a.shippingOption || '').localeCompare(b.shippingOption || ''); },
       full: function (a, b) { return (b.isFbs ? 1 : 0) - (a.isFbs ? 1 : 0); },
@@ -815,7 +830,12 @@
       '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="teq" style="width:240px" placeholder="Buscar pedido, BR, SKU, produto…" value="' + esc(teF.search) + '">' +
       '<select class="select sm" id="tefull"><option value=""' + (!teF.full ? ' selected' : '') + '>Full e não Full</option><option value="full"' + (teF.full === 'full' ? ' selected' : '') + '>Só Full</option><option value="nfull"' + (teF.full === 'nfull' ? ' selected' : '') + '>Só não Full</option></select>' +
       '<select class="select sm" id="temod"><option value="">Todas as modalidades</option>' + Object.keys(modOptions).map(function (m) { return '<option value="' + esc(m) + '"' + (teF.modalidade === m ? ' selected' : '') + '>' + esc(m) + '</option>'; }).join('') + '</select>' +
-      '<select class="select sm" id="tesort"><option value="prazo"' + (teF.sort === 'prazo' ? ' selected' : '') + '>Quem vence primeiro</option><option value="pagamento"' + (teF.sort === 'pagamento' ? ' selected' : '') + '>Pagamento mais antigo</option><option value="produto"' + (teF.sort === 'produto' ? ' selected' : '') + '>Produto</option><option value="modalidade"' + (teF.sort === 'modalidade' ? ' selected' : '') + '>Modalidade</option><option value="full"' + (teF.sort === 'full' ? ' selected' : '') + '>Full primeiro</option><option value="status"' + (teF.sort === 'status' ? ' selected' : '') + '>Status</option></select></div>' +
+      '<select class="select sm" id="tesort">' + [
+        ['prazo', 'Vence primeiro'], ['prazo_desc', 'Vence por último'],
+        ['pagamento', 'Pagamento mais antigo'], ['pagamento_desc', 'Pagamento mais recente'],
+        ['criacao', 'Pedido mais antigo'], ['criacao_desc', 'Pedido mais recente'],
+        ['produto', 'Produto'], ['modalidade', 'Modalidade'], ['full', 'Full primeiro'], ['status', 'Status'],
+      ].map(function (o) { return '<option value="' + o[0] + '"' + (teF.sort === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
       '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos' + (list.length > 300 ? ' (mostrando 300)' : '') + '</div>' +
       '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>BR</th><th>Produto</th><th>SKU</th><th>Pagamento</th><th>Prazo de envio</th><th>Enviado / restante</th><th>Modalidade</th><th>Full?</th><th>Status Shopee</th><th>Situação do prazo</th></tr></thead><tbody>' + (rows || '<tr><td colspan="11" class="empty">Nenhum pedido neste filtro.</td></tr>') + '</tbody></table></div></div>';
   }
