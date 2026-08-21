@@ -4868,40 +4868,24 @@ buffer/index.js:
   // detalhadas), Shopee Acelera, Afiliados, Saldo da Carteira e Devoluções em uma única visão.
   // §2 do prompt de reorganização financeira e operacional.
   function fLine(label, cents, opt) { opt = opt || {}; if (cents == null) return '<div class="fin-line"><span>' + esc(label) + '</span><span class="tag warn">' + (opt.missingLabel || 'não disponível') + '</span></div>'; return '<div class="fin-line' + (opt.total ? ' total' : '') + '"><span>' + esc(label) + '</span><span class="' + (cents < 0 ? 'neg' : cents > 0 && opt.pos ? 'pos' : '') + '">' + brlC(cents) + '</span></div>'; }
-  // Ficha do Pedido consolidada (Fase 2 da arquitetura) — jornada única, sem "Ficha 360" separada
-  // e sem esconder taxas atrás de cliques extras: Venda → Custos → Taxas detalhadas → Margem →
-  // Expedição → Acelera → Carteira → Devolução → Resultado final, tudo na mesma tela/scroll.
-  function openPedidoFicha360(orderId) {
+  // ============================================================ COMPOSIÇÃO FINANCEIRA DO PEDIDO
+  // (correção de arquitetura — "Caixa não pode depender de Minha Renda"): esta é a fonte CANÔNICA,
+  // dona de PEDIDOS, da composição financeira de um pedido — venda, custo, descontos comerciais,
+  // taxas cobradas de nós, créditos/incentivos, resultado e a Pendência de Composição (quando a
+  // conferência não fecha). Lê mrRenda/mrAdj DIRETO (dado bruto já importado — um array de fatos,
+  // não um cálculo de outro módulo) — nunca chama mrEngine()/mrPeriodEngine()/mrOrderProfitEngine()/
+  // mrResultadoDetalhado(), que pertencem a Minha Renda. A direção é sempre
+  // Produtos→Pedidos→Expedição→Acelera→Caixa→Minha Renda — Minha Renda pode LER o resultado desta
+  // função depois; o contrário nunca pode acontecer. A Ficha do Pedido (openPedidoFicha360) e o
+  // Caixa consomem exatamente o mesmo retorno — nunca duas contas para o mesmo pedido.
+  function pedidoIncomeRow(orderId) { return mrRenda.find(function (r) { return r.orderId === orderId && r.ver === 'Order'; }) || null; }
+  function pedidoComposicaoFinanceira(orderId) {
     var ord = orders.find(function (x) { return x.id === orderId; });
-    var mr = mrEngine(); var mrRow = mr.orders.find(function (r) { return r.orderId === orderId; });
-    var mrByOrderFicha = {}; mr.orders.forEach(function (r) { mrByOrderFicha[r.orderId] = r; });
+    var mrRow = pedidoIncomeRow(orderId);
     var svcRows = mrSvc.filter(function (v) { return v.orderId === orderId; });
-    var shipRow = mrShip.find(function (s) { return s.id === orderId; });
-    var acRows = acelera.filter(function (r) { return r.pedido === orderId; });
-    var affEng = affEngine(); var affRow = affEng.orderMap[orderId];
-    var wtx = wallet.filter(function (t) { return t.orderId === orderId; });
-    var occs = occ.filter(function (x) { return !x.isDemo && x.orderId === orderId; });
-    var bip = shipBip[orderId];
-    var st = pedidoConciliacaoStatus(orderId);
-
-    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '860px'; panel.style.maxWidth = '98vw';
-    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
-
-    // ---- Receita e custo (base: Minha Renda se disponível — mais detalhado; senão Pedidos) ----
     var receitaC = mrRow ? mrRow.preco : (ord ? Math.round(orderFinance(ord).revenue * 100) : null);
     var custoProdC = null, custoPendente = false;
     if (ord) { var fOrd = orderFinance(ord); if (fOrd.costPending) custoPendente = true; else custoProdC = Math.round((fOrd.productCostTotal || 0) * 100); }
-
-    // Conferência matemática determinística (§21 do prompt de reorganização): total informado ×
-    // soma dos componentes. Nunca usa IA — só soma campos já importados de Minha Renda/Service Fee Details.
-    function conferencia(total, soma) { if (total == null) return ''; var dif = total - soma; var bate = Math.abs(dif) <= 100; return '<span class="tag ' + (bate ? 'ok' : 'warn') + '">' + (bate ? '🟢 Conferido' : '🔴 Divergência de ' + brlC(dif)) + '</span>'; }
-
-    // ---- §9-13 do prompt de reorganização: TAXAS E DESCONTOS é UMA ÚNICA LISTA VERTICAL —
-    // nunca um card por taxa. Componentes decomponíveis (comissão bruta→líquida, taxa de serviço→
-    // afiliados/transação/por item) entram como sub-linhas indentadas, só para EXPLICAR — nunca somados
-    // de novo no total (a linha-pai já é a soma dos componentes). Ação comercial (incentivo+ajuste)
-    // agora entra na lista — antes ficava fora da ficha por engano, embora já contasse no total de
-    // Minha Renda (§37 do prompt: alinhar a ficha ao mesmo total já aprovado na Visão Geral).
     var taxaRows = [];
     function addTaxa(label, valor, subs, origem, fieldKey) { if (valor == null) return; var cl = finClassifica(fieldKey, valor); taxaRows.push({ label: label, valor: valor, subs: subs || [], origem: origem, fieldKey: fieldKey, nat: cl.nat }); }
     var adjRows = mrAdj.filter(function (a) { return a.orderId === orderId; });
@@ -4917,19 +4901,66 @@ buffer/index.js:
       addTaxa('Programa de frete (frete parceiro)', mrRow.freteParceiro, [], 'Income', 'freteParceiro');
       addTaxa('Desconto de frete (Shopee)', mrRow.descontoFrete, [], 'Income', 'descontoFrete');
       addTaxa('Envio reverso', mrRow.envioReverso, [], 'Income', 'envioReverso');
-      addTaxa('Afiliado (Minha Renda)', mrRow.afiliado, [], 'Income', 'afiliado');
+      addTaxa('Afiliado', mrRow.afiliado, [], 'Income', 'afiliado');
       addTaxa('Cupom', mrRow.cupom, [], 'Income', 'cupom');
       addTaxa('Ajuste PIX', mrRow.pix, [], 'Income', 'pix');
       addTaxa('Reembolso', mrRow.reembolso, [], 'Income', 'reembolso');
     } else if (ord) {
-      addTaxa('Comissão (aproximado)', -Math.round((ord.commissionNet || 0) * 100), [], 'Pedidos — sem Minha Renda para este pedido', 'comissao');
-      addTaxa('Taxa de serviço (aproximado)', -Math.round((ord.serviceFeeNet || 0) * 100), [], 'Pedidos — sem Minha Renda para este pedido', 'servico');
-      addTaxa('Taxa de transação (aproximado)', -Math.round((ord.transactionFee || 0) * 100), [], 'Pedidos — sem Minha Renda para este pedido', 'transacao');
-      addTaxa('Frete reverso (aproximado)', -Math.round((ord.reverseShippingFee || 0) * 100), [], 'Pedidos — sem Minha Renda para este pedido', 'envioReverso');
+      addTaxa('Comissão (aproximado)', -Math.round((ord.commissionNet || 0) * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'comissao');
+      addTaxa('Taxa de serviço (aproximado)', -Math.round((ord.serviceFeeNet || 0) * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'servico');
+      addTaxa('Taxa de transação (aproximado)', -Math.round((ord.transactionFee || 0) * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'transacao');
+      addTaxa('Frete reverso (aproximado)', -Math.round((ord.reverseShippingFee || 0) * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'envioReverso');
     }
     adjRows.forEach(function (a) { addTaxa(a.desc || 'Ajuste', a.valor, [], 'Adjustment', 'ajusteGenerico'); });
-    var adjTotalC = adjRows.reduce(function (s, a) { return s + a.valor; }, 0);
+    var gTaxas = taxaRows.filter(function (r) { return r.nat === 'DEBITO_VENDEDOR'; });
+    var gDescontos = taxaRows.filter(function (r) { return r.nat === 'DESCONTO_COMERCIAL_VENDEDOR'; });
+    var gCreditos = taxaRows.filter(function (r) { return r.nat === 'CREDITO_VENDEDOR'; });
+    var gOutros = taxaRows.filter(function (r) { return ['DEBITO_VENDEDOR', 'DESCONTO_COMERCIAL_VENDEDOR', 'CREDITO_VENDEDOR'].indexOf(r.nat) < 0; });
+    var somaGrupo = function (g) { return g.reduce(function (s, r) { return s + r.valor; }, 0); };
     var taxasSomaC = taxaRows.reduce(function (s, r) { return s + r.valor; }, 0);
+    var resultadoC = (receitaC != null && custoProdC != null) ? (receitaC + taxasSomaC - custoProdC) : null;
+    var margemPct = (resultadoC != null && receitaC) ? r2(resultadoC / receitaC * 100) : null;
+    // Pendência de Composição — NASCE aqui, em Pedidos. Nunca recriada por outro módulo (Caixa só
+    // consome .pendencia); mesma fórmula/tolerância que já era usada (§21 da Ficha).
+    var pendencia = null;
+    if (mrRow) {
+      var diff = mrRow.liberado - (mrRow.preco + taxasSomaC);
+      if (Math.abs(diff) > 100) pendencia = { id: 'PENDFIN-' + orderId, origem: 'PEDIDOS', orderId: orderId, tipo: 'COMPOSICAO_FINANCEIRA', diff: diff, liberado: mrRow.liberado, calculado: mrRow.preco + taxasSomaC, motivo: 'Diferença financeira de ' + brlC(diff) + ' entre a composição do pedido e o Pagamento Liberado — etapa: composição Shopee, motivo: lançamento não classificado' };
+    }
+    return { orderId: orderId, temIncome: !!mrRow, mrRow: mrRow, ord: ord, svcRows: svcRows, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gOutros: gOutros, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia };
+  }
+  // Ficha do Pedido consolidada (Fase 2 da arquitetura) — jornada única, sem "Ficha 360" separada
+  // e sem esconder taxas atrás de cliques extras: Venda → Custos → Taxas detalhadas → Margem →
+  // Expedição → Acelera → Carteira → Devolução → Resultado final, tudo na mesma tela/scroll.
+  function openPedidoFicha360(orderId) {
+    // Fonte única (§ correção de arquitetura): a composição financeira vem de
+    // pedidoComposicaoFinanceira() — dona de Pedidos, sem chamar mrEngine()/mrPeriodEngine(). A
+    // Ficha só formata em HTML o que essa função já calculou; nunca recalcula por conta própria.
+    var comp = pedidoComposicaoFinanceira(orderId);
+    var ord = comp.ord, mrRow = comp.mrRow, svcRows = comp.svcRows;
+    var mrByOrderFicha = {}; if (mrRow) mrByOrderFicha[orderId] = mrRow;
+    var shipRow = mrShip.find(function (s) { return s.id === orderId; });
+    var acRows = acelera.filter(function (r) { return r.pedido === orderId; });
+    var affEng = affEngine(); var affRow = affEng.orderMap[orderId];
+    var wtx = wallet.filter(function (t) { return t.orderId === orderId; });
+    var occs = occ.filter(function (x) { return !x.isDemo && x.orderId === orderId; });
+    var bip = shipBip[orderId];
+    var st = pedidoConciliacaoStatus(orderId);
+
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '860px'; panel.style.maxWidth = '98vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+
+    var receitaC = comp.receitaC, custoProdC = comp.custoProdC, custoPendente = comp.custoPendente;
+
+    // Conferência matemática determinística (§21 do prompt de reorganização): total informado ×
+    // soma dos componentes. Nunca usa IA — só soma campos já importados de Income/Service Fee Details.
+    function conferencia(total, soma) { if (total == null) return ''; var dif = total - soma; var bate = Math.abs(dif) <= 100; return '<span class="tag ' + (bate ? 'ok' : 'warn') + '">' + (bate ? '🟢 Conferido' : '🔴 Divergência de ' + brlC(dif)) + '</span>'; }
+
+    // ---- §9-13 do prompt de reorganização: TAXAS E DESCONTOS é UMA ÚNICA LISTA VERTICAL —
+    // nunca um card por taxa. Componentes decomponíveis (comissão bruta→líquida, taxa de serviço→
+    // afiliados/transação/por item) entram como sub-linhas indentadas, só para EXPLICAR — nunca somados
+    // de novo no total (a linha-pai já é a soma dos componentes).
+    var taxaRows = comp.taxaRows, adjRows = comp.adjRows, taxasSomaC = comp.taxasSomaC;
     var taxasConf = mrRow ? conferencia(mrRow.liberado, mrRow.preco + taxasSomaC) : '';
     var taxaLine = function (r) {
       var sub = r.subs.length ? '<div class="footnote" style="margin:2px 0 6px">' + r.subs.map(function (s) { return '↳ ' + esc(s[0]) + ': ' + brlC(s[1]); }).join(' · ') + '</div>' : '';
@@ -4939,11 +4970,8 @@ buffer/index.js:
     // NÓS (débitos reais do vendedor, sempre visível primeiro) de DESCONTOS COMERCIAIS e
     // CRÉDITOS/INCENTIVOS (subseções só aparecem quando têm conteúdo). A SOMA dos três grupos +
     // reembolso continua sendo exatamente taxasSomaC — nenhum valor foi recalculado, só reagrupado.
-    var gTaxas = taxaRows.filter(function (r) { return r.nat === 'DEBITO_VENDEDOR'; });
-    var gDescontos = taxaRows.filter(function (r) { return r.nat === 'DESCONTO_COMERCIAL_VENDEDOR'; });
-    var gCreditos = taxaRows.filter(function (r) { return r.nat === 'CREDITO_VENDEDOR'; });
-    var gOutros = taxaRows.filter(function (r) { return ['DEBITO_VENDEDOR', 'DESCONTO_COMERCIAL_VENDEDOR', 'CREDITO_VENDEDOR'].indexOf(r.nat) < 0; });
-    var somaGrupo = function (g) { return g.reduce(function (s, r) { return s + r.valor; }, 0); };
+    var gTaxas = comp.gTaxas, gDescontos = comp.gDescontos, gCreditos = comp.gCreditos, gOutros = comp.gOutros;
+    var somaGrupo = comp.somaGrupo;
     var grupoBlock = function (titulo, g, sempreMostra) {
       if (!g.length && !sempreMostra) return '';
       var soma = somaGrupo(g);
