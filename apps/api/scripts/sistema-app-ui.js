@@ -2671,7 +2671,7 @@
   // ==================================================================================
   // SALDO DA CARTEIRA — mostrar + medir + rastrear + reconciliar (determinístico)
   // ==================================================================================
-  var WCAT = { RENDA: 'Renda de pedido', DEVOLUCAO: 'Devolução / Reembolso', CANCELAMENTO: 'Cancelamento', INDENIZACAO: 'Indenização', PIX: 'Pix', SAQUE: 'Saque', ADS: 'Ads', ACELERA: 'Shopee Acelera', PAGAMENTO: 'Pagamento', LOGISTICA: 'Logística', AJUSTE: 'Ajuste', COMPENSACAO: 'Compensação', CREDITO: 'Crédito', TAXA: 'Taxa', SEMLINHA: 'Ajuste sem linha', OUTRO: 'Outro' };
+  var WCAT = { RENDA: 'Renda de pedido', DEVOLUCAO: 'Devolução / Reembolso', CANCELAMENTO: 'Cancelamento', INDENIZACAO: 'Indenização', PIX: 'Pix', SAQUE: 'Saque', ADS: 'Ads', ACELERA: 'Shopee Acelera', AFILIADOS: 'Comissão de afiliados', PAGAMENTO: 'Pagamento', LOGISTICA: 'Logística', AJUSTE: 'Ajuste', COMPENSACAO: 'Compensação', CREDITO: 'Crédito', TAXA: 'Taxa', SEMLINHA: 'Ajuste sem linha', OUTRO: 'Outro' };
   function wcatLabel(c) { return WCAT[c] || c; }
   // Classificação INTERNA (nunca altera o dado Shopee, §MOV): responsabilidade, status, observação, vínculos.
   var WRESP = { OPERACAO: 'Nossa operação', SHOPEE: 'Shopee', LOGISTICA: 'Logística / Transporte', CLIENTE: 'Cliente', TERCEIRO: 'Terceiro', NAO_DEFINIDO: 'Não definido' };
@@ -2715,8 +2715,9 @@
     if (/pix/.test(t)) return 'PIX';
     if (/saque/.test(t)) return 'SAQUE';
     if (/acelera/.test(t)) return 'ACELERA';
+    if (/afiliado/.test(t) || /afiliado/.test(s)) return 'AFILIADOS';
     if (/pagamento/.test(t)) { if (/ads|anuncio|publicidade|impuls|recarga/.test(s)) return 'ADS'; return 'PAGAMENTO'; }
-    if (/ajuste/.test(t)) { if (/reembolso|devolucao|debito referente ao pedido/.test(s)) return 'DEVOLUCAO'; if (/perdido|danificado|indeniz|compensa|credito por item/.test(s)) return 'INDENIZACAO'; return entrada ? 'CREDITO' : 'AJUSTE'; }
+    if (/ajuste/.test(t)) { if (/reembolso|devolucao|debito referente ao pedido/.test(s)) return 'DEVOLUCAO'; if (/perdido|danificado|indeniz|compensa|credito por item/.test(s)) return 'INDENIZACAO'; if (/afiliado/.test(s)) return 'AFILIADOS'; return entrada ? 'CREDITO' : 'AJUSTE'; }
     if (/reembolso|devolucao/.test(s)) return 'DEVOLUCAO';
     if (/indeniz|perdido|danificado|compensa/.test(s)) return 'INDENIZACAO';
     if (/ads|anuncio|publicidade/.test(s)) return 'ADS';
@@ -2824,6 +2825,10 @@
         var mr = mrEngine(); var mrow = mr.orders.find(function (r) { return r.orderId === oid; });
         if (mrow) { return { tier: 'ID exato', confidence: 'alta', fonte: 'Minha Renda / Income · pedido ' + oid, esperado: mrow.liberado / 100, encontrado: t.amount, diff: r2(t.amount - mrow.liberado / 100), ok: Math.abs(amtC - mrow.liberado) <= 100 }; }
       }
+      if (cat === 'AFILIADOS' && affConv.length) {
+        var affo = affEngine().orderMap[oid];
+        if (affo) { var despC = Math.round((affo.despesaHas ? affo.despesaStated : affo.despesaRecon) / 100); return { tier: 'ID exato', confidence: 'alta', fonte: 'Afiliados · comissão/despesa do pedido ' + oid, esperado: r2(-despC / 100), encontrado: t.amount, diff: r2(t.amount + despC / 100), ok: Math.abs(amtC + despC) <= 100 }; }
+      }
     }
     // Tier 2: sem ID de pedido no lançamento — Acelera lança o RESGATE inteiro (soma de vários
     // pedidos), então tenta casar por valor recebido do resgate consolidado + janela de 5 dias.
@@ -2848,7 +2853,9 @@
     var mrRange = mrDates.length ? { min: new Date(mrDates[0]), max: new Date(mrDates[mrDates.length - 1]) } : null;
     var occDates = occ.filter(function (o) { return !o.isDemo; }).map(function (o) { return o.occurredAt; }).filter(Boolean).sort();
     var occRange = occDates.length ? { min: new Date(occDates[0]), max: new Date(occDates[occDates.length - 1]) } : null;
-    return { ACELERA: acRange, RENDA: mrRange, DEVOLUCAO: occRange, CANCELAMENTO: occRange, INDENIZACAO: occRange };
+    var affDates = affConv.map(function (r) { return r.orderTime; }).filter(Boolean).sort();
+    var affRange = affDates.length ? { min: new Date(affDates[0]), max: new Date(affDates[affDates.length - 1]) } : null;
+    return { ACELERA: acRange, RENDA: mrRange, DEVOLUCAO: occRange, CANCELAMENTO: occRange, INDENIZACAO: occRange, AFILIADOS: affRange };
   }
   // true = dentro da cobertura (pendência real se não achou origem); false = fora (fonte ainda não
   // chega até essa data — não é pendência, é lacuna de importação); null = fonte não tem NENHUM dado
@@ -2941,7 +2948,7 @@
   // Só avalia categorias com fonte de comparação (Acelera/Devolução/Indenização/Renda) — as demais
   // (Pix, Saque, Ads, Ajuste, etc.) não têm um valor esperado no sistema hoje e ficam fora da conta,
   // nunca viram "pendência" por engano.
-  var WALLET_ORIGEM_CATS = { ACELERA: 1, DEVOLUCAO: 1, CANCELAMENTO: 1, INDENIZACAO: 1, RENDA: 1 };
+  var WALLET_ORIGEM_CATS = { ACELERA: 1, DEVOLUCAO: 1, CANCELAMENTO: 1, INDENIZACAO: 1, RENDA: 1, AFILIADOS: 1 };
   function walletOrigemDiag(m) {
     var elegiveis = m.real.filter(function (t) { return WALLET_ORIGEM_CATS[wEffCat(t)]; });
     var coverage = walletSourceCoverage();
@@ -2997,18 +3004,33 @@
   // §14-16 — CONFERÊNCIA: uma única tela para tudo que precisa de investigação (antes espalhado em
   // "Ajustes e Divergências" + "Central de Pendências"). Reaproveita os motores já aprovados
   // (walletOrigemDiag/walletDiag/wgetCls/wsetCls/WSTATUS) — não cria um segundo mecanismo de status.
-  var WPROBLEMA = { DIVERGENCIA_VALOR: 'Diferença de valor', DUPLICIDADE: 'Possível duplicação', CANDIDATO: 'Candidato de conciliação', SEM_ORIGEM: 'Origem não identificada', AJUSTE_SEM_LINHA: 'Ajuste sem linha' };
+  var WPROBLEMA = { DIVERGENCIA_VALOR: 'Diferença de valor', DUPLICIDADE: 'Possível duplicação', CANDIDATO: 'Candidato de conciliação', SEM_ORIGEM: 'Débito sem origem identificada', CREDITO_SEM_ORIGEM: 'Crédito sem origem identificada', DESCONTO_INDEVIDO: 'Possível desconto indevido', AJUSTE_SEM_LINHA: 'Ajuste sem linha' };
+  // §59/§63 — estado de conciliação por lançamento, para exibição (🟢🟡⚪🔴🟠). Não recalcula nada:
+  // só rotula o que walletOrigemDiag/walletPendItems/manual flags já apuraram.
+  var WSITUACAO = { CONCILIADO: '🟢 Conciliado — origem exata', PROVAVEL: '🟡 Origem provável', FORA_COBERTURA: '⚪ Fora da cobertura das fontes', SEM_ORIGEM: '🔴 Sem origem', DIVERGENTE: '🔴 Valor divergente', DUPLICIDADE: '🔴 Possível duplicidade', DESCONTO_INDEVIDO: '🔴 Possível desconto indevido', MANUAL_PENDENTE: '🟠 Classificação manual pendente' };
   var walletPendF = { status: '', tipo: '' };
   function walletPendItems(m) {
     var g = walletOrigemDiag(m); var seen = {}; var items = [];
-    function add(t, tipo, motivo, detalhe) { if (seen[t.id]) return; seen[t.id] = true; items.push({ t: t, tipo: tipo, motivo: motivo, detalhe: detalhe }); }
-    g.divergentes.forEach(function (x) { add(x.t, 'DIVERGENCIA_VALOR', 'Diferença de valor — ' + x.origin.fonte, 'Esperado ' + brl(x.origin.esperado) + ' · Carteira ' + brl(x.t.amount) + ' · Diferença ' + brl(x.origin.diff)); });
-    g.dup.forEach(function (d) { d.itens.forEach(function (t) { add(t, 'DUPLICIDADE', 'Possível cobrança duplicada — ' + d.fonte, nn(d.itens.length) + '× o mesmo valor (' + brl(d.valor) + ') na carteira'); }); });
-    g.candidatos.forEach(function (x) { add(x.t, 'CANDIDATO', 'Candidato de conciliação — ' + x.origin.fonte, 'Valor e janela de data batem, mas sem ID exato — nunca fecha sozinho, confirme manualmente'); });
-    g.semOrigem.forEach(function (t) { add(t, 'SEM_ORIGEM', 'Origem não identificada (' + wcatLabel(wEffCat(t)) + ')', 'Fonte relevante já cobre esta data e mesmo assim não achou correspondência'); });
+    function add(t, tipo, motivo, detalhe, situacao) { if (seen[t.id]) return; seen[t.id] = true; items.push({ t: t, tipo: tipo, motivo: motivo, detalhe: detalhe, situacao: situacao || tipo }); }
+    g.divergentes.forEach(function (x) { add(x.t, 'DIVERGENCIA_VALOR', 'Diferença de valor — ' + x.origin.fonte, 'Esperado ' + brl(x.origin.esperado) + ' · Carteira ' + brl(x.t.amount) + ' · Diferença ' + brl(x.origin.diff), 'DIVERGENTE'); });
+    g.dup.forEach(function (d) { d.itens.forEach(function (t) { add(t, 'DUPLICIDADE', 'Possível cobrança duplicada — ' + d.fonte, nn(d.itens.length) + '× o mesmo valor (' + brl(d.valor) + ') na carteira', 'DUPLICIDADE'); }); });
+    g.candidatos.forEach(function (x) { add(x.t, 'CANDIDATO', 'Candidato de conciliação — ' + x.origin.fonte, 'Valor e janela de data batem, mas sem ID exato — nunca fecha sozinho, confirme manualmente', 'PROVAVEL'); });
+    // §63/§65: "esse dinheiro saiu/entrou, por quê?" — separa débito (possível desconto indevido) de
+    // crédito sem origem (§59: nunca auditar só débitos). Nunca resolve sozinho como "Outro".
+    g.semOrigem.forEach(function (t) { if (t.amount < 0) add(t, 'SEM_ORIGEM', 'Débito sem origem identificada (' + wcatLabel(wEffCat(t)) + ')', 'Fonte relevante já cobre esta data e mesmo assim não achou correspondência — esse dinheiro saiu, sem causa encontrada', 'SEM_ORIGEM'); else add(t, 'CREDITO_SEM_ORIGEM', 'Crédito sem origem identificada (' + wcatLabel(wEffCat(t)) + ')', 'Fonte relevante já cobre esta data e mesmo assim não achou correspondência — esse dinheiro entrou, sem causa encontrada', 'PROVAVEL'); });
+    // Marcação manual (§62-63): duplicidade/desconto indevido apontados pelo operador, em QUALQUER
+    // lançamento — não só nas categorias com fonte de comparação. Sinalização humana nunca é apagada.
+    m.real.forEach(function (t) { var c = wgetCls(t.id); if (!c) return; if (c.flagDuplicidade) add(t, 'DUPLICIDADE', 'Duplicidade marcada manualmente', c.note || 'Marcado pelo operador como cobrança duplicada', 'DUPLICIDADE'); else if (c.flagDescontoIndevido) add(t, 'DESCONTO_INDEVIDO', 'Possível desconto indevido (marcado manualmente)', c.note || 'Marcado pelo operador — sem evento esperado, valor duplicado/maior que o esperado, ou cobrança sem causa', 'DESCONTO_INDEVIDO'); });
     var diag = walletDiag(m);
-    diag.divergentes.forEach(function (d) { add(d.rec, 'AJUSTE_SEM_LINHA', 'Diferença de saldo do extrato (ajuste sem linha)', 'Esperado ' + brl(d.expected) + ' · Informado ' + brl(d.informed) + ' · Diferença ' + brl(d.gap)); });
+    diag.divergentes.forEach(function (d) { add(d.rec, 'AJUSTE_SEM_LINHA', 'Diferença de saldo do extrato (ajuste sem linha)', 'Esperado ' + brl(d.expected) + ' · Informado ' + brl(d.informed) + ' · Diferença ' + brl(d.gap), 'SEM_ORIGEM'); });
     return items;
+  }
+  // §61 — itens fora da cobertura das fontes (⚪): não são pendência real (a fonte relevante ainda
+  // não importou dado para o período), mas precisam aparecer na tela de Pendências da Carteira para
+  // nunca esconder um débito/crédito não explicado.
+  function walletForaCoberturaItems(m) {
+    var g = walletOrigemDiag(m);
+    return g.foraCobertura.map(function (t) { return { t: t, tipo: 'FORA_COBERTURA', motivo: 'Fora da cobertura de conciliação (' + wcatLabel(wEffCat(t)) + ')', detalhe: 'A fonte relevante ainda não importou dado para este período — não é pendência, mas segue sem origem confirmada.', situacao: 'FORA_COBERTURA' }; });
   }
   function walletConferencia() {
     var m = walletMetrics(); var items = walletPendItems(m);
@@ -3354,6 +3376,10 @@
       '<label class="fld">Responsabilidade</label><select class="select" id="wcls-resp" style="width:100%">' + opt(WRESP, c.responsibility || wResp(t)) + '</select>' +
       '<label class="fld">Status da análise</label><select class="select" id="wcls-st" style="width:100%">' + opt(WSTATUS, c.internalStatus || 'NAO_REVISADO') + '</select>' +
       '<label class="fld">Vincular pedido (ID)</label><input class="input" id="wcls-ord" style="width:100%" value="' + esc(c.linkedOrderId || '') + '" placeholder="' + (t.orderId ? 'auto: ' + esc(t.orderId) : 'ID do pedido') + '">' +
+      '<label class="fld">Vincular devolução (ID do caso)</label><input class="input" id="wcls-occ" style="width:100%" value="' + esc(c.linkedOccId || '') + '" placeholder="ex.: DEV-2608XXXX">' +
+      '<label class="fld">Vincular resgate Acelera</label><input class="input" id="wcls-resg" style="width:100%" value="' + esc(c.linkedResgateId || '') + '" placeholder="ID do resgate">' +
+      '<label class="fld" style="display:flex;align-items:center;gap:8px;margin-top:10px"><input type="checkbox" id="wcls-dup"' + (c.flagDuplicidade ? ' checked' : '') + '> Marcar como possível duplicidade</label>' +
+      '<label class="fld" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="wcls-indev"' + (c.flagDescontoIndevido ? ' checked' : '') + '> Marcar como possível desconto indevido</label>' +
       '<label class="fld">Observação interna</label><input class="input" id="wcls-note" style="width:100%" value="' + esc(c.note || '') + '" placeholder="ex.: confirmado como erro de embalagem da operação">' +
       '<div style="margin-top:10px"><button class="btn-sm primary" id="wcls-save">Salvar classificação</button></div>' +
       ((c.history && c.history.length) ? '<div class="footnote" style="margin-top:10px">Histórico:</div>' + c.history.slice(0, 6).map(function (h) { return '<div class="fin-line"><span>' + (h.changes && h.changes.length ? h.changes.map(function (ch) { return esc(ch.field) + ': ' + esc(ch.old || '∅') + '→' + esc(ch.nw); }).join(' · ') : esc(h.obs || 'obs')) + '</span><span class="footnote" style="margin:0">' + new Date(h.at).toLocaleString('pt-BR') + ' · ' + esc(h.user) + '</span></div>'; }).join('') : '') +
@@ -3367,7 +3393,7 @@
       recon + pedido + devol + '</div>';
     panel.querySelector('.x').onclick = function () { d.remove(); };
     panel.querySelector('#wcls-save').onclick = function () {
-      var patch = { catManual: panel.querySelector('#wcls-cat').value || null, subcat: panel.querySelector('#wcls-sub').value.trim() || null, responsibility: panel.querySelector('#wcls-resp').value || null, internalStatus: panel.querySelector('#wcls-st').value || null, linkedOrderId: panel.querySelector('#wcls-ord').value.trim() || null };
+      var patch = { catManual: panel.querySelector('#wcls-cat').value || null, subcat: panel.querySelector('#wcls-sub').value.trim() || null, responsibility: panel.querySelector('#wcls-resp').value || null, internalStatus: panel.querySelector('#wcls-st').value || null, linkedOrderId: panel.querySelector('#wcls-ord').value.trim() || null, linkedOccId: panel.querySelector('#wcls-occ').value.trim() || null, linkedResgateId: panel.querySelector('#wcls-resg').value.trim() || null, flagDuplicidade: panel.querySelector('#wcls-dup').checked || null, flagDescontoIndevido: panel.querySelector('#wcls-indev').checked || null };
       wsetCls(t.id, patch, panel.querySelector('#wcls-note').value.trim() || null, 'Operador').then(function () { d.remove(); render(); if (onDone) onDone(); toast('Classificação salva', ''); });
     };
     var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { d.remove(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
@@ -5931,6 +5957,41 @@
     return head + table;
   }
   function bindCaixaHistoricoView() { app.querySelectorAll('[data-caixadia]').forEach(function (b) { b.onclick = function () { openCaixaFechamentoDia(b.dataset.caixadia); }; }); }
+
+  // ============ CAIXA · PENDÊNCIAS DA CARTEIRA (Camada 4) ============
+  // §54-67 do prompt mestre: nenhum débito/crédito da Carteira pode ficar sem explicação. Esta tela
+  // NÃO cria um segundo motor de conciliação — é uma leitura, dentro do Caixa, do mesmo motor já
+  // aprovado da Carteira (walletOrigin/walletOrigemDiag/walletPendItems/wgetCls/wsetCls). Read-only
+  // sobre Pedidos/Acelera/Devolução/Income/Afiliados: nunca altera pedido, bip, Acelera, devolução ou
+  // Income — só classifica/vincula o LANÇAMENTO da carteira (mesmo mecanismo que a Carteira já usa).
+  var caixaCarteiraPendF = { tipo: '', situacao: '' };
+  function wProvavelOrigem(t) { var o = walletOrigin(t); return o ? o.fonte : '—'; }
+  function caixaPendenciasCarteiraView() {
+    var head = secHead('CAIXA · PENDÊNCIAS DA CARTEIRA', 'Todo débito e crédito precisa de explicação', 'A pergunta não é só "o saldo bate?" — é "esse dinheiro saiu (ou entrou), por quê?". Cruza cada lançamento da Carteira com Pedidos, Acelera, Devolução, Minha Renda/Income e Afiliados (só leitura — nunca altera esses módulos) e mostra o que ainda não tem origem confirmada.') +
+      callout('', 'Dois conceitos diferentes', '<b>Saldo matemático conferido</b> (o extrato bate aritmeticamente) é diferente de <b>origem financeira conciliada</b> (sabemos exatamente de onde veio/para onde foi cada valor). Um lançamento pode fechar no saldo e ainda assim não ter origem identificada — é exatamente isso que esta tela lista, e nunca resolve sozinho como "Outro".');
+    if (!wallet.length) return head + emptyBox('Nenhum extrato da Carteira importado ainda.');
+    var m = walletMetrics();
+    var items = walletPendItems(m).concat(walletForaCoberturaItems(m));
+    var counts = {}; items.forEach(function (it) { counts[it.tipo] = (counts[it.tipo] || 0) + 1; });
+    var strip = kstrip(Object.keys(WPROBLEMA).map(function (k) { return { l: WPROBLEMA[k], v: nn(counts[k] || 0), cls: (k === 'CANDIDATO' || k === 'FORA_COBERTURA') ? '' : (counts[k] ? 'red' : 'green') }; }).concat([{ l: '⚪ Fora da cobertura das fontes', v: nn(counts.FORA_COBERTURA || 0), cls: '' }]));
+    var toolbar = '<div class="toolbar2" style="margin-top:8px">' +
+      '<select class="select sm" id="ccptipo"><option value="">Problema: todos</option>' + Object.keys(WPROBLEMA).concat(['FORA_COBERTURA']).map(function (k) { var lbl = WPROBLEMA[k] || 'Fora da cobertura das fontes'; return '<option value="' + k + '"' + (caixaCarteiraPendF.tipo === k ? ' selected' : '') + '>' + lbl + ' (' + nn(counts[k] || 0) + ')</option>'; }).join('') + '</select>' +
+      (caixaCarteiraPendF.tipo ? '<button class="link-btn" id="ccpclear">limpar filtro</button>' : '') + '</div>';
+    var filtered = items.filter(function (it) { return !caixaCarteiraPendF.tipo || it.tipo === caixaCarteiraPendF.tipo; });
+    var rows = filtered.slice(0, 300).map(function (it) {
+      var t = it.t; var isRec = t.origin === 'SISTEMA';
+      var movimento = isRec ? 'Diferença de saldo reconstruída' : (t.tipo || t.desc || '—');
+      var origemProv = it.tipo === 'AJUSTE_SEM_LINHA' ? '—' : wProvavelOrigem(t);
+      return '<tr class="rowlink" data-wtx="' + esc(t.id) + '"><td class="nowrap">' + dbr(t.date) + '</td><td class="mono">' + wOrderCell(t) + '</td><td class="cell-text">' + esc(String(movimento).slice(0, 60)) + '</td><td class="nowrap ' + (t.amount < 0 ? 'neg' : 'pos') + '"><b>' + brl(t.amount) + '</b></td><td class="cell-text">' + esc(origemProv) + '</td><td class="cell-text">' + esc(it.motivo) + '<div class="footnote" style="margin:0">' + esc(it.detalhe) + '</div></td><td class="nowrap">' + esc(WSITUACAO[it.situacao] || it.situacao) + '</td><td class="nowrap"><button class="btn-sm" data-wtx="' + esc(t.id) + '">Classificar / Resolver</button></td></tr>';
+    }).join('');
+    var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Pedido</th><th>Movimento</th><th>Valor</th><th>Origem provável</th><th>Problema</th><th>Situação</th><th>Ação</th></tr></thead><tbody>' + (rows || '<tr><td colspan="8" class="empty">Nenhum item neste filtro. 🎉</td></tr>') + '</tbody></table></div></div>';
+    return head + strip + toolbar + '<div class="count-line" style="margin-top:8px"><b>' + nn(filtered.length) + '</b> item(ns)</div>' + table;
+  }
+  function bindCaixaPendenciasCarteiraView() {
+    var s1 = document.getElementById('ccptipo'); if (s1) s1.onchange = function () { caixaCarteiraPendF.tipo = s1.value; render(); };
+    var cl = document.getElementById('ccpclear'); if (cl) cl.onclick = function () { caixaCarteiraPendF = { tipo: '', situacao: '' }; render(); };
+    app.querySelectorAll('[data-wtx]').forEach(function (b) { b.onclick = function () { openWalletTx(b.dataset.wtx, function () { render(); }); }; });
+  }
   // §24-27: exportação XLSX do fechamento — sempre respeita o dia aberto no momento (nunca um
   // período diferente do que está sendo visto). Reaproveita os mesmos motores/leituras já usados
   // na tela — nunca uma segunda fonte de números só para o arquivo exportado.
@@ -5970,11 +6031,12 @@
     XLSX.writeFile(wb, 'Fechamento_Caixa_' + dateKey + '.xlsx');
   }
   function renderCaixa() {
-    app.innerHTML = '<div class="subtabs">' + [['dashboard', 'Dashboard'], ['fechamento', 'Fechamento Diário'], ['historico', 'Histórico']].map(function (t) { return '<div class="subtab' + (caixaSub === t[0] ? ' active' : '') + '" data-caixasub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><div id="caixabody" style="margin-top:14px"></div>';
+    app.innerHTML = '<div class="subtabs">' + [['dashboard', 'Dashboard'], ['fechamento', 'Fechamento do Dia'], ['carteira', 'Pendências da Carteira'], ['historico', 'Histórico']].map(function (t) { return '<div class="subtab' + (caixaSub === t[0] ? ' active' : '') + '" data-caixasub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><div id="caixabody" style="margin-top:14px"></div>';
     var body = document.getElementById('caixabody');
-    body.innerHTML = caixaSub === 'fechamento' ? caixaFechamentoView() : caixaSub === 'historico' ? caixaHistoricoView() : caixaDashboardView();
+    body.innerHTML = caixaSub === 'fechamento' ? caixaFechamentoView() : caixaSub === 'carteira' ? caixaPendenciasCarteiraView() : caixaSub === 'historico' ? caixaHistoricoView() : caixaDashboardView();
     app.querySelectorAll('[data-caixasub]').forEach(function (t) { t.onclick = function () { caixaSub = t.dataset.caixasub; render(); }; });
     if (caixaSub === 'fechamento') bindCaixaFechamentoView();
+    else if (caixaSub === 'carteira') bindCaixaPendenciasCarteiraView();
     else if (caixaSub === 'historico') bindCaixaHistoricoView();
     else bindCaixaDashboardView();
   }
