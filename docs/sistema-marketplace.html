@@ -6855,9 +6855,13 @@ buffer/index.js:
     rec.history = rec.history || []; rec.history.unshift({ at: at, user: rec.lastReviewedBy, status: 'REVISAO_SALVA', justificativa: note || null, n: dm.n, pendN: dm.pendN });
     walletClose[dateKey] = rec; return putMany('walletclose', [rec]);
   }
+  // Correção de arquitetura: o fechamento diário OFICIAL é o Caixa (menu próprio) — esta tela
+  // continua existindo como conferência de extrato/saldo da Carteira (nunca apagada, já aprovada),
+  // mas não é mais chamada "fechamento" para não sugerir um segundo encerramento oficial do dia.
   function walletFechamento() {
     var days = {}; wallet.forEach(function (t) { if (t.date && t.origin === 'SHOPEE') days[t.date.slice(0, 10)] = 1; });
-    var head = secHead('CARTEIRA · FECHAMENTO DE CAIXA', 'Conferência diária', 'Para cada dia: veja operação, Acelera, movimentação da carteira e conciliação juntos — feche quando estiver tudo certo, ou feche com pendências e justifique. Um dia só fica "Fechado" depois que alguém clica em fechar.');
+    var head = secHead('CARTEIRA · CONFERÊNCIA DE EXTRATO', 'Conferência diária do saldo', 'Para cada dia: veja operação, Acelera, movimentação da carteira e conciliação de SALDO juntos — feche quando estiver tudo certo, ou feche com pendências e justifique.') +
+      callout('', 'O fechamento diário oficial é o Caixa', 'Esta tela confere o saldo/extrato da Carteira — não é mais o encerramento oficial do dia. Para fechar o dia (vendas, expedição, Acelera, pendências e DRE), use o menu <b>Caixa → Fechamento Diário</b>.');
     if (!Object.keys(days).length) return head + emptyBox('Nenhuma movimentação real (Shopee) importada ainda.');
     var list = Object.keys(days).sort().reverse().slice(0, 60).map(function (dk) { return walletDayStatus(dk); });
     var abertos = list.filter(function (x) { return x.status === 'ABERTO'; }).length;
@@ -6958,11 +6962,11 @@ buffer/index.js:
       var podeFechar = conc.items.length === 0;
       var footer = '<div class="panel"><div class="pb" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
         '<button class="btn-sm" id="fch-save">Salvar revisão</button>' +
-        '<button class="btn-sm' + (podeFechar ? ' primary' : '') + '"' + (podeFechar ? '' : ' disabled title="Só é possível Fechar o dia sem pendências — use Fechar com pendências"') + ' id="fch-close">Fechar dia</button>' +
-        '<button class="btn-sm' + (podeFechar ? '' : ' primary') + '" id="fch-closepend">Fechar com pendências</button>' +
+        '<button class="btn-sm' + (podeFechar ? ' primary' : '') + '"' + (podeFechar ? '' : ' disabled title="Só é possível concluir sem pendências — use Concluir com pendências"') + ' id="fch-close">Concluir conferência</button>' +
+        '<button class="btn-sm' + (podeFechar ? '' : ' primary') + '" id="fch-closepend">Concluir com pendências</button>' +
         (st.rec ? '<span class="footnote" style="margin:0">último registro: ' + esc(CLOSE_LABEL[st.rec.status] ? CLOSE_LABEL[st.rec.status][0] : st.rec.status) + ' por ' + esc(st.rec.closedBy || '—') + ' em ' + new Date(st.rec.closedAt).toLocaleString('pt-BR') + '</span>' : '') +
         '</div></div>';
-      return '<div class="dh"><div><b>FECHAMENTO — ' + esc(dbr(dateKey)) + '</b> <span class="tag ' + lbl[1] + '" style="margin-left:6px">' + lbl[0] + '</span>' + (st.status === 'REVISAO_NECESSARIA' ? ' <span class="footnote" style="margin:0">⚠ movimento novo após o fechamento anterior</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' +
+      return '<div class="dh"><div><b>CONFERÊNCIA DE EXTRATO — ' + esc(dbr(dateKey)) + '</b> <span class="tag ' + lbl[1] + '" style="margin-left:6px">' + lbl[0] + '</span>' + (st.status === 'REVISAO_NECESSARIA' ? ' <span class="footnote" style="margin:0">⚠ movimento novo após a última conferência</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' +
         blocoOp + blocoAc + blocoMov + blocoConc + pendTable + footer + '</div>';
     }
     function wire() {
@@ -6982,7 +6986,7 @@ buffer/index.js:
 
   function renderCarteira() {
     app.innerHTML = devPeriodBar() +
-      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + [['visao', 'Visão Geral'], ['mov', 'Movimentações'], ['conferencia', 'Conferência'], ['fechamento', 'Fechamento de Caixa']].map(function (t) { return '<div class="subtab' + (walletSub === t[0] ? ' active' : '') + '" data-wsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-wimport="1">Importar extrato</button></div><div id="wbody" style="margin-top:14px"></div>';
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + [['visao', 'Visão Geral'], ['mov', 'Movimentações'], ['conferencia', 'Conferência'], ['fechamento', 'Conferência de Extrato']].map(function (t) { return '<div class="subtab' + (walletSub === t[0] ? ' active' : '') + '" data-wsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-wimport="1">Importar extrato</button></div><div id="wbody" style="margin-top:14px"></div>';
     var body = document.getElementById('wbody');
     try {
       if (!wallet.length) body.innerHTML = secHead('SALDO DA CARTEIRA', 'Saldo da Carteira', 'Mostrar, medir, rastrear e reconciliar tudo que acontece no saldo da Shopee.') + emptyBox('Nenhum extrato importado. Clique em “Importar extrato” para carregar o relatório de transações do saldo Shopee.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="wimp">Importar extrato</button></div>';
