@@ -5668,11 +5668,49 @@
   // ---- Blocos de dados do dia (cada um lê motores já aprovados; nenhum recalcula) ----
   function caixaDayVendas(dateKey) {
     var pagas = orders.filter(function (o) { return o.paidAt && o.paidAt.slice(0, 10) === dateKey; });
-    var profitOf = mrOrderProfitEngine();
     var valor = 0, lucro = 0, nLucroConhecido = 0;
-    pagas.forEach(function (o) { valor += o.totalAmount || 0; var p = profitOf(o); if (p.known) { lucro += p.lucro; nLucroConhecido++; } });
+    pagas.forEach(function (o) { valor += o.totalAmount || 0; var c = pedidoComposicaoFinanceira(o.id); if (c.resultadoC != null) { lucro += c.resultadoC; nLucroConhecido++; } });
     var pendFin = caixaPendenciasFinanceirasPedidos(pagas.map(function (o) { return o.id; }));
     return { n: pagas.length, valor: r2(valor), lucroC: lucro, nLucroConhecido: nLucroConhecido, pendFin: pendFin, pedidos: pagas };
+  }
+  // ---- DRE do dia — motor NATIVO do Caixa: agrega pedidoComposicaoFinanceira() (Pedidos) dos
+  // pedidos pagos do dia. Zero chamadas a mrEngine()/mrPeriodEngine()/mrResultadoDetalhado() —
+  // funciona mesmo que Minha Renda nunca tenha sido usada (teste de isolamento da arquitetura).
+  function caixaDreDia(dateKey) {
+    var pagas = orders.filter(function (o) { return o.paidAt && o.paidAt.slice(0, 10) === dateKey; });
+    var receitaBruta = 0, descComerciais = 0, taxasCobradas = 0, creditos = 0, outros = 0, custoTotal = 0, custoConhecidoN = 0, comIncomeN = 0;
+    pagas.forEach(function (o) {
+      var c = pedidoComposicaoFinanceira(o.id);
+      receitaBruta += (c.receitaC || 0); descComerciais += c.descontosComerciaisC; taxasCobradas += c.taxasCobradasC; creditos += c.creditosC; outros += c.outrosC;
+      if (c.custoProdC != null) { custoTotal += c.custoProdC; custoConhecidoN++; }
+      if (c.temIncome) comIncomeN++;
+    });
+    var receitaLiquida = receitaBruta + descComerciais + taxasCobradas + creditos + outros;
+    var custoCompleto = pagas.length > 0 && custoConhecidoN === pagas.length;
+    var lucro = custoCompleto ? receitaLiquida - custoTotal : null;
+    var margem = (receitaBruta && lucro != null) ? r2(lucro / receitaBruta * 100) : null;
+    return { n: pagas.length, comIncomeN: comIncomeN, receitaBruta: receitaBruta, descComerciais: descComerciais, taxasCobradas: taxasCobradas, creditos: creditos, outros: outros, receitaLiquida: receitaLiquida, custoTotal: custoConhecidoN ? custoTotal : null, custoConhecidoN: custoConhecidoN, custoCompleto: custoCompleto, lucro: lucro, margem: margem };
+  }
+  // Conta colunas do Income com valor real ainda sem destino — lê mrRenda DIRETO (dado bruto já
+  // marcado por linha durante a importação), nunca mrEngine()/mrCamposNaoClassificados() (Minha Renda).
+  function caixaCamposNaoClassificadosCount() {
+    var seen = {};
+    mrRenda.filter(function (r) { return r.ver === 'Order'; }).forEach(function (o) { if (!o.outros) return; Object.keys(o.outros).forEach(function (k) { seen[k] = 1; }); });
+    return Object.keys(seen).length;
+  }
+  function caixaDreBlock(dre) {
+    var line = function (label, v, opts) { opts = opts || {}; return '<div class="fin-line' + (opts.total ? ' total' : '') + '"><span>' + (opts.op ? '<b>' + opts.op + '</b> ' : '') + esc(label) + (opts.note ? ' <span class="footnote" style="margin:0">' + esc(opts.note) + '</span>' : '') + '</span><b class="' + (v == null ? '' : v < 0 ? 'neg' : v > 0 ? 'pos' : '') + '">' + (v == null ? 'não disponível' : brlC(v)) + '</b></div>'; };
+    if (!dre.n) return '<div class="panel"><div class="ph"><h3>DRE do dia</h3></div><div class="pb"><span class="tag neutral">Nenhum pedido pago neste dia.</span></div></div>';
+    var body = line('Receita Bruta', dre.receitaBruta, { note: nn(dre.n) + ' pedidos pagos' }) +
+      line('Descontos Comerciais do Vendedor', dre.descComerciais, { op: '−' }) +
+      line('Taxas Cobradas do Vendedor', dre.taxasCobradas, { op: '−' }) +
+      line('Créditos / Incentivos Shopee', dre.creditos, { op: '+' }) +
+      line('Reembolsos e Outros Ajustes', dre.outros, { op: '−' }) +
+      line('Receita Líquida', dre.receitaLiquida, { total: true, op: '=' }) +
+      line('Custo dos Produtos', dre.custoTotal, { op: '−', note: nn(dre.custoConhecidoN) + ' de ' + nn(dre.n) + ' pedidos com custo cadastrado' }) +
+      line('Lucro', dre.lucro, { total: true, op: '=' }) +
+      '<div class="fin-line"><span>Margem sobre a Receita Bruta</span><b class="' + (dre.margem == null ? '' : dre.margem >= 0 ? 'pos' : 'neg') + '">' + (dre.margem == null ? '—' : pct(dre.margem)) + '</b></div>';
+    return '<div class="panel"><div class="ph"><h3>DRE do dia</h3><span class="footnote" style="margin:0">motor nativo do Caixa — não depende de Minha Renda · ' + nn(dre.comIncomeN) + ' de ' + nn(dre.n) + ' pedidos com Income cruzado</span></div><div class="pb" style="padding-top:0">' + body + '</div></div>';
   }
   function caixaDayExpedicao(dateKey) {
     var sess = expSessions.find(function (s) { return s.dataOperacional === dateKey; });
@@ -5738,20 +5776,20 @@
   // ---- Inteligência do dia (§13): tudo linkável ao pedido correspondente ----
   function caixaInteligenciaDia(dateKey) {
     var vendas = caixaDayVendas(dateKey);
-    var profitOf = mrOrderProfitEngine();
-    var comLucro = vendas.pedidos.map(function (o) { var p = profitOf(o); var it = (o.items || [])[0] || {}; return { orderId: o.id, o: o, p: p, it: it }; }).filter(function (x) { return x.p.known; });
-    var maiorLucro = comLucro.length ? comLucro.reduce(function (a, b) { return b.p.lucro > a.p.lucro ? b : a; }) : null;
-    var prejuizos = comLucro.filter(function (x) { return x.p.lucro < 0; });
-    var maiorPrejuizo = prejuizos.length ? prejuizos.reduce(function (a, b) { return b.p.lucro < a.p.lucro ? b : a; }) : null;
+    var comLucro = vendas.pedidos.map(function (o) { var c = pedidoComposicaoFinanceira(o.id); var it = (o.items || [])[0] || {}; return { orderId: o.id, o: o, c: c, it: it }; }).filter(function (x) { return x.c.resultadoC != null; });
+    var maiorLucro = comLucro.length ? comLucro.reduce(function (a, b) { return b.c.resultadoC > a.c.resultadoC ? b : a; }) : null;
+    var prejuizos = comLucro.filter(function (x) { return x.c.resultadoC < 0; });
+    var maiorPrejuizo = prejuizos.length ? prejuizos.reduce(function (a, b) { return b.c.resultadoC < a.c.resultadoC ? b : a; }) : null;
     var bySku = {};
-    comLucro.forEach(function (x) { var k = x.it.sku || x.o.id; var g = bySku[k] = bySku[k] || { sku: k, produto: x.it.productName, lucro: 0, n: 0 }; g.lucro += x.p.lucro; g.n++; });
+    comLucro.forEach(function (x) { var k = x.it.sku || x.o.id; var g = bySku[k] = bySku[k] || { sku: k, produto: x.it.productName, lucro: 0, n: 0 }; g.lucro += x.c.resultadoC; g.n++; });
     var skuArr = Object.values(bySku);
     var melhorSku = skuArr.length ? skuArr.reduce(function (a, b) { return b.lucro > a.lucro ? b : a; }) : null;
     var piorSku = skuArr.length ? skuArr.reduce(function (a, b) { return b.lucro < a.lucro ? b : a; }) : null;
-    var mr = mrEngine(); var mrByOrder = {}; mr.orders.forEach(function (r) { mrByOrder[r.orderId] = r; });
-    var comTaxa = vendas.pedidos.map(function (o) { var r = mrByOrder[o.id]; if (!r) return null; return { orderId: o.id, taxa: -(r.comissao + r.servico + r.transacao) }; }).filter(function (x) { return x && x.taxa > 0; });
+    // "Maior taxa/desconto do dia" lê o Income cruzado (comp.mrRow) DIRETO — mesma fonte de dado
+    // bruto que pedidoComposicaoFinanceira() usa, nunca mrEngine().
+    var comTaxa = vendas.pedidos.map(function (o) { var r = pedidoIncomeRow(o.id); if (!r) return null; return { orderId: o.id, taxa: -(r.comissao + r.servico + r.transacao) }; }).filter(function (x) { return x && x.taxa > 0; });
     var maiorTaxa = comTaxa.length ? comTaxa.reduce(function (a, b) { return b.taxa > a.taxa ? b : a; }) : null;
-    var comDesconto = vendas.pedidos.map(function (o) { var r = mrByOrder[o.id]; if (!r) return null; return { orderId: o.id, desconto: -r.cupom }; }).filter(function (x) { return x && x.desconto > 0; });
+    var comDesconto = vendas.pedidos.map(function (o) { var r = pedidoIncomeRow(o.id); if (!r) return null; return { orderId: o.id, desconto: -r.cupom }; }).filter(function (x) { return x && x.desconto > 0; });
     var maiorDesconto = comDesconto.length ? comDesconto.reduce(function (a, b) { return b.desconto > a.desconto ? b : a; }) : null;
     var pend = caixaDayPendencias(dateKey);
     var todasPend = pend.operacionais.map(function (i) { return { orderId: i.orderId, valor: i.valorAcelera != null ? Math.abs(i.valorAcelera) : (i.valorPedido != null ? Math.abs(i.valorPedido) : 0) }; }).concat(pend.financeiras.map(function (f) { return { orderId: f.orderId, valor: Math.abs(f.diff) }; }));
@@ -5776,8 +5814,8 @@
     var stripPend = kstrip([{ l: 'Pendências', v: nn(pend.total), cls: pend.total ? 'red' : 'green' }, { l: 'Valor financeiro envolvido', v: brlC(valorPend), cls: valorPend ? 'amber' : 'green' }]);
     var inte = caixaInteligenciaDia(dateKey);
     var inteligencia = '<div class="panel"><div class="ph"><h3>Inteligência do dia</h3></div><div class="pb"><div class="kstrip" style="flex-wrap:wrap">' +
-      caixaCard('Maior lucro', inte.maiorLucro, function (x) { return '<div class="kv pos" style="font-size:15px">' + brlC(x.p.lucro) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + ' · ' + esc((x.it.productName || '—').slice(0, 24)) + '</div>'; }, true) +
-      caixaCard('Maior prejuízo', inte.maiorPrejuizo, function (x) { return '<div class="kv neg" style="font-size:15px">' + brlC(x.p.lucro) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + ' · ' + esc((x.it.productName || '—').slice(0, 24)) + '</div>'; }, true) +
+      caixaCard('Maior lucro', inte.maiorLucro, function (x) { return '<div class="kv pos" style="font-size:15px">' + brlC(x.c.resultadoC) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + ' · ' + esc((x.it.productName || '—').slice(0, 24)) + '</div>'; }, true) +
+      caixaCard('Maior prejuízo', inte.maiorPrejuizo, function (x) { return '<div class="kv neg" style="font-size:15px">' + brlC(x.c.resultadoC) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + ' · ' + esc((x.it.productName || '—').slice(0, 24)) + '</div>'; }, true) +
       caixaCard('Produto/SKU mais lucrativo', inte.melhorSku, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.lucro) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.sku) + ' · ' + esc((x.produto || '—').slice(0, 24)) + '</div>'; }, false) +
       caixaCard('Produto/SKU com pior resultado', inte.piorSku, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.lucro) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.sku) + ' · ' + esc((x.produto || '—').slice(0, 24)) + '</div>'; }, false) +
       caixaCard('Maior taxa do dia', inte.maiorTaxa, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.taxa) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + '</div>'; }, true) +
@@ -5825,13 +5863,13 @@
       var st = caixaDayStatus(dateKey); var lbl = CAIXA_LABEL[st.status];
       var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = caixaDayAcelera(dateKey), pend = st.pend;
       var margem = vendas.valor ? r2(vendas.lucroC / 100 / vendas.valor * 100) : null;
-      var profitOf = mrOrderProfitEngine(); var custoConhecido = vendas.pedidos.filter(function (o) { return profitOf(o).known; }).length;
-      var naoClass = mrCamposNaoClassificados();
+      var custoConhecido = vendas.pedidos.filter(function (o) { return pedidoComposicaoFinanceira(o.id).custoProdC != null; }).length;
+      var naoClass = caixaCamposNaoClassificadosCount();
       var blocoVendas = '<div class="panel"><div class="ph"><h3>1. Vendas</h3></div><div class="pb">' + kv('Pedidos pagos', nn(vendas.n)) + kv('Faturamento', brl(vendas.valor)) + kv('Lucro atual', vendas.nLucroConhecido ? brlC(vendas.lucroC) : 'aguardando custo') + kv('Margem', margem != null ? pct(margem) : '—') + kv('Composição financeira conferida', (vendas.n - vendas.pendFin.length) + ' de ' + vendas.n + ' pedidos') + '</div></div>';
       var blocoExp = '<div class="panel"><div class="ph"><h3>2. Expedição</h3></div><div class="pb">' + (exp.temSessao ? (kv('Esperados', nn(exp.esperados)) + kv('Confirmados', nn(exp.expedidos)) + kv('Faltaram', nn(exp.faltaram))) : callout('', 'Sem Sessão de Expedição registrada para este dia', 'Contagem por confirmação de saída (bipe/Full) datada neste dia: ' + nn(exp.expedidos) + '.')) + '</div></div>';
       var blocoAc = !acelera.length ? '' : ('<div class="panel"><div class="ph"><h3>3. Acelera</h3></div><div class="pb">' + (ac.n ? (kv('Resgates', nn(ac.n)) + kv('Valor antecipado', brlC(ac.antec)) + kv('Taxa Acelera', brlC(ac.taxa)) + kv('Valor recebido', brlC(ac.liquido))) : '<div class="footnote" style="padding:0 16px 12px">Nenhum resgate do Acelera consolidado nesta data.</div>') + '</div></div>');
-      var blocoFin = '<div class="panel"><div class="ph"><h3>4. Financeiro</h3></div><div class="pb">' + kv('Taxas conferidas (Income cruzado)', (vendas.n - vendas.pendFin.length) + ' de ' + vendas.n + ' pedidos') + kv('Custos conferidos', nn(custoConhecido) + ' de ' + nn(vendas.n) + ' pedidos') + kv('Diferenças financeiras em aberto', nn(vendas.pendFin.length)) + kv('Valores não classificados (total importado — não restrito a este dia)', nn(naoClass.length) + ' coluna(s)') + '</div></div>';
-      var dreBlock = mrRenda.length ? mrResultadoDetalhado(mrPeriodEngine(caixaDayRange(dateKey)), false) : '';
+      var blocoFin = '<div class="panel"><div class="ph"><h3>4. Financeiro</h3></div><div class="pb">' + kv('Taxas conferidas (Income cruzado)', (vendas.n - vendas.pendFin.length) + ' de ' + vendas.n + ' pedidos') + kv('Custos conferidos', nn(custoConhecido) + ' de ' + nn(vendas.n) + ' pedidos') + kv('Diferenças financeiras em aberto', nn(vendas.pendFin.length)) + kv('Valores não classificados (total importado — não restrito a este dia)', nn(naoClass) + ' coluna(s)') + '</div></div>';
+      var dreBlock = caixaDreBlock(caixaDreDia(dateKey));
       var pendRows = pend.operacionais.slice(0, 60).map(function (i) { return '<tr><td class="mono">' + esc(i.orderId) + '</td><td class="cell-text">' + esc(i.motivo) + '</td><td><button class="btn-sm" data-caixapendop="' + esc(i.orderId) + '">Resolver</button></td></tr>'; }).join('') +
         pend.financeiras.slice(0, 60).map(function (f) { return '<tr><td class="mono">' + esc(f.orderId) + '</td><td class="cell-text">' + esc(f.motivo) + '</td><td><button class="btn-sm" data-goped360="' + esc(f.orderId) + '">Ver pedido</button> <button class="btn-sm" data-caixapendfin="' + esc(f.orderId) + '">Resolver</button></td></tr>'; }).join('');
       var pendTable = '<div class="panel"><div class="ph"><h3>5. Pendências</h3><span class="footnote" style="margin:0">' + nn(pend.total) + ' no total</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Problema</th><th></th></tr></thead><tbody>' + (pendRows || '<tr><td colspan="3" class="empty">Nenhuma pendência neste dia. 🎉</td></tr>') + '</tbody></table></div></div>';
@@ -5865,17 +5903,6 @@
           pendenciaResolver('FIN:' + orderId, acao, motivo, motivo, 'ABERTA').then(function () { toast('Pendência financeira resolvida', orderId); refresh(); render(); });
         };
       });
-      // drill-down da DRE do dia: aponta o filtro global de período para ESTE dia antes de abrir —
-      // nunca mostra o drill calculado sobre o período global por engano (mesma lição do §39).
-      panel.querySelectorAll('[data-mrdrill]').forEach(function (b) {
-        b.onclick = function () {
-          periodSel.value = 'custom'; customRange.from = dateKey; customRange.to = dateKey;
-          var df = document.getElementById('dfrom'); if (df) df.value = dateKey;
-          var dtI = document.getElementById('dto'); if (dtI) dtI.value = dateKey;
-          if (typeof syncDateUI === 'function') syncDateUI();
-          openMrDrill(b.dataset.mrdrill, b.dataset.mrdrilllabel || b.dataset.mrdrill);
-        };
-      });
       var cl = panel.querySelector('#caixa-close'); if (cl && !cl.disabled) cl.onclick = function () { caixaCloseDay(dateKey, 'FECHADO', 'Operador', null).then(function () { toast('Caixa fechado', dbr(dateKey)); refresh(); render(); }); };
       var cr = panel.querySelector('#caixa-closeress'); if (cr) cr.onclick = function () {
         var pendAtual = caixaDayPendencias(dateKey);
@@ -5905,8 +5932,6 @@
   // na tela — nunca uma segunda fonte de números só para o arquivo exportado.
   function caixaExportarXlsx(dateKey) {
     var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = caixaDayAcelera(dateKey), pend = caixaDayPendencias(dateKey);
-    var mr = mrEngine(); var mrByOrder = {}; mr.orders.forEach(function (r) { mrByOrder[r.orderId] = r; });
-    var profitOf = mrOrderProfitEngine();
     var wb = XLSX.utils.book_new();
     var resumo = [['Fechamento de Caixa', dbr(dateKey)], [],
       ['Pedidos pagos', vendas.n], ['Faturamento (R$)', vendas.valor], ['Lucro atual (R$)', vendas.nLucroConhecido ? vendas.lucroC / 100 : ''],
@@ -5915,26 +5940,23 @@
       ['Pendências', pend.total]];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(resumo), 'Resumo');
     var pedRows = [['Pedido', 'Status', 'Valor (R$)', 'Lucro (R$)', 'Custo conhecido']];
-    vendas.pedidos.forEach(function (o) { var p = profitOf(o); pedRows.push([o.id, S.pedidos.labels[o.normalizedStatus] || o.orderStatus, o.totalAmount || 0, p.known ? p.lucro / 100 : '', p.known ? 'sim' : 'não']); });
+    vendas.pedidos.forEach(function (o) { var c = pedidoComposicaoFinanceira(o.id); pedRows.push([o.id, S.pedidos.labels[o.normalizedStatus] || o.orderStatus, o.totalAmount || 0, c.resultadoC != null ? c.resultadoC / 100 : '', c.custoProdC != null ? 'sim' : 'não']); });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pedRows), 'Pedidos');
-    var taxRows = [['Pedido', 'Comissão', 'Serviço', 'Transação', 'Frete parceiro', 'Desconto frete', 'Envio reverso', 'Ação comercial (incentivo)', 'Ação comercial (ajuste)', 'Afiliado', 'Cupom', 'PIX', 'Reembolso']];
-    vendas.pedidos.forEach(function (o) { var r = mrByOrder[o.id]; if (!r) return; taxRows.push([o.id, r.comissao / 100, r.servico / 100, r.transacao / 100, r.freteParceiro / 100, r.descontoFrete / 100, r.envioReverso / 100, (r.incentivoAcaoComercial || 0) / 100, (r.ajusteAcaoComercial || 0) / 100, r.afiliado / 100, r.cupom / 100, r.pix / 100, r.reembolso / 100]); });
+    var taxRows = [['Pedido', 'Taxas cobradas (R$)', 'Descontos comerciais (R$)', 'Créditos/incentivos (R$)', 'Reembolsos/outros (R$)']];
+    vendas.pedidos.forEach(function (o) { var c = pedidoComposicaoFinanceira(o.id); if (!c.temIncome) return; taxRows.push([o.id, c.taxasCobradasC / 100, c.descontosComerciaisC / 100, c.creditosC / 100, c.outrosC / 100]); });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(taxRows), 'Taxas');
     var expRows = [['Pedido', 'Modalidade', 'Tipo', 'Situação', 'Expedido em']];
     exp.itens.forEach(function (i) { expRows.push([i.orderId, i.modalidade, i.isFbs ? 'Full' : 'Normal', i.situacao, i.expedidoAt ? dbr(i.expedidoAt) : '']); });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(expRows), 'Expedição');
     var acRows2 = [['Resgates', 'Antecipado (R$)', 'Taxa (R$)', 'Recebido (R$)']]; if (ac.n) acRows2.push([ac.n, ac.antec / 100, ac.taxa / 100, ac.liquido / 100]);
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(acRows2), 'Acelera');
-    var pendRows2 = [['Pedido', 'Tipo', 'Motivo/Valor']];
-    pend.operacionais.forEach(function (i) { pendRows2.push([i.orderId, 'Operacional', i.motivo]); });
-    pend.financeiras.forEach(function (f) { pendRows2.push([f.orderId, 'Financeira', 'Diferença de R$ ' + (f.diff / 100).toFixed(2) + ' na composição × Pagamento Liberado']); });
+    var pendRows2 = [['Pedido', 'Origem', 'Motivo/Valor']];
+    pend.operacionais.forEach(function (i) { pendRows2.push([i.orderId, i.origem, i.motivo]); });
+    pend.financeiras.forEach(function (f) { pendRows2.push([f.orderId, f.origem, f.motivo]); });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pendRows2), 'Pendências');
-    if (mrRenda.length) {
-      var pe = mrPeriodEngine(caixaDayRange(dateKey)); var t = pe.t;
-      var descComerciais = t.cupom + t.pix, taxasShopee = pe.taxasShopeeTotal + t.afiliado, devolucoes = t.reembolso, outrosAj = pe.adjTot;
-      var receitaLiquida = pe.faturamento + descComerciais + taxasShopee + devolucoes + outrosAj;
-      var custo = pe.custoItemsKnown > 0 ? pe.custoProd : null;
-      var dreRows = [['Linha', 'Valor (R$)'], ['Receita Bruta', pe.faturamento / 100], ['Descontos Comerciais', descComerciais / 100], ['Taxas Shopee', taxasShopee / 100], ['Devoluções e Reembolsos', devolucoes / 100], ['Outros Ajustes', outrosAj / 100], ['Receita Líquida', receitaLiquida / 100], ['Custo dos Produtos', custo != null ? custo / 100 : ''], ['Lucro', custo != null ? (receitaLiquida - custo) / 100 : '']];
+    var dre = caixaDreDia(dateKey);
+    if (dre.n) {
+      var dreRows = [['Linha', 'Valor (R$)'], ['Receita Bruta', dre.receitaBruta / 100], ['Descontos Comerciais', dre.descComerciais / 100], ['Taxas Cobradas', dre.taxasCobradas / 100], ['Créditos/Incentivos', dre.creditos / 100], ['Reembolsos e Outros Ajustes', dre.outros / 100], ['Receita Líquida', dre.receitaLiquida / 100], ['Custo dos Produtos', dre.custoTotal != null ? dre.custoTotal / 100 : ''], ['Lucro', dre.lucro != null ? dre.lucro / 100 : '']];
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dreRows), 'DRE');
     }
     var rec = caixaClose[dateKey];
