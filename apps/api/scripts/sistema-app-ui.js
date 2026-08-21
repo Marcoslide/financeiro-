@@ -742,7 +742,7 @@
   // congeladas, expedidoSet(), registros do Acelera por ID) numa situação objetiva e um motivo
   // específico, nunca "Divergente" genérico.
   function pendenciaMotivoAcao(acao) {
-    return { CONFIRMAR_SEM_BIP: 'Saída confirmada manualmente sem bipe', JUSTIFICAR: 'Justificado', VINCULAR_SESSAO: 'Vinculado a outra sessão', ERRO_LEITURA: 'Marcado como erro de leitura' }[acao] || acao;
+    return { CONFIRMAR_SEM_BIP: 'Saída confirmada manualmente sem bipe', JUSTIFICAR: 'Justificado', VINCULAR_SESSAO: 'Vinculado a outra sessão', ERRO_LEITURA: 'Marcado como erro de leitura', CLASSIFICAR_TAXA: 'Taxa classificada manualmente', MARCAR_CREDITO: 'Marcado como crédito', MARCAR_DEBITO: 'Marcado como débito' }[acao] || acao;
   }
   function pendenciasConferencia() {
     var exp = expedidoSet();
@@ -760,23 +760,31 @@
       var res = pendResolucoes[id]; var resolvido = res && res.atual;
       var valorAcelera = noAcelera ? acRecs.reduce(function (s, r) { return s + r.antecipado; }, 0) : null;
       var isFbs = (esp && esp.isFbs) || (o && o.isFbs) || (info && info.isFbs) || false;
-      var situacao, motivo;
-      if (resolvido) { situacao = 'RESOLVIDO'; motivo = res.motivo || pendenciaMotivoAcao(res.atual); }
-      else if (expedido && noAcelera) { situacao = 'OK'; motivo = 'Expedido e antecipado — tudo certo.'; }
+      // origem: qual módulo detectou o problema — nunca "Divergente" sem dono. PEND_OPERACIONAL/
+      // PEND_EXPEDICAO nascem da falta de confirmação de saída (Expedição); PEND_FINANCEIRA/
+      // INVESTIGAR nascem do cruzamento com o relatório do Acelera (Acelera).
+      var situacao, motivo, origem;
+      if (expedido && noAcelera) { situacao = 'OK'; motivo = 'Expedido e antecipado — tudo certo.'; origem = 'ACELERA'; }
       else if (expedido && !noAcelera) {
         var idade = info.at ? Date.now() - new Date(info.at).getTime() : 0;
+        origem = 'ACELERA';
         if (idade < tolMs) { situacao = 'AGUARDANDO'; motivo = (isFbs ? 'Full expedido' : 'Expedido') + ' há pouco tempo — aguardando aparecer no Acelera (dentro da tolerância de ' + (aceleraCfg.aguardandoDias || 3) + ' dia(s)).'; }
         else { situacao = 'PEND_FINANCEIRA'; motivo = (isFbs ? 'Full expedido (confirmado pela Shopee)' : 'Expedido') + ' em ' + (info.at ? dbr(info.at) : '—') + ', mas a antecipação não foi localizada no Acelera.'; }
       }
-      else if (!expedido && noAcelera) { situacao = 'PEND_OPERACIONAL'; motivo = 'Acelera encontrado — bip não localizado. O Acelera confirma antecipação deste pedido, mas nenhuma saída foi registrada (nem bipe interno, nem confirmação de status Full).'; }
+      else if (!expedido && noAcelera) { situacao = 'PEND_OPERACIONAL'; origem = 'EXPEDICAO'; motivo = 'Acelera encontrado — bip não localizado. O Acelera confirma antecipação deste pedido, mas nenhuma saída foi registrada (nem bipe interno, nem confirmação de status Full).'; }
       else if (esp) {
         var idadeSess = Date.now() - new Date(esp.sessaoInicio).getTime();
+        origem = 'EXPEDICAO';
         if (o && o.normalizedStatus !== 'A_ENVIAR') { situacao = 'INVESTIGAR'; motivo = 'Esperado na sessão de ' + acDbr(esp.sessaoData) + ', mas o status Shopee já mudou para "' + (S.pedidos.labels[o.normalizedStatus] || o.orderStatus) + '" sem nenhuma confirmação de expedição registrada.'; }
         else if (idadeSess > tolMs) { situacao = 'PEND_EXPEDICAO'; motivo = 'Esperado na sessão de ' + acDbr(esp.sessaoData) + ' — ainda não expedido nem localizado no Acelera.'; }
         else { situacao = 'AGUARDANDO'; motivo = 'Esperado na sessão de ' + acDbr(esp.sessaoData) + ' — ainda dentro da janela operacional normal.'; }
       }
-      else { situacao = 'INVESTIGAR'; motivo = 'Encontrado no Acelera fora de qualquer sessão de expedição registrada — confirme como este pedido foi enviado.'; }
-      return { orderId: id, isFbs: isFbs, modalidade: (esp && esp.modalidade) || (o && o.shippingOption) || '—', expedidoAt: info ? info.at : null, expedidoVia: info ? info.via : null, shopeeStatus: o ? (S.pedidos.labels[o.normalizedStatus] || o.orderStatus) : '—', noAcelera: noAcelera, valorAcelera: valorAcelera, valorPedido: o ? o.totalAmount : null, situacao: situacao, motivo: motivo, resolucao: res, sessao: esp };
+      else { situacao = 'INVESTIGAR'; origem = 'ACELERA'; motivo = 'Encontrado no Acelera fora de qualquer sessão de expedição registrada — confirme como este pedido foi enviado.'; }
+      // resolução some por cima do resultado da detecção — mas a origem/motivo de detecção nunca
+      // são apagados (ficam disponíveis mesmo depois de RESOLVIDO, via detectSituacao/detectMotivo).
+      var detectSituacao = situacao, detectMotivo = motivo;
+      if (resolvido) { situacao = 'RESOLVIDO'; motivo = res.motivo || pendenciaMotivoAcao(res.atual); }
+      return { id: 'PEND-' + id, orderId: id, origem: origem, isFbs: isFbs, modalidade: (esp && esp.modalidade) || (o && o.shippingOption) || '—', expedidoAt: info ? info.at : null, expedidoVia: info ? info.via : null, shopeeStatus: o ? (S.pedidos.labels[o.normalizedStatus] || o.orderStatus) : '—', noAcelera: noAcelera, valorAcelera: valorAcelera, valorPedido: o ? o.totalAmount : null, situacao: situacao, motivo: motivo, detectSituacao: detectSituacao, detectMotivo: detectMotivo, resolucao: res, sessao: esp };
     });
     return itens;
   }
@@ -5634,28 +5642,27 @@
   }
 
   // ============================================================ CAIXA (arquitetura central)
-  // Núcleo unidirecional Produtos→Pedidos→Expedição→Acelera→Caixa (prompt de arquitetura §1-28):
-  // o Caixa só LÊ motores já aprovados (orderFinance/mrEngine/mrOrderProfitEngine/expedidoSet/
-  // pendenciasConferencia/aceleraByDia/mrPeriodEngine/mrResultadoDetalhado/pendenciaResolver) —
-  // nunca recalcula nem reescreve nada das etapas anteriores. É o único lugar que concilia,
-  // resolve pendências (reaproveitando o MESMO motor de resolução da Expedição — nunca uma
-  // segunda Central de Pendências paralela) e fecha o dia.
+  // Núcleo unidirecional Produtos→Pedidos→Expedição→Acelera→Caixa→Minha Renda (correção de
+  // arquitetura): o Caixa só LÊ eventos/cálculos CANÔNICOS de cada etapa anterior — orderFinance()
+  // e pedidoComposicaoFinanceira() (Pedidos), expedidoSet()/expSessionItens() (Expedição),
+  // aceleraByDia() (Acelera), pendenciasConferencia() (Expedição×Acelera) — e NUNCA chama
+  // mrEngine()/mrPeriodEngine()/mrOrderProfitEngine()/mrResultadoDetalhado(), que pertencem a
+  // Minha Renda. A seta nunca volta: Minha Renda pode ler o resultado do Caixa depois, o Caixa
+  // nunca lê Minha Renda. O Caixa também NUNCA cria uma pendência nova — cada pendência nasce no
+  // módulo de origem (Pedidos/Expedição/Acelera) com id único, e o Caixa só resolve usando a MESMA
+  // função canônica do módulo que a criou (pendenciaResolver/pendResolucoes) — nunca um segundo
+  // estado paralelo.
   function caixaDayRange(dateKey) { return { from: new Date(dateKey + 'T00:00:00'), to: new Date(dateKey + 'T23:59:59.999') }; }
-  // ---- Pendência Financeira do Pedido (§5): diferença entre composição e Pagamento Liberado ----
-  // MESMA fórmula/tolerância já usada na Ficha do Pedido (conferencia()) — nunca uma segunda conta.
-  function pedidoPendenciaFinanceiraCalc(orderId, mrRow) {
-    if (!mrRow) return null; // sem Income cruzado — nunca inventa pendência por falta de dado
-    var taxasSomaC = mrRow.comissao + mrRow.servico + mrRow.transacao + mrRow.freteParceiro + mrRow.descontoFrete + mrRow.envioReverso + (mrRow.incentivoAcaoComercial || 0) + (mrRow.ajusteAcaoComercial || 0) + mrRow.afiliado + mrRow.cupom + mrRow.pix + mrRow.reembolso;
-    var adjSoma = mrAdj.filter(function (a) { return a.orderId === orderId; }).reduce(function (s, a) { return s + a.valor; }, 0);
-    var calculado = mrRow.preco + taxasSomaC + adjSoma;
-    var diff = mrRow.liberado - calculado;
-    if (Math.abs(diff) <= 100) return null; // mesma tolerância da Ficha (§21 conferencia())
-    return { orderId: orderId, diff: diff, liberado: mrRow.liberado, calculado: calculado };
-  }
+  // A Pendência de Composição (financeira) NASCE em pedidoComposicaoFinanceira() (Pedidos) — o
+  // Caixa só consulta o resultado e aplica a resolução já registrada (chave namespaced 'FIN:'+id no
+  // MESMO pendResolucoes/pendenciaResolver da Expedição, nunca um segundo mapa de estado).
   function caixaPendenciasFinanceirasPedidos(pedidoIds) {
-    var mr = mrEngine(); var mrByOrder = {}; mr.orders.forEach(function (r) { mrByOrder[r.orderId] = r; });
     var out = [];
-    pedidoIds.forEach(function (id) { var p = pedidoPendenciaFinanceiraCalc(id, mrByOrder[id]); if (p) out.push(p); });
+    pedidoIds.forEach(function (id) {
+      var comp = pedidoComposicaoFinanceira(id); if (!comp.pendencia) return;
+      var res = pendResolucoes['FIN:' + id]; if (res && res.atual) return; // já resolvida — não aparece mais como pendência aberta
+      out.push(comp.pendencia);
+    });
     return out;
   }
   // ---- Blocos de dados do dia (cada um lê motores já aprovados; nenhum recalcula) ----
@@ -5826,7 +5833,7 @@
       var blocoFin = '<div class="panel"><div class="ph"><h3>4. Financeiro</h3></div><div class="pb">' + kv('Taxas conferidas (Income cruzado)', (vendas.n - vendas.pendFin.length) + ' de ' + vendas.n + ' pedidos') + kv('Custos conferidos', nn(custoConhecido) + ' de ' + nn(vendas.n) + ' pedidos') + kv('Diferenças financeiras em aberto', nn(vendas.pendFin.length)) + kv('Valores não classificados (total importado — não restrito a este dia)', nn(naoClass.length) + ' coluna(s)') + '</div></div>';
       var dreBlock = mrRenda.length ? mrResultadoDetalhado(mrPeriodEngine(caixaDayRange(dateKey)), false) : '';
       var pendRows = pend.operacionais.slice(0, 60).map(function (i) { return '<tr><td class="mono">' + esc(i.orderId) + '</td><td class="cell-text">' + esc(i.motivo) + '</td><td><button class="btn-sm" data-caixapendop="' + esc(i.orderId) + '">Resolver</button></td></tr>'; }).join('') +
-        pend.financeiras.slice(0, 60).map(function (f) { return '<tr><td class="mono">' + esc(f.orderId) + '</td><td class="cell-text">Diferença financeira de ' + brlC(f.diff) + ' entre a composição do pedido e o Pagamento Liberado — etapa: composição Shopee, motivo: lançamento não classificado</td><td><button class="btn-sm" data-goped360="' + esc(f.orderId) + '">Ver pedido</button></td></tr>'; }).join('');
+        pend.financeiras.slice(0, 60).map(function (f) { return '<tr><td class="mono">' + esc(f.orderId) + '</td><td class="cell-text">' + esc(f.motivo) + '</td><td><button class="btn-sm" data-goped360="' + esc(f.orderId) + '">Ver pedido</button> <button class="btn-sm" data-caixapendfin="' + esc(f.orderId) + '">Resolver</button></td></tr>'; }).join('');
       var pendTable = '<div class="panel"><div class="ph"><h3>5. Pendências</h3><span class="footnote" style="margin:0">' + nn(pend.total) + ' no total</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Problema</th><th></th></tr></thead><tbody>' + (pendRows || '<tr><td colspan="3" class="empty">Nenhuma pendência neste dia. 🎉</td></tr>') + '</tbody></table></div></div>';
       var podeFechar = pend.total === 0;
       var footer = '<div class="panel"><div class="pb" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
@@ -5844,6 +5851,20 @@
       // reaproveita o MESMO motor de resolução da Expedição (pendenciaDrawer/pendenciaResolver) —
       // nunca uma segunda lógica de resolução de pendência operacional só porque foi aberta daqui.
       panel.querySelectorAll('[data-caixapendop]').forEach(function (b) { b.onclick = function () { d.remove(); pendenciaDrawer(b.dataset.caixapendop); }; });
+      // Pendência de Composição (financeira) — resolvida com o MESMO motor canônico
+      // (pendenciaResolver/pendResolucoes) usado pela Expedição, só com chave namespaced 'FIN:'
+      // para nunca colidir com a resolução operacional do mesmo pedido. Nunca um segundo estado.
+      panel.querySelectorAll('[data-caixapendfin]').forEach(function (b) {
+        b.onclick = function () {
+          var orderId = b.dataset.caixapendfin;
+          var comp = pedidoComposicaoFinanceira(orderId); var p = comp.pendencia;
+          var acao = prompt('Resolver "' + (p ? p.motivo : 'pendência financeira') + '" do pedido ' + orderId + '.\nDigite a ação: CLASSIFICAR_TAXA, MARCAR_CREDITO, MARCAR_DEBITO, JUSTIFICAR ou ERRO_LEITURA');
+          if (!acao) return;
+          acao = acao.trim().toUpperCase().replace(/\s+/g, '_');
+          var motivo = prompt('Observação para "' + pendenciaMotivoAcao(acao) + '":') || '';
+          pendenciaResolver('FIN:' + orderId, acao, motivo, motivo, 'ABERTA').then(function () { toast('Pendência financeira resolvida', orderId); refresh(); render(); });
+        };
+      });
       // drill-down da DRE do dia: aponta o filtro global de período para ESTE dia antes de abrir —
       // nunca mostra o drill calculado sobre o período global por engano (mesma lição do §39).
       panel.querySelectorAll('[data-mrdrill]').forEach(function (b) {
