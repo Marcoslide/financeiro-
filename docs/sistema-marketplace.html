@@ -8043,10 +8043,12 @@ buffer/index.js:
   function openMrDrill(kind, label) {
     var pe = mrPeriodEngine(); var e = mrEngine(); var rows = [];
     if (kind === 'taxasShopee') {
+      // §39 do prompt de reorganização: precisa bater EXATAMENTE com a linha "Taxas Shopee" da DRE
+      // (pe.taxasShopeeTotal + t.afiliado) — inclui ação comercial e afiliados, que faltavam aqui.
       pe.rows.forEach(function (r) {
-        var v = r.comissao + r.servico + r.transacao + r.freteParceiro + r.descontoFrete + r.envioReverso; if (!v) return;
+        var v = r.comissao + r.servico + r.transacao + r.freteParceiro + r.descontoFrete + r.envioReverso + (r.incentivoAcaoComercial || 0) + (r.ajusteAcaoComercial || 0) + r.afiliado; if (!v) return;
         var sk = e.skuByOrder[r.orderId];
-        rows.push({ orderId: r.orderId, data: r.dataConclusao || r.dataCriacao, sku: sk && sk[0] ? sk[0].sku : '—', produto: sk && sk[0] ? sk[0].produto : (r.produto || '—'), descricao: 'comissão+serviço+transação+frete parceiro+ajuste de frete+envio reverso', valor: v });
+        rows.push({ orderId: r.orderId, data: r.dataConclusao || r.dataCriacao, sku: sk && sk[0] ? sk[0].sku : '—', produto: sk && sk[0] ? sk[0].produto : (r.produto || '—'), descricao: 'comissão+serviço+transação+frete parceiro+ajuste de frete+envio reverso+ação comercial+afiliados', valor: v });
       });
     } else if (MR_FIELDS.indexOf(kind) >= 0 || kind === 'receitaLiquida') {
       // "Receita Líquida" = exatamente o pagamento liberado (soma de mrRow.liberado) — mesma base do
@@ -8163,7 +8165,7 @@ buffer/index.js:
     ]);
     var pctConciliado = pe.n ? r2(t.nMR / pe.n * 100) : 0;
     var strip3 = kstrip([
-      { l: 'Total Taxas Shopee', v: brlC(taxasShopeeAbs), cls: 'red', drill: t.nMR ? 'taxasShopee' : null, drillLabel: 'Total Taxas Shopee' },
+      { l: 'Total Taxas Shopee', v: brlC(taxasShopeeAbs), cls: 'red', s: 'sem afiliados — ver Financeiro para o detalhamento completo e a DRE' },
       { l: 'Afiliados', v: brlC(afiliadosAbs), cls: 'amber', drill: t.nMR ? 'afiliado' : null, drillLabel: 'Afiliados' },
       { l: 'Devoluções', v: brlC(devolucoesAbs), cls: 'red', drill: t.nMR ? 'reembolso' : null, drillLabel: 'Devoluções' },
       { l: '% Conciliado', v: pct(pctConciliado), cls: pctConciliado >= 95 ? 'green' : 'amber', s: nn(t.nMR) + ' de ' + nn(pe.n) + ' pedidos pagos com Minha Renda cruzada' },
