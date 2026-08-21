@@ -2727,62 +2727,168 @@
     var cl = document.getElementById('cfrclear'); if (cl) cl.onclick = function () { walletPendF = { status: '', tipo: '' }; render(); };
   }
 
-  // §35-38 — Fechamento de Caixa Diário: confere se as entradas/saídas do dia estão classificadas e
-  // explicadas. Nunca recalcula o resultado do negócio — só usa os mesmos wIsExplained()/wStatus()
-  // já aprovados. O snapshot do fechamento é gravado (walletclose, nunca apagado); se dado retroativo
-  // chegar depois, o dia aparece como "recebeu atualização posterior" sem apagar o registro anterior.
-  var CLOSE_LABEL = { ABERTO: ['Aberto', 'neutral'], COM_PENDENCIAS: ['Com pendências', 'warn'], FECHADO: ['Fechado', 'ok'] };
+  // §17-26 — Fechamento de Caixa Diário: um dia só é "fechado" quando alguém CLICA em fechar — nunca
+  // automaticamente por pendN===0 (§25). Abre um drawer por dia com 4 blocos (Operação/Acelera/
+  // Movimentação/Conciliação) + lista de pendências resolvível ali mesmo (reaproveita openWalletTx).
+  // O snapshot do fechamento é gravado (walletclose, nunca apagado); se dado novo chegar depois de
+  // fechado, o dia vira "Revisão necessária" (§26) sem apagar o histórico anterior.
+  var CLOSE_LABEL = { ABERTO: ['Aberto', 'neutral'], FECHADO: ['Fechado', 'ok'], FECHADO_COM_PENDENCIAS: ['Fechado com pendências', 'warn'], REVISAO_NECESSARIA: ['Revisão necessária', 'warn'] };
   function walletDayMetrics(dateKey) {
     var txs = wallet.filter(function (t) { return t.date && t.date.slice(0, 10) === dateKey && t.origin === 'SHOPEE'; });
     var entradas = 0, saidas = 0, conciliado = 0, pendente = 0, pendN = 0;
     txs.forEach(function (t) { if (t.amount > 0) entradas += t.amount; else saidas += t.amount; if (wIsExplained(t)) conciliado += Math.abs(t.amount); else { pendente += Math.abs(t.amount); pendN++; } });
     return { dateKey: dateKey, n: txs.length, entradas: r2(entradas), saidas: r2(saidas), liquido: r2(entradas + saidas), conciliado: r2(conciliado), pendente: r2(pendente), pendN: pendN };
   }
-  function walletCloseDay(dateKey, userName, obs) {
+  // status real do dia: nunca "fechado" sem um registro explícito de fechamento (walletClose[dk]).
+  function walletDayStatus(dateKey) {
+    var dm = walletDayMetrics(dateKey); var rec = walletClose[dateKey] || null;
+    var closed = rec && (rec.status === 'FECHADO' || rec.status === 'FECHADO_COM_PENDENCIAS' || rec.status === 'REVISAO_NECESSARIA');
+    var novoDepois = !!(closed && rec.snapshot && rec.snapshot.n !== dm.n);
+    var status = !closed ? 'ABERTO' : (novoDepois ? 'REVISAO_NECESSARIA' : rec.status);
+    return { dm: dm, rec: rec, novoDepois: novoDepois, status: status };
+  }
+  function walletCloseDay(dateKey, status, userName, justificativa) {
     var dm = walletDayMetrics(dateKey);
-    var status = dm.pendN === 0 ? 'FECHADO' : 'COM_PENDENCIAS';
     var rec = walletClose[dateKey] || { id: dateKey, history: [] };
     var at = new Date().toISOString();
     rec.status = status; rec.closedBy = userName || 'Operador'; rec.closedAt = at;
     rec.snapshot = { entradas: dm.entradas, saidas: dm.saidas, conciliado: dm.conciliado, pendente: dm.pendente, n: dm.n, pendN: dm.pendN };
-    rec.obs = obs || null;
-    rec.history = rec.history || []; rec.history.unshift({ at: at, user: rec.closedBy, status: status, obs: obs || null, n: dm.n, pendN: dm.pendN });
+    rec.justificativa = justificativa || null;
+    rec.history = rec.history || []; rec.history.unshift({ at: at, user: rec.closedBy, status: status, justificativa: justificativa || null, n: dm.n, pendN: dm.pendN });
+    walletClose[dateKey] = rec; return putMany('walletclose', [rec]);
+  }
+  // "Salvar revisão" não fecha o dia — só registra progresso (§25: status só muda com Fechar dia/Fechar com pendências).
+  function walletSaveReview(dateKey, userName, note) {
+    var dm = walletDayMetrics(dateKey);
+    var rec = walletClose[dateKey] || { id: dateKey, history: [] };
+    var at = new Date().toISOString();
+    rec.lastReviewedAt = at; rec.lastReviewedBy = userName || 'Operador';
+    rec.history = rec.history || []; rec.history.unshift({ at: at, user: rec.lastReviewedBy, status: 'REVISAO_SALVA', justificativa: note || null, n: dm.n, pendN: dm.pendN });
     walletClose[dateKey] = rec; return putMany('walletclose', [rec]);
   }
   function walletFechamento() {
     var days = {}; wallet.forEach(function (t) { if (t.date && t.origin === 'SHOPEE') days[t.date.slice(0, 10)] = 1; });
-    var head = secHead('CARTEIRA · FECHAMENTO DE CAIXA', 'Conferência diária', 'Para cada dia: entradas, saídas, quanto já está classificado/explicado e quanto ainda falta — feche o dia quando estiver tudo certo, ou registre com pendências e justifique.');
+    var head = secHead('CARTEIRA · FECHAMENTO DE CAIXA', 'Conferência diária', 'Para cada dia: veja operação, Acelera, movimentação da carteira e conciliação juntos — feche quando estiver tudo certo, ou feche com pendências e justifique. Um dia só fica "Fechado" depois que alguém clica em fechar.');
     if (!Object.keys(days).length) return head + emptyBox('Nenhuma movimentação real (Shopee) importada ainda.');
-    var list = Object.keys(days).sort().reverse().slice(0, 60).map(function (dk) {
-      var dm = walletDayMetrics(dk); var rec = walletClose[dk] || null;
-      var atualizadoDepois = rec && rec.snapshot && (rec.snapshot.n !== dm.n);
-      var statusAoVivo = rec ? rec.status : (dm.pendN === 0 ? 'FECHADO' : 'ABERTO');
-      return { dm: dm, rec: rec, atualizadoDepois: atualizadoDepois, statusAoVivo: statusAoVivo };
-    });
-    var abertos = list.filter(function (x) { return !x.rec; }).length;
-    var comPend = list.filter(function (x) { return x.rec && x.rec.status === 'COM_PENDENCIAS'; }).length;
-    var fechados = list.filter(function (x) { return x.rec && x.rec.status === 'FECHADO'; }).length;
-    var desatualizados = list.filter(function (x) { return x.atualizadoDepois; }).length;
+    var list = Object.keys(days).sort().reverse().slice(0, 60).map(function (dk) { return walletDayStatus(dk); });
+    var abertos = list.filter(function (x) { return x.status === 'ABERTO'; }).length;
+    var comPend = list.filter(function (x) { return x.status === 'FECHADO_COM_PENDENCIAS'; }).length;
+    var fechados = list.filter(function (x) { return x.status === 'FECHADO'; }).length;
+    var revisao = list.filter(function (x) { return x.status === 'REVISAO_NECESSARIA'; }).length;
     var strip = kstrip([
       { l: 'Dias fechados', v: nn(fechados), cls: 'green' },
-      { l: 'Dias com pendências', v: nn(comPend), cls: comPend ? 'amber' : 'green' },
-      { l: 'Dias ainda não revisados', v: nn(abertos), cls: abertos ? 'blue' : 'green' },
-      { l: 'Fechamentos com dado novo depois', v: nn(desatualizados), cls: desatualizados ? 'red' : 'green', s: 'reabra e feche de novo' },
+      { l: 'Dias fechados com pendências', v: nn(comPend), cls: comPend ? 'amber' : 'green' },
+      { l: 'Dias ainda não revisados (aberto)', v: nn(abertos), cls: abertos ? 'blue' : 'green' },
+      { l: 'Precisam revisão (movimento novo)', v: nn(revisao), cls: revisao ? 'red' : 'green' },
     ]);
     var rows = list.map(function (x) {
-      var dm = x.dm, rec = x.rec; var lbl = CLOSE_LABEL[x.statusAoVivo];
-      return '<tr' + (x.atualizadoDepois ? ' style="background:#fdf1e9"' : '') + '><td class="nowrap">' + dbr(dm.dateKey) + '</td><td class="nowrap">' + brl(dm.entradas) + '</td><td class="nowrap">' + brl(dm.saidas) + '</td><td class="nowrap">' + brl(dm.liquido) + '</td><td class="nowrap">' + brl(dm.conciliado) + '</td><td class="nowrap' + (dm.pendente ? ' neg' : '') + '">' + brl(dm.pendente) + ' (' + nn(dm.pendN) + ')</td><td><span class="tag ' + lbl[1] + '">' + lbl[0] + '</span>' + (x.atualizadoDepois ? ' <span class="tag warn">⚠ atualizado depois</span>' : '') + '</td><td>' + (rec ? esc(rec.closedBy) + ' · ' + new Date(rec.closedAt).toLocaleString('pt-BR') : '—') + '</td><td><button class="btn-sm" data-wclose="' + esc(dm.dateKey) + '">' + (rec ? 'Refazer' : 'Fechar o dia') + '</button></td></tr>';
+      var dm = x.dm, rec = x.rec; var lbl = CLOSE_LABEL[x.status];
+      return '<tr class="rowlink" data-wdia="' + esc(dm.dateKey) + '"' + (x.status === 'REVISAO_NECESSARIA' ? ' style="background:#fdf1e9"' : '') + '><td class="nowrap">' + dbr(dm.dateKey) + '</td><td class="nowrap">' + brl(dm.entradas) + '</td><td class="nowrap">' + brl(dm.saidas) + '</td><td class="nowrap">' + brl(dm.liquido) + '</td><td class="nowrap">' + brl(dm.conciliado) + '</td><td class="nowrap' + (dm.pendente ? ' neg' : '') + '">' + brl(dm.pendente) + ' (' + nn(dm.pendN) + ')</td><td><span class="tag ' + lbl[1] + '">' + lbl[0] + '</span></td><td>' + (rec ? esc(rec.closedBy) + ' · ' + new Date(rec.closedAt).toLocaleString('pt-BR') : '—') + '</td><td><button class="btn-sm" data-wdiabtn="' + esc(dm.dateKey) + '">Abrir</button></td></tr>';
     }).join('');
     var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Dia</th><th>Entradas</th><th>Saídas</th><th>Líquido</th><th>Conciliado</th><th>Pendente</th><th>Status</th><th>Fechado por</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
     return head + strip + table;
   }
   function bindWalletFechamento() {
-    app.querySelectorAll('[data-wclose]').forEach(function (b) { b.onclick = function () {
-      var dk = b.dataset.wclose; var dm = walletDayMetrics(dk);
-      var obs = null;
-      if (dm.pendN > 0) { obs = prompt(nn(dm.pendN) + ' lançamento(s) deste dia ainda não estão explicados (total ' + brl(dm.pendente) + '). Descreva o motivo para fechar mesmo assim com pendências:'); if (obs == null) return; }
-      walletCloseDay(dk, 'Operador', obs).then(function () { render(); toast('Fechamento registrado', dbr(dk) + (dm.pendN > 0 ? ' — com pendências' : ' — fechado')); });
-    }; });
+    app.querySelectorAll('[data-wdia]').forEach(function (b) { b.onclick = function () { openFechamentoDia(b.dataset.wdia); }; });
+    app.querySelectorAll('[data-wdiabtn]').forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); openFechamentoDia(b.dataset.wdiabtn); }; });
+  }
+  // ---- blocos de dados do drawer de Fechamento (cada um lê motores já aprovados; nenhum recalcula) ----
+  function walletDayOperacao(dateKey) {
+    var pagas = orders.filter(function (o) { return o.paidAt && o.paidAt.slice(0, 10) === dateKey; });
+    var pagasValor = pagas.reduce(function (s, o) { return s + (o.totalAmount || 0); }, 0);
+    var expIds = Object.keys(shipBip).filter(function (oid) { var b = shipBip[oid]; return b.bipedAt && b.bipedAt.slice(0, 10) === dateKey; });
+    var expValor = expIds.reduce(function (s, oid) { var o = orders.find(function (x) { return x.id === oid; }); return s + (o ? (o.totalAmount || 0) : 0); }, 0);
+    var aEnviar = orders.filter(function (o) { return o.normalizedStatus === 'A_ENVIAR' && o.shipByDate && o.shipByDate.slice(0, 10) === dateKey; });
+    return { vendasPagasN: pagas.length, vendasPagasValor: r2(pagasValor), expedidosN: expIds.length, expedidosValor: r2(expValor), aEnviarN: aEnviar.length };
+  }
+  function walletDayAcelera(dateKey) {
+    if (!acelera.length) return null;
+    var dias = aceleraByDia(acelera); var d = dias.filter(function (x) { return x.data === dateKey; })[0];
+    if (!d) return { n: 0 };
+    var walletAcelera = wallet.filter(function (t) { return t.date && t.date.slice(0, 10) === dateKey && wEffCat(t) === 'ACELERA'; });
+    var walletCredito = r2(walletAcelera.reduce(function (s, t) { return s + t.amount; }, 0));
+    var liquidoEsperado = r2(d.liquidoCalc / 100);
+    var bate = Math.abs(r2(walletCredito - liquidoEsperado)) <= 0.05;
+    return { n: d.resgates, antec: d.antec, taxa: d.taxa, liquidoCalc: d.liquidoCalc, walletCredito: walletCredito, liquidoEsperado: liquidoEsperado, bate: bate, temCreditoNaCarteira: walletAcelera.length > 0 };
+  }
+  function walletDayMov(dateKey) {
+    var txs = wallet.filter(function (t) { return t.date && t.date.slice(0, 10) === dateKey && t.origin === 'SHOPEE'; });
+    var entradas = 0, saidas = 0, entIdent = 0, entNao = 0, saiIdent = 0, saiNao = 0;
+    txs.forEach(function (t) {
+      var ident = !!wOrderId(t);
+      if (t.amount > 0) { entradas += t.amount; if (ident) entIdent += t.amount; else entNao += t.amount; }
+      else { saidas += t.amount; if (ident) saiIdent += t.amount; else saiNao += t.amount; }
+    });
+    return { n: txs.length, entradas: r2(entradas), saidas: r2(saidas), liquido: r2(entradas + saidas), entIdent: r2(entIdent), entNao: r2(entNao), saiIdent: r2(saiIdent), saiNao: r2(saiNao) };
+  }
+  // Conciliação por dia: reaproveita walletOrigemDiag (não depende do período global) + diffs do dia
+  // (bypassa inPeriod global — Fechamento é sempre por dia, independente do filtro de período ativo).
+  function walletDayConciliacao(dateKey) {
+    var rec = reconcileWallet();
+    var real = rec.txs.filter(function (t) { return t.date && t.date.slice(0, 10) === dateKey && t.origin === 'SHOPEE'; });
+    var g = walletOrigemDiag({ real: real });
+    var diffsDay = rec.diffs.filter(function (d) { return d.date && d.date.slice(0, 10) === dateKey; });
+    var diffsAbertas = diffsDay.filter(function (d) { return d.status === 'DIVERGENTE' && !wIsExplained(d.rec) && wStatus(d.rec) !== 'CONTESTACAO' && wStatus(d.rec) !== 'EM_ANALISE'; });
+    var classificadosManual = real.filter(function (t) { var c = wgetCls(t.id); return c && c.catManual; }).length;
+    var seen = {}; var items = [];
+    function add(t, tipo, motivo, detalhe) { if (seen[t.id]) return; seen[t.id] = true; items.push({ t: t, tipo: tipo, motivo: motivo, detalhe: detalhe }); }
+    g.divergentes.forEach(function (x) { add(x.t, 'DIVERGENCIA_VALOR', 'Diferença de valor — ' + x.origin.fonte, 'Esperado ' + brl(x.origin.esperado) + ' · Carteira ' + brl(x.t.amount) + ' · Diferença ' + brl(x.origin.diff)); });
+    g.dup.forEach(function (d) { d.itens.forEach(function (t) { if (t.date && t.date.slice(0, 10) === dateKey) add(t, 'DUPLICIDADE', 'Possível cobrança duplicada — ' + d.fonte, nn(d.itens.length) + '× o mesmo valor (' + brl(d.valor) + ') na carteira'); }); });
+    g.candidatos.forEach(function (x) { add(x.t, 'CANDIDATO', 'Candidato de conciliação — ' + x.origin.fonte, 'Valor e janela de data batem, mas sem ID exato — confirme manualmente'); });
+    g.semOrigem.forEach(function (t) { add(t, 'SEM_ORIGEM', 'Origem não identificada (' + wcatLabel(wEffCat(t)) + ')', 'Fonte relevante já cobre esta data e mesmo assim não achou correspondência'); });
+    diffsDay.filter(function (d) { return d.status === 'DIVERGENTE'; }).forEach(function (d) { add(d.rec, 'AJUSTE_SEM_LINHA', 'Diferença de saldo do extrato (ajuste sem linha)', 'Esperado ' + brl(d.expected) + ' · Informado ' + brl(d.informed) + ' · Diferença ' + brl(d.gap)); });
+    return { real: real, conciliados: g.conciliados.length, divergentes: g.divergentes.length, candidatos: g.candidatos.length, semOrigem: g.semOrigem.length, foraCobertura: g.foraCobertura.length, dup: g.dup.length, classificadosManual: classificadosManual, diffsTotal: diffsDay.length, diffsAbertas: diffsAbertas, saldoFecha: diffsAbertas.length === 0, items: items };
+  }
+  function openFechamentoDia(dateKey) {
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '760px'; panel.style.maxWidth = '98vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    function refresh() { panel.innerHTML = body(); wire(); }
+    function body() {
+      var st = walletDayStatus(dateKey); var lbl = CLOSE_LABEL[st.status];
+      var op = walletDayOperacao(dateKey); var ac = walletDayAcelera(dateKey); var mov = walletDayMov(dateKey); var conc = walletDayConciliacao(dateKey);
+      var blocoOp = '<div class="panel"><div class="ph"><h3>Operação do dia</h3><span class="footnote" style="margin:0">contexto — nunca somado à Carteira</span></div><div class="pb">' +
+        kv('Vendas pagas', nn(op.vendasPagasN) + ' pedido(s) · ' + brl(op.vendasPagasValor)) +
+        kv('Expedidos (bipados)', nn(op.expedidosN) + ' pedido(s) · ' + brl(op.expedidosValor)) +
+        kv('A enviar (prazo vence hoje)', nn(op.aEnviarN) + ' pedido(s)') + '</div></div>';
+      var blocoAc = !acelera.length ? '' : ('<div class="panel"><div class="ph"><h3>Shopee Acelera</h3></div><div class="pb">' +
+        (ac && ac.n ? (kv('Resgates do dia', nn(ac.n)) + kv('Valor antecipado', brlC(ac.antec)) + kv('Taxa Acelera', brlC(ac.taxa)) + kv('Líquido esperado', brlC(ac.liquidoCalc)) + kv('Crédito localizado na Carteira', ac.temCreditoNaCarteira ? brl(ac.walletCredito) : 'não encontrado') + kv('Situação', ac.bate ? '🟢 Bate' : '🔴 Divergente')) : '<div class="footnote" style="padding:0 16px 12px">Nenhum resgate do Acelera consolidado nesta data.</div>') + '</div></div>');
+      var blocoMov = '<div class="panel"><div class="ph"><h3>Movimentação da Carteira</h3></div><div class="pb">' +
+        kv('Entradas', brl(mov.entradas)) + kv('· identificadas (com pedido)', brl(mov.entIdent)) + kv('· não identificadas', brl(mov.entNao)) +
+        kv('Saídas', brl(mov.saidas)) + kv('· identificadas (com pedido)', brl(mov.saiIdent)) + kv('· não identificadas', brl(mov.saiNao)) +
+        kv('Movimento líquido', brl(mov.liquido)) + '</div></div>';
+      var confCallout = callout(conc.saldoFecha ? 'green' : 'warn', conc.saldoFecha ? '✓ Saldo matemático fecha' : '⚠ Saldo matemático com diferença em aberto',
+        'Distinto de <b>origem financeira identificada</b>: o saldo pode fechar matematicamente mesmo com lançamentos cuja origem (pedido/resgate) ainda não foi encontrada — é o que a lista de pendências abaixo mostra.');
+      var blocoConc = '<div class="panel"><div class="ph"><h3>Conciliação</h3></div><div class="pb">' + confCallout +
+        kv('Lançamentos totais (Shopee)', nn(conc.real.length)) + kv('Conciliados por origem exata', nn(conc.conciliados)) + kv('Classificados manualmente', nn(conc.classificadosManual)) +
+        kv('Com diferença de valor', nn(conc.divergentes)) + kv('Sem origem identificada', nn(conc.semOrigem)) + kv('Possíveis duplicações', nn(conc.dup)) +
+        kv('Pendências restantes', nn(conc.items.length)) + '</div></div>';
+      var pendRows = conc.items.slice(0, 100).map(function (it) {
+        var t = it.t; return '<tr><td class="nowrap">' + dbr(t.date) + '</td><td class="mono">' + wOrderCell(t) + '</td><td class="cell-text">' + esc(it.motivo) + '</td><td class="nowrap">' + brl(t.amount) + '</td><td><button class="btn-sm" data-fchtx="' + esc(t.id) + '">Resolver</button></td></tr>';
+      }).join('');
+      var pendTable = '<div class="panel"><div class="ph"><h3>Pendências do dia</h3><span class="footnote" style="margin:0">resolva sem sair desta tela — os totais acima atualizam sozinhos</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Pedido</th><th>Problema</th><th>Valor</th><th></th></tr></thead><tbody>' + (pendRows || '<tr><td colspan="5" class="empty">Nenhuma pendência neste dia. 🎉</td></tr>') + '</tbody></table></div></div>';
+      var podeFechar = conc.items.length === 0;
+      var footer = '<div class="panel"><div class="pb" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
+        '<button class="btn-sm" id="fch-save">Salvar revisão</button>' +
+        '<button class="btn-sm' + (podeFechar ? ' primary' : '') + '"' + (podeFechar ? '' : ' disabled title="Só é possível Fechar o dia sem pendências — use Fechar com pendências"') + ' id="fch-close">Fechar dia</button>' +
+        '<button class="btn-sm' + (podeFechar ? '' : ' primary') + '" id="fch-closepend">Fechar com pendências</button>' +
+        (st.rec ? '<span class="footnote" style="margin:0">último registro: ' + esc(CLOSE_LABEL[st.rec.status] ? CLOSE_LABEL[st.rec.status][0] : st.rec.status) + ' por ' + esc(st.rec.closedBy || '—') + ' em ' + new Date(st.rec.closedAt).toLocaleString('pt-BR') + '</span>' : '') +
+        '</div></div>';
+      return '<div class="dh"><div><b>FECHAMENTO — ' + esc(dbr(dateKey)) + '</b> <span class="tag ' + lbl[1] + '" style="margin-left:6px">' + lbl[0] + '</span>' + (st.status === 'REVISAO_NECESSARIA' ? ' <span class="footnote" style="margin:0">⚠ movimento novo após o fechamento anterior</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' +
+        blocoOp + blocoAc + blocoMov + blocoConc + pendTable + footer + '</div>';
+    }
+    function wire() {
+      panel.querySelector('.x').onclick = function () { d.remove(); };
+      panel.querySelectorAll('[data-fchtx]').forEach(function (b) { b.onclick = function () { openWalletTx(b.dataset.fchtx, refresh); }; });
+      var sv = panel.querySelector('#fch-save'); if (sv) sv.onclick = function () { walletSaveReview(dateKey, 'Operador', null).then(function () { toast('Revisão salva', dbr(dateKey)); refresh(); render(); }); };
+      var cl = panel.querySelector('#fch-close'); if (cl && !cl.disabled) cl.onclick = function () { walletCloseDay(dateKey, 'FECHADO', 'Operador', null).then(function () { toast('Dia fechado', dbr(dateKey)); refresh(); render(); }); };
+      var cp = panel.querySelector('#fch-closepend'); if (cp) cp.onclick = function () {
+        var conc = walletDayConciliacao(dateKey);
+        var justificativa = prompt((conc.items.length ? nn(conc.items.length) + ' pendência(s) deste dia ainda em aberto. ' : '') + 'Descreva o motivo para fechar mesmo assim:');
+        if (justificativa == null || !justificativa.trim()) return;
+        walletCloseDay(dateKey, 'FECHADO_COM_PENDENCIAS', 'Operador', justificativa.trim()).then(function () { toast('Dia fechado com pendências', dbr(dateKey)); refresh(); render(); });
+      };
+    }
+    refresh();
   }
 
   function renderCarteira() {
@@ -2911,7 +3017,7 @@
     if (t.gap != null && Math.abs(t.gap) > 0.01) parts.push('Atenção: o saldo após esta movimentação não fechou exatamente — veja a diferença reconstruída próxima a esta data.'); else if (t.gap === 0) parts.push('O saldo fechou matematicamente após esta movimentação.');
     return parts.join(' ');
   }
-  function openWalletTx(id) {
+  function openWalletTx(id, onDone) {
     var rec = reconcileWallet(); var t = rec.txs.find(function (x) { return x.id === id; }); if (!t) return;
     var isRec = t.origin === 'SISTEMA';
     var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '640px'; panel.style.maxWidth = '96vw';
@@ -2943,7 +3049,7 @@
     panel.querySelector('.x').onclick = function () { d.remove(); };
     panel.querySelector('#wcls-save').onclick = function () {
       var patch = { catManual: panel.querySelector('#wcls-cat').value || null, subcat: panel.querySelector('#wcls-sub').value.trim() || null, responsibility: panel.querySelector('#wcls-resp').value || null, internalStatus: panel.querySelector('#wcls-st').value || null, linkedOrderId: panel.querySelector('#wcls-ord').value.trim() || null };
-      wsetCls(t.id, patch, panel.querySelector('#wcls-note').value.trim() || null, 'Operador').then(function () { d.remove(); render(); toast('Classificação salva', ''); });
+      wsetCls(t.id, patch, panel.querySelector('#wcls-note').value.trim() || null, 'Operador').then(function () { d.remove(); render(); if (onDone) onDone(); toast('Classificação salva', ''); });
     };
     var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { d.remove(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
     var gd = panel.querySelector('[data-godev]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev; d.remove(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
