@@ -66,6 +66,12 @@
   // (evita confundir "precisa sair fisicamente daqui" com pedidos que o centro de distribuição da
   // Shopee já resolve). "Incluir Full" liga de volta quando for útil analisar tudo junto.
   var pedExpF = { search: '', status: '', includeFull: false };
+  // Sessão de Expedição (prompt Expedição/Full/FBS §5-6/§13/§24/§79): retrato CONGELADO do que
+  // deveria sair num dia operacional — nunca reescrito por importações futuras. "Data operacional"
+  // (o dia que a sessão representa) é sempre distinta de "data/hora real do bipe" (quando cada
+  // pedido efetivamente saiu, que pode cair no dia seguinte).
+  var expSessions = []; // { id, dataOperacional, horaInicio, operador, esperados:[{orderId,modalidade,prazoEnvio,statusNoMomento,isFbs}], resolvidas:[] }
+  var expSessF = { sel: null }; // sessão aberta na tela (id) — null = mostra a lista
   var devSel = {};            // seleção múltipla em Casos: id -> true (em memória)
   var devCustomStatus = [];   // status internos personalizados pelo operador: [{key,label}]
   var chat = [];
@@ -212,7 +218,7 @@
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -652,6 +658,58 @@
   // Pedidos > A ENVIAR (normalizedStatus === 'A_ENVIAR'). Nunca por prazo, pagamento, "parece
   // pendente" ou qualquer outro status — não pago/enviado/concluído/cancelado/devolução NUNCA
   // entram aqui, mesmo que tenham data prevista de envio, rastreio ou informação logística.
+  // Sessão de Expedição (§5-6/§13/§24/§79): "data operacional" = o dia que a sessão representa
+  // (ex.: 20/08); "hora de início" = quando a sessão foi aberta; cada item congelado tem seu
+  // próprio "confirmado em" depois, que pode cair no dia seguinte (ex.: bipado às 14h11 de 21/08
+  // para uma sessão operacional de 20/08) — os dois nunca são a mesma coisa.
+  function expSessionAtiva() {
+    var today = new Date().toISOString().slice(0, 10);
+    return expSessions.find(function (s) { return s.dataOperacional === today; }) || null;
+  }
+  function expSessionStart(dataOperacional, operador) {
+    var aEnviarAll = orders.filter(function (o) { return o.normalizedStatus === 'A_ENVIAR'; });
+    var esperados = aEnviarAll.map(function (o) { return { orderId: o.id, modalidade: o.shippingOption || '(sem modalidade)', prazoEnvio: o.shipByDate, statusNoMomento: o.normalizedStatus, isFbs: !!o.isFbs }; });
+    var now = new Date().toISOString();
+    var sess = { id: 'exps' + Date.now() + Math.round(performance.now()), dataOperacional: dataOperacional || now.slice(0, 10), horaInicio: now, operador: operador || 'Operador', esperados: esperados, resolvidas: [] };
+    expSessions.unshift(sess);
+    return putMany('expsessions', [sess]).then(function () { return sess; });
+  }
+  // Nunca reescreve sess.esperados (o congelamento é definitivo) — só interpreta, a cada
+  // renderização, o estado ATUAL desses IDs contra expedidoSet() e o Acelera importado depois.
+  function expSessionItens(sess) {
+    var exp = expedidoSet();
+    var acByOrder = {}; acelera.forEach(function (r) { (acByOrder[r.pedido] = acByOrder[r.pedido] || []).push(r); });
+    var resolvidoMap = {}; (sess.resolvidas || []).forEach(function (r) { resolvidoMap[r.orderId] = r; });
+    return sess.esperados.map(function (e) {
+      var o = orders.find(function (x) { return x.id === e.orderId; });
+      var info = exp[e.orderId]; var expedido = !!info; var noAcelera = !!acByOrder[e.orderId];
+      var resolucao = resolvidoMap[e.orderId]; var situacao;
+      if (resolucao) situacao = 'RESOLVIDO';
+      else if (expedido && noAcelera) situacao = 'OK';
+      else if (expedido && !noAcelera) situacao = 'PEND_FINANCEIRA';
+      else if (!expedido && noAcelera) situacao = 'PEND_OPERACIONAL';
+      else situacao = 'PEND_EXPEDICAO';
+      return { orderId: e.orderId, modalidade: e.modalidade, prazoEnvio: e.prazoEnvio, isFbs: e.isFbs, statusAtual: o ? o.normalizedStatus : null, expedido: expedido, expedidoAt: info ? info.at : null, expedidoVia: info ? info.via : null, noAcelera: noAcelera, situacao: situacao, resolucao: resolucao };
+    });
+  }
+  function expSessaoBlock() {
+    var ativa = expSessionAtiva();
+    if (!ativa) {
+      var aEnviarAgora = orders.filter(function (o) { return o.normalizedStatus === 'A_ENVIAR'; }).length;
+      return '<div class="panel"><div class="ph"><h3>Sessão de Expedição</h3><span class="footnote" style="margin:0">retrato congelado do que deveria sair hoje — nunca reescrito por importações futuras</span></div><div class="pb"><div class="footnote">Nenhuma sessão aberta para hoje (' + acDbr(new Date().toISOString()) + '). Ao iniciar, o sistema congela a lista atual de A Enviar (' + nn(aEnviarAgora) + ' pedido(s)) como "esperados" do dia.</div><button class="btn-sm primary" id="expsessstart" style="margin-top:8px">Iniciar sessão de expedição de hoje</button></div></div>';
+    }
+    var itens = expSessionItens(ativa);
+    var counts = { OK: 0, PEND_FINANCEIRA: 0, PEND_OPERACIONAL: 0, PEND_EXPEDICAO: 0, RESOLVIDO: 0 };
+    itens.forEach(function (i) { counts[i.situacao]++; });
+    return '<div class="panel"><div class="ph"><h3>Sessão de Expedição — ' + acDbr(ativa.dataOperacional) + '</h3><span class="footnote" style="margin:0">aberta às ' + new Date(ativa.horaInicio).toLocaleTimeString('pt-BR') + ' · ' + nn(ativa.esperados.length) + ' pedido(s) congelado(s) como esperados</span></div><div class="pb"><div class="kstrip">' +
+      '<div class="kc"><div class="kl">Esperados</div><div class="kv" style="font-size:16px">' + nn(ativa.esperados.length) + '</div></div>' +
+      '<div class="kc"><div class="kl">🟢 OK</div><div class="kv" style="font-size:16px">' + nn(counts.OK + counts.RESOLVIDO) + '</div></div>' +
+      '<div class="kc"><div class="kl">🔴 Pendência</div><div class="kv" style="font-size:16px">' + nn(counts.PEND_FINANCEIRA + counts.PEND_OPERACIONAL + counts.PEND_EXPEDICAO) + '</div></div>' +
+      '</div><div class="footnote" style="margin-top:6px">Ver detalhamento completo (com motivo e ação) em Pedidos → Expedição → Pendências da Conferência.</div></div></div>';
+  }
+  function bindExpSessaoBlock() {
+    var b = document.getElementById('expsessstart'); if (b) b.onclick = function () { expSessionStart().then(function () { render(); toast('Sessão de expedição iniciada', ''); }); };
+  }
   function pedidosExpedicao() {
     var head = secHead('PEDIDOS · EXPEDIÇÃO', 'A Enviar × Bipado', 'A fila é exatamente a aba A Enviar de Pedidos — nada mais. O bipe confirma que a caixa realmente saiu; não altera o status Shopee.');
     if (!orders.length) return head + emptyBox('Importe os Pedidos para começar a controlar a expedição.');
@@ -677,13 +735,14 @@
     var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>BR</th><th>Data venda</th><th>Expedição</th><th>Conciliação</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="empty">Nenhum pedido neste filtro.</td></tr>') + '</tbody></table></div></div>';
     var anomaliaRows = bipadosForaFila.slice(0, 100).map(function (x) { return '<tr><td class="mono">' + esc(x.oid) + '</td><td>' + (x.o ? '<span class="pill ' + x.o.normalizedStatus + '">' + esc(S.pedidos.labels[x.o.normalizedStatus] || x.o.normalizedStatus) + '</span>' : '<span class="tag warn">pedido não encontrado em Pedidos</span>') + '</td><td class="nowrap">' + new Date(x.b.bipedAt).toLocaleString('pt-BR') + '</td>' + (x.o ? '<td><button class="btn-sm" data-goped360="' + esc(x.oid) + '">Ficha do Pedido</button></td>' : '<td>—</td>') + '</tr>'; }).join('');
     var anomaliaBox = bipadosForaFila.length ? '<div class="panel"><div class="ph"><h3>Bipados que não estão em A Enviar</h3><span class="footnote" style="margin:0">o bipe existe, mas o status Shopee do pedido já mudou (ou o ID não existe em Pedidos) — revise</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Status atual</th><th>Bipado em</th><th></th></tr></thead><tbody>' + anomaliaRows + '</tbody></table></div></div>' : '';
-    return head + strip + bipe +
+    return head + expSessaoBlock() + strip + bipe +
       '<div class="chips">' + chips.map(function (c) { return '<span class="chip' + (pedExpF.status === c[0] ? ' chip-on' : '') + '" data-expst="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '<span class="chip' + (pedExpF.includeFull ? ' chip-on' : '') + '" data-expfull="1" title="Full/FBS é despachado pelo centro de distribuição da Shopee — por padrão fica fora desta fila própria">Incluir Full (' + nn(fullCount) + ')</span></div>' +
       '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="expq" style="width:260px" placeholder="Buscar ID do pedido ou BR…" value="' + esc(pedExpF.search) + '"></div>' +
       '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos em A Enviar' + (!pedExpF.includeFull && fullCount ? ' <span class="footnote">(' + nn(fullCount) + ' Full/FBS fora da fila — expedidos pela Shopee)</span>' : '') + '</div>' +
       table + anomaliaBox;
   }
   function bindPedidosExpedicao() {
+    bindExpSessaoBlock();
     var bi = document.getElementById('bipinput'); var doRegister = function () { var v = bi.value; bipRegister(v).then(function (rec) { bi.value = ''; render(); var el = document.getElementById('bipinput'); if (el) el.focus(); toast('Expedição registrada', rec.orderId); }).catch(function (e) { toast('Falha', e.message, true); }); };
     if (bi) bi.onkeydown = function (e) { if (e.key === 'Enter') doRegister(); };
     var bb = document.getElementById('bipbtn'); if (bb) bb.onclick = doRegister;
@@ -5327,13 +5386,13 @@
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
 
   // Abre o banco; se falhar (corrompido/bloqueado/privado), ativa o modo em memória e SEGUE —
   // o sistema sempre carrega e Produtos sempre abre (só não salva). Nunca dead-end / tela branca.
   openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions')]);
   }).then(function (r) {
     orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
     wallet = r[5] || [];
@@ -5349,6 +5408,7 @@
     var mrS = settings.filter(function (x) { return x.id === 'mrSummary'; })[0]; if (mrS) mrSummary = mrS.data;
     var mrMCfg = settings.filter(function (x) { return x.id === 'mrMetaCfg'; })[0]; if (mrMCfg && mrMCfg.data) Object.keys(mrMCfg.data).forEach(function (k) { mrMetaCfg[k] = mrMCfg.data[k]; });
     shipBip = {}; (r[18] || []).forEach(function (b) { shipBip[b.orderId] = b; });
+    expSessions = (r[20] || []).sort(function (a, b) { return b.horaInicio.localeCompare(a.horaInicio); });
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
     plans = (r[4] || []).map(function (p) { if (PLAN_MIGR[p.status]) p.status = PLAN_MIGR[p.status]; if (p.scopeSkus == null && p.relatedSkus) p.scopeSkus = p.relatedSkus; if (p.indicatorKind == null) p.indicatorKind = 'liquido'; return p; });
     occ = occ.filter(function (o) { return !o.isDemo; }); // higiene: nunca deixar demo no banco real
