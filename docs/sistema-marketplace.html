@@ -3838,6 +3838,7 @@ buffer/index.js:
   // (evita confundir "precisa sair fisicamente daqui" com pedidos que o centro de distribuição da
   // Shopee já resolve). "Incluir Full" liga de volta quando for útil analisar tudo junto.
   var pedExpF = { search: '', status: '', includeFull: false };
+  var pedExpView = 'fila'; // 'fila' (bipagem) | 'prazos' (Tempo de Envio, absorvido em Expedição)
   // Sessão de Expedição (prompt Expedição/Full/FBS §5-6/§13/§24/§79): retrato CONGELADO do que
   // deveria sair num dia operacional — nunca reescrito por importações futuras. "Data operacional"
   // (o dia que a sessão representa) é sempre distinta de "data/hora real do bipe" (quando cada
@@ -4362,15 +4363,14 @@ buffer/index.js:
       '<button class="btn-sm primary" id="imp-ped">Importar planilha de pedidos</button></div>' +
       dadosAtualizadosAteBadge() +
       devPeriodBar() +
-      '<div class="subtabs">' + subtab('pedidos', 'pedidos', 'Pedidos') + subtab('pedidos', 'expedicao', 'Expedição') + subtab('pedidos', 'tempoenvio', 'Tempo de Envio') + subtab('pedidos', 'dashboard', 'Dashboard') + subtab('pedidos', 'import', 'Importações') + '</div>' +
-      (sub.pedidos === 'dashboard' ? pedidosDashboard() : sub.pedidos === 'import' ? importsFor('Pedidos') : sub.pedidos === 'expedicao' ? pedidosExpedicao() : sub.pedidos === 'tempoenvio' ? pedidosTempoEnvio() : pedidosList());
+      '<div class="subtabs">' + subtab('pedidos', 'pedidos', 'Pedidos') + subtab('pedidos', 'expedicao', 'Expedição') + subtab('pedidos', 'dashboard', 'Dashboard') + subtab('pedidos', 'import', 'Importações') + '</div>' +
+      (sub.pedidos === 'dashboard' ? pedidosDashboard() : sub.pedidos === 'import' ? importsFor('Pedidos') : (sub.pedidos === 'expedicao' || sub.pedidos === 'tempoenvio') ? pedidosExpedicao() : pedidosList());
     document.getElementById('imp-ped').onclick = function () { fileInput(function (f) { importPedidos(f).then(function (b) { render(); toast('Pedidos importados', b.seen + ' pedidos · ' + b.novo + ' novos · ' + b.upd + ' atualizados · ' + b.unch + ' sem alteração'); }).catch(function (e) { toast('Falha', e.message, true); }); }); };
     bindSubtabs('pedidos');
     bindDevPeriodBar();
     if (sub.pedidos === 'pedidos') bindPedidosList();
-    if (sub.pedidos === 'expedicao') bindPedidosExpedicao();
+    if (sub.pedidos === 'expedicao' || sub.pedidos === 'tempoenvio') bindPedidosExpedicao();
     if (sub.pedidos === 'dashboard') bindPedidosDashboard();
-    if (sub.pedidos === 'tempoenvio') bindPedidosTempoEnvio();
   }
   function bindPedidosDashboard() { var s = document.getElementById('peddashbasis'); if (s) s.onchange = function () { pedDashBasis = s.value; render(); }; }
   // ---------- Expedição / Bipe (§1 do prompt de reorganização): "vendido" ≠ "expedido" ----------
@@ -4625,7 +4625,12 @@ buffer/index.js:
     var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>BR</th><th>Data venda</th><th>Expedição</th><th>Conciliação</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="empty">Nenhum pedido neste filtro.</td></tr>') + '</tbody></table></div></div>';
     var anomaliaRows = bipadosForaFila.slice(0, 100).map(function (x) { return '<tr><td class="mono">' + esc(x.oid) + '</td><td>' + (x.o ? '<span class="pill ' + x.o.normalizedStatus + '">' + esc(S.pedidos.labels[x.o.normalizedStatus] || x.o.normalizedStatus) + '</span>' : '<span class="tag warn">pedido não encontrado em Pedidos</span>') + '</td><td class="nowrap">' + new Date(x.b.bipedAt).toLocaleString('pt-BR') + '</td>' + (x.o ? '<td><button class="btn-sm" data-goped360="' + esc(x.oid) + '">Ficha do Pedido</button></td>' : '<td>—</td>') + '</tr>'; }).join('');
     var anomaliaBox = bipadosForaFila.length ? '<div class="panel"><div class="ph"><h3>Bipados que não estão em A Enviar</h3><span class="footnote" style="margin:0">o bipe existe, mas o status Shopee do pedido já mudou (ou o ID não existe em Pedidos) — revise</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Status atual</th><th>Bipado em</th><th></th></tr></thead><tbody>' + anomaliaRows + '</tbody></table></div></div>' : '';
-    return head + expSessaoBlock() + pendenciasConferenciaBlock() + strip + bipe +
+    // §17-21 Full/FBS: Tempo de Envio absorvido aqui como uma segunda visão da mesma tela — nunca
+    // uma aba própria de novo. "Fila de bipagem" é o operacional do dia; "Prazos de envio" é o
+    // mesmo teQueue()/shipDeadlineTs() de sempre, sem nenhuma alteração de cálculo.
+    var viewToggle = '<div class="chips" style="margin-top:4px"><span class="chip' + (pedExpView === 'fila' ? ' chip-on' : '') + '" data-expview="fila">Fila de bipagem</span><span class="chip' + (pedExpView === 'prazos' ? ' chip-on' : '') + '" data-expview="prazos">Prazos de envio</span></div>';
+    if (pedExpView === 'prazos') return head + expSessaoBlock() + pendenciasConferenciaBlock() + viewToggle + tempoEnvioBody();
+    return head + expSessaoBlock() + pendenciasConferenciaBlock() + viewToggle + strip + bipe +
       '<div class="chips">' + chips.map(function (c) { return '<span class="chip' + (pedExpF.status === c[0] ? ' chip-on' : '') + '" data-expst="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '<span class="chip' + (pedExpF.includeFull ? ' chip-on' : '') + '" data-expfull="1" title="Full/FBS é despachado pelo centro de distribuição da Shopee — por padrão fica fora desta fila própria">Incluir Full (' + nn(fullCount) + ')</span></div>' +
       '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="expq" style="width:260px" placeholder="Buscar ID do pedido ou BR…" value="' + esc(pedExpF.search) + '"></div>' +
       '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos em A Enviar' + (!pedExpF.includeFull && fullCount ? ' <span class="footnote">(' + nn(fullCount) + ' Full/FBS fora da fila — expedidos pela Shopee)</span>' : '') + '</div>' +
@@ -4634,6 +4639,8 @@ buffer/index.js:
   function bindPedidosExpedicao() {
     bindExpSessaoBlock();
     bindPendenciasConferenciaBlock();
+    app.querySelectorAll('[data-expview]').forEach(function (c) { c.onclick = function () { pedExpView = c.dataset.expview; render(); }; });
+    if (pedExpView === 'prazos') { bindTempoEnvioBody(); return; }
     var bi = document.getElementById('bipinput'); var doRegister = function () { var v = bi.value; bipRegister(v).then(function (rec) { bi.value = ''; render(); var el = document.getElementById('bipinput'); if (el) el.focus(); toast('Expedição registrada', rec.orderId); }).catch(function (e) { toast('Falha', e.message, true); }); };
     if (bi) bi.onkeydown = function (e) { if (e.key === 'Enter') doRegister(); };
     var bb = document.getElementById('bipbtn'); if (bb) bb.onclick = doRegister;
@@ -4766,8 +4773,11 @@ buffer/index.js:
   // fazendo a ordem cronológica correta parecer embaralhada na leitura visual).
   function teQueue() { return pedidosInPeriod().filter(function (o) { return o.shipByDate && o.normalizedStatus === 'A_ENVIAR'; }); }
   var teF = { classe: '', preset: '', full: '', modalidade: '', search: '', sort: 'prazo' };
-  function pedidosTempoEnvio() {
-    var head = secHead('PEDIDOS · TEMPO DE ENVIO', 'Evitar atraso e penalização da Shopee', 'Prazo real vem da planilha (Data prevista de envio). Ordena por padrão quem vence primeiro.');
+  // §17-21 do prompt Full/FBS: Tempo de Envio deixa de ser aba própria e passa a viver DENTRO de
+  // Expedição (nav vira Pedidos | Expedição | Dashboard | Importações) — mesma categorização de
+  // vencidos/vence hoje/vence amanhã/próximos e o mesmo shipDeadlineTs() canônico, sem alterar nada.
+  function tempoEnvioBody() {
+    var head = '<div class="panel"><div class="ph"><h3>Prazos de Envio</h3><span class="footnote" style="margin:0">Evitar atraso e penalização da Shopee — prazo real vem da planilha (Data prevista de envio)</span></div></div>';
     var base = teQueue();
     if (!base.length) return head + emptyBox('Nenhum pedido com prazo de envio informado no período. Importe/atualize a planilha de Pedidos.');
     var now = new Date();
@@ -4794,6 +4804,7 @@ buffer/index.js:
       produto: function (a, b) { return ((a.items[0] && a.items[0].productName) || '').localeCompare((b.items[0] && b.items[0].productName) || ''); },
       modalidade: function (a, b) { return (a.shippingOption || '').localeCompare(b.shippingOption || ''); },
       full: function (a, b) { return (b.isFbs ? 1 : 0) - (a.isFbs ? 1 : 0); },
+      full_desc: function (a, b) { return (a.isFbs ? 1 : 0) - (b.isFbs ? 1 : 0); },
       status: function (a, b) { return (a.normalizedStatus || '').localeCompare(b.normalizedStatus || ''); },
     };
     list = list.slice().sort(SORTS[teF.sort] || SORTS.prazo);
@@ -4827,12 +4838,12 @@ buffer/index.js:
         ['prazo', 'Vence primeiro'], ['prazo_desc', 'Vence por último'],
         ['pagamento', 'Pagamento mais antigo'], ['pagamento_desc', 'Pagamento mais recente'],
         ['criacao', 'Pedido mais antigo'], ['criacao_desc', 'Pedido mais recente'],
-        ['produto', 'Produto'], ['modalidade', 'Modalidade'], ['full', 'Full primeiro'], ['status', 'Status'],
+        ['produto', 'Produto'], ['modalidade', 'Modalidade'], ['full', 'Full primeiro'], ['full_desc', 'Normal primeiro'], ['status', 'Status'],
       ].map(function (o) { return '<option value="' + o[0] + '"' + (teF.sort === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
       '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos' + (list.length > 300 ? ' (mostrando 300)' : '') + '</div>' +
       '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>BR</th><th>Produto</th><th>SKU</th><th>Pagamento</th><th>Prazo de envio</th><th>Enviado / restante</th><th>Modalidade</th><th>Full?</th><th>Status Shopee</th><th>Situação do prazo</th></tr></thead><tbody>' + (rows || '<tr><td colspan="11" class="empty">Nenhum pedido neste filtro.</td></tr>') + '</tbody></table></div></div>';
   }
-  function bindPedidosTempoEnvio() {
+  function bindTempoEnvioBody() {
     app.querySelectorAll('[data-teclasse]').forEach(function (c) { c.onclick = function () { teF.classe = c.dataset.teclasse; render(); }; });
     app.querySelectorAll('[data-tepreset]').forEach(function (c) { c.onclick = function () { teF.preset = c.dataset.tepreset; render(); }; });
     var fu = document.getElementById('tefull'); if (fu) fu.onchange = function () { teF.full = fu.value; render(); };
