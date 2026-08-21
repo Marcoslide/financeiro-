@@ -4315,7 +4315,7 @@ buffer/index.js:
       else if (go === 'expedicao') { route = 'pedidos'; sub.pedidos = 'expedicao'; }
       else if (go === 'acelera') { route = 'acelera'; aceleraSub = 'expedidos'; }
       else if (go === 'carteira') { route = 'carteira'; walletSub = 'visao'; }
-      else if (go === 'carteirapend') { route = 'carteira'; walletSub = 'pendencias'; }
+      else if (go === 'carteirapend') { route = 'carteira'; walletSub = 'conferencia'; }
       render();
     }; });
   }
@@ -6147,6 +6147,9 @@ buffer/index.js:
   function wEffCat(t) { var c = wgetCls(t.id); return (c && c.catManual) ? c.catManual : t.category; }
   function wLinkedOcc(t) { var c = wgetCls(t.id); if (c && c.linkedOccId) { var o = occ.find(function (x) { return x.id === c.linkedOccId; }); if (o) return o; } var oid = (c && c.linkedOrderId) || t.orderId; if (!oid) return null; return occ.find(function (x) { return !x.isDemo && x.orderId === oid; }) || null; }
   function wLinkedOrder(t) { var c = wgetCls(t.id); var oid = (c && c.linkedOrderId) || t.orderId; if (!oid) return null; return orders.find(function (x) { return x.id === oid; }) || null; }
+  // Pedido é obrigatório como coluna visível (§15): nunca esconder a ausência — sempre "— Não identificado".
+  function wOrderId(t) { var c = wgetCls(t.id); return (c && c.linkedOrderId) || t.orderId || ''; }
+  function wOrderCell(t) { var oid = wOrderId(t); return oid ? esc(oid) : '<span class="footnote" style="margin:0">— Não identificado</span>'; }
   function wResp(t) { var c = wgetCls(t.id); if (c && c.responsibility) return c.responsibility; var oc = wLinkedOcc(t); if (oc && oc.responsibility && oc.responsibility !== 'NAO_IDENTIFICADA') return RESP_FROM_OCC[oc.responsibility] || 'NAO_DEFINIDO'; return 'NAO_DEFINIDO'; }
   function wStatus(t) { var c = wgetCls(t.id); return (c && c.internalStatus) || 'NAO_REVISADO'; }
   function wIsExplained(t) { var s = wStatus(t); return s === 'EXPLICADO' || s === 'RESOLVIDO'; }
@@ -6177,7 +6180,14 @@ buffer/index.js:
     if (/pix/.test(s)) return 'PIX';
     return 'OUTRO';
   }
-  function extractWalletOrderId(colVal, desc) { if (colVal) return colVal; var m = (desc || '').match(/#\s*([A-Za-z0-9]{6,})/) || (desc || '').match(/pedido\s+([A-Za-z0-9]{6,})/i); return m ? m[1] : ''; }
+  function extractWalletOrderId(colVal, desc) {
+    if (colVal) return colVal; // coluna explícita da planilha tem prioridade absoluta (§10)
+    var d = desc || '';
+    // cobre: "Pedido: X", "Pedido #X", "ID do pedido: X", "Pedido nº X"/"n° X", "referente ao pedido X", "pedido X"
+    var m = d.match(/pedido\s*[:#nN°º]*\s*([A-Za-z0-9]{6,})/i);
+    if (!m) m = d.match(/#\s*([A-Za-z0-9]{6,})/);
+    return m ? m[1] : '';
+  }
   function walletKey(row) { return 'w:' + (row.date || row.dateRaw) + '|' + row.amount + '|' + (row.balance == null ? '' : row.balance) + '|' + (row.orderId || '') + '|' + (row.desc || '').slice(0, 48); }
   function parseWallet(ab, filename) {
     var res = { notRecognized: true, rows: [] };
@@ -6189,7 +6199,7 @@ buffer/index.js:
       for (var i = 0; i < Math.min(aoa.length, 40); i++) { var hn = (aoa[i] || []).map(function (c) { return normStatus(c); }); if (hn.indexOf('data') >= 0 && hn.some(function (x) { return x.indexOf('valor') >= 0; }) && hn.some(function (x) { return x.indexOf('balanca') >= 0 || x.indexOf('saldo') >= 0; })) { hi = i; break; } }
       if (hi < 0) continue;
       var head = (aoa[hi] || []).map(function (c) { return String(c).trim(); });
-      var ci = { date: findCol(head, ['data']), tipo: findCol(head, ['tipo de transacao', 'tipo']), desc: findCol(head, ['descricao', 'detalhes']), order: findCol(head, ['id do pedido', 'numero do pedido', 'codigo do pedido']), dir: findCol(head, ['direcao do dinheiro', 'direcao']), val: findCol(head, ['valor']), status: findCol(head, ['status']), bal: findCol(head, ['balanca apos', 'saldo apos', 'saldo']), adj: findCol(head, ['valor a ser ajustado', 'valor a ajustar']) };
+      var ci = { date: findCol(head, ['data']), tipo: findCol(head, ['tipo de transacao', 'tipo']), desc: findCol(head, ['descricao', 'detalhes']), order: findCol(head, ['id do pedido', 'numero do pedido', 'codigo do pedido', 'n do pedido', 'order id']), dir: findCol(head, ['direcao do dinheiro', 'direcao']), val: findCol(head, ['valor']), status: findCol(head, ['status']), bal: findCol(head, ['balanca apos', 'saldo apos', 'saldo']), adj: findCol(head, ['valor a ser ajustado', 'valor a ajustar']) };
       if (ci.date < 0 || ci.val < 0) continue;
       for (var r = hi + 1; r < aoa.length; r++) { var row = aoa[r] || []; var d = String(row[ci.date] || '').trim(); if (!d) continue; var amount = walletNum(row[ci.val]); if (amount == null) continue; var oid = ci.order >= 0 ? String(row[ci.order] || '').trim() : ''; if (oid === '-' || oid === '') oid = ''; res.rows.push({ dateRaw: d, date: parseWalletDate(d), tipo: ci.tipo >= 0 ? String(row[ci.tipo] || '').trim() : '', desc: ci.desc >= 0 ? String(row[ci.desc] || '').trim() : '', orderId: oid, dir: ci.dir >= 0 ? String(row[ci.dir] || '').trim() : '', amount: amount, status: ci.status >= 0 ? String(row[ci.status] || '').trim() : '', balance: ci.bal >= 0 ? walletNum(row[ci.bal]) : null, adjust: ci.adj >= 0 ? walletNum(row[ci.adj]) : null }); }
       res.notRecognized = res.rows.length === 0; break;
@@ -6223,7 +6233,11 @@ buffer/index.js:
         if (Math.abs(gap) > 0.01) {
           var adjDelta = (prevAdj != null && t.adjust != null) ? r2(t.adjust - prevAdj) : null;
           var explained = adjDelta != null && (Math.abs(adjDelta - gap) < 0.02 || Math.abs(adjDelta + gap) < 0.02);
-          var rec = { id: 'rec:' + t.id, origin: 'SISTEMA', date: t.date, dateRaw: t.dateRaw, category: 'SEMLINHA', orderId: t.orderId, amount: gap, balance: t.balance, expectedBalance: expected, informed: t.balance, adjDelta: adjDelta, reconStatus: explained ? 'PROVAVEL' : 'DIVERGENTE', relatedId: t.id, desc: 'Diferença de saldo reconstruída pela reconciliação matemática' };
+          // O gap reconstruído NÃO tem pedido comprovado — herdar t.orderId aqui seria inventar uma
+          // atribuição (o pedido pertence à transação vizinha, não ao gap em si). orderId fica vazio;
+          // a UI mostra "Pedido não identificado" e permite classificação/vínculo manual. Mantemos
+          // nearTxOrderId só como contexto investigativo (transação vizinha), nunca como pedido afirmado.
+          var rec = { id: 'rec:' + t.id, origin: 'SISTEMA', date: t.date, dateRaw: t.dateRaw, category: 'SEMLINHA', orderId: '', amount: gap, balance: t.balance, expectedBalance: expected, informed: t.balance, adjDelta: adjDelta, reconStatus: explained ? 'PROVAVEL' : 'DIVERGENTE', relatedId: t.id, nearTxOrderId: t.orderId || '', desc: 'Diferença de saldo reconstruída pela reconciliação matemática' };
           out.push(rec); diffs.push({ date: t.date, expected: expected, informed: t.balance, gap: gap, status: explained ? 'PROVAVEL' : 'DIVERGENTE', rec: rec, tx: t });
         }
       }
@@ -6437,30 +6451,52 @@ buffer/index.js:
   // (wgetCls/wsetCls/WSTATUS — ciclo de vida por lançamento com histórico, nunca apagado na
   // reimportação) sobre os itens que a Fase 1 (walletOrigemDiag) e o raio-x (walletDiag) já
   // identificam como precisando de atenção. Não cria um segundo mecanismo de status para a mesma coisa.
-  var walletPendF = { status: '' };
+  // §14-16 — CONFERÊNCIA: uma única tela para tudo que precisa de investigação (antes espalhado em
+  // "Ajustes e Divergências" + "Central de Pendências"). Reaproveita os motores já aprovados
+  // (walletOrigemDiag/walletDiag/wgetCls/wsetCls/WSTATUS) — não cria um segundo mecanismo de status.
+  var WPROBLEMA = { DIVERGENCIA_VALOR: 'Diferença de valor', DUPLICIDADE: 'Possível duplicação', CANDIDATO: 'Candidato de conciliação', SEM_ORIGEM: 'Origem não identificada', AJUSTE_SEM_LINHA: 'Ajuste sem linha' };
+  var walletPendF = { status: '', tipo: '' };
   function walletPendItems(m) {
     var g = walletOrigemDiag(m); var seen = {}; var items = [];
-    function add(t, motivo, detalhe) { if (seen[t.id]) return; seen[t.id] = true; items.push({ t: t, motivo: motivo, detalhe: detalhe }); }
-    g.divergentes.forEach(function (x) { add(x.t, 'Diferença de valor — ' + x.origin.fonte, 'Esperado ' + brl(x.origin.esperado) + ' · Carteira ' + brl(x.t.amount) + ' · Diferença ' + brl(x.origin.diff)); });
-    g.dup.forEach(function (d) { d.itens.forEach(function (t) { add(t, 'Possível cobrança duplicada — ' + d.fonte, nn(d.itens.length) + '× o mesmo valor (' + brl(d.valor) + ') na carteira'); }); });
-    g.semOrigem.forEach(function (t) { add(t, 'Origem não identificada (' + wcatLabel(wEffCat(t)) + ')', 'Fonte relevante já cobre esta data e mesmo assim não achou correspondência'); });
+    function add(t, tipo, motivo, detalhe) { if (seen[t.id]) return; seen[t.id] = true; items.push({ t: t, tipo: tipo, motivo: motivo, detalhe: detalhe }); }
+    g.divergentes.forEach(function (x) { add(x.t, 'DIVERGENCIA_VALOR', 'Diferença de valor — ' + x.origin.fonte, 'Esperado ' + brl(x.origin.esperado) + ' · Carteira ' + brl(x.t.amount) + ' · Diferença ' + brl(x.origin.diff)); });
+    g.dup.forEach(function (d) { d.itens.forEach(function (t) { add(t, 'DUPLICIDADE', 'Possível cobrança duplicada — ' + d.fonte, nn(d.itens.length) + '× o mesmo valor (' + brl(d.valor) + ') na carteira'); }); });
+    g.candidatos.forEach(function (x) { add(x.t, 'CANDIDATO', 'Candidato de conciliação — ' + x.origin.fonte, 'Valor e janela de data batem, mas sem ID exato — nunca fecha sozinho, confirme manualmente'); });
+    g.semOrigem.forEach(function (t) { add(t, 'SEM_ORIGEM', 'Origem não identificada (' + wcatLabel(wEffCat(t)) + ')', 'Fonte relevante já cobre esta data e mesmo assim não achou correspondência'); });
     var diag = walletDiag(m);
-    diag.divergentes.forEach(function (d) { add(d.tx, 'Diferença de saldo do extrato (reconciliação matemática)', 'Esperado ' + brl(d.expected) + ' · Informado ' + brl(d.informed) + ' · Diferença ' + brl(d.gap)); });
+    diag.divergentes.forEach(function (d) { add(d.rec, 'AJUSTE_SEM_LINHA', 'Diferença de saldo do extrato (ajuste sem linha)', 'Esperado ' + brl(d.expected) + ' · Informado ' + brl(d.informed) + ' · Diferença ' + brl(d.gap)); });
     return items;
   }
-  function walletPendencias() {
+  function walletConferencia() {
     var m = walletMetrics(); var items = walletPendItems(m);
-    var counts = {}; items.forEach(function (it) { var s = wStatus(it.t); counts[s] = (counts[s] || 0) + 1; });
-    var head = secHead('CARTEIRA · CENTRAL DE PENDÊNCIAS', 'O que ainda precisa de decisão', 'Junta tudo que a conciliação automática não conseguiu fechar sozinha — diferença de valor, possível duplicidade e origem não identificada — com o mesmo status interno usado no resto da Carteira (nunca apagado ao reimportar).');
-    var strip = kstrip(Object.keys(WSTATUS).map(function (k) { return { l: WSTATUS[k], v: nn(counts[k] || 0), cls: k === 'RESOLVIDO' ? 'green' : (k === 'NAO_REVISADO' && counts[k] ? 'amber' : '') }; }).concat([{ l: 'Total de pendências', v: nn(items.length), cls: items.length ? 'red' : 'green' }]));
-    var chips = '<div class="chips" style="margin-top:8px"><span class="chip' + (!walletPendF.status ? ' chip-on' : '') + '" data-pendst="">Todas (' + nn(items.length) + ')</span>' + Object.keys(WSTATUS).map(function (k) { return '<span class="chip' + (walletPendF.status === k ? ' chip-on' : '') + '" data-pendst="' + k + '">' + WSTATUS[k] + ' (' + nn(counts[k] || 0) + ')</span>'; }).join('') + '</div>';
-    var filtered = walletPendF.status ? items.filter(function (it) { return wStatus(it.t) === walletPendF.status; }) : items;
-    var rows = filtered.slice(0, 300).map(function (it) { return '<tr class="rowlink" data-wtx="' + esc(it.t.id) + '"><td class="nowrap">' + dbr(it.t.date) + '</td><td class="cell-text">' + esc(it.motivo) + '</td><td class="cell-text">' + esc(it.detalhe) + '</td><td class="nowrap">' + brl(it.t.amount) + '</td><td><span class="tag ' + (wStatus(it.t) === 'RESOLVIDO' || wStatus(it.t) === 'EXPLICADO' ? 'ok' : 'neutral') + '">' + esc(WSTATUS[wStatus(it.t)]) + '</span></td></tr>'; }).join('');
-    var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Motivo</th><th>Detalhe</th><th>Valor</th><th>Status</th></tr></thead><tbody>' + (rows || '<tr><td colspan="5" class="empty">Nenhuma pendência neste filtro. 🎉</td></tr>') + '</tbody></table></div></div>';
-    return head + strip + chips + '<div class="count-line" style="margin-top:8px"><b>' + nn(filtered.length) + '</b> pendência(s)</div>' + table;
+    var diffsP = m.diffsAll.filter(function (d) { return inPeriod(d.date); });
+    var abertas = diffsP.filter(function (d) { return d.status === 'DIVERGENTE' && !wIsExplained(d.rec) && wStatus(d.rec) !== 'CONTESTACAO' && wStatus(d.rec) !== 'EM_ANALISE'; });
+    var conferido = abertas.length === 0;
+    // Distinção obrigatória (§17): "saldo matemático fecha" ≠ "origem financeira identificada" — nunca confundir.
+    var conf = callout(conferido ? 'green' : 'warn', conferido ? '✓ Saldo matemático fecha' : '⚠ Saldo matemático com diferenças abertas',
+      'A Shopee informa o saldo final de <b>' + brl(m.saldoAtual) + '</b>; somando saldo anterior + cada movimentação, o sistema reconstrói o mesmo valor — ' + (conferido ? 'e bate integralmente neste período.' : '<b>' + nn(abertas.length) + '</b> diferença(s) ainda sem explicação.') + ' Isso é distinto de <b>origem financeira identificada</b>: o saldo pode fechar matematicamente mesmo com lançamentos cuja origem (pedido/resgate) ainda não foi encontrada — é exatamente isso que a tabela abaixo lista.');
+    var counts = {}; items.forEach(function (it) { counts[it.tipo] = (counts[it.tipo] || 0) + 1; });
+    var stCounts = {}; items.forEach(function (it) { var s = wStatus(it.t); stCounts[s] = (stCounts[s] || 0) + 1; });
+    var strip = kstrip([{ l: 'Total a investigar', v: nn(items.length), cls: items.length ? 'red' : 'green' }].concat(Object.keys(WPROBLEMA).map(function (k) { return { l: WPROBLEMA[k], v: nn(counts[k] || 0), cls: counts[k] ? 'amber' : '' }; })).concat([{ l: 'Já resolvidas', v: nn(stCounts.RESOLVIDO || 0) + nn(stCounts.EXPLICADO || 0), cls: 'green' }]));
+    var head = secHead('CARTEIRA · CONFERÊNCIA', 'O que ainda precisa de investigação', 'Junta tudo que a conciliação automática não fechou sozinha — diferença de valor, duplicação, candidato a confirmar, origem não identificada e ajuste sem linha — num único lugar, com o Pedido sempre visível e ação sem sair da tela.') + conf;
+    var toolbar = '<div class="toolbar2" style="margin-top:8px">' +
+      '<select class="select sm" id="cfrtipo"><option value="">Problema: todos</option>' + Object.keys(WPROBLEMA).map(function (k) { return '<option value="' + k + '"' + (walletPendF.tipo === k ? ' selected' : '') + '>' + WPROBLEMA[k] + ' (' + nn(counts[k] || 0) + ')</option>'; }).join('') + '</select>' +
+      '<select class="select sm" id="cfrst"><option value="">Situação: todas</option>' + Object.keys(WSTATUS).map(function (k) { return '<option value="' + k + '"' + (walletPendF.status === k ? ' selected' : '') + '>' + WSTATUS[k] + ' (' + nn(stCounts[k] || 0) + ')</option>'; }).join('') + '</select>' +
+      (walletPendF.tipo || walletPendF.status ? '<button class="link-btn" id="cfrclear">limpar filtros</button>' : '') + '</div>';
+    var filtered = items.filter(function (it) { return (!walletPendF.tipo || it.tipo === walletPendF.tipo) && (!walletPendF.status || wStatus(it.t) === walletPendF.status); });
+    var rows = filtered.slice(0, 300).map(function (it) {
+      var t = it.t; var isRec = t.origin === 'SISTEMA'; var st = wStatus(t); var stl = WSTATUS[st];
+      var stTag = st === 'EXPLICADO' || st === 'RESOLVIDO' ? 'ok' : (st === 'CONTESTACAO' ? 'warn' : (st === 'EM_ANALISE' ? 'info' : 'neutral'));
+      var c = wgetCls(t.id); var man = c && c.catManual;
+      return '<tr class="rowlink" data-wtx="' + esc(t.id) + '"><td class="nowrap">' + dbr(t.date) + '</td><td class="mono">' + wOrderCell(t) + '</td><td>' + esc(wcatLabel(wEffCat(t))) + (man ? ' <span class="tag info">manual</span>' : '') + '</td><td class="cell-text">' + esc(isRec ? 'Reconstruído pelo sistema' : (t.tipo || '—')) + '</td><td class="cell-text">' + esc(isRec ? 'Diferença de saldo reconstruída' : (t.desc || '—')) + '</td><td class="nowrap ' + (t.amount < 0 ? 'neg' : 'pos') + '"><b>' + brl(t.amount) + '</b></td><td class="cell-text">' + esc(it.motivo) + '<div class="footnote" style="margin:0">' + esc(it.detalhe) + '</div></td><td class="nowrap"><span class="tag ' + stTag + '">' + esc(stl) + '</span></td><td class="nowrap"><button class="btn-sm" data-wtx="' + esc(t.id) + '">Resolver</button></td></tr>';
+    }).join('');
+    var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Pedido</th><th>Categoria</th><th>Tipo/Origem</th><th>Descrição Shopee</th><th>Valor</th><th>Problema encontrado</th><th>Conciliação</th><th>Ação</th></tr></thead><tbody>' + (rows || '<tr><td colspan="9" class="empty">Nenhum item neste filtro. 🎉</td></tr>') + '</tbody></table></div></div>';
+    return head + strip + toolbar + '<div class="count-line" style="margin-top:8px"><b>' + nn(filtered.length) + '</b> item(ns)</div>' + table;
   }
-  function bindWalletPendencias() {
-    app.querySelectorAll('[data-pendst]').forEach(function (c) { c.onclick = function () { walletPendF.status = c.dataset.pendst; render(); }; });
+  function bindWalletConferencia() {
+    var st1 = document.getElementById('cfrtipo'); if (st1) st1.onchange = function () { walletPendF.tipo = st1.value; render(); };
+    var st2 = document.getElementById('cfrst'); if (st2) st2.onchange = function () { walletPendF.status = st2.value; render(); };
+    var cl = document.getElementById('cfrclear'); if (cl) cl.onclick = function () { walletPendF = { status: '', tipo: '' }; render(); };
   }
 
   // §35-38 — Fechamento de Caixa Diário: confere se as entradas/saídas do dia estão classificadas e
@@ -6523,13 +6559,12 @@ buffer/index.js:
 
   function renderCarteira() {
     app.innerHTML = devPeriodBar() +
-      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + [['visao', 'Visão Geral'], ['mov', 'Movimentações'], ['ajustes', 'Ajustes e Divergências'], ['pendencias', 'Central de Pendências'], ['fechamento', 'Fechamento de Caixa']].map(function (t) { return '<div class="subtab' + (walletSub === t[0] ? ' active' : '') + '" data-wsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-wimport="1">Importar extrato</button></div><div id="wbody" style="margin-top:14px"></div>';
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + [['visao', 'Visão Geral'], ['mov', 'Movimentações'], ['conferencia', 'Conferência'], ['fechamento', 'Fechamento de Caixa']].map(function (t) { return '<div class="subtab' + (walletSub === t[0] ? ' active' : '') + '" data-wsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-wimport="1">Importar extrato</button></div><div id="wbody" style="margin-top:14px"></div>';
     var body = document.getElementById('wbody');
     try {
       if (!wallet.length) body.innerHTML = secHead('SALDO DA CARTEIRA', 'Saldo da Carteira', 'Mostrar, medir, rastrear e reconciliar tudo que acontece no saldo da Shopee.') + emptyBox('Nenhum extrato importado. Clique em “Importar extrato” para carregar o relatório de transações do saldo Shopee.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="wimp">Importar extrato</button></div>';
       else if (walletSub === 'mov') body.innerHTML = walletMov();
-      else if (walletSub === 'ajustes') body.innerHTML = walletAjustes();
-      else if (walletSub === 'pendencias') body.innerHTML = walletPendencias();
+      else if (walletSub === 'conferencia' || walletSub === 'ajustes' || walletSub === 'pendencias') body.innerHTML = walletConferencia();
       else if (walletSub === 'fechamento') body.innerHTML = walletFechamento();
       else body.innerHTML = walletVisao();
     } catch (e) { body.innerHTML = '<div class="form-err">Erro ao renderizar a Carteira: ' + esc(e.message || e) + '</div>'; }
@@ -6544,7 +6579,7 @@ buffer/index.js:
     app.querySelectorAll('[data-wsig]').forEach(function (b) { b.onclick = function () { walletF = { search: '', cat: '', flow: '', sig: b.dataset.wsig }; walletSub = 'mov'; render(); }; });
     app.querySelectorAll('[data-wgo]').forEach(function (b) { b.onclick = function () { walletSub = b.dataset.wgo; render(); }; });
     if (walletSub === 'mov') bindWalletMov();
-    if (walletSub === 'pendencias') bindWalletPendencias();
+    if (walletSub === 'conferencia' || walletSub === 'ajustes' || walletSub === 'pendencias') bindWalletConferencia();
     if (walletSub === 'fechamento') bindWalletFechamento();
   }
   function walletVisao() {
@@ -6583,7 +6618,7 @@ buffer/index.js:
     // BLOCO 6 — Precisa de atenção
     var alerts = [];
     if (g.semCat.v < -0.5) alerts.push({ t: brl(Math.abs(g.semCat.v)) + ' em descontos sem categoria', f: 'semcat' });
-    if (g.divergentes.length) alerts.push({ t: nn(g.divergentes.length) + ' diferença(s) de saldo ainda em aberto', go: 'ajustes' });
+    if (g.divergentes.length) alerts.push({ t: nn(g.divergentes.length) + ' diferença(s) de saldo ainda em aberto', go: 'conferencia' });
     var devSemResp = g.resps.filter(function (r) { return r.resp === 'NAO_DEFINIDO'; })[0]; if (devSemResp) alerts.push({ t: nn(devSemResp.n) + ' devoluções com débito sem responsabilidade definida', f: 'devolucao' });
     var recUn = g.recurring.filter(function (r) { return r.unclass > 0; })[0]; if (recUn) alerts.push({ t: 'Padrão recorrente sem classificação: "' + (recUn.sample || recUn.sig).slice(0, 40) + '" (' + recUn.n + '×, ' + brl(Math.abs(recUn.total)) + ')', sig: recUn.sig });
     var bloco6 = alerts.length ? callout('warn', 'Precisa da sua atenção', alerts.map(function (a) { return '<div class="fin-line"><span>' + esc(a.t) + '</span><button class="btn-sm" ' + (a.go ? 'data-wgo="' + a.go + '"' : a.sig ? 'data-wsig="' + esc(a.sig) + '"' : 'data-wflowgo="' + a.f + '"') + '>abrir</button></div>'; }).join('')) : '';
@@ -6627,7 +6662,7 @@ buffer/index.js:
         var isRec = t.origin === 'SISTEMA'; var c = wgetCls(t.id); var man = c && c.catManual; var st = wStatus(t); var stl = WSTATUS[st];
         var stTag = st === 'EXPLICADO' || st === 'RESOLVIDO' ? 'ok' : (st === 'CONTESTACAO' ? 'warn' : (st === 'EM_ANALISE' ? 'info' : 'neutral'));
         var resp = wResp(t); var respTxt = resp === 'NAO_DEFINIDO' && t.amount >= 0 ? '—' : (WRESP[resp] || '—');
-        return '<tr' + (isRec ? ' style="background:#fff5ee"' : '') + '><td class="nowrap">' + esc(dbr(t.date)) + '</td><td>' + esc(wcatLabel(wEffCat(t))) + (man ? ' <span class="tag info">manual</span>' : '') + '</td><td class="cell-text">' + esc(respTxt) + (resp === 'NAO_DEFINIDO' && t.amount < 0 ? ' <span class="tag warn">definir</span>' : '') + '</td><td class="mono">' + esc((c && c.linkedOrderId) || t.orderId || '—') + '</td><td class="cell-text">' + esc(isRec ? 'Diferença de saldo reconstruída' : (t.desc || '—')) + '</td><td class="nowrap">' + (t.amount > 0 ? '<span class="pos">' + brl(t.amount) + '</span>' : '—') + '</td><td class="nowrap">' + (t.amount < 0 ? '<span class="neg">' + brl(t.amount) + '</span>' : '—') + '</td><td class="nowrap">' + (t.balance != null ? brl(t.balance) : '—') + '</td><td class="nowrap"><span class="tag ' + stTag + '">' + esc(stl) + '</span></td><td class="nowrap"><button class="btn-sm" data-wtx="' + esc(t.id) + '">Classificar</button></td></tr>';
+        return '<tr' + (isRec ? ' style="background:#fff5ee"' : '') + '><td class="nowrap">' + esc(dbr(t.date)) + '</td><td>' + esc(wcatLabel(wEffCat(t))) + (man ? ' <span class="tag info">manual</span>' : '') + '</td><td class="cell-text">' + esc(respTxt) + (resp === 'NAO_DEFINIDO' && t.amount < 0 ? ' <span class="tag warn">definir</span>' : '') + '</td><td class="mono">' + wOrderCell(t) + '</td><td class="cell-text">' + esc(isRec ? 'Diferença de saldo reconstruída' : (t.desc || '—')) + '</td><td class="nowrap">' + (t.amount > 0 ? '<span class="pos">' + brl(t.amount) + '</span>' : '—') + '</td><td class="nowrap">' + (t.amount < 0 ? '<span class="neg">' + brl(t.amount) + '</span>' : '—') + '</td><td class="nowrap">' + (t.balance != null ? brl(t.balance) : '—') + '</td><td class="nowrap"><span class="tag ' + stTag + '">' + esc(stl) + '</span></td><td class="nowrap"><button class="btn-sm" data-wtx="' + esc(t.id) + '">Classificar</button></td></tr>';
       }).join('') : '<tr><td colspan="10" class="empty">Nenhuma movimentação neste filtro.</td></tr>') + '</tbody></table></div></div>';
   }
   function bindWalletMov() {
@@ -6636,33 +6671,6 @@ buffer/index.js:
     var cs = document.getElementById('wcatsel'); if (cs) cs.onchange = function () { walletF.cat = cs.value; render(); };
     var cl = document.getElementById('wclear'); if (cl) cl.onclick = function () { walletF = { search: '', cat: '', flow: '', sig: '' }; render(); };
     var csp = document.getElementById('wclearsp'); if (csp) csp.onclick = function () { walletF.flow = ''; walletF.sig = ''; render(); };
-  }
-  function walletAjustes() {
-    var m = walletMetrics(); var diffs = m.diffsAll.filter(function (d) { return inPeriod(d.date); });
-    var series = walletSaldoSeries();
-    var abat = m.diffsAll.filter(function (d) { return d.status === 'PROVAVEL'; }).reduce(function (s, d) { return s + Math.abs(d.gap); }, 0);
-    var divergentes = diffs.filter(function (d) { return d.status === 'DIVERGENTE'; });
-    // Diferenças já tratadas manualmente pelo operador (explicado / contestação / resolvido) — não altera a matemática.
-    var tratadas = diffs.filter(function (d) { return wIsExplained(d.rec) || wStatus(d.rec) === 'CONTESTACAO' || wStatus(d.rec) === 'EM_ANALISE'; }).length;
-    var abertas = diffs.filter(function (d) { return d.status === 'DIVERGENTE' && !wIsExplained(d.rec) && wStatus(d.rec) !== 'CONTESTACAO' && wStatus(d.rec) !== 'EM_ANALISE'; });
-    var conferido = abertas.length === 0;
-    // BLOCO — Conferência Shopee × Sistema (nunca altera a matemática; apenas mostra e deixa classificar)
-    var conf = callout(conferido ? 'green' : 'warn', conferido ? '✓ Saldo conferido' : '⚠ Há diferenças a explicar',
-      'A Shopee informa o saldo final de <b>' + brl(m.saldoAtual) + '</b>. Somando saldo anterior + cada movimentação, o sistema reconstrói o mesmo saldo — as linhas fecham em <b>' + nn(diffs.length ? diffs.length : 0) + '</b> ponto(s) de diferença' + (diffs.length ? '' : ' (nenhum)') + '. ' +
-      (diffs.length ? '<b>' + nn(m.diffsAll.filter(function (d) { return d.status === 'PROVAVEL'; }).length) + '</b> são compatíveis com a variação do “Valor a Ser Ajustado” (provável abatimento), <b>' + nn(tratadas) + '</b> você já classificou e <b>' + nn(abertas.length) + '</b> seguem sem explicação. A conferência <b>não muda nenhum número</b> — só registra o porquê.' : 'A matemática bate integralmente.'));
-    return secHead('CARTEIRA · AJUSTES E DIVERGÊNCIAS', 'Ajustes e Divergências', 'Conferência do saldo Shopee × sistema. Tudo que não fecha perfeitamente é mostrado e pode ser classificado (explicado, contestação, resolvido) — sem nunca alterar a matemática.') +
-      kstrip([
-        { l: 'Valor atual a ser ajustado', v: brl(m.ajusteAtual), cls: 'amber', s: 'snapshot (não somar)' },
-        { l: 'Maior valor do período', v: brl(m.peakAdj), cls: 'amber' },
-        { l: 'Dias com valor a ajustar', v: nn(m.adjDays), cls: 'blue' },
-        { l: 'Prováveis abatimentos', v: brl(r2(abat)), cls: 'green' },
-        { l: 'Diferenças em aberto', v: nn(abertas.length), cls: abertas.length ? 'red' : 'green' },
-      ]) +
-      conf +
-      chartCard('Evolução do valor a ser ajustado (é estoque — não somar)', legendSwatch([['Valor a ajustar', '#e0662a']]), svgWalletLine(series.map(function (p) { return { label: p.label, a: p.b }; }), { two: false })) +
-      '<div class="panel"><div class="ph"><h3>Diferenças de saldo</h3><span class="footnote" style="margin:0">saldo esperado × informado pela Shopee — clique em “Classificar” para explicar sem alterar a matemática</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Saldo esperado</th><th>Saldo informado</th><th>Diferença</th><th>Situação</th><th>Classificação</th><th></th></tr></thead><tbody>' +
-      (diffs.length ? diffs.slice().sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); }).slice(0, 300).map(function (d) { var rl = RECON_LABEL[d.status] || RECON_LABEL.DIVERGENTE; var st = wStatus(d.rec); var stl = WSTATUS[st]; var stTag = st === 'EXPLICADO' || st === 'RESOLVIDO' ? 'ok' : (st === 'CONTESTACAO' ? 'warn' : (st === 'EM_ANALISE' ? 'info' : 'neutral')); return '<tr><td class="nowrap">' + esc(dbr(d.date)) + '</td><td class="nowrap">' + brl(d.expected) + '</td><td class="nowrap">' + brl(d.informed) + '</td><td class="nowrap ' + (d.gap < 0 ? 'neg' : 'pos') + '"><b>' + brl(d.gap) + '</b></td><td><span class="tag ' + rl[1] + '">' + rl[0] + '</span></td><td class="nowrap"><span class="tag ' + stTag + '">' + esc(stl) + '</span></td><td><button class="btn-sm" data-wtx="' + esc(d.rec.id) + '">Classificar</button></td></tr>'; }).join('') : '<tr><td colspan="7" class="empty">Nenhuma diferença de saldo no período. 🎉 A matemática bate.</td></tr>') + '</tbody></table></div>' +
-      '<div class="footnote" style="padding:0 16px 14px">Situação (matemática, automática): <b>Provável ajuste</b> a diferença é compatível com a variação do “Valor a Ser Ajustado” · <b>Divergente</b> ainda não explicada. Classificação (sua, manual): registre <b>Explicado</b>, <b>Contestação necessária</b> ou <b>Resolvido</b> — nada disso altera os valores.</div></div>';
   }
   function walletExplain(t) {
     if (t.origin === 'SISTEMA') {
@@ -8053,7 +8061,7 @@ buffer/index.js:
     app.querySelectorAll('[data-mrimport]').forEach(function (b) { b.onclick = imp; });
     var mi = document.getElementById('mrimp'); if (mi) mi.onclick = imp;
     app.querySelectorAll('[data-mrgo]').forEach(function (b) { b.onclick = function () { mrSub = b.dataset.mrgo; render(); }; });
-    app.querySelectorAll('[data-mrgocarteira]').forEach(function (b) { b.onclick = function () { route = 'carteira'; walletSub = 'pendencias'; render(); }; });
+    app.querySelectorAll('[data-mrgocarteira]').forEach(function (b) { b.onclick = function () { route = 'carteira'; walletSub = 'conferencia'; render(); }; });
     app.querySelectorAll('[data-mrsku]').forEach(function (b) { b.onclick = function () { openMrSku(b.dataset.mrsku); }; });
     app.querySelectorAll('[data-mrped]').forEach(function (b) { b.onclick = function () { openMrPedido(b.dataset.mrped); }; });
     app.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.goped360); }; });
