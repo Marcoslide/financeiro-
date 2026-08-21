@@ -1212,7 +1212,7 @@
       return '<div style="margin-top:10px"><div class="footnote" style="margin:0 0 4px;text-transform:uppercase;letter-spacing:.02em">' + esc(titulo) + '</div>' + (g.length ? g.map(taxaLine).join('') + '<div class="fin-line" style="margin-top:2px"><span>Subtotal — ' + esc(titulo.toLowerCase()) + '</span><b class="' + (soma < 0 ? 'neg' : soma > 0 ? 'pos' : '') + '">' + brlC(soma) + '</b></div>' : '<span class="tag neutral">nenhum lançamento deste tipo neste pedido</span>') + '</div>';
     };
     var taxasBlock = '<div class="panel"><div class="ph"><h3>Taxas e Descontos</h3>' + taxasConf + '</div><div class="pb">' +
-      (taxaRows.length ? grupoBlock('Taxas cobradas de nós', gTaxas, true) + grupoBlock('Descontos comerciais', gDescontos, false) + grupoBlock('Créditos / incentivos', gCreditos, false) + grupoBlock('Reembolsos e outros ajustes', gOutros, false) +
+      (taxaRows.length ? grupoBlock('Taxas cobradas da Líder', gTaxas, true) + grupoBlock('Descontos bancados pela Líder', gDescontos, false) + grupoBlock('Créditos / incentivos', gCreditos, false) + grupoBlock('Reembolsos e outros ajustes', gOutros, false) +
         '<div class="fin-line total" style="margin-top:10px"><span>Total (todos os grupos)</span><b class="' + (taxasSomaC < 0 ? 'neg' : 'pos') + '">' + brlC(taxasSomaC) + '</b></div>' : '<span class="tag neutral">sem dados de taxas para este pedido</span>') +
       (shipRow ? '<div class="footnote" style="margin-top:8px">Frete — divergência sobre o esperado (não somada ao total acima): esperado ' + brl(shipRow.esperado) + ' · real ' + brl(shipRow.real) + ' · diferença ' + brl(shipRow.real - shipRow.esperado) + '.</div>' : '') +
       '<div class="footnote" style="margin-top:6px">' + (mrRow ? 'Origem principal: Minha Renda (Income) · Pedido ' + esc(orderId) : ord ? 'Origem: Pedidos (aproximado — sem Minha Renda para este pedido)' : 'sem fonte') + '</div>' +
@@ -1329,8 +1329,8 @@
     var pagamentoLiquidoC = receitaC != null ? receitaC + taxasSomaC : null;
     var resultadoBlock = '<div class="panel"><div class="ph"><h3>Resultado do Pedido</h3></div><div class="pb">' +
       fLine('Venda', receitaC) +
-      (gDescontos.length ? fLine('− Descontos comerciais do vendedor', somaGrupo(gDescontos)) : '') +
-      fLine('− Taxas cobradas do vendedor', somaGrupo(gTaxas)) +
+      (gDescontos.length ? fLine('− Descontos bancados pela Líder', somaGrupo(gDescontos)) : '') +
+      fLine('− Taxas cobradas da Líder', somaGrupo(gTaxas)) +
       (gCreditos.length ? fLine('+ Créditos / incentivos Shopee', somaGrupo(gCreditos)) : '') +
       (gOutros.length ? fLine('− Reembolsos e outros ajustes', somaGrupo(gOutros)) : '') +
       fLine('= Pagamento líquido Shopee (subtotal)', pagamentoLiquidoC, { total: true }) +
@@ -5706,8 +5706,8 @@
     var line = function (label, v, opts) { opts = opts || {}; return '<div class="fin-line' + (opts.total ? ' total' : '') + '"><span>' + (opts.op ? '<b>' + opts.op + '</b> ' : '') + esc(label) + (opts.note ? ' <span class="footnote" style="margin:0">' + esc(opts.note) + '</span>' : '') + '</span><b class="' + (v == null ? '' : v < 0 ? 'neg' : v > 0 ? 'pos' : '') + '">' + (v == null ? 'não disponível' : brlC(v)) + '</b></div>'; };
     if (!dre.n) return '<div class="panel"><div class="ph"><h3>DRE do dia</h3></div><div class="pb"><span class="tag neutral">Nenhum pedido pago neste dia.</span></div></div>';
     var body = line('Receita Bruta', dre.receitaBruta, { note: nn(dre.n) + ' pedidos pagos' }) +
-      line('Descontos Comerciais do Vendedor', dre.descComerciais, { op: '−' }) +
-      line('Taxas Cobradas do Vendedor', dre.taxasCobradas, { op: '−' }) +
+      line('Descontos Bancados pela Líder', dre.descComerciais, { op: '−' }) +
+      line('Taxas Cobradas da Líder', dre.taxasCobradas, { op: '−' }) +
       line('Créditos / Incentivos Shopee', dre.creditos, { op: '+' }) +
       line('Reembolsos e Outros Ajustes', dre.outros, { op: '−' }) +
       line('Receita Líquida', dre.receitaLiquida, { total: true, op: '=' }) +
@@ -5946,7 +5946,7 @@
     var pedRows = [['Pedido', 'Status', 'Valor (R$)', 'Lucro (R$)', 'Custo conhecido']];
     vendas.pedidos.forEach(function (o) { var c = pedidoComposicaoFinanceira(o.id); pedRows.push([o.id, S.pedidos.labels[o.normalizedStatus] || o.orderStatus, o.totalAmount || 0, c.resultadoC != null ? c.resultadoC / 100 : '', c.custoProdC != null ? 'sim' : 'não']); });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pedRows), 'Pedidos');
-    var taxRows = [['Pedido', 'Taxas cobradas (R$)', 'Descontos comerciais (R$)', 'Créditos/incentivos (R$)', 'Reembolsos/outros (R$)']];
+    var taxRows = [['Pedido', 'Taxas cobradas da Líder (R$)', 'Descontos bancados pela Líder (R$)', 'Créditos/incentivos (R$)', 'Reembolsos/outros (R$)']];
     vendas.pedidos.forEach(function (o) { var c = pedidoComposicaoFinanceira(o.id); if (!c.temIncome) return; taxRows.push([o.id, c.taxasCobradasC / 100, c.descontosComerciaisC / 100, c.creditosC / 100, c.outrosC / 100]); });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(taxRows), 'Taxas');
     var expRows = [['Pedido', 'Modalidade', 'Tipo', 'Situação', 'Expedido em']];
