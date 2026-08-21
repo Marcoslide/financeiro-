@@ -72,6 +72,25 @@
   // pedido efetivamente saiu, que pode cair no dia seguinte).
   var expSessions = []; // { id, dataOperacional, horaInicio, operador, esperados:[{orderId,modalidade,prazoEnvio,statusNoMomento,isFbs}], resolvidas:[] }
   var expSessF = { sel: null }; // sessão aberta na tela (id) — null = mostra a lista
+  // Resolução manual das Pendências da Conferência (§25-38/§71-78): trilha de auditoria completa,
+  // nunca apaga — cada resolução acrescenta ao histórico do pedido. "Reabrir investigação" limpa o
+  // estado atual mas preserva o histórico.
+  var pendResolucoes = {}; // orderId -> { atual, motivo, observacao, operador, at, estadoAnterior, history:[] }
+  var pendF = { situacao: '' };
+  function pendenciaResolver(orderId, acao, motivo, observacao, estadoAnterior) {
+    var now = new Date().toISOString();
+    var hist = (pendResolucoes[orderId] && pendResolucoes[orderId].history) || [];
+    hist = hist.concat([{ acao: acao, motivo: motivo || '', observacao: observacao || '', operador: 'Operador', at: now, estadoAnterior: estadoAnterior }]);
+    pendResolucoes[orderId] = { atual: acao, motivo: motivo || '', observacao: observacao || '', operador: 'Operador', at: now, estadoAnterior: estadoAnterior, history: hist };
+    return putMany('settings', [{ id: 'pendResolucoes', data: pendResolucoes }]);
+  }
+  function pendenciaReabrir(orderId) {
+    var ex = pendResolucoes[orderId]; if (!ex || !ex.atual) return Promise.resolve();
+    var hist = (ex.history || []).concat([{ acao: 'REABERTO', motivo: '', observacao: '', operador: 'Operador', at: new Date().toISOString(), estadoAnterior: ex.atual }]);
+    // preserva o histórico completo (nunca apaga) — só remove o estado "resolvido" ativo
+    pendResolucoes[orderId] = { history: hist };
+    return putMany('settings', [{ id: 'pendResolucoes', data: pendResolucoes }]);
+  }
   var devSel = {};            // seleção múltipla em Casos: id -> true (em memória)
   var devCustomStatus = [];   // status internos personalizados pelo operador: [{key,label}]
   var chat = [];
@@ -710,6 +729,105 @@
   function bindExpSessaoBlock() {
     var b = document.getElementById('expsessstart'); if (b) b.onclick = function () { expSessionStart().then(function () { render(); toast('Sessão de expedição iniciada', ''); }); };
   }
+  // §25-38/§71-78 do prompt Full/FBS: motor único de reconciliação Esperados(A) × Expedidos(B) ×
+  // Acelera(C). Nunca toca no cálculo do Acelera — só interpreta os mesmos três sinais (sessões
+  // congeladas, expedidoSet(), registros do Acelera por ID) numa situação objetiva e um motivo
+  // específico, nunca "Divergente" genérico.
+  function pendenciaMotivoAcao(acao) {
+    return { CONFIRMAR_SEM_BIP: 'Saída confirmada manualmente sem bipe', JUSTIFICAR: 'Justificado', VINCULAR_SESSAO: 'Vinculado a outra sessão', ERRO_LEITURA: 'Marcado como erro de leitura' }[acao] || acao;
+  }
+  function pendenciasConferencia() {
+    var exp = expedidoSet();
+    var acByOrder = {}; acelera.forEach(function (r) { (acByOrder[r.pedido] = acByOrder[r.pedido] || []).push(r); });
+    var esperadosSet = {};
+    expSessions.forEach(function (s) { s.esperados.forEach(function (e) { if (!esperadosSet[e.orderId]) esperadosSet[e.orderId] = { modalidade: e.modalidade, isFbs: e.isFbs, sessaoId: s.id, sessaoData: s.dataOperacional, sessaoInicio: s.horaInicio }; }); });
+    var universo = {};
+    Object.keys(esperadosSet).forEach(function (id) { universo[id] = 1; });
+    Object.keys(exp).forEach(function (id) { universo[id] = 1; });
+    Object.keys(acByOrder).forEach(function (id) { universo[id] = 1; });
+    var tolMs = (aceleraCfg.aguardandoDias || 3) * 864e5;
+    var itens = Object.keys(universo).map(function (id) {
+      var o = orders.find(function (x) { return x.id === id; });
+      var esp = esperadosSet[id]; var info = exp[id]; var expedido = !!info; var acRecs = acByOrder[id]; var noAcelera = !!acRecs;
+      var res = pendResolucoes[id]; var resolvido = res && res.atual;
+      var valorAcelera = noAcelera ? acRecs.reduce(function (s, r) { return s + r.antecipado; }, 0) : null;
+      var isFbs = (esp && esp.isFbs) || (o && o.isFbs) || (info && info.isFbs) || false;
+      var situacao, motivo;
+      if (resolvido) { situacao = 'RESOLVIDO'; motivo = res.motivo || pendenciaMotivoAcao(res.atual); }
+      else if (expedido && noAcelera) { situacao = 'OK'; motivo = 'Expedido e antecipado — tudo certo.'; }
+      else if (expedido && !noAcelera) {
+        var idade = info.at ? Date.now() - new Date(info.at).getTime() : 0;
+        if (idade < tolMs) { situacao = 'AGUARDANDO'; motivo = (isFbs ? 'Full expedido' : 'Expedido') + ' há pouco tempo — aguardando aparecer no Acelera (dentro da tolerância de ' + (aceleraCfg.aguardandoDias || 3) + ' dia(s)).'; }
+        else { situacao = 'PEND_FINANCEIRA'; motivo = (isFbs ? 'Full expedido (confirmado pela Shopee)' : 'Expedido') + ' em ' + (info.at ? dbr(info.at) : '—') + ', mas a antecipação não foi localizada no Acelera.'; }
+      }
+      else if (!expedido && noAcelera) { situacao = 'PEND_OPERACIONAL'; motivo = 'Acelera encontrado — bip não localizado. O Acelera confirma antecipação deste pedido, mas nenhuma saída foi registrada (nem bipe interno, nem confirmação de status Full).'; }
+      else if (esp) {
+        var idadeSess = Date.now() - new Date(esp.sessaoInicio).getTime();
+        if (o && o.normalizedStatus !== 'A_ENVIAR') { situacao = 'INVESTIGAR'; motivo = 'Esperado na sessão de ' + acDbr(esp.sessaoData) + ', mas o status Shopee já mudou para "' + (S.pedidos.labels[o.normalizedStatus] || o.orderStatus) + '" sem nenhuma confirmação de expedição registrada.'; }
+        else if (idadeSess > tolMs) { situacao = 'PEND_EXPEDICAO'; motivo = 'Esperado na sessão de ' + acDbr(esp.sessaoData) + ' — ainda não expedido nem localizado no Acelera.'; }
+        else { situacao = 'AGUARDANDO'; motivo = 'Esperado na sessão de ' + acDbr(esp.sessaoData) + ' — ainda dentro da janela operacional normal.'; }
+      }
+      else { situacao = 'INVESTIGAR'; motivo = 'Encontrado no Acelera fora de qualquer sessão de expedição registrada — confirme como este pedido foi enviado.'; }
+      return { orderId: id, isFbs: isFbs, modalidade: (esp && esp.modalidade) || (o && o.shippingOption) || '—', expedidoAt: info ? info.at : null, expedidoVia: info ? info.via : null, shopeeStatus: o ? (S.pedidos.labels[o.normalizedStatus] || o.orderStatus) : '—', noAcelera: noAcelera, valorAcelera: valorAcelera, valorPedido: o ? o.totalAmount : null, situacao: situacao, motivo: motivo, resolucao: res, sessao: esp };
+    });
+    return itens;
+  }
+  function pendenciasConferenciaBlock() {
+    var itens = pendenciasConferencia();
+    var pendentes = itens.filter(function (i) { return ['PEND_FINANCEIRA', 'PEND_OPERACIONAL', 'PEND_EXPEDICAO', 'INVESTIGAR'].indexOf(i.situacao) >= 0; });
+    var resolvidas = itens.filter(function (i) { return i.situacao === 'RESOLVIDO'; });
+    if (!pendentes.length && !resolvidas.length) return '<div class="panel"><div class="ph"><h3>Pendências da Conferência</h3></div><div class="pb">' + callout('green', '✓ Nenhuma pendência', 'Todo o universo cruzado (esperados de sessões, expedidos e Acelera) está OK ou dentro da janela operacional normal.') + '</div></div>';
+    var cats = [
+      { k: 'PEND_OPERACIONAL', l: '🔴 Pendência operacional', n: pendentes.filter(function (i) { return i.situacao === 'PEND_OPERACIONAL'; }).length },
+      { k: 'PEND_FINANCEIRA', l: '🔴 Pendência financeira', n: pendentes.filter(function (i) { return i.situacao === 'PEND_FINANCEIRA'; }).length },
+      { k: 'PEND_EXPEDICAO', l: '🔴 Pendência de expedição', n: pendentes.filter(function (i) { return i.situacao === 'PEND_EXPEDICAO'; }).length },
+      { k: 'INVESTIGAR', l: '🟡 Investigar', n: pendentes.filter(function (i) { return i.situacao === 'INVESTIGAR'; }).length },
+      { k: 'RESOLVIDO', l: '✓ Resolvidas', n: resolvidas.length },
+    ];
+    var sel = pendF.situacao || (pendentes.length ? cats.filter(function (c) { return c.k !== 'RESOLVIDO'; }).find(function (c) { return c.n; }).k : 'RESOLVIDO');
+    var chips = cats.map(function (c) { return '<span class="chip' + (sel === c.k ? ' chip-on' : '') + '" data-pendcat="' + c.k + '">' + c.l + ' (' + nn(c.n) + ')</span>'; }).join('');
+    var list = (sel === 'RESOLVIDO' ? resolvidas : pendentes.filter(function (i) { return i.situacao === sel; }));
+    var rows = list.slice(0, 300).map(function (i) {
+      return '<tr class="rowlink" data-pendped="' + esc(i.orderId) + '"><td class="mono">' + esc(i.orderId) + '</td><td>' + (i.isFbs ? '<span class="tag info">Full</span>' : 'Normal') + '</td><td>' + esc(i.modalidade) + '</td><td class="nowrap">' + (i.expedidoAt ? dbr(i.expedidoAt) : 'não') + '</td><td>' + esc(i.shopeeStatus) + '</td><td class="nowrap">' + (i.noAcelera ? brlC(i.valorAcelera) : '—') + '</td><td class="nowrap">' + (i.valorPedido != null ? brl(i.valorPedido) : '—') + '</td><td class="cell-text">' + esc(i.motivo) + '</td><td><button class="btn-sm" data-pendabrir="' + esc(i.orderId) + '">' + (i.situacao === 'RESOLVIDO' ? 'Ver' : 'Resolver') + '</button></td></tr>';
+    }).join('');
+    var table = '<div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Tipo</th><th>Modalidade</th><th>Expedição</th><th>Shopee</th><th>Acelera</th><th>Valor</th><th>Motivo</th><th>Ação</th></tr></thead><tbody>' + (rows || '<tr><td colspan="9" class="empty">Nenhum pedido nesta categoria.</td></tr>') + '</tbody></table></div>';
+    return '<div class="panel"><div class="ph"><h3>Pendências da Conferência</h3><span class="footnote" style="margin:0">cruza esperados (sessões), expedidos (bipe/Full) e Acelera num único lugar — nunca "Divergente" genérico</span></div><div class="chips" style="padding:8px 16px 0">' + chips + '</div>' + table + '</div>';
+  }
+  function pendenciaDrawer(orderId) {
+    var itens = pendenciasConferencia(); var i = itens.find(function (x) { return x.orderId === orderId; }); if (!i) return;
+    var o = orders.find(function (x) { return x.id === orderId; });
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '620px'; panel.style.maxWidth = '96vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    var histRows = (i.resolucao && i.resolucao.history || []).slice().reverse().map(function (h) { return '<div class="fin-line"><span>' + esc(pendenciaMotivoAcao(h.acao)) + (h.observacao ? ' — ' + esc(h.observacao) : '') + '</span><span class="footnote" style="margin:0">' + new Date(h.at).toLocaleString('pt-BR') + '</span></div>'; }).join('');
+    var acoes = i.situacao === 'RESOLVIDO' ? '<button class="btn-sm" data-pendacao="REABRIR">Reabrir investigação</button>' :
+      '<div style="display:flex;flex-wrap:wrap;gap:8px">' +
+      '<button class="btn-sm primary" data-pendacao="CONFIRMAR_SEM_BIP">Confirmar saída sem bip</button>' +
+      '<button class="btn-sm" data-pendacao="JUSTIFICAR">Justificar</button>' +
+      '<button class="btn-sm" data-pendacao="VINCULAR_SESSAO">Vincular a outra sessão</button>' +
+      '<button class="btn-sm" data-pendacao="ERRO_LEITURA">Marcar como erro de leitura</button>' +
+      '</div>';
+    panel.innerHTML = '<div class="dh"><div><b>Pedido ' + esc(orderId) + '</b> <span class="tag' + (i.situacao.indexOf('PEND') === 0 ? ' warn' : '') + '" style="margin-left:6px">' + esc(i.situacao) + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
+      '<div class="panel"><div class="pb">' + kv('Tipo', i.isFbs ? 'Full/FBS' : 'Normal') + kv('Modalidade', i.modalidade) + kv('Status Shopee', i.shopeeStatus) + kv('Expedição', i.expedidoAt ? dbr(i.expedidoAt) + (i.expedidoVia === 'STATUS_SHOPEE_FULL' ? ' (confirmado pela Shopee)' : ' (bipe interno)') : 'não registrada') + kv('No Acelera', i.noAcelera ? 'sim — ' + brlC(i.valorAcelera) : 'não') + kv('Sessão de origem', i.sessao ? acDbr(i.sessao.sessaoData) : '—') + '<div style="margin-top:6px"><b>Motivo:</b> ' + esc(i.motivo) + '</div><div style="display:flex;gap:8px;margin-top:8px"><button class="btn-sm" data-goped360="' + esc(orderId) + '">Ficha do Pedido</button></div></div></div>' +
+      '<div class="panel"><div class="ph"><h3>Resolução manual</h3></div><div class="pb">' + acoes + '</div></div>' +
+      (histRows ? '<div class="panel"><div class="ph"><h3>Histórico</h3></div><div class="pb">' + histRows + '</div></div>' : '') +
+      '</div>';
+    panel.querySelector('.x').onclick = function () { d.remove(); };
+    var g360 = panel.querySelector('[data-goped360]'); if (g360) g360.onclick = function () { d.remove(); openPedidoFicha360(orderId); };
+    panel.querySelectorAll('[data-pendacao]').forEach(function (b) {
+      b.onclick = function () {
+        var acao = b.dataset.pendacao;
+        if (acao === 'REABRIR') { pendenciaReabrir(orderId).then(function () { d.remove(); render(); toast('Investigação reaberta', orderId); }); return; }
+        var motivo = prompt('Descreva o motivo/observação para "' + pendenciaMotivoAcao(acao) + '" (' + orderId + '):') || '';
+        pendenciaResolver(orderId, acao, motivo, motivo, i.situacao).then(function () { d.remove(); render(); toast('Pendência resolvida', orderId + ' — ' + pendenciaMotivoAcao(acao)); });
+      };
+    });
+  }
+  function bindPendenciasConferenciaBlock() {
+    app.querySelectorAll('[data-pendcat]').forEach(function (c) { c.onclick = function () { pendF.situacao = c.dataset.pendcat; render(); }; });
+    // o botão fica dentro da própria <tr class="rowlink"> — um único onclick na linha evita abrir
+    // a mesma ficha duas vezes por causa do bubbling do clique do botão.
+    app.querySelectorAll('[data-pendped]').forEach(function (tr) { tr.onclick = function () { pendenciaDrawer(tr.dataset.pendped); }; });
+  }
   function pedidosExpedicao() {
     var head = secHead('PEDIDOS · EXPEDIÇÃO', 'A Enviar × Bipado', 'A fila é exatamente a aba A Enviar de Pedidos — nada mais. O bipe confirma que a caixa realmente saiu; não altera o status Shopee.');
     if (!orders.length) return head + emptyBox('Importe os Pedidos para começar a controlar a expedição.');
@@ -735,7 +853,7 @@
     var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>BR</th><th>Data venda</th><th>Expedição</th><th>Conciliação</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="empty">Nenhum pedido neste filtro.</td></tr>') + '</tbody></table></div></div>';
     var anomaliaRows = bipadosForaFila.slice(0, 100).map(function (x) { return '<tr><td class="mono">' + esc(x.oid) + '</td><td>' + (x.o ? '<span class="pill ' + x.o.normalizedStatus + '">' + esc(S.pedidos.labels[x.o.normalizedStatus] || x.o.normalizedStatus) + '</span>' : '<span class="tag warn">pedido não encontrado em Pedidos</span>') + '</td><td class="nowrap">' + new Date(x.b.bipedAt).toLocaleString('pt-BR') + '</td>' + (x.o ? '<td><button class="btn-sm" data-goped360="' + esc(x.oid) + '">Ficha do Pedido</button></td>' : '<td>—</td>') + '</tr>'; }).join('');
     var anomaliaBox = bipadosForaFila.length ? '<div class="panel"><div class="ph"><h3>Bipados que não estão em A Enviar</h3><span class="footnote" style="margin:0">o bipe existe, mas o status Shopee do pedido já mudou (ou o ID não existe em Pedidos) — revise</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Status atual</th><th>Bipado em</th><th></th></tr></thead><tbody>' + anomaliaRows + '</tbody></table></div></div>' : '';
-    return head + expSessaoBlock() + strip + bipe +
+    return head + expSessaoBlock() + pendenciasConferenciaBlock() + strip + bipe +
       '<div class="chips">' + chips.map(function (c) { return '<span class="chip' + (pedExpF.status === c[0] ? ' chip-on' : '') + '" data-expst="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '<span class="chip' + (pedExpF.includeFull ? ' chip-on' : '') + '" data-expfull="1" title="Full/FBS é despachado pelo centro de distribuição da Shopee — por padrão fica fora desta fila própria">Incluir Full (' + nn(fullCount) + ')</span></div>' +
       '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="expq" style="width:260px" placeholder="Buscar ID do pedido ou BR…" value="' + esc(pedExpF.search) + '"></div>' +
       '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos em A Enviar' + (!pedExpF.includeFull && fullCount ? ' <span class="footnote">(' + nn(fullCount) + ' Full/FBS fora da fila — expedidos pela Shopee)</span>' : '') + '</div>' +
@@ -743,6 +861,7 @@
   }
   function bindPedidosExpedicao() {
     bindExpSessaoBlock();
+    bindPendenciasConferenciaBlock();
     var bi = document.getElementById('bipinput'); var doRegister = function () { var v = bi.value; bipRegister(v).then(function (rec) { bi.value = ''; render(); var el = document.getElementById('bipinput'); if (el) el.focus(); toast('Expedição registrada', rec.orderId); }).catch(function (e) { toast('Falha', e.message, true); }); };
     if (bi) bi.onkeydown = function (e) { if (e.key === 'Enter') doRegister(); };
     var bb = document.getElementById('bipbtn'); if (bb) bb.onclick = doRegister;
@@ -5386,7 +5505,7 @@
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
 
   // Abre o banco; se falhar (corrompido/bloqueado/privado), ativa o modo em memória e SEGUE —
   // o sistema sempre carrega e Produtos sempre abre (só não salva). Nunca dead-end / tela branca.
@@ -5409,6 +5528,7 @@
     var mrMCfg = settings.filter(function (x) { return x.id === 'mrMetaCfg'; })[0]; if (mrMCfg && mrMCfg.data) Object.keys(mrMCfg.data).forEach(function (k) { mrMetaCfg[k] = mrMCfg.data[k]; });
     shipBip = {}; (r[18] || []).forEach(function (b) { shipBip[b.orderId] = b; });
     expSessions = (r[20] || []).sort(function (a, b) { return b.horaInicio.localeCompare(a.horaInicio); });
+    var pendR = settings.filter(function (x) { return x.id === 'pendResolucoes'; })[0]; if (pendR && pendR.data) pendResolucoes = pendR.data;
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
     plans = (r[4] || []).map(function (p) { if (PLAN_MIGR[p.status]) p.status = PLAN_MIGR[p.status]; if (p.scopeSkus == null && p.relatedSkus) p.scopeSkus = p.relatedSkus; if (p.indicatorKind == null) p.indicatorKind = 'liquido'; return p; });
     occ = occ.filter(function (o) { return !o.isDemo; }); // higiene: nunca deixar demo no banco real
