@@ -5804,6 +5804,8 @@
       var footer = '<div class="panel"><div class="pb" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
         '<button class="btn-sm' + (podeFechar ? ' primary' : '') + '"' + (podeFechar ? '' : ' disabled title="Só é possível Fechar sem pendências — use Fechar com ressalva"') + ' id="caixa-close">Fechar Caixa</button>' +
         '<button class="btn-sm' + (podeFechar ? '' : ' primary') + '" id="caixa-closeress">Fechar com ressalva</button>' +
+        '<button class="btn-sm" id="caixa-xlsx" title="Planilha com Resumo/Pedidos/Taxas/Expedição/Acelera/Pendências/DRE/Histórico — sempre do dia aberto aqui">Exportar XLSX</button>' +
+        '<button class="btn-sm" id="caixa-print" title="Abre a impressão do navegador — use \'Salvar como PDF\' para gerar o documento de auditoria">Imprimir / PDF</button>' +
         (st.rec ? '<span class="footnote" style="margin:0">último registro: ' + esc(CAIXA_LABEL[st.rec.status] ? CAIXA_LABEL[st.rec.status][0] : st.rec.status) + ' por ' + esc(st.rec.closedBy || '—') + ' em ' + new Date(st.rec.closedAt).toLocaleString('pt-BR') + '</span>' : '') +
         '</div>' + (st.rec && st.rec.eventosPosteriores && st.rec.eventosPosteriores.length ? '<div class="pb" style="padding-top:0"><div class="footnote"><b>Eventos posteriores:</b> ' + st.rec.eventosPosteriores.map(function (e) { return esc(e.orderId) + ' — ' + esc(e.descricao) + ' (' + new Date(e.at).toLocaleDateString('pt-BR') + ')'; }).join(' · ') + '</div></div>' : '') + '</div>';
       return '<div class="dh"><div><b>FECHAMENTO — ' + esc(dbr(dateKey)) + '</b> <span class="tag ' + lbl[1] + '" style="margin-left:6px">' + lbl[0] + '</span>' + (st.status === 'REVISAO_NECESSARIA' ? ' <span class="footnote" style="margin:0">⚠ movimento posterior a este fechamento</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' + blocoVendas + blocoExp + blocoAc + blocoFin + dreBlock + pendTable + footer + '</div>';
@@ -5832,6 +5834,8 @@
         if (justificativa == null || !justificativa.trim()) return;
         caixaCloseDay(dateKey, 'FECHADO_COM_RESSALVA', 'Operador', justificativa.trim()).then(function () { toast('Caixa fechado com ressalva', dbr(dateKey)); refresh(); render(); });
       };
+      var xl = panel.querySelector('#caixa-xlsx'); if (xl) xl.onclick = function () { caixaExportarXlsx(dateKey); toast('Planilha gerada', 'Fechamento_Caixa_' + dateKey + '.xlsx'); };
+      var pr = panel.querySelector('#caixa-print'); if (pr) pr.onclick = function () { window.print(); };
     }
     refresh();
   }
@@ -5847,6 +5851,49 @@
     return head + table;
   }
   function bindCaixaHistoricoView() { app.querySelectorAll('[data-caixadia]').forEach(function (b) { b.onclick = function () { openCaixaFechamentoDia(b.dataset.caixadia); }; }); }
+  // §24-27: exportação XLSX do fechamento — sempre respeita o dia aberto no momento (nunca um
+  // período diferente do que está sendo visto). Reaproveita os mesmos motores/leituras já usados
+  // na tela — nunca uma segunda fonte de números só para o arquivo exportado.
+  function caixaExportarXlsx(dateKey) {
+    var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = caixaDayAcelera(dateKey), pend = caixaDayPendencias(dateKey);
+    var mr = mrEngine(); var mrByOrder = {}; mr.orders.forEach(function (r) { mrByOrder[r.orderId] = r; });
+    var profitOf = mrOrderProfitEngine();
+    var wb = XLSX.utils.book_new();
+    var resumo = [['Fechamento de Caixa', dbr(dateKey)], [],
+      ['Pedidos pagos', vendas.n], ['Faturamento (R$)', vendas.valor], ['Lucro atual (R$)', vendas.nLucroConhecido ? vendas.lucroC / 100 : ''],
+      ['Esperados (Expedição)', exp.esperados != null ? exp.esperados : ''], ['Expedidos', exp.expedidos], ['Faltaram', exp.faltaram != null ? exp.faltaram : ''],
+      ['Resgates Acelera', ac.n || 0], ['Antecipado (R$)', ac.antec != null ? ac.antec / 100 : ''], ['Taxa Acelera (R$)', ac.taxa != null ? ac.taxa / 100 : ''], ['Recebido líquido (R$)', ac.liquido != null ? ac.liquido / 100 : ''],
+      ['Pendências', pend.total]];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(resumo), 'Resumo');
+    var pedRows = [['Pedido', 'Status', 'Valor (R$)', 'Lucro (R$)', 'Custo conhecido']];
+    vendas.pedidos.forEach(function (o) { var p = profitOf(o); pedRows.push([o.id, S.pedidos.labels[o.normalizedStatus] || o.orderStatus, o.totalAmount || 0, p.known ? p.lucro / 100 : '', p.known ? 'sim' : 'não']); });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pedRows), 'Pedidos');
+    var taxRows = [['Pedido', 'Comissão', 'Serviço', 'Transação', 'Frete parceiro', 'Desconto frete', 'Envio reverso', 'Ação comercial (incentivo)', 'Ação comercial (ajuste)', 'Afiliado', 'Cupom', 'PIX', 'Reembolso']];
+    vendas.pedidos.forEach(function (o) { var r = mrByOrder[o.id]; if (!r) return; taxRows.push([o.id, r.comissao / 100, r.servico / 100, r.transacao / 100, r.freteParceiro / 100, r.descontoFrete / 100, r.envioReverso / 100, (r.incentivoAcaoComercial || 0) / 100, (r.ajusteAcaoComercial || 0) / 100, r.afiliado / 100, r.cupom / 100, r.pix / 100, r.reembolso / 100]); });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(taxRows), 'Taxas');
+    var expRows = [['Pedido', 'Modalidade', 'Tipo', 'Situação', 'Expedido em']];
+    exp.itens.forEach(function (i) { expRows.push([i.orderId, i.modalidade, i.isFbs ? 'Full' : 'Normal', i.situacao, i.expedidoAt ? dbr(i.expedidoAt) : '']); });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(expRows), 'Expedição');
+    var acRows2 = [['Resgates', 'Antecipado (R$)', 'Taxa (R$)', 'Recebido (R$)']]; if (ac.n) acRows2.push([ac.n, ac.antec / 100, ac.taxa / 100, ac.liquido / 100]);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(acRows2), 'Acelera');
+    var pendRows2 = [['Pedido', 'Tipo', 'Motivo/Valor']];
+    pend.operacionais.forEach(function (i) { pendRows2.push([i.orderId, 'Operacional', i.motivo]); });
+    pend.financeiras.forEach(function (f) { pendRows2.push([f.orderId, 'Financeira', 'Diferença de R$ ' + (f.diff / 100).toFixed(2) + ' na composição × Pagamento Liberado']); });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pendRows2), 'Pendências');
+    if (mrRenda.length) {
+      var pe = mrPeriodEngine(caixaDayRange(dateKey)); var t = pe.t;
+      var descComerciais = t.cupom + t.pix, taxasShopee = pe.taxasShopeeTotal + t.afiliado, devolucoes = t.reembolso, outrosAj = pe.adjTot;
+      var receitaLiquida = pe.faturamento + descComerciais + taxasShopee + devolucoes + outrosAj;
+      var custo = pe.custoItemsKnown > 0 ? pe.custoProd : null;
+      var dreRows = [['Linha', 'Valor (R$)'], ['Receita Bruta', pe.faturamento / 100], ['Descontos Comerciais', descComerciais / 100], ['Taxas Shopee', taxasShopee / 100], ['Devoluções e Reembolsos', devolucoes / 100], ['Outros Ajustes', outrosAj / 100], ['Receita Líquida', receitaLiquida / 100], ['Custo dos Produtos', custo != null ? custo / 100 : ''], ['Lucro', custo != null ? (receitaLiquida - custo) / 100 : '']];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dreRows), 'DRE');
+    }
+    var rec = caixaClose[dateKey];
+    var histRows = [['Data/hora', 'Status', 'Justificativa', 'Pendências no momento']];
+    (rec && rec.history || []).forEach(function (h) { histRows.push([new Date(h.at).toLocaleString('pt-BR'), h.status, h.justificativa || '', h.pendTotal]); });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(histRows), 'Histórico');
+    XLSX.writeFile(wb, 'Fechamento_Caixa_' + dateKey + '.xlsx');
+  }
   function renderCaixa() {
     app.innerHTML = '<div class="subtabs">' + [['dashboard', 'Dashboard'], ['fechamento', 'Fechamento Diário'], ['historico', 'Histórico']].map(function (t) { return '<div class="subtab' + (caixaSub === t[0] ? ' active' : '') + '" data-caixasub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><div id="caixabody" style="margin-top:14px"></div>';
     var body = document.getElementById('caixabody');
