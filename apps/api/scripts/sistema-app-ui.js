@@ -342,7 +342,18 @@
           // usados no Dashboard (pedidos feitos × pagos) e na aba Tempo de Envio.
           paidAt: toIso(rep.paidAt), shipByDate: toIso(rep.shipByDate), shippedAt: toIso(rep.shippedAt), deliveredAt: toIso(rep.deliveredAt), completedAt: toIso(rep.completedAt), cancelledAt: toIso(rep.cancelledAt) };
         var ex = byId[id];
-        if (!ex) { novo++; byId[id] = next; } else { var diff = ex.orderStatus !== next.orderStatus || ex.tracking !== next.tracking || ex.totalAmount !== next.totalAmount; if (diff) upd++; else unch++; byId[id] = next; }
+        var nowIso = new Date().toISOString();
+        if (!ex) { novo++; next.statusHistory = [{ status: next.normalizedStatus, at: next.createdAt || nowIso, detectedAt: nowIso }]; byId[id] = next; }
+        else {
+          var diff = ex.orderStatus !== next.orderStatus || ex.tracking !== next.tracking || ex.totalAmount !== next.totalAmount;
+          if (diff) upd++; else unch++;
+          // Rastreamento histórico de status (prompt Expedição/Full/FBS §7-16): nunca reescreve o
+          // passado — só acrescenta um evento quando o normalizedStatus realmente muda entre
+          // importações. É o que permite detectar Full A_ENVIAR→ENVIADO sem exigir bipe físico.
+          next.statusHistory = (ex.statusHistory || []).slice();
+          if (ex.normalizedStatus !== next.normalizedStatus) next.statusHistory.push({ status: next.normalizedStatus, from: ex.normalizedStatus, at: nowIso });
+          byId[id] = next;
+        }
         changed.push(next);
       });
       orders = Object.values(byId);
@@ -594,7 +605,35 @@
     else { ex = shipBip[orderId] = { id: orderId, orderId: orderId, bipedAt: now, lastScanAt: now, bipedBy: 'Operador', note: note || '', scannedVia: res.via, scannedValue: rawInput, history: [] }; }
     return putMany('shipbip', [ex]).then(function () { return ex; });
   }
-  function pedIsExpedido(orderId) { return !!shipBip[orderId]; }
+  // Full/FBS não é despachado por bipe interno — a Shopee expede pelo próprio centro de
+  // distribuição. A confirmação de saída de um Full vem da própria transição de status
+  // (A_ENVIAR → ENVIADO/CONCLUÍDO) detectada entre importações de Pedidos (statusHistory).
+  // Nunca fabricamos um bipe para Full; se por acidente ele for bipado, o bipe fica registrado
+  // mas a NATUREZA da confirmação continua sendo o status Shopee, nunca o bipe.
+  function fullConfirmadoEnvio(o) { return !!o && !!o.isFbs && (o.normalizedStatus === 'ENVIADO' || o.normalizedStatus === 'CONCLUIDO'); }
+  function fullTransicaoAEnviarEnviado(o) { return o && (o.statusHistory || []).find(function (h) { return h.status === 'ENVIADO' && h.from === 'A_ENVIAR'; }); }
+  // Definição única de "expedido" (prompt Full/FBS §7-16, §40-41): normal → bipe interno;
+  // Full → confirmação por status Shopee. Usada em toda parte que precisa saber "isto já saiu?" —
+  // Expedição, Tempo de Envio e o cruzamento com o Acelera — nunca duas definições paralelas.
+  function pedidoExpedidoInfo(orderId) {
+    var o = typeof orderId === 'string' ? orders.find(function (x) { return x.id === orderId; }) : orderId;
+    var b = shipBip[o ? o.id : orderId];
+    if (o && o.isFbs) {
+      var confirmado = fullConfirmadoEnvio(o);
+      var trans = fullTransicaoAEnviarEnviado(o);
+      return { expedido: confirmado, via: confirmado ? 'STATUS_SHOPEE_FULL' : null, at: trans ? trans.at : (confirmado ? (o.shippedAt || o.createdAt || null) : null), bip: b, bipAcidental: !!b, isFbs: true };
+    }
+    return { expedido: !!b, via: b ? 'BIPE_INTERNO' : null, at: b ? b.bipedAt : null, bip: b, bipAcidental: false, isFbs: false };
+  }
+  function pedIsExpedido(orderId) { return pedidoExpedidoInfo(orderId).expedido; }
+  // Conjunto de todos os pedidos expedidos (normais bipados ∪ Full confirmados por status) — a
+  // MESMA fonte usada em Pedidos→Expedição e no cruzamento com o Acelera (nunca duas listas).
+  function expedidoSet() {
+    var set = {};
+    Object.keys(shipBip).forEach(function (oid) { var o = orders.find(function (x) { return x.id === oid; }); if (!o || !o.isFbs) set[oid] = pedidoExpedidoInfo(o || oid); });
+    orders.forEach(function (o) { if (o.isFbs && fullConfirmadoEnvio(o)) set[o.id] = pedidoExpedidoInfo(o); });
+    return set;
+  }
   // Status de conciliação financeira de um pedido, cruzando Minha Renda × Acelera × Carteira × Devolução.
   // Usado na fila de Expedição e na Ficha Financeira 360º (mesma definição nos dois lugares).
   function pedidoConciliacaoStatus(orderId) {
@@ -3416,7 +3455,7 @@
   // "expedido sem Acelera"), depois-da-antecipação (reembolso §24), pedido central e Ficha 360º.
   function openAceleraPedido(pid) {
     var recs = acelera.filter(function (r) { return r.pedido === pid; }); var r = recs[0];
-    var ord = orders.find(function (o) { return o.id === pid; }); var oc = occ.find(function (o) { return !o.isDemo && o.orderId === pid; }); var bip = shipBip[pid];
+    var ord = orders.find(function (o) { return o.id === pid; }); var oc = occ.find(function (o) { return !o.isDemo && o.orderId === pid; }); var expInfo = pedidoExpedidoInfo(ord || pid); var bip = { bipedAt: expInfo.at }; var bipReal = expInfo.expedido;
     var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '640px'; panel.style.maxWidth = '96vw';
     d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
     var antBlock;
@@ -3427,10 +3466,10 @@
         '<div class="panel"><div class="ph"><h3>Depois da antecipação</h3><span class="footnote" style="margin:0">valores brutos, exatamente como vieram da Shopee</span></div><div class="pb">' + kv('Reembolsado', brlC(r.reembolsado)) + kv('Valor pendente (Shopee)', brlC(r.pendente)) + kv('Última transação', acDbr(r.ultimaTransacao)) + kv('Vencimento', acDbr(r.vencimento)) + (r.reembolsado > 0 ? '<div style="margin-top:4px"><span class="tag warn">Pedido posteriormente reembolsado</span></div>' : '') + '</div></div>' +
         ((r.history && r.history.length) ? '<div class="panel"><div class="ph"><h3>Linha do tempo</h3></div><div class="pb">' + [{ at: r.firstImportAt, txt: 'Importado — ' + acStatusLabel(r.status) }].concat(r.history.map(function (h) { return { at: h.at, txt: acStatusLabel(h.statusOld) + ' → ' + acStatusLabel(h.statusNew) }; })).map(function (e) { return '<div class="fin-line"><span>' + esc(e.txt) + '</span><span class="footnote" style="margin:0">' + (e.at ? new Date(e.at).toLocaleDateString('pt-BR') : '') + '</span></div>'; }).join('') + '</div></div>' : '');
     } else {
-      antBlock = callout('warn', 'Pedido não encontrado no Acelera', bip ? 'Expedido em ' + dbr(bip.bipedAt) + ', mas sem registro correspondente no relatório do Shopee Acelera importado.' : 'Sem registro no Shopee Acelera importado.');
+      antBlock = callout('warn', 'Pedido não encontrado no Acelera', bipReal ? (expInfo.isFbs ? 'Full expedido (confirmado pela Shopee) em ' : 'Expedido em ') + dbr(bip.bipedAt) + ', mas sem registro correspondente no relatório do Shopee Acelera importado.' : 'Sem registro no Shopee Acelera importado.');
     }
     var it = ord ? (ord.items || [])[0] || {} : {};
-    var pedBlock = ord ? '<div class="panel"><div class="ph"><h3>Pedido (do módulo Pedidos)</h3></div><div class="pb">' + kv('Produto', it.productName || '—') + kv('SKU', it.sku || '—') + kv('Status', S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus || '—') + kv('Valor', brl(ord.totalAmount || 0)) + kv('Expedido', bip ? dbr(bip.bipedAt) : 'não registrado') + '<div style="display:flex;gap:8px;margin-top:8px"><button class="btn-sm" data-goped="' + esc(pid) + '">Ver pedido</button><button class="btn-sm primary" data-goped360="' + esc(pid) + '">Ficha do Pedido</button></div></div></div>' : '<div class="footnote">Pedido ' + esc(pid) + ' não importado no módulo Pedidos — SKU/produto indisponíveis.</div>';
+    var pedBlock = ord ? '<div class="panel"><div class="ph"><h3>Pedido (do módulo Pedidos)</h3></div><div class="pb">' + kv('Produto', it.productName || '—') + kv('SKU', it.sku || '—') + kv('Status', S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus || '—') + kv('Valor', brl(ord.totalAmount || 0)) + kv('Expedido', bipReal ? dbr(bip.bipedAt) + (expInfo.isFbs ? ' (Full — confirmado pela Shopee)' : '') : 'não registrado') + '<div style="display:flex;gap:8px;margin-top:8px"><button class="btn-sm" data-goped="' + esc(pid) + '">Ver pedido</button><button class="btn-sm primary" data-goped360="' + esc(pid) + '">Ficha do Pedido</button></div></div></div>' : '<div class="footnote">Pedido ' + esc(pid) + ' não importado no módulo Pedidos — SKU/produto indisponíveis.</div>';
     var devBlock = oc ? '<div class="panel"><div class="ph"><h3>Devolução vinculada</h3><span class="tag info">' + esc(statusLabel(oc.status)) + '</span></div><div class="pb">' + kv('Motivo', oc.reason || '—') + kv('Responsabilidade', (DEV.RESPONSIBILITY[oc.responsibility] || '—')) + '<button class="btn-sm" data-godev="' + esc(oc.id) + '">Ver devolução</button></div></div>' : '';
     panel.innerHTML = '<div class="dh"><div><b>Pedido ' + esc(pid) + '</b>' + (r ? ' <span class="tag ' + (acIsReemb(r) ? 'warn' : acIsFullyPaid(r) ? 'ok' : 'neutral') + '" style="margin-left:6px">' + esc(acStatusLabel(r.status)) + '</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' + antBlock + pedBlock + devBlock + '</div>';
     panel.querySelector('.x').onclick = function () { d.remove(); };
@@ -3449,45 +3488,49 @@
   // objetivo (bipe registrado, ou aparição no relatório do Acelera) — nunca é assumido.
   function aceleraFunilStages() {
     var aEnviar = orders.filter(function (o) { return o.normalizedStatus === 'A_ENVIAR'; }).length;
-    var bipados = Object.keys(shipBip).length;
+    var exp = expedidoSet();
+    var bipados = Object.keys(exp).length;
     var acPedidosSet = {}; acelera.forEach(function (r) { acPedidosSet[r.pedido] = 1; });
-    var encontrados = Object.keys(shipBip).filter(function (oid) { return acPedidosSet[oid]; }).length;
+    var encontrados = Object.keys(exp).filter(function (oid) { return acPedidosSet[oid]; }).length;
     return { aEnviar: aEnviar, bipados: bipados, encontrados: encontrados };
   }
+  // §7-16/§40-41 do prompt Full/FBS: "expedido" aqui é SEMPRE expedidoSet() — bipe interno
+  // (normal) ∪ confirmação por transição de status Shopee (Full). Isto só estende QUEM entra no
+  // cruzamento; a matemática do Acelera (aceleraByResgate/aceleraMetrics/etc.) não é tocada.
   function aceleraExpedidos() {
-    var head = secHead('SHOPEE ACELERA · EXPEDIDOS × ACELERA', 'Os pedidos expedidos foram antecipados?', 'Cruza a expedição (bipe, em Pedidos → Expedição) com os registros do Acelera pelo ID do pedido.');
+    var head = secHead('SHOPEE ACELERA · EXPEDIDOS × ACELERA', 'Os pedidos expedidos foram antecipados?', 'Cruza a expedição (bipe interno para normais, confirmação por status Shopee para Full/FBS) com os registros do Acelera pelo ID do pedido.');
     var fun = aceleraFunilStages();
-    var funil = '<div class="panel"><div class="ph"><h3>Funil de conciliação (3 estágios, nunca fundidos)</h3></div><div class="pb"><div class="kstrip"><div class="kc"><div class="kl">① A Enviar (Pedidos)</div><div class="kv" style="font-size:16px">' + nn(fun.aEnviar) + '</div></div><div class="kc"><div class="kl">② Bipado/Expedido</div><div class="kv" style="font-size:16px">' + nn(fun.bipados) + '</div></div><div class="kc"><div class="kl">③ Encontrado no Acelera</div><div class="kv" style="font-size:16px">' + nn(fun.encontrados) + '</div></div></div><span class="footnote">① nunca aparece no Acelera (ainda não foi enviado); ② confirmação própria de despacho; ③ cruzamento por ID do pedido no relatório do Acelera — os três estágios nunca são somados nem confundidos entre si.</span></div></div>';
-    var bips = Object.keys(shipBip);
-    if (!bips.length) return head + funil + emptyBox('Nenhum pedido expedido (bipado) ainda. Registre a expedição em Pedidos → Expedição para habilitar este cruzamento.');
+    var funil = '<div class="panel"><div class="ph"><h3>Funil de conciliação (3 estágios, nunca fundidos)</h3></div><div class="pb"><div class="kstrip"><div class="kc"><div class="kl">① A Enviar (Pedidos)</div><div class="kv" style="font-size:16px">' + nn(fun.aEnviar) + '</div></div><div class="kc"><div class="kl">② Expedido (bipe ou Full confirmado)</div><div class="kv" style="font-size:16px">' + nn(fun.bipados) + '</div></div><div class="kc"><div class="kl">③ Encontrado no Acelera</div><div class="kv" style="font-size:16px">' + nn(fun.encontrados) + '</div></div></div><span class="footnote">① nunca aparece no Acelera (ainda não foi enviado); ② confirmação de despacho (bipe interno para normal, status Shopee para Full); ③ cruzamento por ID do pedido no relatório do Acelera — os três estágios nunca são somados nem confundidos entre si.</span></div></div>';
+    var exp = expedidoSet(); var bips = Object.keys(exp);
+    if (!bips.length) return head + funil + emptyBox('Nenhum pedido expedido ainda. Registre a expedição em Pedidos → Expedição (bipe) ou aguarde a Shopee confirmar o envio dos pedidos Full para habilitar este cruzamento.');
     var acByOrder = {}; acelera.forEach(function (r) { (acByOrder[r.pedido] = acByOrder[r.pedido] || []).push(r); });
     var tolMs = (aceleraCfg.aguardandoDias || 3) * 864e5;
     var rows = bips.map(function (oid) {
-      var b = shipBip[oid]; var recs = acByOrder[oid]; var situacao, badge;
-      if (recs && recs.length) { situacao = 'CONCILIADO'; badge = '🟢 Conciliado'; }
+      var info = exp[oid]; var recs = acByOrder[oid]; var situacao, badge;
+      if (recs && recs.length) { situacao = 'CONCILIADO'; badge = info.isFbs ? '🟢 Full conciliado' : '🟢 Conciliado'; }
       else {
-        var idade = Date.now() - new Date(b.bipedAt).getTime();
+        var idade = info.at ? Date.now() - new Date(info.at).getTime() : 0;
         // §16: janela operacional antes de marcar como problema — não é um prazo oficial da Shopee,
         // é uma tolerância ajustável (aceleraCfg.aguardandoDias) para não gerar alarme falso cedo demais.
-        if (idade < tolMs) { situacao = 'AGUARDANDO'; badge = '🟡 Aguardando antecipação'; }
-        else { situacao = 'NAO_ENCONTRADO'; badge = '🔴 Expedido, não encontrado no Acelera'; }
+        if (idade < tolMs) { situacao = 'AGUARDANDO'; badge = info.isFbs ? '🟡 Full expedido — aguardando antecipação' : '🟡 Aguardando antecipação'; }
+        else { situacao = 'NAO_ENCONTRADO'; badge = info.isFbs ? '🔴 Full expedido — antecipação não localizada' : '🔴 Expedido, não encontrado no Acelera'; }
       }
-      return { oid: oid, bipedAt: b.bipedAt, recs: recs || [], situacao: situacao, badge: badge };
+      return { oid: oid, at: info.at, via: info.via, isFbs: info.isFbs, recs: recs || [], situacao: situacao, badge: badge };
     });
-    var acSemExp = Object.keys(acByOrder).filter(function (oid) { return !shipBip[oid]; });
+    var acSemExp = Object.keys(acByOrder).filter(function (oid) { return !exp[oid]; });
     var conciliados = rows.filter(function (r) { return r.situacao === 'CONCILIADO'; });
     var naoEncontrados = rows.filter(function (r) { return r.situacao === 'NAO_ENCONTRADO'; });
     var pctConc = bips.length ? r2(conciliados.length / bips.length * 100) : 0;
     var strip = kstrip([
-      { l: 'Pedidos expedidos/bipados', v: nn(bips.length), cls: 'blue' },
+      { l: 'Pedidos expedidos', v: nn(bips.length), cls: 'blue', s: 'bipe interno + Full confirmado pela Shopee' },
       { l: 'Encontrados no Acelera', v: nn(conciliados.length), cls: 'green' },
       { l: 'Não encontrados no Acelera', v: nn(naoEncontrados.length), cls: naoEncontrados.length ? 'red' : 'green' },
       { l: 'Acelera sem confirmação de expedição', v: nn(acSemExp.length), cls: acSemExp.length ? 'amber' : 'green' },
       { l: '% conciliado', v: pct(pctConc), cls: 'blue', s: nn(conciliados.length) + ' de ' + nn(bips.length) + ' expedidos (denominador = todos os expedidos)' },
     ]);
-    var tableRows = rows.sort(function (a, b) { var ord = { NAO_ENCONTRADO: 0, AGUARDANDO: 1, CONCILIADO: 2 }; return ord[a.situacao] - ord[b.situacao] || b.bipedAt.localeCompare(a.bipedAt); }).slice(0, 400).map(function (r) {
+    var tableRows = rows.sort(function (a, b) { var ord = { NAO_ENCONTRADO: 0, AGUARDANDO: 1, CONCILIADO: 2 }; return ord[a.situacao] - ord[b.situacao] || (b.at || '').localeCompare(a.at || ''); }).slice(0, 400).map(function (r) {
       var rec = r.recs[0]; var o2 = orders.find(function (o) { return o.id === r.oid; });
-      return '<tr><td class="mono">' + esc(r.oid) + '</td><td class="nowrap">' + dbr(r.bipedAt) + '</td><td class="nowrap">' + (rec ? acDbr(rec.data) : '—') + '</td><td class="nowrap">' + (rec ? brlC(rec.antecipado) : '—') + '</td><td class="nowrap">' + (rec ? brlC(rec.taxa) : '—') + '</td><td class="nowrap">' + (rec ? brlC(rec.recebido) : '—') + '</td><td class="mono">' + (rec ? esc(rec.resgate) : '—') + '</td><td>' + (o2 ? esc(S.pedidos.labels[o2.normalizedStatus] || o2.orderStatus) : '—') + '</td><td><span class="tag' + (r.situacao === 'NAO_ENCONTRADO' ? ' warn' : '') + '">' + r.badge + '</span></td><td><button class="btn-sm" data-acped="' + esc(r.oid) + '">Abrir</button></td></tr>';
+      return '<tr><td class="mono">' + esc(r.oid) + '</td><td class="nowrap">' + (r.at ? dbr(r.at) : '—') + (r.isFbs ? ' <span class="tag info">Full</span>' : '') + '</td><td class="nowrap">' + (rec ? acDbr(rec.data) : '—') + '</td><td class="nowrap">' + (rec ? brlC(rec.antecipado) : '—') + '</td><td class="nowrap">' + (rec ? brlC(rec.taxa) : '—') + '</td><td class="nowrap">' + (rec ? brlC(rec.recebido) : '—') + '</td><td class="mono">' + (rec ? esc(rec.resgate) : '—') + '</td><td>' + (o2 ? esc(S.pedidos.labels[o2.normalizedStatus] || o2.orderStatus) : '—') + '</td><td><span class="tag' + (r.situacao === 'NAO_ENCONTRADO' ? ' warn' : '') + '">' + r.badge + '</span></td><td><button class="btn-sm" data-acped="' + esc(r.oid) + '">Abrir</button></td></tr>';
     }).join('');
     var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Data expedição</th><th>Data antecipação</th><th>Valor antecipado</th><th>Taxa</th><th>Líquido</th><th>ID resgate</th><th>Status</th><th>Situação</th><th></th></tr></thead><tbody>' + (tableRows || '<tr><td colspan="10" class="empty">Nenhum pedido.</td></tr>') + '</tbody></table></div></div>';
     var acSemExpTable = acSemExp.length ? '<div class="panel"><div class="ph"><h3>⚠️ Acelera sem expedição localizada</h3><span class="footnote" style="margin:0">' + nn(acSemExp.length) + ' pedido(s) antecipados sem registro de expedição/bipe</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Data antecipação</th><th>Valor antecipado</th><th></th></tr></thead><tbody>' + acSemExp.slice(0, 200).map(function (oid) { var rr = acByOrder[oid][0]; return '<tr><td class="mono">' + esc(oid) + '</td><td class="nowrap">' + acDbr(rr.data) + '</td><td class="nowrap">' + brlC(rr.antecipado) + '</td><td><button class="btn-sm" data-acped="' + esc(oid) + '">Abrir</button></td></tr>'; }).join('') + '</tbody></table></div></div>' : '';
@@ -3501,9 +3544,9 @@
     var recs = aceleraInPeriod();
     var head = secHead('ACELERA · DIVERGÊNCIAS', 'Exceções que precisam de revisão', 'Separadas por categoria — nunca marcamos "possível duplicidade" só porque existem dois resgates na mesma data.');
     var acByOrder = {}; acelera.forEach(function (r) { (acByOrder[r.pedido] = acByOrder[r.pedido] || []).push(r); });
-    var bips = Object.keys(shipBip);
+    var exp = expedidoSet(); var bips = Object.keys(exp);
     var expedidosSemAcelera = bips.filter(function (oid) { return !acByOrder[oid]; });
-    var aceleraSemExpedicao = Object.keys(acByOrder).filter(function (oid) { return !shipBip[oid]; });
+    var aceleraSemExpedicao = Object.keys(acByOrder).filter(function (oid) { return !exp[oid]; });
     var liquidoDivergente = recs.filter(acLiquidoDivergente);
     var taxaDivergente = recs.filter(function (r) { return r.taxa < 0 || (r.antecipado > 0 && r.taxa > r.antecipado); });
     var incompletos = acelera.filter(function (r) { return !r.pedido || !r.resgate || !r.data || !r.antecipado; });
@@ -3528,7 +3571,7 @@
     var sel = aceleraF.divCat || 'liq';
     var chips = cats.map(function (c) { return '<span class="chip' + (sel === c.key ? ' chip-on' : '') + '" data-acdivcat="' + c.key + '">' + c.icon + ' ' + c.label + ' (' + nn(c.n) + ')</span>'; }).join('');
     var body;
-    if (sel === 'expSemAc') body = aceleraDivTable(expedidosSemAcelera.map(function (oid) { return { pedido: oid, motivo: 'Expedido em ' + dbr(shipBip[oid].bipedAt) + ', sem registro no Acelera' }; }));
+    if (sel === 'expSemAc') body = aceleraDivTable(expedidosSemAcelera.map(function (oid) { var info = exp[oid]; return { pedido: oid, motivo: (info.isFbs ? 'Full expedido (confirmado pela Shopee) em ' : 'Expedido em ') + (info.at ? dbr(info.at) : '—') + ', sem registro no Acelera' }; }));
     else if (sel === 'acSemExp') body = aceleraDivTable(aceleraSemExpedicao.map(function (oid) { var r = acByOrder[oid][0]; return { pedido: oid, motivo: 'Antecipado em ' + acDbr(r.data) + ', sem expedição/bipe registrado' }; }));
     else if (sel === 'liq') body = aceleraDivTable(liquidoDivergente.map(function (r) { return { pedido: r.pedido, resgate: r.resgate, motivo: 'Líquido informado ' + brlC(r.recebido) + ' ≠ calculado ' + brlC(acLiquidoCalc(r)) + ' (diferença ' + brlC(acLiquidoDiff(r)) + ')' }; }));
     else if (sel === 'taxa') body = aceleraDivTable(taxaDivergente.map(function (r) { return { pedido: r.pedido, resgate: r.resgate, motivo: r.taxa < 0 ? 'Taxa negativa: ' + brlC(r.taxa) : 'Taxa (' + brlC(r.taxa) + ') maior que o antecipado (' + brlC(r.antecipado) + ')' }; }));
@@ -3605,9 +3648,9 @@
     var totalNovo = imps.reduce(function (s, b) { return s + (b.novo || 0); }, 0); var totalUpd = imps.reduce(function (s, b) { return s + (b.upd || 0); }, 0);
     var incompletos = acelera.filter(function (r) { return !r.pedido || !r.resgate || !r.data || !r.antecipado; });
     var cntBlock = '<div class="panel"><div class="ph"><h3>Auditoria de contagem</h3></div><div class="pb">' + kv('Registros brutos importados (total)', nn(acelera.length)) + kv('Pedidos únicos (no período)', nn(m.nPedidos)) + kv('Resgates únicos (no período)', nn(m.nResgates)) + kv('Registros novos (histórico de importações)', nn(totalNovo)) + kv('Registros atualizados', nn(totalUpd)) + kv('Registros inválidos/incompletos', nn(incompletos.length)) + '</div></div>';
-    var bips = Object.keys(shipBip); var acByOrder = {}; acelera.forEach(function (r) { (acByOrder[r.pedido] = acByOrder[r.pedido] || []).push(r); });
+    var exp = expedidoSet(); var bips = Object.keys(exp); var acByOrder = {}; acelera.forEach(function (r) { (acByOrder[r.pedido] = acByOrder[r.pedido] || []).push(r); });
     var encontrados = bips.filter(function (oid) { return acByOrder[oid]; }).length; var naoEncontrados = bips.length - encontrados;
-    var acSemExp = Object.keys(acByOrder).filter(function (oid) { return !shipBip[oid]; }).length;
+    var acSemExp = Object.keys(acByOrder).filter(function (oid) { return !exp[oid]; }).length;
     var concBlock = '<div class="panel"><div class="ph"><h3>Auditoria de conciliação</h3></div><div class="pb">' + kv('Expedidos', nn(bips.length)) + kv('Encontrados no Acelera', nn(encontrados)) + kv('Não encontrados', nn(naoEncontrados)) + kv('Acelera sem expedição', nn(acSemExp)) + '<button class="btn-sm" data-acgo="expedidos" style="margin-top:8px">Ver Expedidos × Acelera</button></div></div>';
     var recon = aceleraReconcile(m); // §1 pergunta 10: bate com o resumo que a Shopee escreveu no arquivo?
     var an = m.anomalies;
