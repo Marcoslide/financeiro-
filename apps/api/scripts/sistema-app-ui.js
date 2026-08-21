@@ -4324,17 +4324,16 @@
     // Ordem fixa pelo prompt de alterações pontuais (§2-3, §19): Visão Geral no topo, Meta & Projeção
     // sempre por último. DRE/Taxas/Categorias/Produtos priorizam a análise financeira real; Frete,
     // Ajustes, Conciliação e Auditoria são as abas já existentes, preservadas sem alteração de posição relativa.
-    // §39 do prompt "Alterações — Sistema Marketplace Líder": Visão Geral, DRE, Taxas, Categorias,
-    // Produtos/SKUs, Lucro e Prejuízo, Tendências, Meta e Projeção (sempre por último). Frete,
-    // §37-42: 4 abas apenas — Resultado/Taxas/Evolução/Impactos/Alertas ficam concentrados em Visão
-    // Geral; Produtos e SKUs unifica a rentabilidade por SKU; Auditoria é só diagnóstico técnico;
-    // Meta & Projeção é a última camada. MINHA RENDA = INCOME XLSX — sem PDF na interface (§42).
-    var tabs = [['visao', 'Visão Geral'], ['produto', 'Produtos e SKUs'], ['auditoria', 'Auditoria'], ['meta', 'Meta & Projeção']];
+    // §17 do prompt de reorganização: 5 abas — Visão Geral (como está o negócio) | Financeiro (o que
+    // entrou/saiu, DRE completa, fechamento — não é preciso trocar de aba pra entender a DRE) |
+    // Produtos & SKUs (onde ganhamos/perdemos dinheiro, unificado) | Auditoria (só diagnóstico
+    // técnico) | Meta & Projeção (última camada). MINHA RENDA = INCOME XLSX — sem PDF na interface.
+    var tabs = [['visao', 'Visão Geral'], ['financeiro', 'Financeiro'], ['produto', 'Produtos e SKUs'], ['auditoria', 'Auditoria'], ['meta', 'Meta & Projeção']];
     app.innerHTML = dadosAtualizadosAteBadge() + devPeriodBar() + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + tabs.map(function (t) { return '<div class="subtab' + (mrSub === t[0] ? ' active' : '') + '" data-mrsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-mrimport="1">Importar Income</button></div><div id="mrbody" style="margin-top:14px"></div>';
     var body = document.getElementById('mrbody');
     try {
       if (!mrRenda.length && mrSub !== 'meta') body.innerHTML = secHead('MINHA RENDA', 'Consolidação Financeira Shopee', 'Quanto vendemos, quanto foi descontado, para onde foi o dinheiro e quanto a Shopee liberou — do agregado até o pedido.') + emptyBox('Nenhum relatório importado. Envie o Income (XLSX) da Shopee — é a única fonte necessária para a Minha Renda.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="mrimp">Importar Income</button></div>';
-      else body.innerHTML = ({ visao: mrVisao, produto: mrProduto, auditoria: mrAuditoria, meta: mrMeta }[mrSub] || mrVisao)();
+      else body.innerHTML = ({ visao: mrVisao, financeiro: mrFinanceiro, produto: mrProduto, auditoria: mrAuditoria, meta: mrMeta }[mrSub] || mrVisao)();
     } catch (e) { body.innerHTML = '<div class="form-err">Erro ao renderizar Minha Renda: ' + esc(e.message || e) + '</div>'; }
     app.querySelectorAll('[data-mrsub]').forEach(function (b) { b.onclick = function () { mrSub = b.dataset.mrsub; mrPage = 1; render(); }; });
     var imp = function () { fileInput(function (f) { importMinhaRenda(f).then(function (b) { render(); toast('Income importado', b.stats.renda + ' linhas de renda · ' + b.stats.ship + ' fretes · ' + b.stats.adj + ' ajustes'); }).catch(function (e) { toast('Falha', e.message, true); }); }); };
@@ -4390,27 +4389,24 @@
       { l: 'Lucro Médio por Pedido' + (temLucro && lucroParcial ? parcialTag : ''), v: lucroMedioPedido != null ? brlC(lucroMedioPedido) : 'não disponível', s: lucroMedioPedido != null ? null : 'Motivo: nenhum pedido pago do período tem lucro calculável (custo incompleto).', cls: lucroMedioPedido == null ? 'blue' : (lucroMedioPedido >= 0 ? 'green' : 'red') },
       { l: 'Custo dos Produtos' + (custoParcial ? parcialTag : ''), v: custoTemDado ? brlC(pe.custoProd) : 'não disponível', cls: 'amber', s: custoTemDado ? (nn(pe.custoItemsKnown) + ' de ' + nn(pe.custoItemsTotal) + ' itens com custo (' + pct(pe.custoCoveragePct) + ')') : 'Motivo: nenhum custo de produto foi encontrado para os pedidos pagos deste período (SKUs sem vínculo em Produtos ou sem custo cadastrado).', drill: custoTemDado ? 'custoProdutos' : null, drillLabel: 'Custo dos Produtos' },
     ]);
+    var pctConciliado = pe.n ? r2(t.nMR / pe.n * 100) : 0;
     var strip3 = kstrip([
       { l: 'Total Taxas Shopee', v: brlC(taxasShopeeAbs), cls: 'red', drill: t.nMR ? 'taxasShopee' : null, drillLabel: 'Total Taxas Shopee' },
       { l: 'Afiliados', v: brlC(afiliadosAbs), cls: 'amber', drill: t.nMR ? 'afiliado' : null, drillLabel: 'Afiliados' },
       { l: 'Devoluções', v: brlC(devolucoesAbs), cls: 'red', drill: t.nMR ? 'reembolso' : null, drillLabel: 'Devoluções' },
-      { l: 'Outros Descontos/Ajustes', v: brlC(outrosAbs), cls: 'amber' },
+      { l: '% Conciliado', v: pct(pctConciliado), cls: pctConciliado >= 95 ? 'green' : 'amber', s: nn(t.nMR) + ' de ' + nn(pe.n) + ' pedidos pagos com Minha Renda cruzada' },
     ]);
     var coverage = t.nMR < pe.n ? callout('warn', 'Cobertura da Minha Renda no período', '<b>' + nn(t.nMR) + '</b> de <b>' + nn(pe.n) + '</b> pedidos pagos têm dados reais da Shopee (Income) cruzados por pedido no período. Faturamento Bruto/Ticket Médio já vêm de Pedidos (sempre completos); Taxas Shopee/Afiliados/Devoluções/Receita Líquida acima refletem os pedidos cobertos pela Minha Renda' + (pe.nIncomeExtra ? ' <b>mais</b> ' + nn(pe.nIncomeExtra) + ' lançamento(s) do Income com data própria no período mas sem pedido pago correspondente (§31 — o Income é fonte autossuficiente, nunca some por falta de cruzamento)' : '') + ' — nunca estimados.') : (pe.nIncomeExtra ? callout('', 'Income além dos pedidos pagos', '<b>' + nn(pe.nIncomeExtra) + '</b> lançamento(s) do Income entram nos totais de Taxas/Receita Líquida acima por data própria (conclusão do pagamento/criação), mesmo sem um pedido pago correspondente no módulo Pedidos neste período — a taxa é real e não pode desaparecer por falta de cruzamento.') : '');
-    var cobertura = mrCoberturaBox();
-    var e = mrEngine();
-    var dedup = callout('', 'ORDER × SKU (sem dupla contagem)', mrRenda.length ? 'Importadas <b>' + nn(e.orders.length) + '</b> linhas Order (financeiro) e <b>' + nn(mrRenda.length - e.orders.length) + '</b> linhas SKU (atribuição de produto) no total já importado. Os valores financeiros vêm só das linhas Order.' : '');
-    // §39: a Visão Geral concentra Resultado (DRE completo)/Taxas Shopee por categoria/Evolução/
-    // Impactos/Alertas — nada disso exige trocar de aba. Blocos densos ficam em <details> para não
-    // virar uma parede de informação por padrão (§44), mas continuam abertos a um clique, na mesma tela.
-    var dreBlock = mrResultadoDetalhado(pe);
-    var taxasBlock = mrTaxasPorCategoriaBlock(pe);
+    // Visão Geral responde "como está o negócio" — KPIs executivos, evolução e "para onde foi o
+    // dinheiro". A DRE completa, taxas por categoria, categorias financeiras e o fechamento do
+    // período ficam concentrados na aba Financeiro (não é preciso pular entre abas para entender a DRE).
     var evoBlock = mrEvolucaoBlock();
-    var impactosBlock = mrImpactosBlock(e);
-    return head + strip1 + mrQualidadeConciliacaoBox() + strip2 + strip3 + coverage + mrWaterfall(t) + dreBlock + taxasBlock + evoBlock + impactosBlock + cobertura + dedup + mrAlertas();
+    var goFinanceiro = callout('', 'Quer o detalhamento completo?', 'DRE completa, taxas por categoria, entradas × saídas e o fechamento do período estão na aba Financeiro. <button class="btn-sm primary" data-mrgo="financeiro">Abrir Financeiro</button>');
+    return head + strip1 + mrQualidadeConciliacaoBox() + strip2 + strip3 + coverage + mrWaterfall(t) + evoBlock + goFinanceiro + mrAlertas();
   }
   // ---- Resultado detalhado (DRE completo) embutido na Visão Geral (§39) ----
-  function mrResultadoDetalhado(pe) {
+  function mrResultadoDetalhado(pe, asDetails) {
+    asDetails = asDetails !== false;
     var t = pe.t;
     var receitaBruta = pe.faturamento;
     var descComerciais = t.cupom + t.pix;
@@ -4439,10 +4435,11 @@
       '<div class="fin-line"><span>Margem sobre a Receita Bruta' + (margem != null && (mrParcial || custoParcial) ? ' <span class="tag warn">parcial</span>' : '') + '</span><b class="' + (margem == null ? '' : margem >= 0 ? 'pos' : 'neg') + '">' + (margem == null ? '—' : pct(margem)) + '</b></div>';
     var mrCheck = t.liberado - (t.preco + descComerciais + taxasShopee + devolucoes);
     var conf = t.nMR ? callout(Math.abs(mrCheck) <= 100 ? 'green' : 'warn', Math.abs(mrCheck) <= 100 ? '✓ Conferência: bate com o Pagamento Liberado real' : '⚠ Diferença na conferência', 'Só para os ' + nn(t.nMR) + ' pedidos com dados da Shopee (Income): pagamento liberado real <b>' + brlC(t.liberado) + '</b> · calculado (preço − descontos − taxas − devoluções) <b>' + brlC(t.preco + descComerciais + taxasShopee + devolucoes) + '</b> · diferença <b>' + brlC(mrCheck) + '</b>.') : '';
-    return '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Resultado detalhado (DRE completo)</summary><div class="pb" style="padding-top:0">' + cascata + '</div>' + conf + '</details>';
+    var body = '<div class="pb" style="padding-top:0">' + cascata + '</div>' + conf;
+    return asDetails ? '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Resultado detalhado (DRE completo)</summary>' + body + '</details>' : '<div class="panel"><div class="ph"><h3>DRE — Demonstração do Resultado</h3></div>' + body + '</div>';
   }
-  // ---- Taxas Shopee, todas abertas por categoria, embutido na Visão Geral (§39) ----
-  function mrTaxasPorCategoriaBlock(pe) {
+  // ---- Taxas Shopee, todas abertas por categoria — usada na Visão Geral (recolhida) e no Financeiro (expandida) ----
+  function mrTaxasPorCategoriaBlock(pe, asDetails) {
     var t = pe.t;
     if (!t.nMR) return '';
     var prevR = mrPrevRange(); var prevPe = prevR ? mrPeriodEngine(prevR) : null;
@@ -4455,7 +4452,7 @@
     // §36: Service Fee Details é SÓ explicação da composição da Taxa de Serviço — nunca somado por cima dela.
     var svcTot = { afil: 0, trans: 0, item: 0 }; mrSvc.forEach(function (v) { svcTot.afil += v.afiliadosVendedor; svcTot.trans += v.transacao; svcTot.item += v.porItem; });
     var svcBox = mrSvc.length ? callout('', 'Composição da taxa de serviço (Service Fee Details — só explicação, não soma por cima)', 'Componentes somam: taxa de serviço afiliados ' + brlC(svcTot.afil) + ' · transação ' + brlC(svcTot.trans) + ' · por item vendido ' + brlC(svcTot.item) + '.') : '';
-    return '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Taxas Shopee — todas as categorias</summary>' + table + '</details>' + chart + svcBox;
+    return (asDetails === false ? '<div class="panel"><div class="ph"><h3>Taxas Shopee — todas as categorias</h3></div>' + table + '</div>' : '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Taxas Shopee — todas as categorias</summary>' + table + '</details>') + chart + svcBox;
   }
   // ---- Evolução — período atual × anterior, embutido na Visão Geral (§39) ----
   function mrEvolucaoBlock() {
@@ -4475,14 +4472,104 @@
     return '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Evolução — período atual × anterior</summary>' + table + '</details>' + chart;
   }
   // ---- Impactos — frete/ajustes/devoluções, embutido na Visão Geral (§39) ----
-  function mrImpactosBlock(e) {
+  function mrImpactosBlock(e, asDetails) {
     var ship = e.shipTot;
     var shipBox = ship.n ? callout('warn', 'Frete acima do esperado (histórico completo, sem data confiável para filtrar): ' + brlC(ship.diff), '<b>' + nn(ship.n) + '</b> pedidos · esperado ' + brlC(ship.esperado) + ' · real ' + brlC(ship.real) + '.') : '';
     var shipTable = ship.n ? '<div class="table-wrap"><table class="report"><thead><tr><th>SKU</th><th>Produto</th><th>Pedidos</th><th>Diferença</th></tr></thead><tbody>' + e.skuList.slice(0, 10).map(function (x) { return '<tr class="rowlink" data-mrsku="' + esc(x.sku) + '"><td class="mono">' + esc(x.sku) + '</td><td class="cell-text">' + esc((x.produto || '—').slice(0, 30)) + '</td><td>' + nn(x.n) + '</td><td class="nowrap neg"><b>' + brlC(x.diff) + '</b></td></tr>'; }).join('') + '</tbody></table></div>' : '';
     var totAdj = mrAdj.reduce(function (s, a) { return s + a.valor; }, 0);
     var adjBox = mrAdj.length ? callout('', 'Ajustes (histórico completo — aba Adjustment)', 'Total: <b>' + brlC(totAdj) + '</b> em ' + nn(mrAdj.length) + ' lançamento(s). Um ajuste de hoje pode se referir a um pedido antigo — a data financeira do ajuste é separada da data do pedido.') : '';
     if (!ship.n && !mrAdj.length) return '';
-    return '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Impactos — frete, ajustes e devoluções</summary><div class="pb" style="padding-top:0">' + shipBox + shipTable + adjBox + '</div></details>';
+    var body = '<div class="pb" style="padding-top:0">' + shipBox + shipTable + adjBox + '</div>';
+    return asDetails === false ? '<div class="panel"><div class="ph"><h3>Impactos — frete, ajustes e devoluções</h3></div>' + body + '</div>' : '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Impactos — frete, ajustes e devoluções</summary>' + body + '</details>';
+  }
+  // ---- §22 do prompt de reorganização: ONDE O DINHEIRO SAIU — saídas por categoria, com % da venda
+  // e pedidos afetados. Reaproveita só os campos já somados por mrPeriodEngine()/mrAdj — não recalcula. ----
+  function mrSaidasPorCategoria(pe) {
+    var t = pe.t;
+    var afetados = function (key) { return pe.rows.filter(function (r) { return (r[key] || 0) !== 0; }).length; };
+    var linhas = [
+      ['Comissão', Math.abs(t.comissao), afetados('comissao')],
+      ['Serviço', Math.abs(t.servico), afetados('servico')],
+      ['Transação', Math.abs(t.transacao), afetados('transacao')],
+      ['Afiliados', Math.abs(t.afiliado), afetados('afiliado')],
+      ['Frete (programa de frete Shopee)', Math.abs(t.freteParceiro), afetados('freteParceiro')],
+      ['Ação comercial', Math.abs(t.incentivoAcaoComercial + t.ajusteAcaoComercial), pe.rows.filter(function (r) { return (r.incentivoAcaoComercial || 0) + (r.ajusteAcaoComercial || 0) !== 0; }).length],
+      ['Custo do produto', pe.custoProd, pe.custoItemsKnown ? pe.custoProdN : 0],
+      ['Devoluções', Math.abs(t.reembolso), afetados('reembolso')],
+      ['Ajustes (Adjustment)', Math.abs(pe.adjTot), mrAdj.length],
+      ['Outros (cupom + PIX)', Math.abs(t.cupom + t.pix), pe.rows.filter(function (r) { return (r.cupom || 0) + (r.pix || 0) !== 0; }).length],
+    ].filter(function (r) { return r[1] > 0; }).sort(function (a, b) { return b[1] - a[1]; });
+    if (!linhas.length) return '';
+    var rows = linhas.map(function (r) { return '<tr><td class="cell-text">' + esc(r[0]) + '</td><td class="nowrap">' + brlC(r[1]) + '</td><td>' + pct(pe.faturamento ? r2(r[1] / pe.faturamento * 100) : 0) + '</td><td>' + nn(r[2]) + '</td></tr>'; }).join('');
+    return '<div class="panel"><div class="ph"><h3>Onde o dinheiro saiu</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Categoria</th><th>Valor</th><th>% da venda</th><th>Pedidos afetados</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+  }
+  // ---- §25 do prompt de reorganização: CATEGORIAS FINANCEIRAS — entradas × saídas, mesma base já
+  // aprovada (t/pe.custoProd/mrAdj); "Acelera" fica de fora (base/período próprios, ver módulo Acelera). ----
+  function mrCategoriasFinanceiras(pe) {
+    var t = pe.t;
+    var adjPos = mrAdj.filter(function (a) { return a.valor > 0; }).reduce(function (s, a) { return s + a.valor; }, 0);
+    var adjNeg = mrAdj.filter(function (a) { return a.valor < 0; }).reduce(function (s, a) { return s + a.valor; }, 0);
+    var custoProdutos = pe.custoItemsKnown > 0 ? pe.custoProd : 0;
+    function grp(title, items) {
+      var rows = items.filter(function (it) { return it[1] !== 0; }).map(function (it) { var drillAttr = it[2] ? ' rowlink" data-mrdrill="' + esc(it[2]) + '" data-mrdrilllabel="' + esc(it[0]) : ''; return '<div class="fin-line' + drillAttr + '"><span>' + esc(it[0]) + '</span><b class="' + (it[1] < 0 ? 'neg' : 'pos') + '">' + brlC(it[1]) + '</b></div>'; }).join('');
+      var tot = items.reduce(function (s, it) { return s + it[1]; }, 0);
+      if (!rows) return '';
+      return '<div class="panel"><div class="ph"><h3>' + esc(title) + '</h3><b class="' + (tot < 0 ? 'neg' : 'pos') + '">' + brlC(tot) + '</b></div><div class="pb">' + rows + '</div></div>';
+    }
+    var entradas = grp('ENTRADAS', [
+      ['Vendas (preço do produto)', t.preco, 'preco'],
+      ['Desconto de frete recebido da Shopee', t.descontoFrete > 0 ? t.descontoFrete : 0, 'descontoFrete'],
+      ['Ação comercial (incentivo)', t.incentivoAcaoComercial > 0 ? t.incentivoAcaoComercial : 0, 'incentivoAcaoComercial'],
+      ['Ajustes positivos / créditos', adjPos, 'adjustes'],
+    ]);
+    var saidas = grp('SAÍDAS', [
+      ['Comissão', t.comissao, 'comissao'],
+      ['Serviço', t.servico, 'servico'],
+      ['Transação', t.transacao, 'transacao'],
+      ['Ajuste de frete (quando custo)', t.descontoFrete < 0 ? t.descontoFrete : 0, 'descontoFrete'],
+      ['Frete (programa de frete Shopee)', t.freteParceiro, 'freteParceiro'],
+      ['Afiliados', t.afiliado, 'afiliado'],
+      ['Cupom', t.cupom, 'cupom'],
+      ['Envio reverso', t.envioReverso, 'envioReverso'],
+      ['Devoluções/Reembolso', t.reembolso, 'reembolso'],
+      ['Custo do produto', custoProdutos ? -custoProdutos : 0, 'custoProdutos'],
+      ['Ajustes negativos', adjNeg, 'adjustes'],
+    ]);
+    return entradas + saidas;
+  }
+  // ---- §26 do prompt de reorganização: FECHAMENTO DO PERÍODO — vendido/taxas/custos/recuperações/
+  // resultado/margem/conciliado — mesma matemática do resto de Minha Renda, só reapresentada como fechamento. ----
+  function mrFechamentoPeriodo(pe) {
+    var t = pe.t;
+    var eng = mrEngine(); var mrByOrderF = {}; eng.orders.forEach(function (r) { mrByOrderF[r.orderId] = r; });
+    var pedidosPagos = orders.filter(function (o) { return o.paidAt && pe.range(o.paidAt); });
+    var fatConciliado = 0, fatNaoConciliado = 0;
+    pedidosPagos.forEach(function (o) { var f = orderFinance(o); var v = Math.round(f.revenue * 100); if (mrByOrderF[o.id]) fatConciliado += v; else fatNaoConciliado += v; });
+    var adjPos = mrAdj.filter(function (a) { return a.valor > 0; }).reduce(function (s, a) { return s + a.valor; }, 0);
+    var recuperacoes = adjPos + (t.descontoFrete > 0 ? t.descontoFrete : 0);
+    var outrosCustos = Math.abs(t.afiliado) + Math.abs(t.cupom + t.pix) + Math.abs(t.envioReverso) + Math.abs(mrAdj.filter(function (a) { return a.valor < 0; }).reduce(function (s, a) { return s + a.valor; }, 0));
+    var temLucro = pe.lucroN > 0;
+    var margem = (temLucro && pe.faturamento) ? r2(pe.lucro / pe.faturamento * 100) : null;
+    var pctConciliado = pe.n ? r2(t.nMR / pe.n * 100) : 0;
+    var line = function (label, v, opts) { opts = opts || {}; return '<div class="fin-line' + (opts.total ? ' total' : '') + '"><span>' + (opts.op ? '<b>' + opts.op + '</b> ' : '') + esc(label) + '</span><b class="' + (v == null ? '' : v < 0 ? 'neg' : v > 0 ? 'pos' : '') + '">' + (v == null ? 'não disponível' : brlC(v)) + '</b></div>'; };
+    return '<div class="panel"><div class="ph"><h3>Fechamento do Período</h3></div><div class="pb">' +
+      line('Vendido', pe.faturamento) +
+      line('Total de taxas Shopee', -Math.abs(pe.taxasShopeeTotal), { op: '−' }) +
+      line('Custos de produção', pe.custoItemsKnown ? -pe.custoProd : null, { op: '−' }) +
+      line('Outros custos (afiliados, cupom, PIX, envio reverso, ajustes negativos)', -outrosCustos, { op: '−' }) +
+      line('Recuperações (ajustes positivos, desconto de frete recebido)', recuperacoes, { op: '+' }) +
+      line('Resultado', temLucro ? pe.lucro : null, { total: true, op: '=' }) +
+      '<div class="fin-line"><span>Margem</span><b>' + (margem != null ? pct(margem) : '—') + '</b></div>' +
+      '<div class="fin-line"><span>Conciliado</span><b class="' + (pctConciliado >= 95 ? 'pos' : '') + '">' + pct(pctConciliado) + '</b></div>' +
+      '<div class="fin-line"><span>Faturamento não conciliado (Minha Renda ainda não cruzou este pedido)</span><b class="' + (fatNaoConciliado ? 'neg' : '') + '">' + brlC(fatNaoConciliado) + '</b></div>' +
+      '</div></div>';
+  }
+  function mrFinanceiro() {
+    var pe = mrPeriodEngine();
+    var head = secHead('MINHA RENDA · FINANCEIRO', 'O que entrou, o que saiu, para onde foi', 'O fechamento financeiro gerencial do período selecionado — DRE completa, taxas por categoria, entradas × saídas e o fechamento. A Carteira confirma a origem de cada movimento; esta tela não depende dela para existir (o Income já é fonte suficiente).');
+    if (!pe.n) return head + emptyBox('Nenhum pedido pago no período selecionado. Motivo: não há pedidos com "Hora do pagamento do pedido" preenchida dentro deste intervalo — ajuste o período ou importe Pedidos.');
+    var e = mrEngine();
+    return head + mrResultadoDetalhado(pe, false) + mrSaidasPorCategoria(pe) + mrTaxasPorCategoriaBlock(pe, false) + mrCategoriasFinanceiras(pe) + mrImpactosBlock(e, false) + mrFechamentoPeriodo(pe) + mrCoberturaBox();
   }
   // §40-44 — Fase 5 da arquitetura: Minha Renda como camada executiva. Não espera 100% da
   // conciliação para mostrar resultado (§41) — separa Resultado ESTIMADO (todos os eventos
