@@ -27,6 +27,13 @@
   // "status da pendência + quem mudou + quando", nunca recriamos um segundo mecanismo para a mesma coisa.
   var walletClose = {};       // Fase 3 (§35-38): fechamento de caixa diário, por data (YYYY-MM-DD) — nunca apagado na reimportação
   var walletSub = 'visao';    // sub-aba da Carteira: visao | mov | ajustes | pendencias | fechamento
+  var caixaSub = 'dashboard'; // sub-aba do Caixa: dashboard | fechamento | historico
+  // Caixa (§1-28 do prompt de arquitetura): dateKey('YYYY-MM-DD') -> registro de fechamento.
+  // Mesmo ciclo de vida já aprovado em walletClose — ABERTO/FECHADO/FECHADO_COM_RESSALVA/
+  // REVISAO_NECESSARIA — mas escopado ao núcleo Pedidos+Expedição+Acelera+Financeiro, nunca só à
+  // Carteira. Snapshot nunca é reescrito silenciosamente; evento posterior vira anotação à parte.
+  var caixaClose = {};
+  var caixaDashDate = null; // null = hoje
   var walletF = { search: '', cat: '', flow: '' }; // filtros da tabela de movimentações
   var walletStamp = null;     // "atualizado até" da carteira
   var Produtos = null;
@@ -238,7 +245,7 @@
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -479,7 +486,7 @@
   function fileInput(cb) { var inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.xlsx,.xls,.csv'; inp.onchange = function () { if (inp.files[0]) cb(inp.files[0]); }; inp.click(); }
 
   // ============================================================ RENDER (roteamento)
-  function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', minharenda: 'Minha Renda', ia: 'Inteligência' }[route] || ''; }
+  function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', minharenda: 'Minha Renda', caixa: 'Caixa', ia: 'Inteligência' }[route] || ''; }
   function render() {
     setActive();
     // Cada módulo é isolado: um erro em um deles mostra a mensagem no lugar de deixar a tela em branco
@@ -493,6 +500,7 @@
       if (route === 'acelera') return renderAcelera();
       if (route === 'afiliados') return renderAfiliados();
       if (route === 'minharenda') return renderMinhaRenda();
+      if (route === 'caixa') return renderCaixa();
       if (route === 'ia') return renderIA();
     } catch (e) { app.innerHTML = renderErrBox('Erro ao abrir esta tela: ' + esc(e && (e.message || e)) + '. Os dados estão salvos — recarregue a página.'); }
   }
@@ -5597,6 +5605,258 @@
     };
   }
 
+  // ============================================================ CAIXA (arquitetura central)
+  // Núcleo unidirecional Produtos→Pedidos→Expedição→Acelera→Caixa (prompt de arquitetura §1-28):
+  // o Caixa só LÊ motores já aprovados (orderFinance/mrEngine/mrOrderProfitEngine/expedidoSet/
+  // pendenciasConferencia/aceleraByDia/mrPeriodEngine/mrResultadoDetalhado/pendenciaResolver) —
+  // nunca recalcula nem reescreve nada das etapas anteriores. É o único lugar que concilia,
+  // resolve pendências (reaproveitando o MESMO motor de resolução da Expedição — nunca uma
+  // segunda Central de Pendências paralela) e fecha o dia.
+  function caixaDayRange(dateKey) { return { from: new Date(dateKey + 'T00:00:00'), to: new Date(dateKey + 'T23:59:59.999') }; }
+  // ---- Pendência Financeira do Pedido (§5): diferença entre composição e Pagamento Liberado ----
+  // MESMA fórmula/tolerância já usada na Ficha do Pedido (conferencia()) — nunca uma segunda conta.
+  function pedidoPendenciaFinanceiraCalc(orderId, mrRow) {
+    if (!mrRow) return null; // sem Income cruzado — nunca inventa pendência por falta de dado
+    var taxasSomaC = mrRow.comissao + mrRow.servico + mrRow.transacao + mrRow.freteParceiro + mrRow.descontoFrete + mrRow.envioReverso + (mrRow.incentivoAcaoComercial || 0) + (mrRow.ajusteAcaoComercial || 0) + mrRow.afiliado + mrRow.cupom + mrRow.pix + mrRow.reembolso;
+    var adjSoma = mrAdj.filter(function (a) { return a.orderId === orderId; }).reduce(function (s, a) { return s + a.valor; }, 0);
+    var calculado = mrRow.preco + taxasSomaC + adjSoma;
+    var diff = mrRow.liberado - calculado;
+    if (Math.abs(diff) <= 100) return null; // mesma tolerância da Ficha (§21 conferencia())
+    return { orderId: orderId, diff: diff, liberado: mrRow.liberado, calculado: calculado };
+  }
+  function caixaPendenciasFinanceirasPedidos(pedidoIds) {
+    var mr = mrEngine(); var mrByOrder = {}; mr.orders.forEach(function (r) { mrByOrder[r.orderId] = r; });
+    var out = [];
+    pedidoIds.forEach(function (id) { var p = pedidoPendenciaFinanceiraCalc(id, mrByOrder[id]); if (p) out.push(p); });
+    return out;
+  }
+  // ---- Blocos de dados do dia (cada um lê motores já aprovados; nenhum recalcula) ----
+  function caixaDayVendas(dateKey) {
+    var pagas = orders.filter(function (o) { return o.paidAt && o.paidAt.slice(0, 10) === dateKey; });
+    var profitOf = mrOrderProfitEngine();
+    var valor = 0, lucro = 0, nLucroConhecido = 0;
+    pagas.forEach(function (o) { valor += o.totalAmount || 0; var p = profitOf(o); if (p.known) { lucro += p.lucro; nLucroConhecido++; } });
+    var pendFin = caixaPendenciasFinanceirasPedidos(pagas.map(function (o) { return o.id; }));
+    return { n: pagas.length, valor: r2(valor), lucroC: lucro, nLucroConhecido: nLucroConhecido, pendFin: pendFin, pedidos: pagas };
+  }
+  function caixaDayExpedicao(dateKey) {
+    var sess = expSessions.find(function (s) { return s.dataOperacional === dateKey; });
+    if (sess) { var itens = expSessionItens(sess); var ok = itens.filter(function (i) { return i.situacao === 'OK' || i.situacao === 'RESOLVIDO'; }).length; return { temSessao: true, esperados: itens.length, expedidos: ok, faltaram: itens.length - ok, itens: itens }; }
+    var exp = expedidoSet(); var idsHoje = Object.keys(exp).filter(function (oid) { return exp[oid].at && exp[oid].at.slice(0, 10) === dateKey; });
+    return { temSessao: false, esperados: null, expedidos: idsHoje.length, faltaram: null, itens: [] };
+  }
+  function caixaDayAcelera(dateKey) {
+    if (!acelera.length) return { n: 0 };
+    var dias = aceleraByDia(acelera); var d = dias.filter(function (x) { return x.data === dateKey; })[0];
+    if (!d) return { n: 0 };
+    return { n: d.resgates, antec: d.antec, taxa: d.taxa, liquido: d.liquidoCalc };
+  }
+  // Pendências do dia: cruza pendenciasConferencia() (Esperados×Expedidos×Acelera, já aprovado —
+  // nunca recalculado aqui) com as novas Pendências Financeiras do Pedido — um único lugar.
+  function caixaDayPendencias(dateKey) {
+    var pend = pendenciasConferencia().filter(function (i) {
+      if (['OK', 'RESOLVIDO'].indexOf(i.situacao) >= 0) return false;
+      if (i.sessao && i.sessao.sessaoData === dateKey) return true;
+      if (i.expedidoAt && i.expedidoAt.slice(0, 10) === dateKey) return true;
+      return false;
+    });
+    var fin = caixaDayVendas(dateKey).pendFin;
+    return { operacionais: pend, financeiras: fin, total: pend.length + fin.length };
+  }
+  function caixaDiasComMovimento() {
+    var days = {};
+    orders.forEach(function (o) { if (o.paidAt) days[o.paidAt.slice(0, 10)] = 1; });
+    expSessions.forEach(function (s) { days[s.dataOperacional] = 1; });
+    if (acelera.length) aceleraByDia(acelera).forEach(function (d) { days[d.data] = 1; });
+    return Object.keys(days).sort().reverse();
+  }
+  // ---- ciclo de vida do fechamento — mesmo padrão já aprovado em walletCloseDay/walletDayStatus,
+  // agora escopado ao núcleo Pedidos+Expedição+Acelera+Financeiro (não só à Carteira). ----
+  var CAIXA_LABEL = { ABERTO: ['Aberto', 'neutral'], FECHADO: ['Fechado', 'ok'], FECHADO_COM_RESSALVA: ['Fechado com ressalva', 'warn'], REVISAO_NECESSARIA: ['Revisão necessária', 'warn'] };
+  function caixaDayStatus(dateKey) {
+    var pend = caixaDayPendencias(dateKey);
+    var rec = caixaClose[dateKey] || null;
+    var closed = rec && (rec.status === 'FECHADO' || rec.status === 'FECHADO_COM_RESSALVA');
+    // §20-21: fechamento é uma fotografia — se pendências mudaram de contagem depois de fechado
+    // (movimento posterior), nunca reescreve o snapshot; só sinaliza revisão necessária.
+    var novoDepois = !!(closed && rec.snapshot && rec.snapshot.pendTotal !== pend.total);
+    var status = !closed ? 'ABERTO' : (novoDepois ? 'REVISAO_NECESSARIA' : rec.status);
+    return { pend: pend, rec: rec, novoDepois: novoDepois, status: status };
+  }
+  function caixaCloseDay(dateKey, status, userName, justificativa) {
+    var vendas = caixaDayVendas(dateKey); var exp = caixaDayExpedicao(dateKey); var ac = caixaDayAcelera(dateKey); var pend = caixaDayPendencias(dateKey);
+    var rec = caixaClose[dateKey] || { id: dateKey, history: [], eventosPosteriores: [] };
+    var at = new Date().toISOString();
+    rec.status = status; rec.closedBy = userName || 'Operador'; rec.closedAt = at;
+    rec.snapshot = { vendasN: vendas.n, vendasValor: vendas.valor, lucroC: vendas.nLucroConhecido ? vendas.lucroC : null, expEsperados: exp.esperados, expExpedidos: exp.expedidos, acN: ac.n || 0, pendTotal: pend.total };
+    rec.justificativa = justificativa || null;
+    rec.history = (rec.history || []).concat([{ at: at, user: rec.closedBy, status: status, justificativa: justificativa || null, pendTotal: pend.total }]);
+    caixaClose[dateKey] = rec; return putMany('caixafechamentos', [rec]);
+  }
+  // §21: evento posterior — nunca reabre nem reescreve o snapshot do fechamento original; só
+  // acrescenta uma anotação vinculada à data ORIGINAL do pedido, nunca à data do evento.
+  function caixaRegistrarEventoPosterior(dateKey, orderId, descricao) {
+    var rec = caixaClose[dateKey]; if (!rec) return Promise.resolve();
+    rec.eventosPosteriores = (rec.eventosPosteriores || []).concat([{ at: new Date().toISOString(), orderId: orderId, descricao: descricao }]);
+    return putMany('caixafechamentos', [rec]);
+  }
+  // ---- Inteligência do dia (§13): tudo linkável ao pedido correspondente ----
+  function caixaInteligenciaDia(dateKey) {
+    var vendas = caixaDayVendas(dateKey);
+    var profitOf = mrOrderProfitEngine();
+    var comLucro = vendas.pedidos.map(function (o) { var p = profitOf(o); var it = (o.items || [])[0] || {}; return { orderId: o.id, o: o, p: p, it: it }; }).filter(function (x) { return x.p.known; });
+    var maiorLucro = comLucro.length ? comLucro.reduce(function (a, b) { return b.p.lucro > a.p.lucro ? b : a; }) : null;
+    var prejuizos = comLucro.filter(function (x) { return x.p.lucro < 0; });
+    var maiorPrejuizo = prejuizos.length ? prejuizos.reduce(function (a, b) { return b.p.lucro < a.p.lucro ? b : a; }) : null;
+    var bySku = {};
+    comLucro.forEach(function (x) { var k = x.it.sku || x.o.id; var g = bySku[k] = bySku[k] || { sku: k, produto: x.it.productName, lucro: 0, n: 0 }; g.lucro += x.p.lucro; g.n++; });
+    var skuArr = Object.values(bySku);
+    var melhorSku = skuArr.length ? skuArr.reduce(function (a, b) { return b.lucro > a.lucro ? b : a; }) : null;
+    var piorSku = skuArr.length ? skuArr.reduce(function (a, b) { return b.lucro < a.lucro ? b : a; }) : null;
+    var mr = mrEngine(); var mrByOrder = {}; mr.orders.forEach(function (r) { mrByOrder[r.orderId] = r; });
+    var comTaxa = vendas.pedidos.map(function (o) { var r = mrByOrder[o.id]; if (!r) return null; return { orderId: o.id, taxa: -(r.comissao + r.servico + r.transacao) }; }).filter(function (x) { return x && x.taxa > 0; });
+    var maiorTaxa = comTaxa.length ? comTaxa.reduce(function (a, b) { return b.taxa > a.taxa ? b : a; }) : null;
+    var comDesconto = vendas.pedidos.map(function (o) { var r = mrByOrder[o.id]; if (!r) return null; return { orderId: o.id, desconto: -r.cupom }; }).filter(function (x) { return x && x.desconto > 0; });
+    var maiorDesconto = comDesconto.length ? comDesconto.reduce(function (a, b) { return b.desconto > a.desconto ? b : a; }) : null;
+    var pend = caixaDayPendencias(dateKey);
+    var todasPend = pend.operacionais.map(function (i) { return { orderId: i.orderId, valor: i.valorAcelera != null ? Math.abs(i.valorAcelera) : (i.valorPedido != null ? Math.abs(i.valorPedido) : 0) }; }).concat(pend.financeiras.map(function (f) { return { orderId: f.orderId, valor: Math.abs(f.diff) }; }));
+    var maiorPend = todasPend.length ? todasPend.reduce(function (a, b) { return b.valor > a.valor ? b : a; }) : null;
+    return { maiorLucro: maiorLucro, maiorPrejuizo: maiorPrejuizo, melhorSku: melhorSku, piorSku: piorSku, maiorTaxa: maiorTaxa, maiorDesconto: maiorDesconto, maiorPend: maiorPend };
+  }
+  function caixaCard(titulo, x, renderFn, comLink) {
+    if (!x) return '<div class="kc"><div class="kl">' + esc(titulo) + '</div><div class="footnote" style="margin-top:4px">sem dados suficientes</div></div>';
+    return '<div class="kc' + (comLink ? ' rowlink" data-goped360="' + esc(x.orderId) : '') + '"><div class="kl">' + esc(titulo) + '</div>' + renderFn(x) + '</div>';
+  }
+  function caixaDashboardView() {
+    var dateKey = caixaDashDate || new Date().toISOString().slice(0, 10);
+    var head = secHead('CAIXA · DASHBOARD', 'Como foi o negócio neste dia?', 'Consolida Pedidos, Expedição, Acelera e Pendências para o dia selecionado — só leitura dos motores já aprovados, nunca recalcula nada.');
+    if (!orders.length) return head + emptyBox('Importe os Pedidos para começar.');
+    var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = caixaDayAcelera(dateKey), pend = caixaDayPendencias(dateKey);
+    var margem = vendas.valor ? r2(vendas.lucroC / 100 / vendas.valor * 100) : null;
+    var datePicker = '<div class="panel"><div class="pb" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><label class="fld" style="margin:0">Dia</label><input type="date" class="input sm" id="caixadate" value="' + esc(dateKey) + '" style="width:170px"><span class="footnote" style="margin:0">' + esc(dbr(dateKey)) + '</span><button class="btn-sm" data-caixagofech="' + esc(dateKey) + '" style="margin-left:auto">Abrir Fechamento deste dia</button></div></div>';
+    var stripVendas = kstrip([{ l: 'Pedidos pagos', v: nn(vendas.n), cls: 'blue' }, { l: 'Faturamento', v: brl(vendas.valor), cls: 'blue' }, { l: 'Lucro atual', v: vendas.nLucroConhecido ? brlC(vendas.lucroC) : '—', cls: vendas.lucroC >= 0 ? 'green' : 'red', s: nn(vendas.nLucroConhecido) + ' de ' + nn(vendas.n) + ' com custo conhecido' }, { l: 'Margem', v: margem != null ? pct(margem) : '—', cls: 'blue' }]);
+    var stripExp = kstrip([{ l: 'Esperados', v: exp.esperados != null ? nn(exp.esperados) : '—', cls: 'blue' }, { l: 'Expedidos', v: nn(exp.expedidos), cls: 'green' }, { l: 'Faltaram', v: exp.faltaram != null ? nn(exp.faltaram) : '—', cls: exp.faltaram ? 'amber' : 'green' }]);
+    var stripAc = kstrip([{ l: 'Resgates', v: nn(ac.n || 0), cls: 'blue' }, { l: 'Antecipado', v: ac.antec != null ? brlC(ac.antec) : '—', cls: 'blue' }, { l: 'Taxa Acelera', v: ac.taxa != null ? brlC(ac.taxa) : '—', cls: 'blue' }, { l: 'Recebido (líquido)', v: ac.liquido != null ? brlC(ac.liquido) : '—', cls: 'green' }]);
+    var valorPend = pend.financeiras.reduce(function (s, f) { return s + Math.abs(f.diff); }, 0);
+    var stripPend = kstrip([{ l: 'Pendências', v: nn(pend.total), cls: pend.total ? 'red' : 'green' }, { l: 'Valor financeiro envolvido', v: brlC(valorPend), cls: valorPend ? 'amber' : 'green' }]);
+    var inte = caixaInteligenciaDia(dateKey);
+    var inteligencia = '<div class="panel"><div class="ph"><h3>Inteligência do dia</h3></div><div class="pb"><div class="kstrip" style="flex-wrap:wrap">' +
+      caixaCard('Maior lucro', inte.maiorLucro, function (x) { return '<div class="kv pos" style="font-size:15px">' + brlC(x.p.lucro) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + ' · ' + esc((x.it.productName || '—').slice(0, 24)) + '</div>'; }, true) +
+      caixaCard('Maior prejuízo', inte.maiorPrejuizo, function (x) { return '<div class="kv neg" style="font-size:15px">' + brlC(x.p.lucro) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + ' · ' + esc((x.it.productName || '—').slice(0, 24)) + '</div>'; }, true) +
+      caixaCard('Produto/SKU mais lucrativo', inte.melhorSku, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.lucro) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.sku) + ' · ' + esc((x.produto || '—').slice(0, 24)) + '</div>'; }, false) +
+      caixaCard('Produto/SKU com pior resultado', inte.piorSku, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.lucro) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.sku) + ' · ' + esc((x.produto || '—').slice(0, 24)) + '</div>'; }, false) +
+      caixaCard('Maior taxa do dia', inte.maiorTaxa, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.taxa) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + '</div>'; }, true) +
+      caixaCard('Maior desconto do dia', inte.maiorDesconto, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.desconto) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + '</div>'; }, true) +
+      caixaCard('Maior pendência do dia', inte.maiorPend, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.valor) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + '</div>'; }, true) +
+      '</div></div></div>';
+    return head + datePicker + '<div class="panel"><div class="ph"><h3>Vendas</h3></div><div class="pb">' + stripVendas + '</div></div>' +
+      '<div class="panel"><div class="ph"><h3>Expedição</h3></div><div class="pb">' + stripExp + '</div></div>' +
+      '<div class="panel"><div class="ph"><h3>Acelera</h3></div><div class="pb">' + stripAc + '</div></div>' +
+      '<div class="panel"><div class="ph"><h3>Pendências</h3></div><div class="pb">' + stripPend + '</div></div>' +
+      inteligencia +
+      '<div class="footnote" style="padding:8px 0">Para conferir, resolver pendências e fechar o dia, use Caixa → Fechamento Diário.</div>';
+  }
+  function bindCaixaDashboardView() {
+    var dt = document.getElementById('caixadate'); if (dt) dt.onchange = function () { caixaDashDate = dt.value || null; render(); };
+    app.querySelectorAll('[data-goped360]').forEach(function (b) { if (b.dataset.goped360) b.onclick = function () { openPedidoFicha360(b.dataset.goped360); }; });
+    var gf = app.querySelector('[data-caixagofech]'); if (gf) gf.onclick = function () { caixaSub = 'fechamento'; render(); setTimeout(function () { openCaixaFechamentoDia(gf.dataset.caixagofech); }, 60); };
+  }
+  function caixaFechamentoView() {
+    var head = secHead('CAIXA · FECHAMENTO DIÁRIO', 'Confira, resolva e feche o dia', 'Para cada dia: vendas, expedição, Acelera, financeiro e pendências juntos — feche quando estiver tudo certo, ou feche com ressalva e justifique. Um dia só fica "Fechado" quando alguém clica em fechar.');
+    var days = caixaDiasComMovimento();
+    if (!days.length) return head + emptyBox('Nenhum movimento (pedido pago, sessão de expedição ou resgate do Acelera) encontrado ainda.');
+    var list = days.slice(0, 60).map(function (dk) { return { dateKey: dk, st: caixaDayStatus(dk) }; });
+    var fechados = list.filter(function (x) { return x.st.status === 'FECHADO'; }).length;
+    var ressalva = list.filter(function (x) { return x.st.status === 'FECHADO_COM_RESSALVA'; }).length;
+    var abertos = list.filter(function (x) { return x.st.status === 'ABERTO'; }).length;
+    var revisao = list.filter(function (x) { return x.st.status === 'REVISAO_NECESSARIA'; }).length;
+    var strip = kstrip([{ l: 'Dias fechados', v: nn(fechados), cls: 'green' }, { l: 'Fechados com ressalva', v: nn(ressalva), cls: ressalva ? 'amber' : 'green' }, { l: 'Ainda abertos', v: nn(abertos), cls: abertos ? 'blue' : 'green' }, { l: 'Precisam revisão (movimento posterior)', v: nn(revisao), cls: revisao ? 'red' : 'green' }]);
+    var rows = list.map(function (x) {
+      var lbl = CAIXA_LABEL[x.st.status]; var pend = x.st.pend;
+      return '<tr class="rowlink" data-caixadia="' + esc(x.dateKey) + '"' + (x.st.status === 'REVISAO_NECESSARIA' ? ' style="background:#fdf1e9"' : '') + '><td class="nowrap">' + dbr(x.dateKey) + '</td><td>' + nn(pend.total) + '</td><td><span class="tag ' + lbl[1] + '">' + lbl[0] + '</span></td><td>' + (x.st.rec ? esc(x.st.rec.closedBy) + ' · ' + new Date(x.st.rec.closedAt).toLocaleString('pt-BR') : '—') + '</td><td><button class="btn-sm" data-caixadiabtn="' + esc(x.dateKey) + '">Abrir</button></td></tr>';
+    }).join('');
+    var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Dia</th><th>Pendências</th><th>Status</th><th>Fechado por</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+    return head + strip + table;
+  }
+  function bindCaixaFechamentoView() {
+    app.querySelectorAll('[data-caixadia]').forEach(function (b) { b.onclick = function () { openCaixaFechamentoDia(b.dataset.caixadia); }; });
+    app.querySelectorAll('[data-caixadiabtn]').forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); openCaixaFechamentoDia(b.dataset.caixadiabtn); }; });
+  }
+  function openCaixaFechamentoDia(dateKey) {
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '860px'; panel.style.maxWidth = '98vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    function refresh() { panel.innerHTML = body(); wire(); }
+    function body() {
+      var st = caixaDayStatus(dateKey); var lbl = CAIXA_LABEL[st.status];
+      var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = caixaDayAcelera(dateKey), pend = st.pend;
+      var margem = vendas.valor ? r2(vendas.lucroC / 100 / vendas.valor * 100) : null;
+      var profitOf = mrOrderProfitEngine(); var custoConhecido = vendas.pedidos.filter(function (o) { return profitOf(o).known; }).length;
+      var naoClass = mrCamposNaoClassificados();
+      var blocoVendas = '<div class="panel"><div class="ph"><h3>1. Vendas</h3></div><div class="pb">' + kv('Pedidos pagos', nn(vendas.n)) + kv('Faturamento', brl(vendas.valor)) + kv('Lucro atual', vendas.nLucroConhecido ? brlC(vendas.lucroC) : 'aguardando custo') + kv('Margem', margem != null ? pct(margem) : '—') + kv('Composição financeira conferida', (vendas.n - vendas.pendFin.length) + ' de ' + vendas.n + ' pedidos') + '</div></div>';
+      var blocoExp = '<div class="panel"><div class="ph"><h3>2. Expedição</h3></div><div class="pb">' + (exp.temSessao ? (kv('Esperados', nn(exp.esperados)) + kv('Confirmados', nn(exp.expedidos)) + kv('Faltaram', nn(exp.faltaram))) : callout('', 'Sem Sessão de Expedição registrada para este dia', 'Contagem por confirmação de saída (bipe/Full) datada neste dia: ' + nn(exp.expedidos) + '.')) + '</div></div>';
+      var blocoAc = !acelera.length ? '' : ('<div class="panel"><div class="ph"><h3>3. Acelera</h3></div><div class="pb">' + (ac.n ? (kv('Resgates', nn(ac.n)) + kv('Valor antecipado', brlC(ac.antec)) + kv('Taxa Acelera', brlC(ac.taxa)) + kv('Valor recebido', brlC(ac.liquido))) : '<div class="footnote" style="padding:0 16px 12px">Nenhum resgate do Acelera consolidado nesta data.</div>') + '</div></div>');
+      var blocoFin = '<div class="panel"><div class="ph"><h3>4. Financeiro</h3></div><div class="pb">' + kv('Taxas conferidas (Income cruzado)', (vendas.n - vendas.pendFin.length) + ' de ' + vendas.n + ' pedidos') + kv('Custos conferidos', nn(custoConhecido) + ' de ' + nn(vendas.n) + ' pedidos') + kv('Diferenças financeiras em aberto', nn(vendas.pendFin.length)) + kv('Valores não classificados (total importado — não restrito a este dia)', nn(naoClass.length) + ' coluna(s)') + '</div></div>';
+      var dreBlock = mrRenda.length ? mrResultadoDetalhado(mrPeriodEngine(caixaDayRange(dateKey)), false) : '';
+      var pendRows = pend.operacionais.slice(0, 60).map(function (i) { return '<tr><td class="mono">' + esc(i.orderId) + '</td><td class="cell-text">' + esc(i.motivo) + '</td><td><button class="btn-sm" data-caixapendop="' + esc(i.orderId) + '">Resolver</button></td></tr>'; }).join('') +
+        pend.financeiras.slice(0, 60).map(function (f) { return '<tr><td class="mono">' + esc(f.orderId) + '</td><td class="cell-text">Diferença financeira de ' + brlC(f.diff) + ' entre a composição do pedido e o Pagamento Liberado — etapa: composição Shopee, motivo: lançamento não classificado</td><td><button class="btn-sm" data-goped360="' + esc(f.orderId) + '">Ver pedido</button></td></tr>'; }).join('');
+      var pendTable = '<div class="panel"><div class="ph"><h3>5. Pendências</h3><span class="footnote" style="margin:0">' + nn(pend.total) + ' no total</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Problema</th><th></th></tr></thead><tbody>' + (pendRows || '<tr><td colspan="3" class="empty">Nenhuma pendência neste dia. 🎉</td></tr>') + '</tbody></table></div></div>';
+      var podeFechar = pend.total === 0;
+      var footer = '<div class="panel"><div class="pb" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
+        '<button class="btn-sm' + (podeFechar ? ' primary' : '') + '"' + (podeFechar ? '' : ' disabled title="Só é possível Fechar sem pendências — use Fechar com ressalva"') + ' id="caixa-close">Fechar Caixa</button>' +
+        '<button class="btn-sm' + (podeFechar ? '' : ' primary') + '" id="caixa-closeress">Fechar com ressalva</button>' +
+        (st.rec ? '<span class="footnote" style="margin:0">último registro: ' + esc(CAIXA_LABEL[st.rec.status] ? CAIXA_LABEL[st.rec.status][0] : st.rec.status) + ' por ' + esc(st.rec.closedBy || '—') + ' em ' + new Date(st.rec.closedAt).toLocaleString('pt-BR') + '</span>' : '') +
+        '</div>' + (st.rec && st.rec.eventosPosteriores && st.rec.eventosPosteriores.length ? '<div class="pb" style="padding-top:0"><div class="footnote"><b>Eventos posteriores:</b> ' + st.rec.eventosPosteriores.map(function (e) { return esc(e.orderId) + ' — ' + esc(e.descricao) + ' (' + new Date(e.at).toLocaleDateString('pt-BR') + ')'; }).join(' · ') + '</div></div>' : '') + '</div>';
+      return '<div class="dh"><div><b>FECHAMENTO — ' + esc(dbr(dateKey)) + '</b> <span class="tag ' + lbl[1] + '" style="margin-left:6px">' + lbl[0] + '</span>' + (st.status === 'REVISAO_NECESSARIA' ? ' <span class="footnote" style="margin:0">⚠ movimento posterior a este fechamento</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' + blocoVendas + blocoExp + blocoAc + blocoFin + dreBlock + pendTable + footer + '</div>';
+    }
+    function wire() {
+      panel.querySelector('.x').onclick = function () { d.remove(); };
+      panel.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { d.remove(); openPedidoFicha360(b.dataset.goped360); }; });
+      // reaproveita o MESMO motor de resolução da Expedição (pendenciaDrawer/pendenciaResolver) —
+      // nunca uma segunda lógica de resolução de pendência operacional só porque foi aberta daqui.
+      panel.querySelectorAll('[data-caixapendop]').forEach(function (b) { b.onclick = function () { d.remove(); pendenciaDrawer(b.dataset.caixapendop); }; });
+      // drill-down da DRE do dia: aponta o filtro global de período para ESTE dia antes de abrir —
+      // nunca mostra o drill calculado sobre o período global por engano (mesma lição do §39).
+      panel.querySelectorAll('[data-mrdrill]').forEach(function (b) {
+        b.onclick = function () {
+          periodSel.value = 'custom'; customRange.from = dateKey; customRange.to = dateKey;
+          var df = document.getElementById('dfrom'); if (df) df.value = dateKey;
+          var dtI = document.getElementById('dto'); if (dtI) dtI.value = dateKey;
+          if (typeof syncDateUI === 'function') syncDateUI();
+          openMrDrill(b.dataset.mrdrill, b.dataset.mrdrilllabel || b.dataset.mrdrill);
+        };
+      });
+      var cl = panel.querySelector('#caixa-close'); if (cl && !cl.disabled) cl.onclick = function () { caixaCloseDay(dateKey, 'FECHADO', 'Operador', null).then(function () { toast('Caixa fechado', dbr(dateKey)); refresh(); render(); }); };
+      var cr = panel.querySelector('#caixa-closeress'); if (cr) cr.onclick = function () {
+        var pendAtual = caixaDayPendencias(dateKey);
+        var justificativa = prompt((pendAtual.total ? nn(pendAtual.total) + ' pendência(s) deste dia ainda em aberto. ' : '') + 'Descreva o motivo para fechar mesmo assim:');
+        if (justificativa == null || !justificativa.trim()) return;
+        caixaCloseDay(dateKey, 'FECHADO_COM_RESSALVA', 'Operador', justificativa.trim()).then(function () { toast('Caixa fechado com ressalva', dbr(dateKey)); refresh(); render(); });
+      };
+    }
+    refresh();
+  }
+  function caixaHistoricoView() {
+    var head = secHead('CAIXA · HISTÓRICO', 'Fechamentos anteriores', 'Snapshot imutável de cada dia fechado — novo dado relacionado a um dia já fechado nunca reescreve o snapshot; vira Evento Posterior vinculado ao pedido, na data correspondente.');
+    var days = Object.keys(caixaClose).sort().reverse();
+    if (!days.length) return head + emptyBox('Nenhum dia fechado ainda.');
+    var rows = days.map(function (dk) {
+      var rec = caixaClose[dk]; var lbl = CAIXA_LABEL[rec.status] || ['—', 'neutral']; var snap = rec.snapshot || {};
+      return '<tr class="rowlink" data-caixadia="' + esc(dk) + '"><td class="nowrap">' + dbr(dk) + '</td><td><span class="tag ' + lbl[1] + '">' + lbl[0] + '</span></td><td>' + nn(snap.vendasN || 0) + '</td><td class="nowrap">' + brl(snap.vendasValor || 0) + '</td><td class="nowrap">' + (snap.lucroC != null ? brlC(snap.lucroC) : '—') + '</td><td>' + nn((rec.eventosPosteriores || []).length) + '</td><td class="nowrap">' + esc(rec.closedBy || '—') + ' · ' + new Date(rec.closedAt).toLocaleString('pt-BR') + '</td></tr>';
+    }).join('');
+    var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Dia</th><th>Status</th><th>Pedidos</th><th>Faturamento</th><th>Lucro</th><th>Eventos posteriores</th><th>Fechado</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+    return head + table;
+  }
+  function bindCaixaHistoricoView() { app.querySelectorAll('[data-caixadia]').forEach(function (b) { b.onclick = function () { openCaixaFechamentoDia(b.dataset.caixadia); }; }); }
+  function renderCaixa() {
+    app.innerHTML = '<div class="subtabs">' + [['dashboard', 'Dashboard'], ['fechamento', 'Fechamento Diário'], ['historico', 'Histórico']].map(function (t) { return '<div class="subtab' + (caixaSub === t[0] ? ' active' : '') + '" data-caixasub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><div id="caixabody" style="margin-top:14px"></div>';
+    var body = document.getElementById('caixabody');
+    body.innerHTML = caixaSub === 'fechamento' ? caixaFechamentoView() : caixaSub === 'historico' ? caixaHistoricoView() : caixaDashboardView();
+    app.querySelectorAll('[data-caixasub]').forEach(function (t) { t.onclick = function () { caixaSub = t.dataset.caixasub; render(); }; });
+    if (caixaSub === 'fechamento') bindCaixaFechamentoView();
+    else if (caixaSub === 'historico') bindCaixaHistoricoView();
+    else bindCaixaDashboardView();
+  }
+
   // ---------- boot ----------
   document.querySelectorAll('#nav a').forEach(function (a) { a.onclick = function () { route = a.dataset.route; render(); }; });
   var dateInputs = document.getElementById('dateinputs');
@@ -5607,13 +5867,13 @@
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
 
   // Abre o banco; se falhar (corrompido/bloqueado/privado), ativa o modo em memória e SEGUE —
   // o sistema sempre carrega e Produtos sempre abre (só não salva). Nunca dead-end / tela branca.
   openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos')]);
   }).then(function (r) {
     orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
     wallet = r[5] || [];
@@ -5631,6 +5891,7 @@
     shipBip = {}; (r[18] || []).forEach(function (b) { shipBip[b.orderId] = b; });
     expSessions = (r[20] || []).sort(function (a, b) { return b.horaInicio.localeCompare(a.horaInicio); });
     var pendR = settings.filter(function (x) { return x.id === 'pendResolucoes'; })[0]; if (pendR && pendR.data) pendResolucoes = pendR.data;
+    caixaClose = {}; (r[21] || []).forEach(function (c) { caixaClose[c.id] = c; });
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
     plans = (r[4] || []).map(function (p) { if (PLAN_MIGR[p.status]) p.status = PLAN_MIGR[p.status]; if (p.scopeSkus == null && p.relatedSkus) p.scopeSkus = p.relatedSkus; if (p.indicatorKind == null) p.indicatorKind = 'liquido'; return p; });
     occ = occ.filter(function (o) { return !o.isDemo; }); // higiene: nunca deixar demo no banco real
