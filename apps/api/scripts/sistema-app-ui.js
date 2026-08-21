@@ -609,35 +609,40 @@
     if (expected > 0 && found >= expected) return { code: 'CONCILIADO', label: '🟢 Conciliado', hasRenda: hasRenda, hasAcelera: accEng, hasWallet: hasWallet, hasDevol: hasDevol };
     return { code: 'PARCIAL', label: '🟡 Parcialmente conciliado', hasRenda: hasRenda, hasAcelera: accEng, hasWallet: hasWallet, hasDevol: hasDevol };
   }
+  // REGRA DEFINITIVA (prompt de correção): a fila de Expedição vem exclusivamente de
+  // Pedidos > A ENVIAR (normalizedStatus === 'A_ENVIAR'). Nunca por prazo, pagamento, "parece
+  // pendente" ou qualquer outro status — não pago/enviado/concluído/cancelado/devolução NUNCA
+  // entram aqui, mesmo que tenham data prevista de envio, rastreio ou informação logística.
   function pedidosExpedicao() {
-    var head = secHead('PEDIDOS · EXPEDIÇÃO', 'Vendido × Expedido', 'A expedição é registrada pelo bipe da etiqueta (leitor USB/Bluetooth ou digitação do ID) — é um evento diferente da venda. "Vendido" não significa "saiu da empresa".');
-    var vendidosHoje = orders.filter(function (o) { return o.createdAt && o.createdAt.slice(0, 10) === new Date().toISOString().slice(0, 10); }).length;
-    var expedidosHoje = Object.values(shipBip).filter(function (b) { return b.bipedAt.slice(0, 10) === new Date().toISOString().slice(0, 10); }).length;
-    var totalExpedidos = Object.keys(shipBip).length;
-    var pendentes = orders.filter(function (o) { return !pedIsExpedido(o.id) && o.normalizedStatus !== 'CANCELADO'; }).length;
-    var pctExp = orders.length ? r2(totalExpedidos / orders.length * 100) : 0;
-    var semConf = 0, comDiverg = 0;
-    Object.keys(shipBip).forEach(function (oid) { var st = pedidoConciliacaoStatus(oid); if (st.code === 'AGUARDANDO' || st.code === 'PARCIAL') semConf++; if (st.code === 'DIVERGENTE') comDiverg++; });
+    var head = secHead('PEDIDOS · EXPEDIÇÃO', 'A Enviar × Bipado', 'A fila é exatamente a aba A Enviar de Pedidos — nada mais. O bipe confirma que a caixa realmente saiu; não altera o status Shopee.');
+    if (!orders.length) return head + emptyBox('Importe os Pedidos para começar a controlar a expedição.');
+    var aEnviarAll = orders.filter(function (o) { return o.normalizedStatus === 'A_ENVIAR'; });
+    var fullCount = aEnviarAll.filter(function (o) { return o.isFbs; }).length;
+    var baseList = pedExpF.includeFull ? aEnviarAll : aEnviarAll.filter(function (o) { return !o.isFbs; });
+    var bipados = baseList.filter(function (o) { return pedIsExpedido(o.id); });
+    var faltando = baseList.filter(function (o) { return !pedIsExpedido(o.id); });
+    // anomalia (§4): bipado mas o pedido não está (mais) em A Enviar — status Shopee já avançou,
+    // foi cancelado, ou o ID bipado nem existe em Pedidos. Nunca escondido — sempre mostrado à parte.
+    var bipadosForaFila = Object.keys(shipBip).map(function (oid) { return { oid: oid, o: orders.find(function (x) { return x.id === oid; }), b: shipBip[oid] }; }).filter(function (x) { return !x.o || x.o.normalizedStatus !== 'A_ENVIAR'; });
     var strip = kstrip([
-      { l: 'Vendidos hoje', v: nn(vendidosHoje), cls: 'blue' },
-      { l: 'Expedidos hoje', v: nn(expedidosHoje), cls: 'green' },
-      { l: 'Pendentes de expedição', v: nn(pendentes), cls: pendentes ? 'amber' : 'green' },
-      { l: '% expedido (total)', v: pct(pctExp), cls: 'blue', s: nn(totalExpedidos) + ' de ' + nn(orders.length) },
-      { l: 'Expedidos sem conferência', v: nn(semConf), cls: semConf ? 'amber' : 'green' },
-      { l: 'Expedidos com divergência', v: nn(comDiverg), cls: comDiverg ? 'red' : 'green' },
+      { l: 'A Enviar', v: nn(baseList.length), cls: 'blue' },
+      { l: 'Bipados', v: nn(bipados.length), cls: 'green' },
+      { l: 'Faltando', v: nn(faltando.length), cls: faltando.length ? 'amber' : 'green' },
+      { l: 'Bipados fora da fila A Enviar', v: nn(bipadosForaFila.length), cls: bipadosForaFila.length ? 'red' : 'green', s: 'já não está mais em A Enviar' },
     ]);
     var bipe = '<div class="panel"><div class="ph"><h3>Bipar etiqueta</h3><span class="footnote" style="margin:0">leitor USB/Bluetooth (emite como teclado) ou digite o BR/ID e pressione Enter</span></div><div class="pb"><div style="display:flex;gap:8px;max-width:480px"><input class="input" id="bipinput" placeholder="BR (rastreamento) ou ID do pedido" autofocus style="flex:1"><button class="btn-sm primary" id="bipbtn">Registrar saída</button></div><div class="footnote" style="margin-top:8px">Aceita o BR da etiqueta (resolvido para o pedido pelo rastreamento) ou o ID do pedido digitado direto. Se o BR não for encontrado, ou aparecer em mais de um pedido, nada é registrado automaticamente — você revisa antes. Leitura por câmera não está implementada nesta versão — exigiria uma biblioteca de decodificação de código de barras, que não incluímos para não declarar um recurso não testado.</div></div></div>';
-    if (!orders.length) return head + bipe + emptyBox('Importe os Pedidos para começar a controlar a expedição.');
     var q = pedExpF.search.toLowerCase();
-    var fullCount = orders.filter(function (o) { return o.isFbs; }).length;
-    var list = orders.filter(function (o) { if (!pedExpF.includeFull && o.isFbs) return false; if (pedExpF.status === 'expedido' && !pedIsExpedido(o.id)) return false; if (pedExpF.status === 'pendente' && (pedIsExpedido(o.id) || o.normalizedStatus === 'CANCELADO')) return false; if (q && o.id.toLowerCase().indexOf(q) < 0 && (o.tracking || '').toLowerCase().indexOf(q) < 0) return false; return true; }).sort(function (a, b) { var ba = shipBip[a.id], bb = shipBip[b.id]; if (ba && bb) return bb.bipedAt.localeCompare(ba.bipedAt); if (ba) return -1; if (bb) return 1; return (b.createdAt || '').localeCompare(a.createdAt || ''); });
-    var chips = [['', 'Todos'], ['expedido', 'Expedidos'], ['pendente', 'Pendentes']];
-    var rows = list.slice(0, 200).map(function (o) { var b = shipBip[o.id]; var st = b ? pedidoConciliacaoStatus(o.id) : null; return '<tr' + (b ? '' : ' style="background:#fff8ef"') + '><td class="mono">' + esc(o.id) + '</td><td class="mono">' + esc(o.tracking || '—') + '</td><td class="nowrap">' + dbr(o.createdAt) + '</td><td><span class="pill ' + o.normalizedStatus + '">' + esc(S.pedidos.labels[o.normalizedStatus] || o.normalizedStatus) + '</span></td><td>' + (b ? '<span class="tag ok">expedido</span> <span class="footnote" style="margin:0">' + new Date(b.bipedAt).toLocaleString('pt-BR') + '</span>' : '<span class="tag warn">pendente</span>') + '</td><td>' + (st ? '<span class="tag">' + esc(st.label) + '</span>' : '—') + '</td><td><button class="btn-sm" data-goped360="' + esc(o.id) + '">Ficha do Pedido</button></td></tr>'; }).join('');
+    var list = baseList.filter(function (o) { if (pedExpF.status === 'expedido' && !pedIsExpedido(o.id)) return false; if (pedExpF.status === 'pendente' && pedIsExpedido(o.id)) return false; if (q && o.id.toLowerCase().indexOf(q) < 0 && (o.tracking || '').toLowerCase().indexOf(q) < 0) return false; return true; }).sort(function (a, b) { var ba = shipBip[a.id], bb = shipBip[b.id]; if (ba && bb) return bb.bipedAt.localeCompare(ba.bipedAt); if (ba) return -1; if (bb) return 1; return (b.createdAt || '').localeCompare(a.createdAt || ''); });
+    var chips = [['', 'Todos'], ['expedido', 'Bipados'], ['pendente', 'Faltando']];
+    var rows = list.slice(0, 200).map(function (o) { var b = shipBip[o.id]; var st = b ? pedidoConciliacaoStatus(o.id) : null; return '<tr' + (b ? '' : ' style="background:#fff8ef"') + '><td class="mono">' + esc(o.id) + '</td><td class="mono">' + esc(o.tracking || '—') + '</td><td class="nowrap">' + dbr(o.createdAt) + '</td><td>' + (b ? '<span class="tag ok">bipado</span> <span class="footnote" style="margin:0">' + new Date(b.bipedAt).toLocaleString('pt-BR') + '</span>' : '<span class="tag warn">faltando</span>') + '</td><td>' + (st ? '<span class="tag">' + esc(st.label) + '</span>' : '—') + '</td><td><button class="btn-sm" data-goped360="' + esc(o.id) + '">Ficha do Pedido</button></td></tr>'; }).join('');
+    var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>BR</th><th>Data venda</th><th>Expedição</th><th>Conciliação</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="empty">Nenhum pedido neste filtro.</td></tr>') + '</tbody></table></div></div>';
+    var anomaliaRows = bipadosForaFila.slice(0, 100).map(function (x) { return '<tr><td class="mono">' + esc(x.oid) + '</td><td>' + (x.o ? '<span class="pill ' + x.o.normalizedStatus + '">' + esc(S.pedidos.labels[x.o.normalizedStatus] || x.o.normalizedStatus) + '</span>' : '<span class="tag warn">pedido não encontrado em Pedidos</span>') + '</td><td class="nowrap">' + new Date(x.b.bipedAt).toLocaleString('pt-BR') + '</td>' + (x.o ? '<td><button class="btn-sm" data-goped360="' + esc(x.oid) + '">Ficha do Pedido</button></td>' : '<td>—</td>') + '</tr>'; }).join('');
+    var anomaliaBox = bipadosForaFila.length ? '<div class="panel"><div class="ph"><h3>Bipados que não estão em A Enviar</h3><span class="footnote" style="margin:0">o bipe existe, mas o status Shopee do pedido já mudou (ou o ID não existe em Pedidos) — revise</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Status atual</th><th>Bipado em</th><th></th></tr></thead><tbody>' + anomaliaRows + '</tbody></table></div></div>' : '';
     return head + strip + bipe +
       '<div class="chips">' + chips.map(function (c) { return '<span class="chip' + (pedExpF.status === c[0] ? ' chip-on' : '') + '" data-expst="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '<span class="chip' + (pedExpF.includeFull ? ' chip-on' : '') + '" data-expfull="1" title="Full/FBS é despachado pelo centro de distribuição da Shopee — por padrão fica fora desta fila própria">Incluir Full (' + nn(fullCount) + ')</span></div>' +
       '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="expq" style="width:260px" placeholder="Buscar ID do pedido ou BR…" value="' + esc(pedExpF.search) + '"></div>' +
-      '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos' + (!pedExpF.includeFull && fullCount ? ' <span class="footnote">(' + nn(fullCount) + ' Full/FBS fora da fila — expedidos pela Shopee)</span>' : '') + '</div>' +
-      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>BR</th><th>Data venda</th><th>Status</th><th>Expedição</th><th>Conciliação</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="7" class="empty">Nenhum pedido neste filtro.</td></tr>') + '</tbody></table></div></div>';
+      '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos em A Enviar' + (!pedExpF.includeFull && fullCount ? ' <span class="footnote">(' + nn(fullCount) + ' Full/FBS fora da fila — expedidos pela Shopee)</span>' : '') + '</div>' +
+      table + anomaliaBox;
   }
   function bindPedidosExpedicao() {
     var bi = document.getElementById('bipinput'); var doRegister = function () { var v = bi.value; bipRegister(v).then(function (rec) { bi.value = ''; render(); var el = document.getElementById('bipinput'); if (el) el.focus(); toast('Expedição registrada', rec.orderId); }).catch(function (e) { toast('Falha', e.message, true); }); };
@@ -877,170 +882,182 @@
     var custoProdC = null, custoPendente = false;
     if (ord) { var fOrd = orderFinance(ord); if (fOrd.costPending) custoPendente = true; else custoProdC = Math.round((fOrd.productCostTotal || 0) * 100); }
 
-    // ---- Produção (§11: família, custo unitário, custo total — nunca escondido atrás de outro
-    // clique; reaproveita o vínculo SKU→família→custo já feito em Produtos, nunca recalcula) ----
-    var producaoRows = ord ? ord.items.map(function (it) {
+    // Conferência matemática determinística (§21 do prompt de reorganização): total informado ×
+    // soma dos componentes. Nunca usa IA — só soma campos já importados de Minha Renda/Service Fee Details.
+    function conferencia(total, soma) { if (total == null) return ''; var dif = total - soma; var bate = Math.abs(dif) <= 100; return '<span class="tag ' + (bate ? 'ok' : 'warn') + '">' + (bate ? '🟢 Conferido' : '🔴 Divergência de ' + brlC(dif)) + '</span>'; }
+
+    // ---- §9-13 do prompt de reorganização: TAXAS E DESCONTOS é UMA ÚNICA LISTA VERTICAL —
+    // nunca um card por taxa. Componentes decomponíveis (comissão bruta→líquida, taxa de serviço→
+    // afiliados/transação/por item) entram como sub-linhas indentadas, só para EXPLICAR — nunca somados
+    // de novo no total (a linha-pai já é a soma dos componentes). Ação comercial (incentivo+ajuste)
+    // agora entra na lista — antes ficava fora da ficha por engano, embora já contasse no total de
+    // Minha Renda (§37 do prompt: alinhar a ficha ao mesmo total já aprovado na Visão Geral).
+    var taxaRows = [];
+    function addTaxa(label, valor, subs, origem) { if (valor == null) return; taxaRows.push({ label: label, valor: valor, subs: subs || [], origem: origem }); }
+    var adjRows = mrAdj.filter(function (a) { return a.orderId === orderId; });
+    if (mrRow) {
+      var comSubs = (mrRow.comissaoBruta != null && mrRow.comissaoBruta !== 0 && mrRow.comissaoBruta !== mrRow.comissao) ? [['Comissão bruta', mrRow.comissaoBruta], ['Desconto/ajuste aplicado pela Shopee', mrRow.comissao - mrRow.comissaoBruta]] : [];
+      addTaxa('Comissão Shopee', mrRow.comissao, comSubs, 'Income');
+      var svcSubs = [];
+      if (svcRows.length) { var svcT = { afil: 0, trans: 0, item: 0 }; svcRows.forEach(function (v) { svcT.afil += v.afiliadosVendedor; svcT.trans += v.transacao; svcT.item += v.porItem; }); svcSubs = [['Afiliados do vendedor', svcT.afil], ['Transação', svcT.trans], ['Por item vendido', svcT.item]]; }
+      addTaxa('Taxa de serviço', mrRow.servico, svcSubs, svcRows.length ? 'Income / Service Fee Details' : 'Income');
+      addTaxa('Taxa de transação', mrRow.transacao, [], 'Income');
+      addTaxa('Participação em ação comercial (incentivo)', mrRow.incentivoAcaoComercial, [], 'Income');
+      addTaxa('Participação em ação comercial (ajuste)', mrRow.ajusteAcaoComercial, [], 'Income');
+      addTaxa('Programa de frete (frete parceiro)', mrRow.freteParceiro, [], 'Income');
+      addTaxa('Desconto de frete (Shopee)', mrRow.descontoFrete, [], 'Income');
+      addTaxa('Envio reverso', mrRow.envioReverso, [], 'Income');
+      addTaxa('Afiliado (Minha Renda)', mrRow.afiliado, [], 'Income');
+      addTaxa('Cupom', mrRow.cupom, [], 'Income');
+      addTaxa('Ajuste PIX', mrRow.pix, [], 'Income');
+      addTaxa('Reembolso', mrRow.reembolso, [], 'Income');
+    } else if (ord) {
+      addTaxa('Comissão (aproximado)', -Math.round((ord.commissionNet || 0) * 100), [], 'Pedidos — sem Minha Renda para este pedido');
+      addTaxa('Taxa de serviço (aproximado)', -Math.round((ord.serviceFeeNet || 0) * 100), [], 'Pedidos — sem Minha Renda para este pedido');
+      addTaxa('Taxa de transação (aproximado)', -Math.round((ord.transactionFee || 0) * 100), [], 'Pedidos — sem Minha Renda para este pedido');
+      addTaxa('Frete reverso (aproximado)', -Math.round((ord.reverseShippingFee || 0) * 100), [], 'Pedidos — sem Minha Renda para este pedido');
+    }
+    adjRows.forEach(function (a) { addTaxa(a.desc || 'Ajuste', a.valor, [], 'Adjustment'); });
+    var adjTotalC = adjRows.reduce(function (s, a) { return s + a.valor; }, 0);
+    var taxasSomaC = taxaRows.reduce(function (s, r) { return s + r.valor; }, 0);
+    var taxasConf = mrRow ? conferencia(mrRow.liberado, mrRow.preco + taxasSomaC) : '';
+    var taxaLine = function (r) {
+      var sub = r.subs.length ? '<div class="footnote" style="margin:2px 0 6px">' + r.subs.map(function (s) { return '↳ ' + esc(s[0]) + ': ' + brlC(s[1]); }).join(' · ') + '</div>' : '';
+      return '<div class="fin-line rowlink" title="Fonte: ' + esc(r.origem) + '"><span>' + esc(r.label) + '</span><b class="' + (r.valor < 0 ? 'neg' : r.valor > 0 ? 'pos' : '') + '">' + brlC(r.valor) + '</b></div>' + sub;
+    };
+    var taxasBlock = '<div class="panel"><div class="ph"><h3>Taxas e Descontos</h3>' + taxasConf + '</div><div class="pb">' +
+      (taxaRows.length ? taxaRows.map(taxaLine).join('') + '<div class="fin-line total" style="margin-top:6px"><span>Total de taxas/descontos</span><b class="' + (taxasSomaC < 0 ? 'neg' : 'pos') + '">' + brlC(taxasSomaC) + '</b></div>' : '<span class="tag neutral">sem dados de taxas para este pedido</span>') +
+      (shipRow ? '<div class="footnote" style="margin-top:8px">Frete — divergência sobre o esperado (não somada ao total acima): esperado ' + brl(shipRow.esperado) + ' · real ' + brl(shipRow.real) + ' · diferença ' + brl(shipRow.real - shipRow.esperado) + '.</div>' : '') +
+      '<div class="footnote" style="margin-top:6px">' + (mrRow ? 'Origem principal: Minha Renda (Income) · Pedido ' + esc(orderId) : ord ? 'Origem: Pedidos (aproximado — sem Minha Renda para este pedido)' : 'sem fonte') + '</div>' +
+      '</div></div>';
+
+    // ---- §8 do prompt de reorganização: DADOS DA VENDA — grade compacta, um único bloco (pedido +
+    // itens), sem espalhar em vários cards. Família/custo reaproveitam o vínculo SKU→família→custo já
+    // feito em Produtos — nunca recalculado aqui. ----
+    var itemRows = ord ? ord.items.map(function (it) {
       var c = it.sku ? skuCost[it.sku.toLowerCase()] : null;
       var custoUnit = c && c.cost != null ? c.cost : null;
       var custoTotal = custoUnit != null ? r2(custoUnit * it.qty) : null;
-      return { produto: it.productName, sku: it.sku, familia: c ? c.familyName : null, qty: it.qty, custoUnit: custoUnit, custoTotal: custoTotal, linked: !!c };
+      var unitPrice = it.agreedPrice != null ? it.agreedPrice : (it.subtotal != null && it.qty ? r2(it.subtotal / it.qty) : null);
+      return { produto: it.productName, sku: it.sku, variacao: it.variationName, familia: c ? c.familyName : null, qty: it.qty, unitPrice: unitPrice, total: it.subtotal, custoUnit: custoUnit, custoTotal: custoTotal, linked: !!c };
     }) : [];
-    var producaoBlock = producaoRows.length ? '<div class="panel"><div class="ph"><h3>Produção</h3></div><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>Produto</th><th>SKU</th><th>Família</th><th>Qtd</th><th>Custo unit.</th><th>Custo total</th></tr></thead><tbody>' + producaoRows.map(function (r) { return '<tr><td class="cell-text">' + esc(r.produto || '—') + '</td><td class="mono">' + esc(r.sku || '—') + '</td><td>' + esc(r.familia || (r.linked ? '—' : '⚠ SKU sem vínculo em Produtos')) + '</td><td>' + nn(r.qty) + '</td><td>' + (r.custoUnit != null ? brl(r.custoUnit) : '<span class="tag warn">sem custo</span>') + '</td><td>' + (r.custoTotal != null ? brl(r.custoTotal) : '—') + '</td></tr>'; }).join('') + '</tbody></table></div><div class="footnote" style="margin-top:6px">Origem: Produtos (custo por família) · Pedido ' + esc(orderId) + '</div></div></div>' : '';
+    var dadosVendaBlock = '<div class="panel"><div class="ph"><h3>Dados da Venda</h3></div><div class="pb">' +
+      kv('Pedido', orderId) + kv('Status Shopee', ord ? (S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus) : '—') + kv('Data de criação', ord ? dbr(ord.createdAt) : '—') + kv('Data de pagamento', ord && ord.paidAt ? dbr(ord.paidAt) : '—') + kv('BR / Rastreamento', ord ? ord.tracking : '—') + (ord && ord.isFbs ? kv('Full/FBS', 'Sim') : '') +
+      (itemRows.length ? '<div class="table-wrap" style="margin-top:8px"><table class="report"><thead><tr><th>Produto</th><th>SKU</th><th>Variação</th><th>Família</th><th>Qtd</th><th>Valor unit.</th><th>Valor total</th><th>Custo unit.</th><th>Custo total</th></tr></thead><tbody>' +
+        itemRows.map(function (r) { return '<tr><td class="cell-text">' + esc(r.produto || '—') + '</td><td class="mono">' + esc(r.sku || '—') + '</td><td>' + esc(r.variacao || '—') + '</td><td>' + esc(r.familia || (r.linked ? '—' : '⚠ sem vínculo')) + '</td><td>' + nn(r.qty) + '</td><td class="nowrap">' + (r.unitPrice != null ? brl(r.unitPrice) : '—') + '</td><td class="nowrap">' + (r.total != null ? brl(r.total) : '—') + '</td><td class="nowrap">' + (r.custoUnit != null ? brl(r.custoUnit) : '<span class="tag warn">sem custo</span>') + '</td><td class="nowrap">' + (r.custoTotal != null ? brl(r.custoTotal) : '—') + '</td></tr>'; }).join('') +
+        '</tbody></table></div>' : '') +
+      '</div></div>';
 
-    // ---- Taxas Shopee detalhadas ----
-    var taxasRows;
-    if (mrRow) {
-      taxasRows = [['Comissão', mrRow.comissao], ['Taxa de serviço líquida', mrRow.servico], ['Taxa de transação', mrRow.transacao], ['Afiliados (Minha Renda)', mrRow.afiliado], ['Frete cobrado pelo parceiro', mrRow.freteParceiro], ['Desconto de frete (Shopee)', mrRow.descontoFrete], ['Envio reverso', mrRow.envioReverso], ['Cupom', mrRow.cupom], ['Ajuste PIX', mrRow.pix], ['Reembolso', mrRow.reembolso]];
-    } else if (ord) {
-      taxasRows = [['Comissão líquida', -Math.round((ord.commissionNet || 0) * 100)], ['Taxa de serviço líquida', -Math.round((ord.serviceFeeNet || 0) * 100)], ['Taxa de transação', -Math.round((ord.transactionFee || 0) * 100)], ['Frete reverso', -Math.round((ord.reverseShippingFee || 0) * 100)]];
-    } else taxasRows = [];
-    var taxasSomaC = taxasRows.reduce(function (s, r) { return s + (r[1] || 0); }, 0);
-    // Conferência matemática determinística (§6): total informado × soma dos componentes.
-    // Nunca usa IA — só soma os campos já importados de Minha Renda/Service Fee Details.
-    function conferencia(total, soma) { if (total == null) return ''; var dif = total - soma; var bate = Math.abs(dif) <= 100; return '<span class="tag ' + (bate ? 'ok' : 'warn') + '">' + (bate ? '🟢 Conferido' : '🔴 Divergência de ' + brlC(dif)) + '</span>'; }
-    var svcComposicao = '';
-    if (svcRows.length) {
-      var svcT = { afil: 0, trans: 0, item: 0 }; svcRows.forEach(function (v) { svcT.afil += v.afiliadosVendedor; svcT.trans += v.transacao; svcT.item += v.porItem; });
-      var svcSoma = svcT.afil + svcT.trans + svcT.item; var svcTotal = mrRow ? mrRow.servico : null;
-      svcComposicao = '<div class="panel"><div class="ph"><h3>Taxa de serviço líquida — composição</h3>' + conferencia(svcTotal, svcSoma) + '</div><div class="pb">' + fLine('Taxa de serviço líquida (total)', svcTotal) + '<div class="footnote" style="margin:6px 0">Componentes (Service Fee Details, mesmo pedido — não somados por cima do total):</div>' + fLine('↳ Afiliados do vendedor', svcT.afil) + fLine('↳ Transação', svcT.trans) + fLine('↳ Por item vendido', svcT.item) + '<div class="footnote" style="margin-top:6px">Origem: Minha Renda (Service Fee Details) · Pedido ' + esc(orderId) + '</div></div></div>';
-    }
-    // Composição da comissão (§3-6): bruta → líquida, usando colunas já importadas e não usadas
-    // em nenhuma outra tela (comissaoBruta/servicoBruta) — nada inventado, só exposto.
-    var comComposicao = '';
-    if (mrRow && mrRow.comissaoBruta != null && mrRow.comissaoBruta !== 0 && mrRow.comissaoBruta !== mrRow.comissao) {
-      var comDesc = mrRow.comissao - mrRow.comissaoBruta;
-      comComposicao = '<div class="panel"><div class="ph"><h3>Comissão — composição</h3>' + conferencia(mrRow.comissao, mrRow.comissaoBruta + comDesc) + '</div><div class="pb">' + fLine('Comissão bruta', mrRow.comissaoBruta) + fLine('↳ Desconto/ajuste aplicado pela Shopee', comDesc) + fLine('Comissão líquida (total)', mrRow.comissao, { total: true }) + '<div class="footnote" style="margin-top:6px">Origem: Minha Renda · Pedido ' + esc(orderId) + '</div></div></div>';
-    }
-    // Ajustes (Adjustment) ligados a este pedido — mesmo campo orderId da Minha Renda, sem inventar vínculo.
-    var adjRows = mrAdj.filter(function (a) { return a.orderId === orderId; });
-    var adjTotalC = adjRows.reduce(function (s, a) { return s + a.valor; }, 0);
-    var adjBlock = adjRows.length ? '<div class="panel"><div class="ph"><h3>Ajustes (Minha Renda · Adjustment)</h3></div><div class="pb">' + adjRows.map(function (a) { return fLine(a.desc || 'Ajuste', a.valor); }).join('') + fLine('Total de ajustes deste pedido', adjTotalC, { total: true }) + '<div class="footnote" style="margin-top:6px">Origem: Minha Renda (Adjustment) · Pedido ' + esc(orderId) + '</div></div></div>' : '';
-
-    // ---- Expedição (§11: deveria ser expedido? / bipado? / data-hora / divergência operacional —
-    // nunca reinterpreta o status Shopee: só compara status Shopee × confirmação física do bipe) ----
-    var expedicaoBlock = '';
+    // ---- §14 do prompt de reorganização: EVENTOS DO PEDIDO — Expedição/Acelera/Carteira/Devolução
+    // resumidos num único painel (não 4 cards separados). Devolução só aparece se existir ocorrência;
+    // sem ocorrência, uma linha só: "Nenhuma devolução registrada" — nunca um bloco grande vazio.
+    var eventoLinhas = '';
     if (ord) {
       var stN = ord.normalizedStatus;
       var naoAplica = stN === 'NAO_PAGO' || stN === 'CANCELADO';
       var divergenciaExp = !naoAplica && !bip && (stN === 'ENVIADO' || stN === 'CONCLUIDO');
       var situacaoExp = naoAplica ? 'Não se aplica — status Shopee: ' + (S.pedidos.labels[stN] || stN)
         : bip ? '🟢 Expedido — bipe confirmado'
-        : divergenciaExp ? '🔴 Divergência — status Shopee já indica envio, mas sem bipe registrado no sistema'
-        : '🟡 Aguardando expedição (status Shopee: A Enviar)';
-      expedicaoBlock = '<div class="panel"><div class="ph"><h3>Expedição</h3></div><div class="pb">' + kv('Situação', situacaoExp) + kv('Status Shopee', S.pedidos.labels[stN] || ord.orderStatus || '—') + kv('BR / Rastreamento', ord.tracking || '—') + kv('Modalidade', (ord.shippingOption || '') + ' ' + (ord.shippingMethod || '') || '—') + (ord.isFbs ? kv('Full/FBS', 'Sim') : '') + kv('Prazo de envio', dbr(ord.shipByDate)) + kv('Enviado em (Shopee)', ord.shippedAt ? new Date(ord.shippedAt).toLocaleString('pt-BR') : '—') + kv('Bipado (confirmação própria)', bip ? 'Sim' : 'Não') + (bip ? kv('Data/hora do bipe', new Date(bip.bipedAt).toLocaleString('pt-BR')) : '') + kv('Cidade/UF', (ord.city || '—') + '/' + (ord.uf || '—')) + '</div></div>';
+        : divergenciaExp ? '🔴 Divergência — status Shopee já indica envio, mas sem bipe registrado'
+        : '🟡 Aguardando expedição (A Enviar)';
+      eventoLinhas += kv('Expedição', situacaoExp + (bip ? ' · bipado em ' + new Date(bip.bipedAt).toLocaleString('pt-BR') : ''));
     }
-
-    // ---- Acelera (§11: localizado? / ID do resgate / valor disponível / bruto resgatado / taxa /
-    // líquido recebido / situação da auditoria — reaproveita aceleraConciliacaoPedido, já existente
-    // na aba Auditoria do Acelera, nunca recalcula a conciliação de um jeito diferente aqui) ----
-    var acBlock = '';
     if (acRows.length) {
-      var acAntec = acRows.reduce(function (s, r) { return s + r.antecipado; }, 0), acTaxa = acRows.reduce(function (s, r) { return s + r.taxa; }, 0), acReceb = acRows.reduce(function (s, r) { return s + r.recebido; }, 0), acDisp = acRows.reduce(function (s, r) { return s + (r.disponivel || 0); }, 0);
+      var acAntec = acRows.reduce(function (s, r) { return s + r.antecipado; }, 0), acTaxa = acRows.reduce(function (s, r) { return s + r.taxa; }, 0), acReceb = acRows.reduce(function (s, r) { return s + r.recebido; }, 0);
       var resgatesIds = Array.from(new Set(acRows.map(function (r) { return r.resgate; })));
       var acAudit = aceleraConciliacaoPedido(orderId, mrByOrderFicha);
-      acBlock = '<div class="panel"><div class="ph"><h3>Shopee Acelera</h3><span class="tag">' + esc(acAudit.status.label) + '</span></div><div class="pb">' + kv('ID do resgate', resgatesIds.join(', ')) + fLine('Valor disponível para resgate rápido', acDisp) + fLine('Valor bruto resgatado', acAntec) + fLine('Taxa de antecipação', -Math.abs(acTaxa)) + fLine('Líquido recebido', acReceb, { total: true }) + (acAudit.status.motivo ? '<div class="footnote" style="margin-top:6px">' + esc(acAudit.status.motivo) + '</div>' : '') + '<button class="btn-sm" style="margin-top:8px" data-acped360="' + esc(orderId) + '">Abrir no Acelera</button></div></div>';
+      eventoLinhas += kv('Acelera', 'resgate ' + esc(resgatesIds.join(', ')) + ' · bruto ' + brlC(acAntec) + ' · taxa ' + brlC(-Math.abs(acTaxa)) + ' · recebido ' + brlC(acReceb) + ' · ' + esc(acAudit.status.label)) + '<button class="btn-sm" style="margin:2px 0 8px" data-acped360="' + esc(orderId) + '">Abrir no Acelera</button>';
+    } else {
+      eventoLinhas += kv('Acelera', 'não encontrado — pedido não antecipado, ou relatório ainda não cobre este pedido');
     }
-    else acBlock = '<div class="panel"><div class="ph"><h3>Shopee Acelera</h3></div><div class="pb"><span class="tag neutral">não encontrado no Acelera</span> — pedido não antecipado, ou relatório do Acelera ainda não cobre este pedido.</div></div>';
-
-    // ---- Afiliados ----
-    var afBlock = '';
-    if (affRow) afBlock = '<div class="panel"><div class="ph"><h3>Afiliados</h3></div><div class="pb">' + kv('Afiliado', affRow.affUser) + '<div class="fin-line"><span>Comissão</span><span class="neg">' + brlU(affRow.comAff) + '</span></div><div class="fin-line"><span>Taxa de serviço afiliados</span><span class="neg">' + brlU(affRow.svcFee) + '</span></div>' + (mrRow ? '<div class="footnote" style="margin-top:6px">Já incluído em "Afiliados (Minha Renda)" nas taxas acima — não somado de novo no resultado, para evitar dupla contagem.</div>' : '') + '<button class="btn-sm" style="margin-top:8px" data-affped360="' + esc(orderId) + '">Abrir em Afiliados</button></div></div>';
-
-    // ---- Carteira (§11: lançamento correspondente encontrado? / valor esperado / valor encontrado /
-    // conciliado? / diferença — reaproveita walletOrigin(), o mesmo motor da Fase 1; nunca cria uma
-    // segunda lógica de conciliação aqui) ----
-    var wBlock = '';
+    if (affRow && !mrRow) {
+      eventoLinhas += kv('Afiliados', esc(affRow.affUser) + ' · comissão ' + brlU(-Math.abs(affRow.comAff)) + ' · taxa de serviço ' + brlU(-Math.abs(affRow.svcFee))) + '<button class="btn-sm" style="margin:2px 0 8px" data-affped360="' + esc(orderId) + '">Abrir em Afiliados</button>';
+    } else if (affRow) {
+      eventoLinhas += kv('Afiliados', esc(affRow.affUser) + ' — já incluído em "Afiliado (Minha Renda)" na lista de Taxas e Descontos acima');
+    }
+    var wSum = 0, wRows = '';
     if (wtx.length) {
-      var wSum = wtx.reduce(function (s, t) { return s + t.amount; }, 0);
-      var wRows = wtx.slice().sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); }).map(function (t) {
-        var o = WALLET_ORIGEM_CATS[wEffCat(t)] ? walletOrigin(t) : null;
-        var sit = !o ? '<span class="tag neutral">sem comparação automática</span>' : o.confidence === 'alta' ? (o.ok ? '<span class="tag ok">🟢 Conciliado</span>' : '<span class="tag warn">🔴 Diferença ' + brl(o.diff) + '</span>') : o.confidence === 'candidato' ? '<span class="tag info">🔵 Candidato — confirmar</span>' : '<span class="tag info">🟡 Estimativa</span>';
-        return '<tr class="rowlink" data-wtx="' + esc(t.id) + '"><td class="nowrap">' + dbr(t.date) + '</td><td>' + esc(wcatLabel(wEffCat(t))) + '</td><td class="nowrap">' + brl(t.amount) + '</td><td>' + sit + '</td></tr>';
-      }).join('');
-      wBlock = '<div class="panel"><div class="ph"><h3>Saldo da Carteira</h3><span class="footnote" style="margin:0">' + nn(wtx.length) + ' movimentação(ões)</span></div><div class="pb"><div class="fin-line total"><span>Líquido na carteira</span><span class="' + (wSum < 0 ? 'neg' : 'pos') + '">' + brl(wSum) + '</span></div><div class="table-wrap" style="margin-top:8px"><table class="report"><thead><tr><th>Data</th><th>Categoria</th><th>Valor</th><th>Conciliação</th></tr></thead><tbody>' + wRows + '</tbody></table></div></div></div>';
+      wSum = wtx.reduce(function (s, t) { return s + t.amount; }, 0);
+      var wConc = wtx.filter(function (t) { var o = WALLET_ORIGEM_CATS[wEffCat(t)] ? walletOrigin(t) : null; return o && o.confidence === 'alta' && o.ok; }).length;
+      var wDiverg = wtx.filter(function (t) { var o = WALLET_ORIGEM_CATS[wEffCat(t)] ? walletOrigin(t) : null; return o && o.confidence === 'alta' && !o.ok; }).length;
+      eventoLinhas += kv('Carteira', nn(wtx.length) + ' movimentação(ões) · líquido ' + brl(wSum) + (wConc ? ' · ' + nn(wConc) + ' conciliada(s)' : '') + (wDiverg ? ' · ' + nn(wDiverg) + ' com diferença' : ''));
+      wRows = wtx.slice().sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); }).map(function (t) { return '<tr class="rowlink" data-wtx="' + esc(t.id) + '"><td class="nowrap">' + dbr(t.date) + '</td><td>' + esc(wcatLabel(wEffCat(t))) + '</td><td class="nowrap">' + brl(t.amount) + '</td></tr>'; }).join('');
+    } else {
+      eventoLinhas += kv('Carteira', 'nenhuma movimentação localizada');
     }
-    else wBlock = '<div class="panel"><div class="ph"><h3>Saldo da Carteira</h3></div><div class="pb"><span class="tag neutral">nenhuma movimentação localizada</span></div></div>';
-
-    // ---- Devolução ----
-    var devBlock = '';
-    if (occs.length) devBlock = '<div class="panel"><div class="ph"><h3>Devolução</h3></div><div class="pb">' + occs.map(function (x) { var r = occResultadoDevolucao(x); return kv('Status', statusLabel(x.status)) + kv('Motivo', x.reason || '—') + '<div class="fin-line"><span>Resultado (<span class="tag ' + (r.status === 'confirmado' ? 'ok' : 'info') + '">' + (r.status === 'confirmado' ? 'confirmado' : 'provisório') + '</span>)</span><span class="neg">' + brl(r.perda) + '</span></div><button class="btn-sm" style="margin-top:6px" data-godev360="' + esc(x.id) + '">Abrir devolução</button>'; }).join('<hr style="border:none;border-top:1px solid var(--line);margin:10px 0">') + '</div></div>';
+    if (occs.length) {
+      eventoLinhas += occs.map(function (x) { var r = occResultadoDevolucao(x); return kv('Devolução', statusLabel(x.status) + ' · ' + (x.reason || 'motivo não informado') + ' · resultado ' + brl(r.perda) + ' (' + (r.status === 'confirmado' ? 'confirmado' : 'provisório') + ')') + '<button class="btn-sm" style="margin:2px 0 8px" data-godev360="' + esc(x.id) + '">Abrir devolução</button>'; }).join('');
+    } else {
+      eventoLinhas += kv('Devolução', 'Nenhuma devolução registrada');
+    }
+    var eventosBlock = '<div class="panel"><div class="ph"><h3>Eventos do Pedido</h3></div><div class="pb">' + eventoLinhas +
+      (wRows ? '<details style="margin-top:6px"><summary style="cursor:pointer;font-weight:600">Ver movimentações da Carteira (' + nn(wtx.length) + ')</summary><div class="table-wrap" style="margin-top:8px"><table class="report"><thead><tr><th>Data</th><th>Categoria</th><th>Valor</th></tr></thead><tbody>' + wRows + '</tbody></table></div></details>' : '') +
+      '</div></div>';
 
     // ---- Resultado final ----
-    // Evita dupla contagem (§ regra de não duplicidade): quando Minha Renda já cobre o pedido, o
-    // campo "Afiliados" da própria Renda já está dentro de taxasSomaC — não soma de novo do relatório de Afiliados.
+    // Evita dupla contagem: quando Minha Renda já cobre o pedido, o campo "Afiliados" da própria
+    // Renda já está dentro de taxasSomaC — não soma de novo do relatório de Afiliados.
     var custoAfilCents = (!mrRow && affRow) ? Math.round((affRow.comAff + affRow.svcFee) / 100) : 0;
     var acTaxaCents = acRows.length ? acRows.reduce(function (s, r) { return s + r.taxa; }, 0) : 0; // já em cents
     // Usa o resultado CONFIRMADO da baixa quando existir (custo real − reaproveitável), senão o
-    // provisório (§22-24) — occResultadoDevolucao() cai para occEffectiveLoss() automaticamente.
+    // provisório — occResultadoDevolucao() cai para occEffectiveLoss() automaticamente.
     var devImpactoCents = occs.length ? Math.round(occs.reduce(function (s, x) { return s + occResultadoDevolucao(x).perda; }, 0) * 100) : 0;
     var devConfirmadoN = occs.filter(function (x) { return occResultadoDevolucao(x).status === 'confirmado'; }).length;
-    var lucroConhecido = receitaC != null && (custoProdC != null || !custoPendente);
     var resultadoC = null;
     if (receitaC != null && custoProdC != null) { resultadoC = receitaC + taxasSomaC - custoProdC - custoAfilCents - acTaxaCents - devImpactoCents + adjTotalC; }
     var margemPct = (resultadoC != null && receitaC) ? r2(resultadoC / receitaC * 100) : null;
-    var taxasConf = mrRow ? conferencia(mrRow.liberado, mrRow.preco + taxasSomaC) : '';
+    // §7 do prompt de reorganização: "Lucro provisório" sempre que algum componente do resultado
+    // ainda depende de estimativa (sem Minha Renda cruzada, ou devolução ainda não confirmada pela
+    // baixa) — nunca inventa um número final quando a base ainda pode mudar.
+    var lucroProvisorio = resultadoC != null && (!mrRow || (occs.length > 0 && devConfirmadoN < occs.length));
 
-    // ---- §45-47: Devolução REABRE o resultado do pedido — nunca apaga o histórico original. Mostra
-    // a evolução Resultado original (antes da devolução) → Evento → Resultado atualizado. Não é um
-    // cálculo novo: resultadoAntes = resultadoC + devImpactoCents (o mesmo devImpactoCents já somado
-    // no Resultado final abaixo, só somado de volta para reconstruir o "antes").
+    // ---- §45-47 (herdado de fase anterior): Devolução REABRE o resultado do pedido — nunca apaga o
+    // histórico original. resultadoAntes = resultadoC + devImpactoCents (o mesmo valor já somado no
+    // Resultado do Pedido abaixo, só somado de volta para reconstruir o "antes").
     var devReaberturaBlock = '';
-    if (occs.length && resultadoC != null) {
+    if (occs.length && resultadoC != null && Math.abs(devImpactoCents) > 1) {
       var resultadoAntes = r2(resultadoC + devImpactoCents);
-      if (Math.abs(devImpactoCents) > 1) {
-        devReaberturaBlock = '<div class="panel"><div class="ph"><h3>Devolução reabriu o resultado deste pedido</h3></div><div class="pb">' +
-          '<div class="fin-line"><span>Resultado original (venda, sem a devolução)</span><span class="' + (resultadoAntes < 0 ? 'neg' : 'pos') + '">' + brlC(resultadoAntes) + '</span></div>' +
-          occs.map(function (x) { var r = occResultadoDevolucao(x); return '<div class="fin-line"><span>↳ Evento: ' + esc(statusLabel(x.status)) + ' (' + esc(x.reason || 'motivo não informado') + ')' + (x.returnOpenedAt ? ' em ' + dbr(x.returnOpenedAt) : '') + ' <span class="tag ' + (r.status === 'confirmado' ? 'ok' : 'info') + '">' + (r.status === 'confirmado' ? 'confirmado' : 'provisório') + '</span></span><span class="neg">' + brl(r.perda) + '</span></div>'; }).join('') +
-          '<div class="fin-line total"><span>Resultado atualizado (com a devolução)</span><span class="' + (resultadoC < 0 ? 'neg' : 'pos') + '">' + brlC(resultadoC) + '</span></div>' +
-          '<div class="footnote" style="margin-top:6px">O histórico original não é apagado — este pedido continua registrado como vendido/expedido/conciliado normalmente; a devolução só ajusta o resultado financeiro final.</div>' +
-          '</div></div>';
-      }
+      devReaberturaBlock = '<div class="panel"><div class="ph"><h3>Devolução reabriu o resultado deste pedido</h3></div><div class="pb">' +
+        '<div class="fin-line"><span>Resultado original (venda, sem a devolução)</span><span class="' + (resultadoAntes < 0 ? 'neg' : 'pos') + '">' + brlC(resultadoAntes) + '</span></div>' +
+        occs.map(function (x) { var r = occResultadoDevolucao(x); return '<div class="fin-line"><span>↳ Evento: ' + esc(statusLabel(x.status)) + ' (' + esc(x.reason || 'motivo não informado') + ')' + (x.returnOpenedAt ? ' em ' + dbr(x.returnOpenedAt) : '') + ' <span class="tag ' + (r.status === 'confirmado' ? 'ok' : 'info') + '">' + (r.status === 'confirmado' ? 'confirmado' : 'provisório') + '</span></span><span class="neg">' + brl(r.perda) + '</span></div>'; }).join('') +
+        '<div class="fin-line total"><span>Resultado atualizado (com a devolução)</span><span class="' + (resultadoC < 0 ? 'neg' : 'pos') + '">' + brlC(resultadoC) + '</span></div>' +
+        '<div class="footnote" style="margin-top:6px">O histórico original não é apagado — este pedido continua registrado como vendido/expedido/conciliado normalmente; a devolução só ajusta o resultado financeiro final.</div>' +
+        '</div></div>';
     }
 
-    // ---- Margem antes do Acelera (Venda − Taxas Shopee − Custo de produção) — ponto de checagem
-    // explícito pedido pelo usuário, ANTES de entrar Acelera/devolução/ajustes posteriores. Nunca
-    // substitui o Resultado final (que segue exatamente a mesma fórmula já aprovada) — é só um
-    // corte intermediário para responder "quanto deveria sobrar antes da antecipação".
-    var margemAntesAcelera = (receitaC != null && custoProdC != null) ? (receitaC + taxasSomaC - custoProdC) : null;
-    var margemAntesBlock = '<div class="panel"><div class="ph"><h3>Margem antes do Acelera</h3></div><div class="pb">' + fLine('Venda', receitaC) + fLine('− Taxas Shopee', taxasSomaC) + fLine('− Custo de produção', custoProdC != null ? -custoProdC : null) + '<div class="fin-line total"><span>Margem antes do Acelera</span><span class="' + (margemAntesAcelera != null && margemAntesAcelera < 0 ? 'neg' : 'pos') + '">' + (margemAntesAcelera != null ? brlC(margemAntesAcelera) : 'aguardando custo do produto') + '</span></div></div></div>';
-
-    var idBlock = '<div class="panel"><div class="ph"><h3>Venda</h3></div><div class="pb">' + kv('Pedido', orderId) + kv('BR / Rastreamento', ord ? ord.tracking : '—') + kv('Data da venda', ord ? dbr(ord.createdAt) : '—') + kv('Data de conclusão (Minha Renda)', mrRow ? dbr(mrRow.dataConclusao) : '—') + kv('Status', ord ? (S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus) : '—') + (ord && ord.isFbs ? kv('Full/FBS', 'Sim') : '') + fLine('Valor da venda', receitaC, { total: true }) + '</div></div>';
-
-    // Jornada única pedida pelo usuário: Venda → Custos → Taxas detalhadas → Margem → Expedição →
-    // Acelera → Carteira → Devolução → Resultado final. Sem "Ficha 360" separada, sem taxas
-    // escondidas atrás de outro clique — tudo num scroll só, na ordem em que o dinheiro acontece.
-    panel.innerHTML = '<div class="dh"><div><b>Ficha do Pedido</b> — <span class="mono">' + esc(orderId) + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
-      '<div class="kstrip" style="margin-bottom:12px">' +
-      '<div class="kc"><div class="kl">Status de conciliação</div><div class="kv" style="font-size:15px">' + st.label + '</div></div>' +
-      '<div class="kc"><div class="kl">Receita</div><div class="kv" style="font-size:16px">' + (receitaC != null ? brlC(receitaC) : '—') + '</div></div>' +
-      '<div class="kc"><div class="kl">Custo produto</div><div class="kv" style="font-size:16px">' + (custoProdC != null ? brlC(custoProdC) : (custoPendente ? '<span class="tag warn">pendente</span>' : '—')) + '</div></div>' +
-      '<div class="kc"><div class="kl">Lucro real do pedido</div><div class="kv" style="font-size:16px;color:' + (resultadoC != null && resultadoC < 0 ? 'var(--err)' : 'var(--ok)') + '">' + (resultadoC != null ? brlC(resultadoC) : '<span class="tag warn">custo pendente</span>') + '</div></div>' +
-      '<div class="kc"><div class="kl">Margem</div><div class="kv" style="font-size:16px">' + (margemPct != null ? pct(margemPct) : '—') + '</div></div>' +
-      '</div>' +
-      // 1) VENDA
-      idBlock +
-      // 2) CUSTOS (Produção)
-      producaoBlock +
-      // 3) TAXAS DETALHADAS
-      '<div class="panel"><div class="ph"><h3>Taxas Shopee (detalhado, individualizado)</h3>' + taxasConf + '</div><div class="pb"><span class="footnote">' + (mrRow ? 'Origem: Minha Renda · Pedido ' + esc(orderId) : ord ? 'Origem: Pedidos (aproximado — sem Minha Renda para este pedido)' : 'sem fonte') + '</span>' + (taxasRows.length ? taxasRows.map(function (r) { return fLine(r[0], r[1]); }).join('') + fLine('Total de taxas', taxasSomaC, { total: true }) : '<span class="tag neutral">sem dados de taxas para este pedido</span>') + '</div></div>' +
-      comComposicao + svcComposicao + adjBlock +
-      (shipRow ? '<div class="panel"><div class="ph"><h3>Frete — divergência</h3></div><div class="pb">' + fLine('Esperado', shipRow.esperado) + fLine('Real', shipRow.real) + fLine('Diferença', shipRow.real - shipRow.esperado, { total: true }) + '</div></div>' : '') +
-      // 4) MARGEM (antes do Acelera)
-      margemAntesBlock +
-      // 5) EXPEDIÇÃO
-      expedicaoBlock +
-      // 6) ACELERA
-      acBlock + afBlock +
-      // 7) CARTEIRA
-      wBlock +
-      // 8) DEVOLUÇÃO
-      devBlock + devReaberturaBlock +
-      // 9) RESULTADO FINAL
-      '<div class="panel"><div class="ph"><h3>Resultado final</h3></div><div class="pb">' +
-      fLine('Receita', receitaC) + fLine('+ Taxas Shopee (líquido, já negativo, inclui afiliados quando há Minha Renda)', taxasSomaC) + fLine('− Custo do produto', custoProdC != null ? -custoProdC : null) + (custoAfilCents ? fLine('− Custo de afiliados (sem Minha Renda para este pedido)', -custoAfilCents) : '') + fLine('− Taxa Acelera', -Math.abs(acTaxaCents)) + fLine('− Impacto de devolução (' + (devConfirmadoN === occs.length && occs.length ? 'confirmado' : occs.length ? 'parcialmente confirmado' : 'provisório') + ')', -devImpactoCents) + (adjRows.length ? fLine('+ Ajustes (Minha Renda)', adjTotalC) : '') +
-      '<div class="fin-line total"><span>Lucro real do pedido</span><span class="' + (resultadoC != null && resultadoC < 0 ? 'neg' : 'pos') + '">' + (resultadoC != null ? brlC(resultadoC) : 'aguardando custo do produto') + '</span></div>' +
+    // ---- §6-7/§15 do prompt de reorganização: TOPO com os 4 números juntos (Venda/Custo/Lucro
+    // liberado/Margem) + §15 RESULTADO DO PEDIDO em cascata no final, na ordem pedida: Venda − taxas
+    // Shopee − custo produto − taxa Acelera (quando aplicável) − devolução (quando aplicável) +
+    // compensações (quando aplicável) = Lucro atual / Margem atual. Mesma fórmula do topo — nunca
+    // uma segunda conta divergente.
+    var lucroHeroTag = lucroProvisorio ? ' <span class="tag warn">provisório</span>' : '';
+    var resultadoBlock = '<div class="panel"><div class="ph"><h3>Resultado do Pedido</h3></div><div class="pb">' +
+      fLine('Venda', receitaC) +
+      fLine('− Taxas Shopee (líquido, inclui afiliados quando há Minha Renda)', taxasSomaC) +
+      fLine('− Custo do produto', custoProdC != null ? -custoProdC : null) +
+      (custoAfilCents ? fLine('− Custo de afiliados (sem Minha Renda para este pedido)', -custoAfilCents) : '') +
+      (acRows.length ? fLine('− Taxa Acelera', -Math.abs(acTaxaCents)) : '') +
+      (occs.length ? fLine('− Devolução/perdas (' + (devConfirmadoN === occs.length ? 'confirmado' : 'provisório') + ')', -devImpactoCents) : '') +
+      (adjRows.length ? fLine('+ Compensações/ajustes (Minha Renda)', adjTotalC) : '') +
+      '<div class="fin-line total"><span>Lucro atual' + lucroHeroTag + '</span><span class="' + (resultadoC != null && resultadoC < 0 ? 'neg' : 'pos') + '">' + (resultadoC != null ? brlC(resultadoC) : 'aguardando custo do produto') + '</span></div>' +
+      '<div class="fin-line"><span>Margem atual</span><span>' + (margemPct != null ? pct(margemPct) : '—') + '</span></div>' +
       '</div></div>' +
-      '<div class="footnote" style="padding:8px 0">Fontes usadas: Pedidos' + (mrRow ? ' · Minha Renda' : '') + (svcRows.length ? ' · Service Fee Details' : '') + (adjRows.length ? ' · Adjustment' : '') + (acRows.length ? ' · Shopee Acelera' : '') + (affRow ? ' · Afiliados' : '') + (wtx.length ? ' · Saldo da Carteira' : '') + (occs.length ? ' · Devoluções' : '') + '.</div>' +
+      '<div class="footnote" style="padding:8px 0">Fontes usadas: Pedidos' + (mrRow ? ' · Minha Renda' : '') + (svcRows.length ? ' · Service Fee Details' : '') + (adjRows.length ? ' · Adjustment' : '') + (acRows.length ? ' · Shopee Acelera' : '') + (affRow ? ' · Afiliados' : '') + (wtx.length ? ' · Saldo da Carteira' : '') + (occs.length ? ' · Devoluções' : '') + '.</div>';
+
+    // Hierarquia única pedida pelo prompt de reorganização: Topo (4 números) → Dados da Venda →
+    // Taxas e Descontos (lista única) → Eventos do Pedido (resumido) → Resultado do Pedido.
+    panel.innerHTML = '<div class="dh"><div><b>Ficha do Pedido</b> — <span class="mono">' + esc(orderId) + '</span> <span class="tag" style="margin-left:6px">' + st.label + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
+      '<div class="kstrip" style="margin-bottom:12px">' +
+      '<div class="kc"><div class="kl">Valor da venda</div><div class="kv" style="font-size:18px">' + (receitaC != null ? brlC(receitaC) : '—') + '</div></div>' +
+      '<div class="kc"><div class="kl">Custo do produto</div><div class="kv" style="font-size:18px">' + (custoProdC != null ? brlC(custoProdC) : (custoPendente ? '<span class="tag warn">pendente</span>' : '—')) + '</div></div>' +
+      '<div class="kc"><div class="kl">Lucro liberado' + lucroHeroTag + '</div><div class="kv" style="font-size:18px;color:' + (resultadoC != null && resultadoC < 0 ? 'var(--err)' : 'var(--ok)') + '">' + (resultadoC != null ? brlC(resultadoC) : '<span class="tag warn">custo pendente</span>') + '</div></div>' +
+      '<div class="kc"><div class="kl">Margem</div><div class="kv" style="font-size:18px">' + (margemPct != null ? pct(margemPct) : '—') + '</div></div>' +
+      '</div>' +
+      dadosVendaBlock +
+      taxasBlock +
+      eventosBlock +
+      devReaberturaBlock +
+      resultadoBlock +
       (ord ? '<button class="btn-sm" data-goped="' + esc(orderId) + '">Ver na lista de Pedidos</button>' : '') +
       '</div>';
     panel.querySelector('.x').onclick = function () { d.remove(); };
