@@ -403,6 +403,11 @@
   }
   function resolveSkuCost(sku) { return resolveSkuCostByKey(normalizeSkuKey(sku), sku); }
   var SKU_MOTIVO_LABEL = { SKU_NAO_LOCALIZADO: 'SKU não localizado em Produtos', SEM_FAMILIA: 'Família não atribuída', FAMILIA_SEM_CUSTO: 'Custo da família não informado', SKU_CONFLITANTE: 'Conflito de SKU — o mesmo código aparece em variações diferentes' };
+  // §44/§59 do prompt "Correção Financeira": rótulos únicos para incomeResolve.status/statusFinanceiro,
+  // usados na Ficha do Pedido — declarados no escopo do módulo (não dentro de openPedidoFicha360) para
+  // ficarem disponíveis independente da ordem de montagem dos blocos dentro da função.
+  var INCOME_STATUS_TXT = { FOUND: '🟢 localizado', NOT_IN_INCOME: '🟡 aguardando lançamento', WRONG_OPERATION: '🔴 encontrado em outra operação — auditar isolamento', DUPLICATE_ORDER_ROWS: '🔴 mais de uma linha para este pedido — auditar planilha', INVALID_ORDER_ID: '🔴 ID do pedido inválido' };
+  var STATUS_FIN_TXT = { CONFIRMADO: '🟢 Confirmado (Income cruzado, composição fecha)', DIVERGENCIA: '🔴 Divergência (Income cruzado, mas a composição não fecha com a Quantia Total Lançada)', PROVISORIO: '🟡 Provisório (composição estimada, aguardando Income)' };
   var SKU_MATCHEDBY_LABEL = { SKU: 'SKU', REFERENCE_SKU: 'SKU de referência' };
 
   // ---------- período ----------
@@ -1392,7 +1397,7 @@
       (somaGrupo(gCreditos) ? fLine('Créditos', somaGrupo(gCreditos)) : '') +
       '<div class="fin-line total"><span>= Pagamento Liberado Shopee</span><b>' + brlC(pagamentoLiberadoC) + '</b></div>' +
       '<div style="margin-top:4px">' + taxasConf + '</div>' +
-      '</div></div>' : '<div class="panel"><div class="ph"><h3>7. Conciliação do Pagamento</h3></div><div class="pb"><span class="tag neutral">Sem Income cruzado para este pedido — conciliação indisponível.</span></div></div>';
+      '</div></div>' : '<div class="panel"><div class="ph"><h3>7. Conciliação do Pagamento</h3></div><div class="pb"><span class="tag warn">🟡 Composição preliminar — aguardando Income</span><div class="footnote" style="margin-top:6px">' + (comp.incomeResolve.status === 'NOT_IN_INCOME' ? 'Este pedido ainda não aparece no relatório Income importado.' : INCOME_STATUS_TXT[comp.incomeResolve.status] || '') + '</div></div></div>';
     var auditoriaBlock = (auditoriaFonte.length || shipRow) ? '<div class="panel"><div class="ph"><h3>Auditoria Técnica</h3></div><div class="pb">' +
       '<details><summary style="cursor:pointer;font-weight:600">Ver campos brutos, origem e valores não contabilizados</summary><div style="margin-top:6px">' +
       auditoriaFonte.map(function (a) { return '<div class="fin-line"><span>' + esc(a.label) + ' <span class="footnote" style="margin:0">(' + esc(a.nota) + ')</span></span><span class="' + (a.valor < 0 ? 'neg' : 'pos') + '">' + brlC(a.valor) + '</span></div>'; }).join('') +
@@ -1431,7 +1436,14 @@
     // ---- §14 do prompt de reorganização: EVENTOS DO PEDIDO — Expedição/Acelera/Carteira/Devolução
     // resumidos num único painel (não 4 cards separados). Devolução só aparece se existir ocorrência;
     // sem ocorrência, uma linha só: "Nenhuma devolução registrada" — nunca um bloco grande vazio.
+    // §65-66/§54/§59 do prompt "Correção Financeira": linha de Conciliação do Income — nunca "aproximado"
+    // tratado como definitivo. Usa comp.statusFinanceiro/incomeResolve, já resolvidos por
+    // resolveIncomeOrder() (mesma função canônica usada em toda a composição — não recalcula nada aqui).
     var eventoLinhas = '';
+    var incomeStatusTxt = INCOME_STATUS_TXT[comp.incomeResolve.status] || comp.incomeResolve.status;
+    if (comp.incomeResolve.status === 'NOT_IN_INCOME' && mrSummary && mrSummary.importedAt) incomeStatusTxt += ' — último Income importado em ' + new Date(mrSummary.importedAt).toLocaleString('pt-BR');
+    eventoLinhas += kv('Income', incomeStatusTxt);
+    eventoLinhas += kv('Situação financeira', STATUS_FIN_TXT[comp.statusFinanceiro] || comp.statusFinanceiro);
     if (ord) {
       var stN = ord.normalizedStatus;
       var naoAplica = stN === 'NAO_PAGO' || stN === 'CANCELADO';
@@ -1540,7 +1552,7 @@
     var heroBlock = '<div class="panel"><div class="ph"><h3>1. Resumo Financeiro</h3></div><div class="pb" style="padding-top:0">' +
       '<div class="kstrip">' +
       '<div class="kc"><div class="kl">Valor da venda</div><div class="kv" style="font-size:18px">' + (receitaC != null ? brlC(receitaC) : '—') + '</div></div>' +
-      '<div class="kc"><div class="kl">Pagamento liberado Shopee</div><div class="kv" style="font-size:18px">' + (pagamentoLiberadoC != null ? brlC(pagamentoLiberadoC) : '—') + '</div></div>' +
+      '<div class="kc"><div class="kl">' + (mrRow ? 'Pagamento liberado Shopee' : 'Pagamento previsto <span class="tag warn" style="font-size:9px">provisório</span>') + '</div><div class="kv" style="font-size:18px">' + (pagamentoLiberadoC != null ? brlC(pagamentoLiberadoC) : '—') + '</div></div>' +
       '<div class="kc"><div class="kl">Custo do produto</div><div class="kv" style="font-size:18px">' + (custoProdC != null ? brlC(custoProdC) : (custoPendente ? '<span class="tag warn">pendente</span>' : '—')) + '</div></div>' +
       '<div class="kc"><div class="kl">Lucro atual' + lucroHeroTag + '</div><div class="kv" style="font-size:18px;color:' + (resultadoC != null && resultadoC < 0 ? 'var(--err)' : 'var(--ok)') + '">' + (resultadoC != null ? brlC(resultadoC) : '<span class="tag warn">custo pendente</span>') + '</div></div>' +
       '<div class="kc"><div class="kl">Margem</div><div class="kv" style="font-size:18px">' + (margemPct != null ? pct(margemPct) : '—') + '</div></div>' +
@@ -6083,9 +6095,31 @@
     mrRenda.filter(function (r) { return r.ver === 'Order'; }).forEach(function (o) { if (!o.outros) return; Object.keys(o.outros).forEach(function (k) { seen[k] = 1; }); });
     return Object.keys(seen).length;
   }
-  function caixaDreBlock(dre) {
+  // §68-69 do prompt "Correção Financeira": toda categoria relevante da DRE precisa ser clicável e
+  // abrir os pedidos que formam o total — soma dos pedidos == total exibido. Reaproveita exatamente
+  // as mesmas taxaRows já calculadas por pedidoComposicaoFinanceira() (nunca soma de novo por fora).
+  function caixaDreDrillOpen(dateKey, label) {
+    var vendas = caixaDayVendas(dateKey);
+    var rows = []; var soma = 0;
+    vendas.pedidos.forEach(function (o) {
+      var comp = pedidoComposicaoFinanceira(o.id);
+      var r = comp.taxaRows.find(function (x) { return x.label === label; });
+      if (r) { rows.push({ orderId: o.id, valor: r.valor }); soma += r.valor; }
+    });
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '520px'; panel.style.maxWidth = '96vw'; panel.style.zIndex = '65';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    var tbl = rows.map(function (r) { return '<tr class="rowlink" data-goped360="' + esc(r.orderId) + '"><td class="mono">' + esc(r.orderId) + '</td><td class="nowrap ' + (r.valor < 0 ? 'neg' : 'pos') + '">' + brlC(r.valor) + '</td></tr>'; }).join('');
+    panel.innerHTML = '<div class="dh"><div><b>' + esc(label) + '</b></div><button class="x">&times;</button></div><div class="dbd">' +
+      '<div class="footnote" style="margin-bottom:8px">' + nn(rows.length) + ' pedido(s) de ' + nn(vendas.n) + ' compõem esta linha da DRE de ' + esc(dbr(dateKey)) + '.</div>' +
+      '<div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Valor</th></tr></thead><tbody>' + (tbl || '<tr><td colspan="2" class="empty">Nenhum pedido com este componente neste dia.</td></tr>') + '</tbody></table></div>' +
+      '<div class="fin-line total" style="margin-top:8px"><span>Soma dos pedidos</span><b>' + brlC(soma) + '</b></div>' +
+      '</div>';
+    panel.querySelector('.x').onclick = function () { d.remove(); };
+    panel.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { d.remove(); openPedidoFicha360(b.dataset.goped360); }; });
+  }
+  function caixaDreBlock(dre, dateKey) {
     var line = function (label, v, opts) { opts = opts || {}; return '<div class="fin-line' + (opts.total ? ' total' : '') + '"><span>' + (opts.op ? '<b>' + opts.op + '</b> ' : '') + esc(label) + (opts.note ? ' <span class="footnote" style="margin:0">' + esc(opts.note) + '</span>' : '') + '</span><b class="' + (v == null ? '' : v < 0 ? 'neg' : v > 0 ? 'pos' : '') + '">' + (v == null ? 'não disponível' : brlC(v)) + '</b></div>'; };
-    var subLine = function (label, v) { return '<div class="fin-line" style="padding-left:14px;font-size:13px"><span>↳ ' + esc(label) + '</span><span class="' + (v < 0 ? 'neg' : 'pos') + '">' + brlC(v) + '</span></div>'; };
+    var subLine = function (label, v) { return '<div class="fin-line rowlink" style="padding-left:14px;font-size:13px" data-dredrill="' + esc(label) + '"><span>↳ ' + esc(label) + '</span><span class="' + (v < 0 ? 'neg' : 'pos') + '">' + brlC(v) + '</span></div>'; };
     if (!dre.n) return '<div class="panel"><div class="ph"><h3>DRE do dia</h3></div><div class="pb"><span class="tag neutral">Nenhum pedido pago neste dia.</span></div></div>';
     // §106-111 do prompt mestre: abre cada grupo pelo nome real das linhas que o compõem — nunca uma
     // linha genérica "Taxas cobradas da Líder"/"Descontos Bancados pela Líder" escondendo a origem.
@@ -6735,7 +6769,7 @@
           (dre.temAcelera ? ('<div class="cx-kv"><span class="cxl">Taxa Acelera</span><span class="cxv neg">' + brlC(dre.acTaxa) + '</span></div>') : '') +
           '<div class="cx-kv" style="border-top:1px solid var(--line);margin-top:4px;padding-top:8px"><span class="cxl" style="font-weight:800">Lucro</span><span class="cxv ' + (dre.lucro != null && dre.lucro < 0 ? 'neg' : 'pos') + '" style="font-size:16px">' + (dre.lucro != null ? brlC(dre.lucro) : 'aguardando custo') + '</span></div>' +
           (dre.margem != null ? ('<div class="cx-kv"><span class="cxl">Margem</span><span class="cxv">' + pct(dre.margem) + '</span></div>') : '') +
-          '<details class="cx-collapse"><summary>Ver DRE completa</summary><div class="pb">' + caixaDreBlock(dre) + '</div></details>'
+          '<details class="cx-collapse"><summary>Ver DRE completa</summary><div class="pb">' + caixaDreBlock(dre, dateKey) + '</div></details>'
         ) : '<div class="footnote">Nenhum pedido pago neste dia.</div>') +
         '</div>';
 
@@ -6807,6 +6841,7 @@
       // (mesma janela do dia, valor ~igual a um Pix já importado da Carteira).
       var btAbrir = panel.querySelector('#bt-abrir-manual'); if (btAbrir) btAbrir.onclick = function () { openTransferenciaManualModal(dateKey, refresh); };
       panel.querySelectorAll('[data-wtx]').forEach(function (b) { b.onclick = function () { openWalletTx(b.dataset.wtx, function () { refresh(); render(); }); }; });
+      panel.querySelectorAll('[data-dredrill]').forEach(function (b) { b.onclick = function () { caixaDreDrillOpen(dateKey, b.dataset.dredrill); }; });
     }
     refresh();
   }
