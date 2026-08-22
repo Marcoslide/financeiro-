@@ -286,7 +286,7 @@
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id', bankaccounts: 'id', companies: 'id', operations: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id', bankaccounts: 'id', companies: 'id', operations: 'id', cpheader: 'id', cpitems: 'id', cppayments: 'id', cpattach: 'id', cpcategories: 'id', cpaccounting: 'id', cpcostcenters: 'id', cpsuppliers: 'id', cpsupplylinks: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -618,7 +618,7 @@
   function fileInput(cb) { var inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.xlsx,.xls,.csv'; inp.onchange = function () { if (inp.files[0]) cb(inp.files[0]); }; inp.click(); }
 
   // ============================================================ RENDER (roteamento)
-  function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', minharenda: 'Minha Renda', caixa: 'Caixa', ia: 'Inteligência' }[route] || ''; }
+  function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', minharenda: 'Minha Renda', caixa: 'Caixa', contaspagar: 'Contas a Pagar', ia: 'Inteligência' }[route] || ''; }
   function render() {
     setActive();
     // Cada módulo é isolado: um erro em um deles mostra a mensagem no lugar de deixar a tela em branco
@@ -633,6 +633,7 @@
       if (route === 'afiliados') return renderAfiliados();
       if (route === 'minharenda') return renderMinhaRenda();
       if (route === 'caixa') return renderCaixa();
+      if (route === 'contaspagar') return renderContasPagar();
       if (route === 'ia') return renderIA();
     } catch (e) { app.innerHTML = renderErrBox('Erro ao abrir esta tela: ' + esc(e && (e.message || e)) + '. Os dados estão salvos — recarregue a página.'); }
   }
@@ -7411,6 +7412,1036 @@
     else bindCaixaDashboardView();
   }
 
+
+  // ============================================================ CONTAS A PAGAR
+  // Módulo novo, dentro de Financeiro — prompt "IMPLEMENTAR MÓDULO CONTAS A PAGAR", inspirado no
+  // Bling. Domínio PRÓPRIO (despesas administrativas da empresa) — nunca toca no motor do Caixa/
+  // Acelera/Carteira (que é o domínio de RECEITA do marketplace, já aprovado e travado). Não é um
+  // "segundo motor financeiro paralelo": é o PRIMEIRO motor para este domínio (despesas gerais), que
+  // simplesmente não existia. cpPayments é o próprio livro de baixas do módulo — cada baixa É o
+  // movimento financeiro gerado (§4/§32), sem inventar uma tabela genérica de "financial_movements"
+  // que duplicaria o que cpPayments já registra.
+  var contasPagar = [], cpItemsAll = [], cpPayments = [], cpAttachments = [], cpCategories = [], cpAccounting = [], cpCostCenters = [], cpSuppliers = [], cpSupplyLinks = [];
+  var cpSub = 'lista'; // lista | categorias | planocontas | centroscusto | fornecedores | dre
+  var cpSel = new Set(), cpPage = 1, cpPageSize = 30;
+  var cpF = { situacao: '', categoryId: '', paymentMethod: '', financialAccountId: '', costCenterId: '', accountingAccountId: '', supplierId: '', valorMin: null, valorMax: null, docNumber: '', search: '', dateBasis: 'vencimento', sort: 'vencimento', dir: 'asc' };
+  var CP_SITUACOES = [['', 'Todas'], ['ABERTA', 'Em aberto'], ['ATRASADA', 'Atrasadas'], ['EMITIDA', 'Emitidas'], ['PAGA', 'Pagas'], ['PARCIAL', 'Parcialmente pagas'], ['CANCELADA', 'Canceladas']];
+  var CP_STATUS_LABEL = { ABERTA: ['Em aberto', 'b-info'], ATRASADA: ['Atrasada', 'b-err'], PARCIAL: ['Parcialmente paga', 'b-warn'], PAGA: ['Paga', 'b-ok'], CANCELADA: ['Cancelada', 'b-neutral'] };
+  var CP_UNIDADES = ['UN', 'MT', 'M²', 'M³', 'KG', 'G', 'L', 'ML', 'CX', 'PCT', 'ROLO', 'PAR', 'OUTRO'];
+  var CP_FORMAS_PGTO = ['Pix', 'Boleto', 'Transferência', 'Dinheiro', 'Cartão', 'Débito automático', 'Outros'];
+  var CP_OCORRENCIAS = [['UNICA', 'Única'], ['PARCELADA', 'Parcelada'], ['SEMANAL', 'Semanal'], ['QUINZENAL', 'Quinzenal'], ['MENSAL', 'Mensal'], ['BIMESTRAL', 'Bimestral'], ['TRIMESTRAL', 'Trimestral'], ['SEMESTRAL', 'Semestral'], ['ANUAL', 'Anual']];
+  var CP_ORIGEM_LABEL = { MANUAL: 'Manual', XML_NFE: 'XML NF-e', PDF: 'PDF/DANFE', IMPORTACAO: 'Importação', RECORRENCIA: 'Recorrência' };
+
+  // ---- helpers locais (não há uuid/normalize/parseNum/debounce globais neste arquivo — cada módulo
+  // redeclara os seus, mesmo padrão de makeProdutos) ----
+  function cpUid(prefix) { return (prefix || 'CP') + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8); }
+  function cpNorm(s) { return (s || '').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim(); }
+  function cpParseNum(s) { if (s == null || s === '') return null; if (typeof s === 'number') return s; var t = String(s).trim().replace(/[^\d,.-]/g, ''); if (t.indexOf(',') >= 0 && t.indexOf('.') >= 0) t = t.replace(/\./g, '').replace(',', '.'); else if (t.indexOf(',') >= 0) t = t.replace(',', '.'); var n = parseFloat(t); return isNaN(n) ? null : n; }
+  function cpDebounce(fn, ms) { var t; return function () { var a = arguments, c = this; clearTimeout(t); t = setTimeout(function () { fn.apply(c, a); }, ms); }; }
+  function cpToday() { return new Date().toISOString().slice(0, 10); }
+  function cpAddDays(dateStr, n) { var d = new Date(dateStr + 'T00:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
+  function cpAddMonths(dateStr, n) { var d = new Date(dateStr + 'T00:00:00'); var day = d.getDate(); d.setDate(1); d.setMonth(d.getMonth() + n); var last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(); d.setDate(Math.min(day, last)); return d.toISOString().slice(0, 10); }
+  function cpAdjustBusinessDay(dateStr) { var d = new Date(dateStr + 'T00:00:00'); var wd = d.getDay(); if (wd === 0) return cpAddDays(dateStr, 1); if (wd === 6) return cpAddDays(dateStr, 2); return dateStr; }
+
+  // ---- lookups ----
+  function cpSupplierLabel(id) { var s = cpSuppliers.find(function (x) { return x.id === id; }); return s ? (s.nomeFantasia || s.razaoSocial) : '—'; }
+  function cpCategoryLabel(id) { var c = cpCategories.find(function (x) { return x.id === id; }); return c ? c.name : '—'; }
+  function cpCategoryPathLabel(id) { var c = cpCategories.find(function (x) { return x.id === id; }); if (!c) return '—'; var p = c.parentId ? cpCategories.find(function (x) { return x.id === c.parentId; }) : null; return (p ? p.name + ' › ' : '') + c.name; }
+  function cpAccountingLabel(id) { var a = cpAccounting.find(function (x) { return x.id === id; }); return a ? (a.code ? a.code + ' — ' + a.name : a.name) : '—'; }
+  function cpCostCenterLabel(id) { var c = cpCostCenters.find(function (x) { return x.id === id; }); return c ? c.name : '—'; }
+  function cpFinAccountLabel(id) { if (!id) return '— sem conta financeira —'; return bankAccountLabel(id) || '—'; }
+  // Uma categoria pode ter conta contábil/centro de custo padrão — herdado quando o campo específico
+  // não é informado (§16/§19/§20 do prompt: categoria ≠ conta financeira ≠ conta contábil).
+  function cpCategoryDefaults(categoryId) { var c = cpCategories.find(function (x) { return x.id === categoryId; }); return { accountingAccountId: (c && c.accountingAccountId) || null, costCenterId: (c && c.costCenterId) || null, dreGroup: (c && c.dreGroup) || null }; }
+
+  // ---- cadastros auxiliares (categorias / plano de contas / centro de custo / fornecedores) ----
+  function cpSaveCategory(dto) {
+    var id = dto.id || cpUid('CAT'); var now = new Date().toISOString();
+    var full = { id: id, name: dto.name, parentId: dto.parentId || null, type: 'DESPESA', accountingAccountId: dto.accountingAccountId || null, dreGroup: dto.dreGroup || null, costCenterId: dto.costCenterId || null, active: dto.active !== false, createdAt: dto.createdAt || now, updatedAt: now };
+    cpCategories = [full].concat(cpCategories.filter(function (c) { return c.id !== id; }));
+    return putMany('cpcategories', [full]).then(function () { return full; });
+  }
+  function cpSaveAccounting(dto) {
+    var id = dto.id || cpUid('ACC'); var now = new Date().toISOString();
+    var full = { id: id, code: dto.code || '', name: dto.name, dreGroup: dto.dreGroup || null, active: dto.active !== false, createdAt: dto.createdAt || now, updatedAt: now };
+    cpAccounting = [full].concat(cpAccounting.filter(function (a) { return a.id !== id; }));
+    return putMany('cpaccounting', [full]).then(function () { return full; });
+  }
+  function cpSaveCostCenter(dto) {
+    var id = dto.id || cpUid('CC'); var now = new Date().toISOString();
+    var full = { id: id, name: dto.name, active: dto.active !== false, createdAt: dto.createdAt || now, updatedAt: now };
+    cpCostCenters = [full].concat(cpCostCenters.filter(function (c) { return c.id !== id; }));
+    return putMany('cpcostcenters', [full]).then(function () { return full; });
+  }
+  function cpSaveSupplier(dto) {
+    var id = dto.id || cpUid('SUP'); var now = new Date().toISOString();
+    var full = { id: id, razaoSocial: dto.razaoSocial || dto.nomeFantasia || '', nomeFantasia: dto.nomeFantasia || '', cnpjCpf: dto.cnpjCpf || null, telefone: dto.telefone || null, email: dto.email || null, endereco: dto.endereco || null, observacoes: dto.observacoes || null, active: dto.active !== false, createdAt: dto.createdAt || now, updatedAt: now };
+    cpSuppliers = [full].concat(cpSuppliers.filter(function (s) { return s.id !== id; }));
+    return putMany('cpsuppliers', [full]).then(function () { return full; });
+  }
+
+  // ---- itens/insumos: aprendizado de vínculo (§25-26) — sem catálogo separado de insumos; a
+  // "biblioteca de insumos conhecidos" é a própria lista de descrições já usadas nos itens deste
+  // fornecedor, mais os vínculos aprendidos explicitamente (rawDescription → descrição canônica). ----
+  function cpKnownDescriptionsForSupplier(supplierId) {
+    var set = {}; cpItemsAll.forEach(function (it) { var h = contasPagar.find(function (x) { return x.id === it.accountsPayableId; }); if (h && (!supplierId || h.supplierId === supplierId)) set[it.description] = true; });
+    return Object.keys(set).sort();
+  }
+  function cpLookupSupplyLink(supplierId, rawDesc) { var key = cpNorm(rawDesc); var l = cpSupplyLinks.find(function (x) { return x.supplierId === supplierId && x.rawNormalized === key; }); return l ? l.description : null; }
+  function cpLearnSupplyLink(supplierId, rawDesc, canonicalDesc) {
+    var key = cpNorm(rawDesc); if (!key || cpNorm(canonicalDesc) === key) return Promise.resolve(); // nada a aprender se for igual
+    var id = cpUid('SL'); var full = { id: id, supplierId: supplierId, rawNormalized: key, rawOriginal: rawDesc, description: canonicalDesc, createdAt: new Date().toISOString() };
+    cpSupplyLinks = [full].concat(cpSupplyLinks.filter(function (l) { return !(l.supplierId === supplierId && l.rawNormalized === key); }));
+    return putMany('cpsupplylinks', [full]);
+  }
+
+  // ---- itens da conta ----
+  function cpItemsForHeader(id) { return cpItemsAll.filter(function (i) { return i.accountsPayableId === id; }); }
+  function cpPaymentsForHeader(id) { return cpPayments.filter(function (p) { return p.accountsPayableId === id; }); }
+  function cpAttachmentsForHeader(id) { return cpAttachments.filter(function (a) { return a.accountsPayableId === id; }); }
+  function cpItemsTotal(items) { return r2(items.reduce(function (s, it) { return s + (it.total || 0); }, 0)); }
+  // §14: total da conta = itens + frete + outras despesas — juros/multa só existem quando HÁ baixa
+  // (§36: entram na visão por CAIXA, nunca somados ao "valor original" da conta).
+  function cpValorOriginal(items, frete, outras) { return r2(cpItemsTotal(items) + (frete || 0) + (outras || 0)); }
+
+  // ---- baixas / saldo / status (§32-34/§48-49) ----
+  // O que efetivamente amortiza o título é o valor pago MENOS os acréscimos (juros/multa) MAIS o
+  // desconto concedido — nunca o valor bruto da baixa, senão juros/multa reduziriam o saldo devedor
+  // além do que é devido (dinheiro que "sobra" pra cobrir juros não é amortização de principal).
+  function cpAmortizado(p) { return r2((p.valorPago || 0) - (p.juros || 0) - (p.multa || 0) + (p.desconto || 0)); }
+  function cpSaldo(h) { var pagos = cpPaymentsForHeader(h.id).filter(function (p) { return !p.estornado; }); var amort = pagos.reduce(function (s, p) { return s + cpAmortizado(p); }, 0); return r2(h.valor - amort); }
+  function cpValorPagoTotal(h) { return r2(cpPaymentsForHeader(h.id).filter(function (p) { return !p.estornado; }).reduce(function (s, p) { return s + (p.valorPago || 0); }, 0)); }
+  // Status é sempre DERIVADO dos movimentos — nunca um campo editável manualmente (§49). O único
+  // status "gravado" no registro é a marca de cancelamento; todo o resto se calcula na leitura.
+  function cpStatusDerivado(h) {
+    if (h.canceledAt) return 'CANCELADA';
+    var saldo = cpSaldo(h);
+    if (saldo <= 0.005) return 'PAGA';
+    if (cpValorPagoTotal(h) > 0.005) return 'PARCIAL';
+    if (h.vencimento && h.vencimento < cpToday()) return 'ATRASADA';
+    return 'ABERTA';
+  }
+
+  // ---- histórico auditável (§35) ----
+  function cpPushHistory(h, action, detail) { h.history = h.history || []; h.history.unshift({ at: new Date().toISOString(), user: 'Operador', action: action, detail: detail || null }); }
+
+  // ---- CRUD principal ----
+  // Substitui todos os itens de um título — diffa contra o snapshot de IDs carregado ao abrir o
+  // editor, apagando só os removidos (delOne) e upsertando o resto — nunca duplica linha.
+  function cpSaveItemsDiff(headerId, originalIds, currentItems) {
+    var curIds = currentItems.map(function (it) { return it.id; });
+    var removed = originalIds.filter(function (id) { return curIds.indexOf(id) < 0; });
+    var toSave = currentItems.map(function (it) { return Object.assign({}, it, { accountsPayableId: headerId }); });
+    return Promise.all(removed.map(function (id) { return delOne('cpitems', id); })).then(function () {
+      return toSave.length ? putMany('cpitems', toSave) : Promise.resolve();
+    }).then(function () {
+      cpItemsAll = cpItemsAll.filter(function (it) { return it.accountsPayableId !== headerId; }).concat(toSave);
+    });
+  }
+  // Cria/atualiza o título. `andBaixa` (§31) já registra a baixa total imediatamente após salvar,
+  // gerando EXATAMENTE um movimento — nunca duplicado (mesma chamada, uma promise encadeada).
+  function cpSaveHeader(draft, items, originalItemIds, andBaixa) {
+    var isNew = !draft.id;
+    var id = draft.id || cpUid('CP'); var now = new Date().toISOString();
+    var op = opActive(); var comp = op ? opCompany(op) : null;
+    var valor = draft.valorManualOverride ? draft.valorManual : cpValorOriginal(items, draft.freteValor, draft.outrasDespesasValor);
+    var existing = contasPagar.find(function (h) { return h.id === id; });
+    var full = Object.assign({}, existing, draft, {
+      id: id, operationId: (existing && existing.operationId) || opActiveOrNull(),
+      companyId: (existing && existing.companyId) || (comp ? comp.id : null),
+      valor: r2(valor), valorManualOverride: !!draft.valorManualOverride,
+      createdAt: (existing && existing.createdAt) || now, updatedAt: now,
+      history: existing ? existing.history : [],
+      origin: draft.origin || (existing && existing.origin) || 'MANUAL',
+    });
+    cpPushHistory(full, isNew ? 'CRIACAO' : 'EDICAO', isNew ? 'Conta criada.' : 'Conta editada.');
+    contasPagar = [full].concat(contasPagar.filter(function (h) { return h.id !== id; }));
+    return cpSaveItemsDiff(id, originalItemIds || [], items).then(function () {
+      return putMany('cpheader', [full]);
+    }).then(function () {
+      if (andBaixa) return cpRegistrarBaixa(id, { valorPago: cpSaldo(full), date: cpToday(), financialAccountId: full.financialAccountId, paymentMethod: full.paymentMethod, juros: 0, multa: 0, desconto: 0, observacao: 'Baixa automática — "Salvar e Dar Baixa".' }).then(function () { return full; });
+      return full;
+    });
+  }
+  function cpRegistrarBaixa(headerId, dto) {
+    var h = contasPagar.find(function (x) { return x.id === headerId; }); if (!h) return Promise.reject(new Error('Conta não encontrada.'));
+    var id = cpUid('PAG'); var now = new Date().toISOString();
+    var full = { id: id, accountsPayableId: headerId, date: dto.date || cpToday(), financialAccountId: dto.financialAccountId || null, paymentMethod: dto.paymentMethod || null, valorPago: r2(dto.valorPago || 0), juros: r2(dto.juros || 0), multa: r2(dto.multa || 0), desconto: r2(dto.desconto || 0), observacao: dto.observacao || null, estornado: false, createdAt: now };
+    cpPayments = [full].concat(cpPayments);
+    cpPushHistory(h, 'BAIXA', 'Pagamento de ' + brl(full.valorPago) + (full.financialAccountId ? ' pela conta ' + cpFinAccountLabel(full.financialAccountId) : '') + (full.juros || full.multa || full.desconto ? ' (juros ' + brl(full.juros) + ', multa ' + brl(full.multa) + ', desconto ' + brl(full.desconto) + ')' : '') + '.');
+    h.updatedAt = now;
+    return Promise.all([putMany('cppayments', [full]), putMany('cpheader', [h])]).then(function () { return full; });
+  }
+  function cpEstornarBaixa(paymentId) {
+    var p = cpPayments.find(function (x) { return x.id === paymentId; }); if (!p) return Promise.reject(new Error('Pagamento não encontrado.'));
+    var h = contasPagar.find(function (x) { return x.id === p.accountsPayableId; });
+    p.estornado = true; p.estornadoAt = new Date().toISOString();
+    if (h) { cpPushHistory(h, 'ESTORNO', 'Baixa de ' + brl(p.valorPago) + ' em ' + dbr(p.date) + ' estornada.'); h.updatedAt = p.estornadoAt; }
+    return Promise.all([putMany('cppayments', [p])].concat(h ? [putMany('cpheader', [h])] : []));
+  }
+  // §45: cancelar nunca apaga; se já houver pagamento, exige estorno antes (nunca cancela em silêncio
+  // um título com dinheiro já movimentado).
+  function cpCancelHeader(id, reason) {
+    var h = contasPagar.find(function (x) { return x.id === id; }); if (!h) return Promise.reject(new Error('Conta não encontrada.'));
+    var pagos = cpPaymentsForHeader(id).filter(function (p) { return !p.estornado; });
+    if (pagos.length) return Promise.reject(new Error('Esta conta possui ' + pagos.length + ' baixa(s) registrada(s). Estorne as baixas antes de cancelar.'));
+    h.canceledAt = new Date().toISOString(); h.canceledReason = reason || null; h.updatedAt = h.canceledAt;
+    cpPushHistory(h, 'CANCELAMENTO', reason || 'Conta cancelada.');
+    return putMany('cpheader', [h]);
+  }
+  // §46: exclusão só para títulos sem baixa registrada — nunca some com movimentação bancária.
+  function cpDeleteHeader(id) {
+    var pagos = cpPaymentsForHeader(id); if (pagos.length) return Promise.reject(new Error('Esta conta possui pagamento(s) vinculado(s) e não pode ser excluída. Cancele-a (após estornar as baixas) em vez de excluir.'));
+    var items = cpItemsForHeader(id); var atts = cpAttachmentsForHeader(id);
+    return Promise.all([delOne('cpheader', id)].concat(items.map(function (it) { return delOne('cpitems', it.id); })).concat(atts.map(function (a) { return delOne('cpattach', a.id); }))).then(function () {
+      contasPagar = contasPagar.filter(function (h) { return h.id !== id; });
+      cpItemsAll = cpItemsAll.filter(function (it) { return it.accountsPayableId !== id; });
+      cpAttachments = cpAttachments.filter(function (a) { return a.accountsPayableId !== id; });
+    });
+  }
+  // §44: clonar copia classificação/itens, NUNCA copia ID/pagamentos/anexos fiscais/chave NF-e —
+  // nasce sempre em aberto.
+  function cpCloneHeader(id) {
+    var h = contasPagar.find(function (x) { return x.id === id; }); if (!h) return Promise.reject(new Error('Conta não encontrada.'));
+    var items = cpItemsForHeader(id).map(function (it) { return Object.assign({}, it, { id: cpUid('CPI') }); });
+    var draft = Object.assign({}, h, { id: null, nfe: null, origin: 'MANUAL', clonedFromId: h.id, canceledAt: null, canceledReason: null, emissao: cpToday(), competencia: cpToday(), vencimento: cpToday() });
+    delete draft.history; delete draft.createdAt; delete draft.updatedAt;
+    return cpSaveHeader(draft, items, [], false);
+  }
+
+  // ---- ocorrência / recorrência (§21-22) ----
+  function cpOccIntervalDays(type) { return { SEMANAL: 7, QUINZENAL: 15 }[type] || null; }
+  function cpOccIntervalMonths(type) { return { MENSAL: 1, BIMESTRAL: 2, TRIMESTRAL: 3, SEMESTRAL: 6, ANUAL: 12 }[type] || null; }
+  // Gera N rascunhos de título a partir de UMA ocorrência configurada — todos com o mesmo
+  // recurrenceGroupId (§22), cada um com seu próprio vencimento/valor/status independentes.
+  function cpGenerateOccurrenceDrafts(baseDraft, occ) {
+    if (!occ || occ.type === 'UNICA') return [baseDraft];
+    var n = occ.type === 'PARCELADA' ? Math.max(1, parseInt(occ.installments, 10) || 1) : Math.max(1, parseInt(occ.installments, 10) || 1);
+    var first = occ.firstDueDate || baseDraft.vencimento || cpToday();
+    var groupId = cpUid('CPGRP');
+    var valorTotal = baseDraft.valor; var valorParcela = r2(valorTotal / n); var soma = 0;
+    var out = [];
+    for (var i = 0; i < n; i++) {
+      var venc;
+      if (occ.type === 'PARCELADA') venc = cpAddDays(first, i * (parseInt(occ.intervalDays, 10) || 30));
+      else if (occ.type === 'SEMANAL' || occ.type === 'QUINZENAL') venc = cpAddDays(first, i * cpOccIntervalDays(occ.type));
+      else venc = cpAddMonths(first, i * cpOccIntervalMonths(occ.type));
+      if (occ.onlyBusinessDays) venc = cpAdjustBusinessDay(venc);
+      var valorEsta = (i === n - 1) ? r2(valorTotal - soma) : valorParcela; soma = r2(soma + valorEsta); // sobra de arredondamento na última parcela
+      out.push(Object.assign({}, baseDraft, { id: null, valor: valorEsta, valorManualOverride: true, vencimento: venc, recurrenceGroupId: groupId, installmentIndex: i + 1, installmentsTotal: n, occurrence: occ, origin: baseDraft.origin || 'RECORRENCIA' }));
+    }
+    return out;
+  }
+
+  // ---- importação de XML NF-e (§24, §29-30) ----
+  function cpXmlTag(root, tag) { var el = root.getElementsByTagName(tag); return el.length ? (el[0].textContent || '').trim() : null; }
+  function cpXmlNum(root, tag) { var v = cpXmlTag(root, tag); return v != null ? parseFloat(v) : null; }
+  // Nunca lança em campo ausente — nota fiscal real tem muita variação de schema; cada extração é
+  // best-effort e o que não existir simplesmente fica null (nunca inventa valor).
+  function cpParseNFeXml(xmlText) {
+    var doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+    if (doc.getElementsByTagName('parsererror').length) throw new Error('XML inválido ou corrompido.');
+    var inf = doc.getElementsByTagName('infNFe')[0]; if (!inf) throw new Error('Não parece ser um XML de NF-e (tag infNFe não encontrada).');
+    var chaveAttr = inf.getAttribute('Id') || ''; var chave = chaveAttr.replace(/^NFe/, '').replace(/\D/g, '');
+    var ide = inf.getElementsByTagName('ide')[0], emit = inf.getElementsByTagName('emit')[0], total = inf.getElementsByTagName('total')[0];
+    var icmsTot = total ? total.getElementsByTagName('ICMSTot')[0] : null;
+    var emitEndereco = emit ? emit.getElementsByTagName('enderEmit')[0] : null;
+    var header = {
+      chave: chave || null, numero: ide ? cpXmlTag(ide, 'nNF') : null, serie: ide ? cpXmlTag(ide, 'serie') : null,
+      dataEmissao: ide ? (cpXmlTag(ide, 'dhEmi') || cpXmlTag(ide, 'dEmi') || '').slice(0, 10) : null,
+      cnpjFornecedor: emit ? cpXmlTag(emit, 'CNPJ') : null, razaoSocial: emit ? cpXmlTag(emit, 'xNome') : null,
+      cnpjEndereco: emitEndereco ? [cpXmlTag(emitEndereco, 'xLgr'), cpXmlTag(emitEndereco, 'nro'), cpXmlTag(emitEndereco, 'xBairro'), cpXmlTag(emitEndereco, 'xMun'), cpXmlTag(emitEndereco, 'UF')].filter(Boolean).join(', ') : null,
+      valorNfe: icmsTot ? cpXmlNum(icmsTot, 'vNF') : null, freteNfe: icmsTot ? cpXmlNum(icmsTot, 'vFrete') : null,
+      outrasDespesasNfe: icmsTot ? cpXmlNum(icmsTot, 'vOutro') : null, descontosNfe: icmsTot ? cpXmlNum(icmsTot, 'vDesc') : null,
+    };
+    var dets = inf.getElementsByTagName('det'); var itens = [];
+    for (var i = 0; i < dets.length; i++) {
+      var prod = dets[i].getElementsByTagName('prod')[0]; if (!prod) continue;
+      itens.push({ codigo: cpXmlTag(prod, 'cProd'), ean: cpXmlTag(prod, 'cEAN'), descricao: cpXmlTag(prod, 'xProd'), ncm: cpXmlTag(prod, 'NCM'), cfop: cpXmlTag(prod, 'CFOP'), unidade: cpXmlTag(prod, 'uCom'), quantidade: cpXmlNum(prod, 'qCom'), precoUnitario: cpXmlNum(prod, 'vUnCom'), total: cpXmlNum(prod, 'vProd') });
+    }
+    var dups = inf.getElementsByTagName('dup'); var parcelas = [];
+    for (var j = 0; j < dups.length; j++) { parcelas.push({ numero: cpXmlTag(dups[j], 'nDup'), vencimento: cpXmlTag(dups[j], 'dVenc'), valor: cpXmlNum(dups[j], 'vDup') }); }
+    return Object.assign({}, header, { itens: itens, parcelas: parcelas });
+  }
+  // §29: evita nota duplicada pela chave — chave NF-e é o identificador mais confiável possível.
+  function cpFindDuplicateNFe(chave) { if (!chave) return null; return contasPagar.find(function (h) { return h.nfe && h.nfe.chave === chave && !h.canceledAt; }) || null; }
+
+  // ---- DRE de despesas (§36-38) — visão gerencial DENTRO do próprio Contas a Pagar, nunca escrita
+  // na DRE do Caixa (que é o domínio de receita do marketplace, motor travado). Suporta as duas
+  // visões pedidas: competência (pela data de competência do título) e caixa (pela data de cada
+  // baixa, com o valor amortizado alocado proporcionalmente à classificação original — nunca duplica
+  // e nunca soma o total do título mais os componentes separadamente, §37). ----
+  function cpDreDespesasCompetencia(from, to) {
+    var buckets = {}; function add(k, v) { if (!k) k = '(sem categoria)'; buckets[k] = (buckets[k] || 0) + v; }
+    contasPagar.forEach(function (h) {
+      if (h.canceledAt) return; if (!h.competencia || h.competencia < from || h.competencia > to) return;
+      var items = cpItemsForHeader(h.id);
+      if (items.length) items.forEach(function (it) { add(cpCategoryLabel(it.categoryId || h.categoryId), it.total || 0); });
+      else add(cpCategoryLabel(h.categoryId), cpItemsTotal(items));
+      if (h.freteValor) add(cpCategoryLabel(h.freteCategoryId || h.categoryId) + ' (frete)', h.freteValor);
+      if (h.outrasDespesasValor) add(cpCategoryLabel(h.outrasDespesasCategoryId || h.categoryId) + ' (outras despesas)', h.outrasDespesasValor);
+    });
+    return buckets;
+  }
+  function cpDreDespesasCaixa(from, to) {
+    var buckets = {}; function add(k, v) { if (!k) k = '(sem categoria)'; buckets[k] = (buckets[k] || 0) + v; }
+    cpPayments.forEach(function (p) {
+      if (p.estornado) return; if (!p.date || p.date < from || p.date > to) return;
+      var h = contasPagar.find(function (x) { return x.id === p.accountsPayableId; }); if (!h) return;
+      var fraction = h.valor > 0 ? cpAmortizado(p) / h.valor : 0;
+      var items = cpItemsForHeader(h.id);
+      if (items.length) items.forEach(function (it) { add(cpCategoryLabel(it.categoryId || h.categoryId), (it.total || 0) * fraction); });
+      else add(cpCategoryLabel(h.categoryId), cpItemsTotal(items) * fraction);
+      if (h.freteValor) add(cpCategoryLabel(h.freteCategoryId || h.categoryId) + ' (frete)', h.freteValor * fraction);
+      if (h.outrasDespesasValor) add(cpCategoryLabel(h.outrasDespesasCategoryId || h.categoryId) + ' (outras despesas)', h.outrasDespesasValor * fraction);
+      if (p.juros) add('Despesas financeiras (juros)', p.juros);
+      if (p.multa) add('Despesas financeiras (multas)', p.multa);
+    });
+    return buckets;
+  }
+
+  // ---- filtro/busca da listagem (§5-6) ----
+  function cpMatchesSearch(h, q) {
+    if (!q) return true; q = cpNorm(q);
+    if (cpNorm(cpSupplierLabel(h.supplierId)).indexOf(q) >= 0) return true;
+    if (cpNorm(h.documentNumber || '').indexOf(q) >= 0) return true;
+    if (cpNorm(h.historico || '').indexOf(q) >= 0) return true;
+    if (cpNorm(cpCategoryLabel(h.categoryId)).indexOf(q) >= 0) return true;
+    if (cpItemsForHeader(h.id).some(function (it) { return cpNorm(it.description || '').indexOf(q) >= 0; })) return true;
+    return false;
+  }
+  function cpFilteredList() {
+    var range = periodRange(); var from = range.from ? range.from.toISOString().slice(0, 10) : null; var to = range.to ? range.to.toISOString().slice(0, 10) : null;
+    var basis = cpF.dateBasis;
+    var list = contasPagar.filter(function (h) {
+      if (basis === 'pagamento') { var pays = cpPaymentsForHeader(h.id).filter(function (p) { return !p.estornado; }); if (!pays.length) return false; if (!pays.some(function (p) { return (!from || p.date >= from) && (!to || p.date <= to); })) return false; }
+      else { var d = h[basis]; if (!d) return periodSel.value === 'all'; if (from && d < from) return false; if (to && d > to) return false; }
+      return true;
+    });
+    if (cpF.situacao) {
+      list = list.filter(function (h) {
+        var st = cpStatusDerivado(h);
+        if (cpF.situacao === 'EMITIDA') return true; // "emitida" já é garantido pelo filtro de período em cima da emissão — não redundante com status
+        return st === cpF.situacao;
+      });
+    }
+    if (cpF.categoryId) list = list.filter(function (h) { return h.categoryId === cpF.categoryId; });
+    if (cpF.paymentMethod) list = list.filter(function (h) { return h.paymentMethod === cpF.paymentMethod; });
+    if (cpF.financialAccountId) list = list.filter(function (h) { return h.financialAccountId === cpF.financialAccountId; });
+    if (cpF.costCenterId) list = list.filter(function (h) { return h.costCenterId === cpF.costCenterId; });
+    if (cpF.accountingAccountId) list = list.filter(function (h) { return h.accountingAccountId === cpF.accountingAccountId; });
+    if (cpF.supplierId) list = list.filter(function (h) { return h.supplierId === cpF.supplierId; });
+    if (cpF.valorMin != null) list = list.filter(function (h) { return h.valor >= cpF.valorMin; });
+    if (cpF.valorMax != null) list = list.filter(function (h) { return h.valor <= cpF.valorMax; });
+    if (cpF.docNumber) list = list.filter(function (h) { return cpNorm(h.documentNumber || '').indexOf(cpNorm(cpF.docNumber)) >= 0; });
+    if (cpF.search) list = list.filter(function (h) { return cpMatchesSearch(h, cpF.search); });
+    var dir = cpF.dir === 'desc' ? -1 : 1;
+    list.sort(function (a, b) {
+      var k = cpF.sort; var va, vb;
+      if (k === 'fornecedor') { va = cpSupplierLabel(a.supplierId); vb = cpSupplierLabel(b.supplierId); }
+      else if (k === 'valor') { va = a.valor; vb = b.valor; }
+      else if (k === 'situacao') { va = cpStatusDerivado(a); vb = cpStatusDerivado(b); }
+      else { va = a[k] || ''; vb = b[k] || ''; }
+      if (va < vb) return -1 * dir; if (va > vb) return 1 * dir; return 0;
+    });
+    return list;
+  }
+
+  // ---- UI: raiz do módulo ----
+  function cpTabsHtml() {
+    return '<div class="tabs">' + [['lista', 'Contas a pagar'], ['dre', 'DRE de Despesas'], ['categorias', 'Categorias'], ['planocontas', 'Plano de contas'], ['centroscusto', 'Centros de custo'], ['fornecedores', 'Fornecedores']].map(function (t) { return '<div class="tab' + (cpSub === t[0] ? ' active' : '') + '" data-cptab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>';
+  }
+  function renderContasPagar() {
+    app.innerHTML = cpHead() + cpTabsHtml() + '<div id="cpbody" style="margin-top:14px"></div>';
+    cpRenderBody();
+    app.querySelectorAll('[data-cptab]').forEach(function (t) { t.onclick = function () { cpSub = t.dataset.cptab; cpPage = 1; render(); }; });
+  }
+  function cpHead() { return secHead('FINANCEIRO', 'Contas a Pagar', 'Lance, classifique e baixe as despesas da empresa por operação, categoria, conta contábil e conta financeira — alimenta o Caixa, a DRE de Despesas e os relatórios gerenciais.'); }
+  function cpRenderBody() {
+    var body = document.getElementById('cpbody');
+    if (cpSub === 'dre') { body.innerHTML = renderCpDre(); bindCpDre(); return; }
+    if (cpSub === 'categorias') { body.innerHTML = renderCpCategoriasTab(); bindCpCategoriasTab(); return; }
+    if (cpSub === 'planocontas') { body.innerHTML = renderCpPlanoContasTab(); bindCpPlanoContasTab(); return; }
+    if (cpSub === 'centroscusto') { body.innerHTML = renderCpCentrosCustoTab(); bindCpCentrosCustoTab(); return; }
+    if (cpSub === 'fornecedores') { body.innerHTML = renderCpFornecedoresTab(); bindCpFornecedoresTab(); return; }
+    body.innerHTML = renderCpLista(); bindCpLista();
+  }
+
+  // ---- UI: listagem principal (§3-9) ----
+  function cpFinAccountOptions(selectedId) {
+    var accs = bankAccountsForActiveCompany();
+    return '<option value="">Todas as contas financeiras</option><option value="__none">Sem conta financeira</option>' + accs.map(function (a) { return '<option value="' + a.id + '"' + (selectedId === a.id ? ' selected' : '') + '>' + esc(a.nome) + '</option>'; }).join('');
+  }
+  function cpCategoryOptions(selectedId, includeNew) {
+    var roots = cpCategories.filter(function (c) { return !c.parentId; });
+    var opts = '<option value="">Todas as categorias</option>';
+    roots.forEach(function (r) {
+      opts += '<option value="' + r.id + '"' + (selectedId === r.id ? ' selected' : '') + '>' + esc(r.name) + '</option>';
+      cpCategories.filter(function (c) { return c.parentId === r.id; }).forEach(function (c) { opts += '<option value="' + c.id + '"' + (selectedId === c.id ? ' selected' : '') + '>— ' + esc(c.name) + '</option>'; });
+    });
+    if (includeNew) opts += '<option value="__new">+ Criar categoria…</option>';
+    return opts;
+  }
+  function cpAccountingOptions(selectedId) { return '<option value="">—</option>' + cpAccounting.filter(function (a) { return a.active; }).map(function (a) { return '<option value="' + a.id + '"' + (selectedId === a.id ? ' selected' : '') + '>' + esc(cpAccountingLabel(a.id)) + '</option>'; }).join(''); }
+  function cpCostCenterOptions(selectedId) { return '<option value="">—</option>' + cpCostCenters.filter(function (c) { return c.active; }).map(function (c) { return '<option value="' + c.id + '"' + (selectedId === c.id ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join(''); }
+  function cpSupplierOptions(selectedId) { return '<option value="">Todos os fornecedores</option>' + cpSuppliers.filter(function (s) { return s.active; }).sort(function (a, b) { return (a.nomeFantasia || a.razaoSocial).localeCompare(b.nomeFantasia || b.razaoSocial); }).map(function (s) { return '<option value="' + s.id + '"' + (selectedId === s.id ? ' selected' : '') + '>' + esc(s.nomeFantasia || s.razaoSocial) + '</option>'; }).join(''); }
+
+  function renderCpLista() {
+    if (!contasPagar.length && !cpF.search && !cpF.situacao && !cpF.categoryId) {
+      return devPeriodBarAsCp() + emptyBox('Nenhuma conta a pagar lançada ainda. Clique em "+ Incluir conta" para começar.') + '<div style="margin-top:12px"><button class="btn-sm primary" id="cp-new">+ Incluir conta</button></div>';
+    }
+    var all = cpFilteredList();
+    var totalGeral = contasPagar.filter(function (h) { return !h.canceledAt; }).reduce(function (s, h) { return s + h.valor; }, 0);
+    var selValor = all.filter(function (h) { return cpSel.has(h.id); }).reduce(function (s, h) { return s + h.valor; }, 0);
+    var pageList = all.slice((cpPage - 1) * cpPageSize, cpPage * cpPageSize);
+    var basisOpts = [['emissao', 'Emissão'], ['competencia', 'Competência'], ['vencimento', 'Vencimento'], ['pagamento', 'Pagamento']];
+    var filtros = '<div class="panel"><div class="pb">' + devPeriodBarAsCp() +
+      '<div class="toolbar2" style="margin-top:0"><input class="input" id="cp-search" style="flex:2;min-width:260px" placeholder="Pesquisar por fornecedor, documento, histórico, categoria, insumo ou observação" value="' + esc(cpF.search) + '">' +
+      '<select class="select sm" id="cp-basis">' + basisOpts.map(function (o) { return '<option value="' + o[0] + '"' + (cpF.dateBasis === o[0] ? ' selected' : '') + '>Data: ' + o[1] + '</option>'; }).join('') + '</select>' +
+      '<select class="select sm" id="cp-situacao">' + CP_SITUACOES.map(function (o) { return '<option value="' + o[0] + '"' + (cpF.situacao === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>' +
+      '<select class="select sm" id="cp-cat">' + cpCategoryOptions(cpF.categoryId, false) + '</select>' +
+      '<select class="select sm" id="cp-forma"><option value="">Toda forma de pagamento</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '"' + (cpF.paymentMethod === f ? ' selected' : '') + '>' + esc(f) + '</option>'; }).join('') + '</select>' +
+      '<select class="select sm" id="cp-conta">' + cpFinAccountOptions(cpF.financialAccountId) + '</select>' +
+      '<select class="select sm" id="cp-cc">' + '<option value="">Todo centro de custo</option>' + cpCostCenters.map(function (c) { return '<option value="' + c.id + '"' + (cpF.costCenterId === c.id ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('') + '</select>' +
+      '<select class="select sm" id="cp-ctacontabil">' + '<option value="">Toda conta contábil</option>' + cpAccounting.map(function (a) { return '<option value="' + a.id + '"' + (cpF.accountingAccountId === a.id ? ' selected' : '') + '>' + esc(cpAccountingLabel(a.id)) + '</option>'; }).join('') + '</select>' +
+      '<select class="select sm" id="cp-fornecedor">' + cpSupplierOptions(cpF.supplierId) + '</select>' +
+      '<input class="input sm" id="cp-vmin" placeholder="Valor mín." style="width:110px" value="' + (cpF.valorMin != null ? cpF.valorMin : '') + '">' +
+      '<input class="input sm" id="cp-vmax" placeholder="Valor máx." style="width:110px" value="' + (cpF.valorMax != null ? cpF.valorMax : '') + '">' +
+      '<input class="input sm" id="cp-doc" placeholder="Nº documento" style="width:140px" value="' + esc(cpF.docNumber) + '">' +
+      '<button class="btn-sm primary" id="cp-filtrar">Filtrar</button><button class="btn-sm" id="cp-limpar">Limpar filtros</button></div></div></div>';
+
+    var rows = pageList.map(function (h) {
+      var lbl = CP_STATUS_LABEL[cpStatusDerivado(h)]; var saldo = cpSaldo(h);
+      return '<tr' + (cpSel.has(h.id) ? ' style="background:#eef4ff"' : '') + '>' +
+        '<td><input type="checkbox" class="cp-chk" data-id="' + h.id + '"' + (cpSel.has(h.id) ? ' checked' : '') + '></td>' +
+        '<td class="rowlink" data-cpopen="' + h.id + '"><b>' + esc(cpSupplierLabel(h.supplierId)) + '</b>' + (h.installmentsTotal > 1 ? ' <span class="footnote" style="margin:0">' + h.installmentIndex + '/' + h.installmentsTotal + '</span>' : '') + '</td>' +
+        '<td class="cell-text">' + esc((h.historico || '').slice(0, 50)) + '</td>' +
+        '<td>' + esc(cpCategoryPathLabel(h.categoryId)) + '</td>' +
+        '<td>' + esc(cpAccountingLabel(h.accountingAccountId)) + '</td>' +
+        '<td>' + esc(h.paymentMethod || '—') + '</td>' +
+        '<td>' + esc(cpFinAccountLabel(h.financialAccountId)) + '</td>' +
+        '<td class="nowrap">' + dbr(h.emissao) + '</td><td class="nowrap">' + dbr(h.competencia) + '</td><td class="nowrap">' + dbr(h.vencimento) + '</td>' +
+        '<td class="nowrap">' + brl(h.valor) + '</td><td class="nowrap">' + brl(cpValorPagoTotal(h)) + '</td><td class="nowrap">' + brl(saldo) + '</td>' +
+        '<td><span class="badge ' + lbl[1] + '">' + lbl[0] + '</span></td>' +
+        '<td style="position:relative"><button class="btn-sm" data-cpmenu="' + h.id + '">⋯</button></td></tr>';
+    }).join('');
+    var table = '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Contas a pagar</h3><span class="footnote" style="margin:0">' + nn(all.length) + ' conta(s) · ' + brl(all.reduce(function (s, h) { return s + h.valor; }, 0)) + '</span></div>' +
+      (cpSel.size ? cpBulkBar(all) : '') +
+      '<div class="table-wrap"><table class="report"><thead><tr><th><input type="checkbox" id="cp-chk-all"></th>' +
+      ['fornecedor:Fornecedor', ':Histórico', ':Categoria', ':Conta contábil', ':Forma de pagamento', ':Conta financeira', 'emissao:Emissão', 'competencia:Competência', 'vencimento:Vencimento', 'valor:Valor', ':Valor pago', ':Saldo', 'situacao:Situação', ':'].map(function (c) {
+        var parts = c.split(':'); var key = parts[0], lbl = parts[1];
+        return '<th' + (key ? ' class="rowlink" data-cpsort="' + key + '"' : '') + '>' + esc(lbl) + (key && cpF.sort === key ? (cpF.dir === 'asc' ? ' ▲' : ' ▼') : '') + '</th>';
+      }).join('') + '</tr></thead><tbody>' + (rows || '<tr><td colspan="14"><div class="empty" style="border:none"><p>Nenhuma conta encontrada com estes filtros.</p></div></td></tr>') + '</tbody></table></div>' +
+      cpPagerHtml(all.length) + '</div>';
+
+    var painel = '<div class="panel"><div class="pb">' +
+      '<h4 style="margin:0 0 8px">Informações</h4>' +
+      '<div class="cx-kv"><span class="cxl">Quantidade de contas</span><span class="cxv">' + nn(contasPagar.filter(function (h) { return !h.canceledAt; }).length) + '</span></div>' +
+      '<div class="cx-kv"><span class="cxl">Valor total</span><span class="cxv">' + brl(totalGeral) + '</span></div>' +
+      (cpSel.size ? ('<div class="cx-kv"><span class="cxl">Selecionadas</span><span class="cxv">' + nn(cpSel.size) + '</span></div><div class="cx-kv"><span class="cxl">Valor selecionado</span><span class="cxv">' + brl(selValor) + '</span></div>') : '') +
+      '<h4 style="margin:16px 0 8px">Ferramentas de apoio</h4>' +
+      '<div style="display:flex;flex-direction:column;gap:6px">' +
+      '<button class="btn-sm" id="cp-gerenciar-cat">Gerenciar categorias</button>' +
+      '<button class="btn-sm" id="cp-gerenciar-plano">Plano de contas</button>' +
+      '<button class="btn-sm" id="cp-gerenciar-cc">Centros de custo</button>' +
+      '<button class="btn-sm" id="cp-gerenciar-forn">Gerenciar fornecedores</button>' +
+      '</div></div></div>';
+
+    return '<div class="page-head"><div></div><button class="btn-sm primary" id="cp-new">+ Incluir conta</button></div>' + filtros + '<div class="split" style="margin-top:14px;align-items:start">' + table + painel + '</div>';
+  }
+  function devPeriodBarAsCp() { return devPeriodBar(); } // reaproveita o MESMO seletor global de período (§ nunca duplicar filtro) — só renomeado pra ficar claro que é usado aqui também
+  function cpPagerHtml(total) {
+    var pages = Math.max(1, Math.ceil(total / cpPageSize)); if (pages <= 1) return '';
+    return '<div class="toolbar2" style="justify-content:flex-end"><span class="footnote" style="margin:0">Página ' + cpPage + ' de ' + pages + '</span><button class="btn-sm" id="cp-prev"' + (cpPage <= 1 ? ' disabled' : '') + '>‹</button><button class="btn-sm" id="cp-next"' + (cpPage >= pages ? ' disabled' : '') + '>›</button></div>';
+  }
+  function cpBulkBar(all) {
+    return '<div class="toolbar2" style="background:#eef4ff;border-radius:8px;padding:8px 10px;margin:0 0 10px">' +
+      '<b style="font-size:12.5px">' + nn(cpSel.size) + ' selecionada(s)</b>' +
+      '<button class="btn-sm" id="cp-bx-baixa">Baixar selecionados</button>' +
+      '<button class="btn-sm" id="cp-bx-cat">Alterar categoria</button>' +
+      '<button class="btn-sm" id="cp-bx-cta">Alterar conta contábil</button>' +
+      '<button class="btn-sm" id="cp-bx-cc">Alterar centro de custo</button>' +
+      '<button class="btn-sm" id="cp-bx-fin">Alterar conta financeira</button>' +
+      '<button class="btn-sm" id="cp-bx-export">Exportar</button>' +
+      '<button class="btn-sm" id="cp-bx-print">Imprimir agrupado por fornecedor</button>' +
+      '</div>';
+  }
+  function bindCpLista() {
+    var btnNew = document.getElementById('cp-new'); if (btnNew) btnNew.onclick = function () { openCpEditor(null); };
+    bindDevPeriodBar();
+    var s = document.getElementById('cp-search'); if (s) s.oninput = cpDebounce(function () { cpF.search = s.value; cpPage = 1; cpRenderBody(); }, 220);
+    var mapSel = { 'cp-basis': 'dateBasis', 'cp-situacao': 'situacao', 'cp-cat': 'categoryId', 'cp-forma': 'paymentMethod', 'cp-cc': 'costCenterId', 'cp-ctacontabil': 'accountingAccountId', 'cp-fornecedor': 'supplierId' };
+    Object.keys(mapSel).forEach(function (elId) { var el = document.getElementById(elId); if (el) el.onchange = function () { cpF[mapSel[elId]] = el.value; }; });
+    var contaSel = document.getElementById('cp-conta'); if (contaSel) contaSel.onchange = function () { cpF.financialAccountId = contaSel.value === '__none' ? '__none' : contaSel.value; };
+    var vmin = document.getElementById('cp-vmin'), vmax = document.getElementById('cp-vmax'), doc = document.getElementById('cp-doc');
+    var applyFilters = function () { if (vmin) cpF.valorMin = cpParseNum(vmin.value); if (vmax) cpF.valorMax = cpParseNum(vmax.value); if (doc) cpF.docNumber = doc.value; cpPage = 1; cpRenderBody(); };
+    var f = document.getElementById('cp-filtrar'); if (f) f.onclick = applyFilters;
+    var lim = document.getElementById('cp-limpar'); if (lim) lim.onclick = function () { cpF = { situacao: '', categoryId: '', paymentMethod: '', financialAccountId: '', costCenterId: '', accountingAccountId: '', supplierId: '', valorMin: null, valorMax: null, docNumber: '', search: '', dateBasis: 'vencimento', sort: 'vencimento', dir: 'asc' }; cpPage = 1; cpRenderBody(); };
+    app.querySelectorAll('[data-cpsort]').forEach(function (th) { th.onclick = function () { var k = th.dataset.cpsort; if (cpF.sort === k) cpF.dir = cpF.dir === 'asc' ? 'desc' : 'asc'; else { cpF.sort = k; cpF.dir = 'asc'; } cpRenderBody(); }; });
+    app.querySelectorAll('[data-cpopen]').forEach(function (el) { el.onclick = function () { openCpEditor(el.dataset.cpopen); }; });
+    var chkAll = document.getElementById('cp-chk-all'); if (chkAll) chkAll.onclick = function () { var all = cpFilteredList(); if (chkAll.checked) all.forEach(function (h) { cpSel.add(h.id); }); else cpSel.clear(); cpRenderBody(); };
+    app.querySelectorAll('.cp-chk').forEach(function (c) { c.onclick = function () { if (c.checked) cpSel.add(c.dataset.id); else cpSel.delete(c.dataset.id); cpRenderBody(); }; });
+    var prev = document.getElementById('cp-prev'); if (prev) prev.onclick = function () { cpPage--; cpRenderBody(); };
+    var next = document.getElementById('cp-next'); if (next) next.onclick = function () { cpPage++; cpRenderBody(); };
+    app.querySelectorAll('[data-cpmenu]').forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); openCpRowMenu(b, b.dataset.cpmenu); }; });
+    var gc = document.getElementById('cp-gerenciar-cat'); if (gc) gc.onclick = function () { cpSub = 'categorias'; render(); };
+    var gp = document.getElementById('cp-gerenciar-plano'); if (gp) gp.onclick = function () { cpSub = 'planocontas'; render(); };
+    var gcc = document.getElementById('cp-gerenciar-cc'); if (gcc) gcc.onclick = function () { cpSub = 'centroscusto'; render(); };
+    var gf = document.getElementById('cp-gerenciar-forn'); if (gf) gf.onclick = function () { cpSub = 'fornecedores'; render(); };
+    // ---- ações em massa (§8) ----
+    var bxBaixa = document.getElementById('cp-bx-baixa'); if (bxBaixa) bxBaixa.onclick = function () { var ids = Array.from(cpSel); openCpBaixaEmMassa(ids); };
+    function bulkField(btnId, field, optionsFn) {
+      var b = document.getElementById(btnId); if (!b) return;
+      b.onclick = function () {
+        var o = cpSimpleOverlay('Alterar em massa (' + cpSel.size + ' conta(s))', '<select class="select" id="cp-bulk-val" style="width:100%">' + optionsFn() + '</select>', function (val) {
+          Array.from(cpSel).forEach(function (id) { var h = contasPagar.find(function (x) { return x.id === id; }); if (h) h[field] = val || null; });
+          return Promise.all(Array.from(cpSel).map(function (id) { var h = contasPagar.find(function (x) { return x.id === id; }); return h ? putMany('cpheader', [h]) : Promise.resolve(); })).then(function () { cpSel.clear(); toast('Atualizado em massa', nn(cpSel.size) + ' conta(s).'); cpRenderBody(); });
+        });
+      };
+    }
+    bulkField('cp-bx-cat', 'categoryId', function () { return cpCategoryOptions(null, false); });
+    bulkField('cp-bx-cta', 'accountingAccountId', function () { return '<option value="">—</option>' + cpAccountingOptions(null); });
+    bulkField('cp-bx-cc', 'costCenterId', function () { return '<option value="">—</option>' + cpCostCenterOptions(null); });
+    bulkField('cp-bx-fin', 'financialAccountId', function () { return cpFinAccountOptions(null); });
+    var bxExport = document.getElementById('cp-bx-export'); if (bxExport) bxExport.onclick = function () { cpExportXlsx(cpFilteredList().filter(function (h) { return cpSel.has(h.id); })); };
+    var bxPrint = document.getElementById('cp-bx-print'); if (bxPrint) bxPrint.onclick = function () { cpPrintAgrupadoPorFornecedor(cpFilteredList().filter(function (h) { return cpSel.has(h.id); })); };
+  }
+  // Modal genérico simples de "selecione um valor e confirme" — reaproveitado pelas ações em massa.
+  function cpSimpleOverlay(title, bodyHtml, onOk) {
+    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:420px"><div class="mh"><h3>' + esc(title) + '</h3><button class="x">×</button></div><div class="mbd">' + bodyHtml + '</div><div class="mf"><button class="btn-sm" id="cp-so-cancel">Cancelar</button><button class="btn-sm primary" id="cp-so-ok">Confirmar</button></div></div>';
+    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
+    o.querySelector('.x').onclick = o.querySelector('#cp-so-cancel').onclick = function () { o.remove(); };
+    o.querySelector('#cp-so-ok').onclick = function () { var el = o.querySelector('#cp-bulk-val'); var val = el ? el.value : null; Promise.resolve(onOk(val)).then(function () { o.remove(); }); };
+    return o;
+  }
+  function openCpRowMenu(anchor, id) {
+    document.querySelectorAll('.cp-dropdown').forEach(function (d) { d.remove(); });
+    var h = contasPagar.find(function (x) { return x.id === id; }); if (!h) return;
+    var rect = anchor.getBoundingClientRect();
+    var menuH = 230, menuW = 190; // aproximado (6 itens) — clampa dentro da viewport pra nunca abrir fora da tela (linha perto do rodapé)
+    var top = Math.min(rect.bottom + 4, window.innerHeight - menuH - 8); if (top < 8) top = 8;
+    var left = Math.min(rect.right - menuW, window.innerWidth - menuW - 8); if (left < 8) left = 8;
+    var d = document.createElement('div'); d.className = 'cp-dropdown'; d.style.cssText = 'position:fixed;z-index:400;top:' + top + 'px;left:' + left + 'px;width:' + menuW + 'px;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:6px;';
+    var opts = [['Abrir / Editar', 'open'], ['Baixa total do pagamento', 'baixatotal'], ['Baixa parcial do pagamento', 'baixaparcial'], ['Cancelar', 'cancelar'], ['Clonar', 'clonar'], ['Excluir', 'excluir']];
+    d.innerHTML = opts.map(function (o) { return '<div class="cp-mi" data-act="' + o[1] + '" style="padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px">' + o[0] + '</div>'; }).join('');
+    document.body.appendChild(d);
+    d.querySelectorAll('.cp-mi').forEach(function (mi) { mi.onmouseenter = function () { mi.style.background = 'var(--bg2,#f2f4f8)'; }; mi.onmouseleave = function () { mi.style.background = ''; }; });
+    setTimeout(function () { document.addEventListener('click', closeIt); }, 0);
+    function closeIt(e) { if (!d.contains(e.target)) { d.remove(); document.removeEventListener('click', closeIt); } }
+    d.querySelector('[data-act="open"]').onclick = function () { d.remove(); openCpEditor(id); };
+    d.querySelector('[data-act="baixatotal"]').onclick = function () { d.remove(); openCpBaixaModal(id, 'total'); };
+    d.querySelector('[data-act="baixaparcial"]').onclick = function () { d.remove(); openCpBaixaModal(id, 'parcial'); };
+    d.querySelector('[data-act="clonar"]').onclick = function () { d.remove(); cpCloneHeader(id).then(function (novo) { toast('Conta clonada', 'Nova conta criada em aberto.'); openCpEditor(novo.id); }); };
+    d.querySelector('[data-act="cancelar"]').onclick = function () {
+      d.remove();
+      cpSimpleOverlay('Cancelar conta', '<label class="fld">Motivo (opcional)</label><input class="input" id="cp-cancel-reason" style="width:100%">', function () {
+        var reason = (document.getElementById('cp-cancel-reason') || {}).value;
+        return cpCancelHeader(id, reason).then(function () { toast('Conta cancelada', ''); cpRenderBody(); }).catch(function (e) { toast('Não foi possível cancelar', e.message, true); });
+      });
+    };
+    d.querySelector('[data-act="excluir"]').onclick = function () {
+      d.remove();
+      if (!confirm('Excluir esta conta a pagar? Essa ação não pode ser desfeita.')) return;
+      cpDeleteHeader(id).then(function () { toast('Conta excluída', ''); cpRenderBody(); }).catch(function (e) { toast('Não foi possível excluir', e.message, true); });
+    };
+  }
+  function openCpBaixaEmMassa(ids) {
+    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:460px"><div class="mh"><h3>Baixar ' + ids.length + ' conta(s)</h3><button class="x">×</button></div><div class="mbd">' +
+      '<label class="fld">Data do pagamento</label><input class="input" type="date" id="cpm-data" value="' + cpToday() + '">' +
+      '<label class="fld">Conta financeira</label><select class="select" id="cpm-conta" style="width:100%">' + cpFinAccountOptions(null).replace('Todas as contas financeiras', 'Escolher…') + '</select>' +
+      '<label class="fld">Forma de pagamento</label><select class="select" id="cpm-forma" style="width:100%"><option value="">—</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '">' + esc(f) + '</option>'; }).join('') + '</select>' +
+      '<p class="footnote">Cada conta será baixada pelo seu saldo em aberto integral (valor original − pagamentos já feitos).</p>' +
+      '</div><div class="mf"><button class="btn-sm" id="cpm-x">Cancelar</button><button class="btn-sm primary" id="cpm-ok">Baixar selecionadas</button></div></div>';
+    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
+    o.querySelector('.x').onclick = o.querySelector('#cpm-x').onclick = function () { o.remove(); };
+    o.querySelector('#cpm-ok').onclick = function () {
+      var data = document.getElementById('cpm-data').value, conta = document.getElementById('cpm-conta').value, forma = document.getElementById('cpm-forma').value;
+      Promise.all(ids.map(function (id) { var h = contasPagar.find(function (x) { return x.id === id; }); if (!h) return Promise.resolve(); var saldo = cpSaldo(h); if (saldo <= 0.005) return Promise.resolve(); return cpRegistrarBaixa(id, { valorPago: saldo, date: data, financialAccountId: conta, paymentMethod: forma, juros: 0, multa: 0, desconto: 0, observacao: 'Baixa em massa.' }); }))
+        .then(function () { cpSel.clear(); o.remove(); toast('Baixa em massa concluída', nn(ids.length) + ' conta(s).'); cpRenderBody(); });
+    };
+  }
+
+  // ---- DRE de Despesas (§36-38) ----
+  var cpDreBasis = 'competencia';
+  function renderCpDre() {
+    var range = periodRange(); var from = range.from ? range.from.toISOString().slice(0, 10) : '1970-01-01'; var to = range.to ? range.to.toISOString().slice(0, 10) : cpToday();
+    var buckets = cpDreBasis === 'caixa' ? cpDreDespesasCaixa(from, to) : cpDreDespesasCompetencia(from, to);
+    var total = Object.keys(buckets).reduce(function (s, k) { return s + buckets[k]; }, 0);
+    var rows = Object.keys(buckets).sort(function (a, b) { return buckets[b] - buckets[a]; }).map(function (k) { return '<tr><td>' + esc(k) + '</td><td class="nowrap">' + brl(buckets[k]) + '</td><td>' + (total ? pct(r2(buckets[k] / total * 100)) : '—') + '</td></tr>'; }).join('');
+    return devPeriodBarAsCp() +
+      '<div class="toolbar2"><b style="font-size:12.5px;color:var(--muted)">Visão:</b><div class="chips"><span class="chip' + (cpDreBasis === 'competencia' ? ' chip-on' : '') + '" data-cpdrebasis="competencia">Por competência</span><span class="chip' + (cpDreBasis === 'caixa' ? ' chip-on' : '') + '" data-cpdrebasis="caixa">Por caixa</span></div></div>' +
+      '<div class="callout' + (cpDreBasis === 'caixa' ? '' : '') + '" style="margin-bottom:12px">' + (cpDreBasis === 'competencia' ? 'Despesa reconhecida na data de <b>competência</b> do título, independente de já ter sido paga.' : 'Despesa reconhecida na data de <b>cada baixa</b> — o valor amortizado é alocado proporcionalmente à classificação original do título; juros/multas pagos entram como despesa financeira à parte.') + '</div>' +
+      '<div class="panel"><div class="ph"><h3>Despesas por categoria</h3><span class="footnote" style="margin:0">Total: ' + brl(total) + '</span></div><div class="table-wrap">' + (rows ? '<table class="report"><thead><tr><th>Categoria</th><th>Valor</th><th>% do total</th></tr></thead><tbody>' + rows + '<tr class="total"><td>TOTAL</td><td>' + brl(total) + '</td><td>100%</td></tr></tbody></table>' : '<div class="empty" style="border:none"><p>Nenhuma despesa classificada neste período.</p></div>') + '</div></div>';
+  }
+  function bindCpDre() { bindDevPeriodBar(); app.querySelectorAll('[data-cpdrebasis]').forEach(function (c) { c.onclick = function () { cpDreBasis = c.dataset.cpdrebasis; cpRenderBody(); }; }); }
+
+  // ---- drawer principal: Nova/Editar Conta a Pagar (§10-18, §51-54) ----
+  function openCpEditor(id) {
+    var existing = id ? contasPagar.find(function (h) { return h.id === id; }) : null;
+    if (id && !existing) { toast('Conta não encontrada', '', true); return; }
+    var locked = existing && cpPaymentsForHeader(existing.id).some(function (p) { return !p.estornado; }); // já tem baixa: trava valor/itens
+    var draft = existing ? Object.assign({}, existing) : { supplierId: null, valorManual: null, valorManualOverride: false, emissao: cpToday(), competencia: cpToday(), vencimento: cpToday(), historico: '', categoryId: null, accountingAccountId: null, costCenterId: null, paymentMethod: null, financialAccountId: null, documentNumber: '', jurosPercent: 0, multaPercent: 0, freteValor: 0, freteCategoryId: null, freteAccountingAccountId: null, outrasDespesasValor: 0, outrasDespesasCategoryId: null, outrasDespesasAccountingAccountId: null, occurrence: { type: 'UNICA', onlyBusinessDays: false, installments: 1, firstDueDate: cpToday(), intervalDays: 30 }, origin: 'MANUAL', nfe: null };
+    var items = existing ? cpItemsForHeader(existing.id).map(function (it) { return Object.assign({}, it); }) : [];
+    var originalItemIds = items.map(function (it) { return it.id; });
+    var atts = existing ? cpAttachmentsForHeader(existing.id).map(function (a) { return Object.assign({}, a); }) : [];
+    var cpEdTab = 'pagamento'; // pagamento | ocorrencia | anexos
+
+    var d = document.createElement('div'); d.className = 'drawer drawer-wide'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '920px'; panel.style.maxWidth = '98vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    refresh();
+
+    function itemsTotal() { return cpItemsTotal(items); }
+    function valorCalculado() { return cpValorOriginal(items, cpParseNum(fieldVal('cp-frete')) || draft.freteValor || 0, cpParseNum(fieldVal('cp-outras')) || draft.outrasDespesasValor || 0); }
+    function fieldVal(id) { var el = panel.querySelector('#' + id); return el ? el.value : null; }
+
+    // refresh() é "burro" de propósito — só remonta o HTML a partir do estado atual de `draft`/
+    // `items`. Cada handler que pode disparar um refresh() é responsável por sincronizar ANTES
+    // (collectDraftFromForm()/readItemsFromForm()) — nunca dentro do próprio refresh(), senão um
+    // handler que já setou `draft.X` diretamente (ex.: fornecedor recém-cadastrado) seria imediatamente
+    // sobrescrito pela leitura do DOM antigo (que ainda não reflete a mudança).
+    function refresh() { panel.innerHTML = body(); wire(); }
+
+    function body() {
+      var itemsRows = items.map(function (it, idx) {
+        return '<tr data-itrow="' + idx + '">' +
+          '<td><input class="input sm cp-it-desc" data-idx="' + idx + '" list="cp-known-desc" value="' + esc(it.description || '') + '" placeholder="Ex.: MDF 3mm"></td>' +
+          '<td><input class="input sm cp-it-qty" data-idx="' + idx + '" style="width:80px" value="' + (it.quantity != null ? it.quantity : '') + '"></td>' +
+          '<td><select class="select sm cp-it-un" data-idx="' + idx + '">' + CP_UNIDADES.map(function (u) { return '<option value="' + u + '"' + (it.unit === u ? ' selected' : '') + '>' + u + '</option>'; }).join('') + '</select></td>' +
+          '<td><input class="input sm cp-it-preco" data-idx="' + idx + '" style="width:100px" value="' + (it.unitPrice != null ? it.unitPrice : '') + '"></td>' +
+          '<td class="nowrap">' + brl(it.total || 0) + (it.totalManualOverride ? ' <span class="footnote" style="margin:0">(ajustado)</span>' : '') + '</td>' +
+          '<td><select class="select sm cp-it-cat" data-idx="' + idx + '"><option value="">(herda da conta)</option>' + cpCategoryOptions(it.categoryId, false).replace('<option value="">Todas as categorias</option>', '') + '</select></td>' +
+          '<td><select class="select sm cp-it-cta" data-idx="' + idx + '"><option value="">(herda da categoria)</option>' + cpAccountingOptions(it.accountingAccountId) + '</select></td>' +
+          '<td><button class="btn-sm" data-itdup="' + idx + '" title="Duplicar item">⧉</button><button class="btn-sm" data-itdel="' + idx + '" title="Excluir item">✕</button></td></tr>';
+      }).join('');
+      var subtotalItens = itemsTotal();
+      var frete = draft.freteValor || 0, outras = draft.outrasDespesasValor || 0;
+      var jurosVal = 0, multaVal = 0; // juros/multa só existem na baixa — aqui é só preview a 0
+      var valorCalc = cpValorOriginal(items, frete, outras);
+      var divergencia = draft.valorManualOverride && draft.valorManual != null ? r2(draft.valorManual - valorCalc) : 0;
+      var valorFinal = draft.valorManualOverride ? (draft.valorManual != null ? draft.valorManual : valorCalc) : valorCalc;
+
+      var header = '<div class="dh"><div><b>Conta a pagar</b>' + (existing ? '<span class="footnote" style="margin:4px 0 0">' + esc(CP_ORIGEM_LABEL[draft.origin] || draft.origin) + (draft.installmentsTotal > 1 ? ' · parcela ' + draft.installmentIndex + '/' + draft.installmentsTotal : '') + '</span>' : '') + '</div><button class="x">&times;</button></div>';
+
+      var camposTopo = '<div class="dbd">' +
+        (locked ? callout('warn', 'Título com pagamento registrado', 'Valor e itens ficam travados enquanto houver baixa ativa. Estorne a baixa (na aba Pagamento) para poder alterá-los.') : '') +
+        '<div style="display:grid;grid-template-columns:2fr 1fr;gap:12px"><div><label class="fld">Fornecedor *</label><div style="display:flex;gap:6px"><select class="select" id="cp-fornecedor-sel" style="flex:1">' + cpSupplierOptions(draft.supplierId).replace('Todos os fornecedores', '— selecione —') + '</select><button class="btn-sm" id="cp-fornecedor-novo">+ cadastrar</button></div></div>' +
+        '<div><label class="fld">Valor (R$) *</label><input class="input" id="cp-valor" value="' + (valorFinal != null ? valorFinal.toFixed(2).replace('.', ',') : '') + '" ' + (items.length ? 'title="Calculado a partir dos itens — edite para sobrescrever manualmente"' : '') + (locked ? ' disabled' : '') + '></div></div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:10px"><div><label class="fld">Emissão *</label><input class="input" type="date" id="cp-emissao" value="' + esc(draft.emissao || '') + '"></div><div><label class="fld">Competência *</label><input class="input" type="date" id="cp-competencia" value="' + esc(draft.competencia || '') + '"></div><div><label class="fld">Vencimento *</label><input class="input" type="date" id="cp-vencimento" value="' + esc(draft.vencimento || '') + '"></div></div>' +
+        '<label class="fld">Histórico</label><textarea class="input" id="cp-historico" maxlength="2000" style="width:100%;min-height:64px">' + esc(draft.historico || '') + '</textarea>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr" ><div><label class="fld">Categoria</label><select class="select" id="cp-categoria" style="width:100%">' + cpCategoryOptions(draft.categoryId, true) + '</select></div><div><label class="fld">Centro de custo</label><select class="select" id="cp-cc-topo" style="width:100%">' + cpCostCenterOptions(draft.costCenterId) + '</select></div></div>' +
+        '</div>';
+
+      var itensSec = '<div class="dbd" style="border-top:1px solid var(--line)">' +
+        '<h4 style="margin:0 0 8px">Itens / Insumos da Nota</h4>' + (locked ? '' :
+        '<div class="table-wrap"><table class="report"><thead><tr><th>Item / Insumo</th><th>Quantidade</th><th>Unidade</th><th>Preço unitário</th><th>Total</th><th>Categoria</th><th>Conta contábil</th><th></th></tr></thead><tbody id="cp-items-body">' + itemsRows + '</tbody></table></div>' +
+        '<datalist id="cp-known-desc">' + cpKnownDescriptionsForSupplier(draft.supplierId).map(function (d2) { return '<option value="' + esc(d2) + '">'; }).join('') + '</datalist>' +
+        '<button class="btn-sm" id="cp-item-add" style="margin-top:8px">+ Adicionar item</button>') +
+        (locked && items.length ? '<div class="table-wrap"><table class="report"><thead><tr><th>Item / Insumo</th><th>Qtd</th><th>Un.</th><th>Preço unit.</th><th>Total</th></tr></thead><tbody>' + items.map(function (it) { return '<tr><td>' + esc(it.description || '') + '</td><td>' + (it.quantity || 0) + '</td><td>' + esc(it.unit || '') + '</td><td>' + brl(it.unitPrice || 0) + '</td><td>' + brl(it.total || 0) + '</td></tr>'; }).join('') + '</tbody></table></div>' : '') +
+        '<div class="cx-section" style="margin-top:14px"><h4>Resumo da compra</h4>' +
+        '<div class="cx-kv"><span class="cxl">Produtos/insumos</span><span class="cxv">' + brl(subtotalItens) + '</span></div>' +
+        '<div class="cx-kv"><span class="cxl">Frete</span><span class="cxv">' + brl(frete) + '</span></div>' +
+        '<div class="cx-kv"><span class="cxl">Outras despesas</span><span class="cxv">' + brl(outras) + '</span></div>' +
+        '<div class="cx-kv" style="border-top:1px solid var(--line);padding-top:6px;margin-top:6px"><span class="cxl"><b>Valor total</b></span><span class="cxv"><b>' + brl(valorFinal) + '</b></span></div>' +
+        (Math.abs(divergencia) > 0.005 ? callout('warn', '', '⚠️ Divergência de ' + brl(Math.abs(divergencia)) + ' entre os itens e o valor informado da conta.') : '') +
+        '</div></div>';
+
+      var tabsBar = '<div class="tabs" style="margin:0 16px">' + [['pagamento', 'Pagamento'], ['ocorrencia', 'Ocorrência'], ['anexos', 'Anexos' + (atts.length ? ' (' + atts.length + ')' : '')]].map(function (t) { return '<div class="tab' + (cpEdTab === t[0] ? ' active' : '') + '" data-cpedtab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>';
+
+      var tabBody = cpEdTab === 'pagamento' ? cpTabPagamento() : cpEdTab === 'ocorrencia' ? cpTabOcorrencia() : cpTabAnexos();
+
+      var histSec = existing ? ('<div class="dbd" style="border-top:1px solid var(--line)"><h4 style="margin:0 0 8px">Histórico</h4>' + cpHistoryHtml(existing) + '</div>') : '';
+      var nfeSec = draft.nfe ? ('<div class="dbd" style="border-top:1px solid var(--line)"><h4 style="margin:0 0 8px">Origem fiscal</h4><div class="cx-kv"><span class="cxl">Chave NF-e</span><span class="cxv mono">' + esc(draft.nfe.chave || '—') + '</span></div><div class="cx-kv"><span class="cxl">Número / Série</span><span class="cxv">' + esc(draft.nfe.numero || '—') + ' / ' + esc(draft.nfe.serie || '—') + '</span></div><div class="cx-kv"><span class="cxl">Emitida em</span><span class="cxv">' + dbr(draft.nfe.dataEmissao) + '</span></div></div>') : '';
+      var pagamentosSec = existing ? cpPagamentosSectionHtml(existing) : '';
+
+      var footer = '<div class="df"><button class="btn-sm" id="cp-cancelbtn">Cancelar</button><div style="flex:1"></div><button class="btn-sm" id="cp-save">Salvar</button><button class="btn-sm primary" id="cp-savebaixa">Salvar e Dar Baixa</button></div>';
+      return header + camposTopo + itensSec + tabsBar + '<div class="dbd">' + tabBody + '</div>' + pagamentosSec + histSec + nfeSec + footer;
+    }
+
+    function cpTabPagamento() {
+      return '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">' +
+        '<div><label class="fld">Forma de pagamento</label><select class="select" id="cp-forma-pgto" style="width:100%"><option value="">—</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '"' + (draft.paymentMethod === f ? ' selected' : '') + '>' + esc(f) + '</option>'; }).join('') + '</select></div>' +
+        '<div><label class="fld">Conta financeira</label><select class="select" id="cp-conta-fin" style="width:100%">' + cpFinAccountOptions(draft.financialAccountId).replace('Todas as contas financeiras', '— escolher —') + '</select></div>' +
+        '<div><label class="fld">Nº documento</label><input class="input" id="cp-docnum" value="' + esc(draft.documentNumber || '') + '"></div>' +
+        '<div><label class="fld">Categoria (pagamento)</label><select class="select" id="cp-cat-pgto" style="width:100%">' + cpCategoryOptions(draft.categoryId, false) + '</select></div>' +
+        '<div><label class="fld">Conta contábil</label><select class="select" id="cp-cta-pgto" style="width:100%">' + cpAccountingOptions(draft.accountingAccountId) + '</select></div>' +
+        '<div><label class="fld">Centro de custo</label><select class="select" id="cp-cc-pgto" style="width:100%">' + cpCostCenterOptions(draft.costCenterId) + '</select></div>' +
+        '<div><label class="fld">Juros mensal (%)</label><input class="input" id="cp-juros" value="' + (draft.jurosPercent || 0) + '"></div>' +
+        '<div><label class="fld">Multa (%)</label><input class="input" id="cp-multa" value="' + (draft.multaPercent || 0) + '"></div>' +
+        '<div><label class="fld">Frete (R$)</label><input class="input" id="cp-frete" value="' + (draft.freteValor || 0) + '"></div>' +
+        '<div><label class="fld">Outras despesas (R$)</label><input class="input" id="cp-outras" value="' + (draft.outrasDespesasValor || 0) + '"></div>' +
+        '<div><label class="fld">Conta contábil do frete</label><select class="select" id="cp-cta-frete" style="width:100%"><option value="">(herda da conta)</option>' + cpAccountingOptions(draft.freteAccountingAccountId) + '</select></div>' +
+        '<div><label class="fld">Conta contábil de outras despesas</label><select class="select" id="cp-cta-outras" style="width:100%"><option value="">(herda da conta)</option>' + cpAccountingOptions(draft.outrasDespesasAccountingAccountId) + '</select></div>' +
+        '</div>' +
+        '<div class="table-wrap" style="margin-top:14px"><table class="report"><thead><tr><th>Vencimento original</th><th>Valor original</th><th>Frete</th><th>Outras despesas</th><th>Juros</th><th>Multa</th><th>Valor total</th></tr></thead><tbody><tr><td>' + dbr(draft.vencimento) + '</td><td>' + brl(cpItemsTotal(items)) + '</td><td>' + brl(draft.freteValor || 0) + '</td><td>' + brl(draft.outrasDespesasValor || 0) + '</td><td>' + brl(0) + '</td><td>' + brl(0) + '</td><td>' + brl(cpValorOriginal(items, draft.freteValor, draft.outrasDespesasValor)) + '</td></tr></tbody></table></div>';
+    }
+    function cpTabOcorrencia() {
+      var occ = draft.occurrence || { type: 'UNICA' };
+      return (existing && existing.recurrenceGroupId ? callout('', '', 'Esta conta faz parte de uma série recorrente/parcelada (parcela ' + (existing.installmentIndex || '?') + ' de ' + (existing.installmentsTotal || '?') + '). Alterar a ocorrência aqui não afeta as demais parcelas já geradas.') : '') +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><div><label class="fld">Ocorrência</label><select class="select" id="cp-occ-type" style="width:100%">' + CP_OCORRENCIAS.map(function (o) { return '<option value="' + o[0] + '"' + (occ.type === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
+        '<div><label class="fld"><input type="checkbox" id="cp-occ-uteis"' + (occ.onlyBusinessDays ? ' checked' : '') + '> Considerar somente dias úteis</label></div></div>' +
+        '<div id="cp-occ-extra" style="display:' + (occ.type === 'UNICA' ? 'none' : 'grid') + ';grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:10px">' +
+        '<div><label class="fld">Quantidade de ocorrências</label><input class="input" id="cp-occ-n" value="' + (occ.installments || 1) + '"></div>' +
+        '<div><label class="fld">Primeiro vencimento</label><input class="input" type="date" id="cp-occ-first" value="' + esc(occ.firstDueDate || draft.vencimento || cpToday()) + '"></div>' +
+        '<div id="cp-occ-interval-wrap" style="display:' + (occ.type === 'PARCELADA' ? 'block' : 'none') + '"><label class="fld">Intervalo (dias)</label><input class="input" id="cp-occ-interval" value="' + (occ.intervalDays || 30) + '"></div>' +
+        '</div>' + (existing ? '' : '<p class="footnote" style="margin-top:10px">Ao salvar, serão geradas todas as contas da série de uma vez — cada uma com seu próprio vencimento, valor e status, todas vinculadas à mesma origem.</p>');
+    }
+    function cpTabAnexos() {
+      return '<div class="dz" id="cp-dz"><div style="font-size:26px;opacity:.4">⭱</div><div class="footnote" style="margin-top:6px">Solte seus arquivos aqui ou clique para adicionar (PDF, XML, JPG, PNG)</div><input type="file" multiple accept=".pdf,.xml,.jpg,.jpeg,.png" class="hidden" id="cp-file"></div><div id="cp-xml-confirm"></div>' +
+        (atts.length ? ('<div class="table-wrap" style="margin-top:10px"><table class="report"><thead><tr><th>Arquivo</th><th>Tipo</th><th></th></tr></thead><tbody>' + atts.map(function (a, idx) { return '<tr><td>' + esc(a.filename) + '</td><td>' + esc(a.kind) + '</td><td><button class="btn-sm" data-attdel="' + idx + '">Remover</button></td></tr>'; }).join('') + '</tbody></table></div>') : '<div class="footnote" style="margin-top:8px">Nenhum anexo ainda.</div>');
+    }
+    function cpHistoryHtml(h) {
+      var hist = h.history || []; if (!hist.length) return '<div class="footnote">Sem eventos registrados.</div>';
+      return '<div class="table-wrap"><table class="report"><thead><tr><th>Quando</th><th>Quem</th><th>Ação</th><th>Detalhe</th></tr></thead><tbody>' + hist.map(function (ev) { return '<tr><td class="nowrap">' + new Date(ev.at).toLocaleString('pt-BR') + '</td><td>' + esc(ev.user) + '</td><td>' + esc(ev.action) + '</td><td class="cell-text">' + esc(ev.detail || '') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+    }
+    function cpPagamentosSectionHtml(h) {
+      var pays = cpPaymentsForHeader(h.id);
+      var saldo = cpSaldo(h);
+      return '<div class="dbd" style="border-top:1px solid var(--line)"><h4 style="margin:0 0 8px">Pagamentos' + (saldo > 0.005 ? ' <span class="footnote" style="margin:0">saldo em aberto: ' + brl(saldo) + '</span>' : '') + '</h4>' +
+        (pays.length ? ('<div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Conta</th><th>Forma</th><th>Valor pago</th><th>Juros</th><th>Multa</th><th>Desconto</th><th></th></tr></thead><tbody>' + pays.map(function (p) { return '<tr' + (p.estornado ? ' style="opacity:.5;text-decoration:line-through"' : '') + '><td class="nowrap">' + dbr(p.date) + '</td><td>' + esc(cpFinAccountLabel(p.financialAccountId)) + '</td><td>' + esc(p.paymentMethod || '—') + '</td><td>' + brl(p.valorPago) + '</td><td>' + brl(p.juros || 0) + '</td><td>' + brl(p.multa || 0) + '</td><td>' + brl(p.desconto || 0) + '</td><td>' + (p.estornado ? 'estornado' : '<button class="btn-sm" data-estornar="' + p.id + '">Estornar</button>') + '</td></tr>'; }).join('') + '</tbody></table></div>') : '<div class="footnote">Nenhum pagamento registrado ainda.</div>') + '</div>';
+    }
+
+    function collectDraftFromForm() {
+      draft.supplierId = fieldVal('cp-fornecedor-sel') || null;
+      draft.emissao = fieldVal('cp-emissao'); draft.competencia = fieldVal('cp-competencia'); draft.vencimento = fieldVal('cp-vencimento');
+      draft.historico = fieldVal('cp-historico');
+      draft.categoryId = fieldVal('cp-categoria') || fieldVal('cp-cat-pgto') || draft.categoryId || null;
+      draft.costCenterId = fieldVal('cp-cc-topo') || fieldVal('cp-cc-pgto') || draft.costCenterId || null;
+      var pForma = fieldVal('cp-forma-pgto'); if (pForma != null) draft.paymentMethod = pForma || null;
+      var pConta = fieldVal('cp-conta-fin'); if (pConta != null) draft.financialAccountId = pConta || null;
+      var pDoc = fieldVal('cp-docnum'); if (pDoc != null) draft.documentNumber = pDoc;
+      var pCta = fieldVal('cp-cta-pgto'); if (pCta != null) draft.accountingAccountId = pCta || null;
+      var jr = fieldVal('cp-juros'); if (jr != null) draft.jurosPercent = cpParseNum(jr) || 0;
+      var mt = fieldVal('cp-multa'); if (mt != null) draft.multaPercent = cpParseNum(mt) || 0;
+      var fr = fieldVal('cp-frete'); if (fr != null) draft.freteValor = cpParseNum(fr) || 0;
+      var ou = fieldVal('cp-outras'); if (ou != null) draft.outrasDespesasValor = cpParseNum(ou) || 0;
+      var ctaFrete = fieldVal('cp-cta-frete'); if (ctaFrete != null) draft.freteAccountingAccountId = ctaFrete || null;
+      var ctaOutras = fieldVal('cp-cta-outras'); if (ctaOutras != null) draft.outrasDespesasAccountingAccountId = ctaOutras || null;
+      var occType = fieldVal('cp-occ-type'); if (occType != null) draft.occurrence = { type: occType, onlyBusinessDays: !!(panel.querySelector('#cp-occ-uteis') || {}).checked, installments: parseInt(fieldVal('cp-occ-n'), 10) || 1, firstDueDate: fieldVal('cp-occ-first') || draft.vencimento, intervalDays: parseInt(fieldVal('cp-occ-interval'), 10) || 30 };
+      var valorInput = cpParseNum(fieldVal('cp-valor'));
+      var calc = cpValorOriginal(items, draft.freteValor, draft.outrasDespesasValor);
+      draft.valorManualOverride = valorInput != null && Math.abs(valorInput - calc) > 0.005;
+      draft.valorManual = valorInput;
+    }
+    // §51: navegação por teclado nos itens — precisa estar acessível tanto pelos handlers de item
+    // (wire()) quanto por refresh() (abaixo), senão um refresh disparado por OUTRO campo (ex.: debounce
+    // do valor) reconstrói a tabela de itens a partir do estado antigo e apaga o que o usuário acabou
+    // de digitar numa linha.
+    function readItemsFromForm() {
+      panel.querySelectorAll('#cp-items-body tr').forEach(function (tr) {
+        var idx = parseInt(tr.dataset.itrow, 10); var it = items[idx]; if (!it) return;
+        it.description = (tr.querySelector('.cp-it-desc') || {}).value || '';
+        it.quantity = cpParseNum((tr.querySelector('.cp-it-qty') || {}).value);
+        it.unit = (tr.querySelector('.cp-it-un') || {}).value;
+        it.unitPrice = cpParseNum((tr.querySelector('.cp-it-preco') || {}).value);
+        it.categoryId = (tr.querySelector('.cp-it-cat') || {}).value || null;
+        it.accountingAccountId = (tr.querySelector('.cp-it-cta') || {}).value || null;
+        if (!it.totalManualOverride) it.total = r2((it.quantity || 0) * (it.unitPrice || 0));
+      });
+    }
+
+    function doSave(andBaixa) {
+      if (!fieldVal('cp-fornecedor-sel')) { toast('Fornecedor obrigatório', 'Selecione ou cadastre um fornecedor antes de salvar.', true); return; }
+      if (!fieldVal('cp-vencimento')) { toast('Vencimento obrigatório', '', true); return; }
+      collectDraftFromForm();
+      var isNewSeries = !existing && draft.occurrence && draft.occurrence.type !== 'UNICA';
+      var chain;
+      if (isNewSeries) {
+        var drafts = cpGenerateOccurrenceDrafts(Object.assign({}, draft, { valor: cpValorOriginal(items, draft.freteValor, draft.outrasDespesasValor) }), draft.occurrence);
+        chain = drafts.reduce(function (p, dft, i) { return p.then(function () { return cpSaveHeader(dft, i === 0 ? items : [], [], false); }); }, Promise.resolve());
+      } else {
+        chain = cpSaveHeader(draft, items, originalItemIds, andBaixa);
+      }
+      chain.then(function (saved) {
+        d.remove(); toast(isNewSeries ? 'Série criada' : (andBaixa ? 'Conta salva e baixada' : 'Conta salva'), isNewSeries ? (draft.occurrence.installments + ' título(s) gerado(s).') : ''); cpRenderBody();
+        if (existing == null && !isNewSeries && saved && draft.nfe && draft.nfe.parcelas && draft.nfe.parcelas.length > 1) {
+          // parcelas da NF-e (§30) já foram tratadas na importação do XML (ver cpApplyNFeToDraft) — nada extra aqui.
+        }
+      }).catch(function (e) { toast('Não foi possível salvar', e.message || String(e), true); });
+    }
+
+    function wire() {
+      panel.querySelector('.x').onclick = function () { d.remove(); };
+      panel.querySelector('#cp-cancelbtn').onclick = function () { d.remove(); };
+      panel.querySelector('#cp-save').onclick = function () { doSave(false); };
+      panel.querySelector('#cp-savebaixa').onclick = function () { doSave(true); };
+      // Cada handler abaixo sincroniza o formulário (collectDraftFromForm()/readItemsFromForm()) ANTES
+      // de sobrescrever seu próprio campo e só então chama refresh() — nunca o inverso, senão um
+      // refresh() disparado por outro campo (ex.: fornecedor recém-cadastrado) reconstrói o HTML a
+      // partir de um `draft` que ainda não tinha capturado o que o usuário já tinha digitado em
+      // vencimento/histórico/etc, apagando silenciosamente esses campos.
+      var fSel = panel.querySelector('#cp-fornecedor-sel'); if (fSel) fSel.onchange = function () { collectDraftFromForm(); draft.supplierId = fSel.value || null; refresh(); };
+      var fNovo = panel.querySelector('#cp-fornecedor-novo'); if (fNovo) fNovo.onclick = function () { openCpSupplierQuickCreate(null, function (sup) { collectDraftFromForm(); draft.supplierId = sup.id; refresh(); }); };
+      panel.querySelectorAll('[data-cpedtab]').forEach(function (t) { t.onclick = function () { collectDraftFromForm(); cpEdTab = t.dataset.cpedtab; refresh(); }; });
+      var freteEl = panel.querySelector('#cp-frete'); if (freteEl) freteEl.oninput = cpDebounce(function () { collectDraftFromForm(); refresh(); }, 300);
+      var outrasEl = panel.querySelector('#cp-outras'); if (outrasEl) outrasEl.oninput = cpDebounce(function () { collectDraftFromForm(); refresh(); }, 300);
+      var valorEl = panel.querySelector('#cp-valor'); if (valorEl) valorEl.oninput = cpDebounce(function () { collectDraftFromForm(); refresh(); }, 400);
+      var catTopo = panel.querySelector('#cp-categoria'); if (catTopo) catTopo.onchange = function () {
+        if (catTopo.value === '__new') { openCpCategoryQuickCreate(function (cat) { collectDraftFromForm(); draft.categoryId = cat.id; refresh(); }); return; }
+        collectDraftFromForm(); draft.categoryId = catTopo.value || null; refresh();
+      };
+      var occType = panel.querySelector('#cp-occ-type'); if (occType) occType.onchange = function () {
+        var extra = panel.querySelector('#cp-occ-extra'); var interval = panel.querySelector('#cp-occ-interval-wrap');
+        if (extra) extra.style.display = occType.value === 'UNICA' ? 'none' : 'grid';
+        if (interval) interval.style.display = occType.value === 'PARCELADA' ? 'block' : 'none';
+      };
+      // ---- itens: navegação por teclado (§51) — Descrição → Qtd → Unidade → Preço; Enter na última coluna cria nova linha ----
+      panel.querySelectorAll('.cp-it-desc,.cp-it-qty,.cp-it-un,.cp-it-preco').forEach(function (el) {
+        el.oninput = cpDebounce(function () { collectDraftFromForm(); readItemsFromForm(); refresh(); focusItemAfterRefresh(el); }, 250);
+        el.onkeydown = function (e) { if (e.key === 'Enter' && el.classList.contains('cp-it-preco')) { collectDraftFromForm(); readItemsFromForm(); addItemRow(); } };
+      });
+      panel.querySelectorAll('.cp-it-cat,.cp-it-cta').forEach(function (el) { el.onchange = function () { collectDraftFromForm(); readItemsFromForm(); refresh(); }; });
+      var lastFocus = null;
+      function focusItemAfterRefresh() { /* refresh já recria o DOM — o browser mantém o foco pelo TAB natural; nada a fazer aqui além de já ter salvo o valor acima */ }
+      function addItemRow() { items.push({ id: cpUid('CPI'), description: '', quantity: 1, unit: 'UN', unitPrice: 0, total: 0, categoryId: null, accountingAccountId: null }); refresh(); setTimeout(function () { var rows = panel.querySelectorAll('.cp-it-desc'); var last = rows[rows.length - 1]; if (last) last.focus(); }, 0); }
+      var addBtn = panel.querySelector('#cp-item-add'); if (addBtn) addBtn.onclick = function () { collectDraftFromForm(); readItemsFromForm(); addItemRow(); };
+      panel.querySelectorAll('[data-itdel]').forEach(function (b) { b.onclick = function () { collectDraftFromForm(); readItemsFromForm(); items.splice(parseInt(b.dataset.itdel, 10), 1); refresh(); }; });
+      panel.querySelectorAll('[data-itdup]').forEach(function (b) { b.onclick = function () { collectDraftFromForm(); readItemsFromForm(); var src = items[parseInt(b.dataset.itdup, 10)]; items.splice(parseInt(b.dataset.itdup, 10) + 1, 0, Object.assign({}, src, { id: cpUid('CPI') })); refresh(); }; });
+      // ---- anexos (§23, §28-30) ----
+      var dz = panel.querySelector('#cp-dz'), fi = panel.querySelector('#cp-file');
+      if (dz) {
+        dz.onclick = function () { fi.click(); };
+        dz.ondragover = function (e) { e.preventDefault(); dz.classList.add('over'); };
+        dz.ondragleave = function () { dz.classList.remove('over'); };
+        dz.ondrop = function (e) { e.preventDefault(); dz.classList.remove('over'); handleFiles(e.dataTransfer.files); };
+      }
+      if (fi) fi.onchange = function () { handleFiles(fi.files); };
+      panel.querySelectorAll('[data-attdel]').forEach(function (b) { b.onclick = function () { collectDraftFromForm(); atts.splice(parseInt(b.dataset.attdel, 10), 1); refresh(); }; });
+      panel.querySelectorAll('[data-estornar]').forEach(function (b) { b.onclick = function () { if (!confirm('Estornar esta baixa? A conta volta a ficar (parcial ou totalmente) em aberto.')) return; collectDraftFromForm(); cpEstornarBaixa(b.dataset.estornar).then(function () { toast('Baixa estornada', ''); refresh(); }); }; });
+      function handleFiles(fileList) {
+        collectDraftFromForm(); readItemsFromForm();
+        Array.from(fileList).forEach(function (file) {
+          var name = file.name || ''; var ext = name.split('.').pop().toLowerCase();
+          if (ext === 'xml') {
+            file.text().then(function (text) {
+              try {
+                var parsed = cpParseNFeXml(text);
+                showXmlConfirm(file, parsed);
+              } catch (e) {
+                atts.push({ id: cpUid('ATT'), filename: name, kind: 'XML', blob: file, createdAt: new Date().toISOString() });
+                toast('XML anexado', 'Não foi possível interpretar como NF-e: ' + e.message);
+                refresh();
+              }
+            });
+          } else if (ext === 'pdf') {
+            atts.push({ id: cpUid('ATT'), filename: name, kind: 'PDF', blob: file, createdAt: new Date().toISOString() });
+            refresh();
+            var box = panel.querySelector('#cp-xml-confirm'); if (box) box.innerHTML = callout('warn', '', 'Extração automática de dados de PDF/DANFE ainda não está disponível nesta versão — o arquivo foi anexado, preencha os itens manualmente na aba de Itens.');
+          } else {
+            atts.push({ id: cpUid('ATT'), filename: name, kind: ext.toUpperCase() === 'JPG' || ext.toUpperCase() === 'JPEG' || ext.toUpperCase() === 'PNG' ? 'IMAGE' : 'OUTRO', blob: file, createdAt: new Date().toISOString() });
+            refresh();
+          }
+        });
+      }
+      function showXmlConfirm(file, parsed) {
+        var dup = cpFindDuplicateNFe(parsed.chave);
+        var box = panel.querySelector('#cp-xml-confirm'); if (!box) return;
+        if (dup) {
+          box.innerHTML = callout('warn', 'Nota fiscal já lançada', 'Esta nota fiscal já está vinculada à conta de <b>' + esc(cpSupplierLabel(dup.supplierId)) + '</b> (nº ' + esc(dup.nfe.numero || '—') + ', emitida em ' + dbr(dup.nfe.dataEmissao) + ', valor ' + brl(dup.valor) + '). Anexar mesmo assim, sem importar os dados?<br><button class="btn-sm" id="cp-xml-attonly" style="margin-top:8px">Apenas anexar</button>');
+          var only = box.querySelector('#cp-xml-attonly'); if (only) only.onclick = function () { collectDraftFromForm(); atts.push({ id: cpUid('ATT'), filename: file.name, kind: 'XML', blob: file, createdAt: new Date().toISOString() }); box.innerHTML = ''; refresh(); };
+          return;
+        }
+        box.innerHTML = callout('', 'Nota fiscal identificada', esc(parsed.razaoSocial || '') + ' · Nº ' + esc(parsed.numero || '—') + ' · ' + brl(parsed.valorNfe || 0) + '. Deseja importar os dados?<br><button class="btn-sm primary" id="cp-xml-import" style="margin-top:8px">Importar dados</button> <button class="btn-sm" id="cp-xml-attonly2" style="margin-top:8px">Apenas anexar</button>');
+        box.querySelector('#cp-xml-import').onclick = function () { collectDraftFromForm(); applyNfe(parsed); atts.push({ id: cpUid('ATT'), filename: file.name, kind: 'XML', blob: file, createdAt: new Date().toISOString() }); box.innerHTML = ''; refresh(); };
+        box.querySelector('#cp-xml-attonly2').onclick = function () { collectDraftFromForm(); atts.push({ id: cpUid('ATT'), filename: file.name, kind: 'XML', blob: file, createdAt: new Date().toISOString() }); box.innerHTML = ''; refresh(); };
+      }
+      function applyNfe(parsed) {
+        draft.nfe = { chave: parsed.chave, numero: parsed.numero, serie: parsed.serie, cnpjFornecedor: parsed.cnpjFornecedor, razaoSocial: parsed.razaoSocial, valorNfe: parsed.valorNfe, freteNfe: parsed.freteNfe, outrasDespesasNfe: parsed.outrasDespesasNfe, descontosNfe: parsed.descontosNfe, dataEmissao: parsed.dataEmissao };
+        draft.origin = 'XML_NFE'; draft.documentNumber = parsed.numero || draft.documentNumber; draft.emissao = parsed.dataEmissao || draft.emissao;
+        if (parsed.freteNfe) draft.freteValor = parsed.freteNfe; if (parsed.outrasDespesasNfe) draft.outrasDespesasValor = parsed.outrasDespesasNfe;
+        // §43: fornecedor não cadastrado a partir do CNPJ da NF-e — pergunta antes de cadastrar.
+        var supExisting = parsed.cnpjFornecedor ? cpSuppliers.find(function (s) { return s.cnpjCpf === parsed.cnpjFornecedor; }) : null;
+        function finishItems() {
+          items.length = 0;
+          parsed.itens.forEach(function (it) {
+            var canonical = cpLookupSupplyLink(draft.supplierId, it.descricao) || it.descricao;
+            items.push({ id: cpUid('CPI'), description: canonical, quantity: it.quantidade, unit: (it.unidade || 'UN').toUpperCase(), unitPrice: it.precoUnitario, total: it.total != null ? it.total : r2((it.quantidade || 0) * (it.precoUnitario || 0)), categoryId: null, accountingAccountId: null, nfeProductCode: it.codigo, nfeEan: it.ean, nfeNcm: it.ncm, nfeCfop: it.cfop });
+          });
+          // §30: parcelas/duplicatas da NF-e viram a ocorrência "PARCELADA" pré-preenchida — nunca soma o valor da NF várias vezes (cada parcela recebe uma FRAÇÃO do valor total, não o total inteiro).
+          if (parsed.parcelas && parsed.parcelas.length > 1) {
+            draft.occurrence = { type: 'PARCELADA', onlyBusinessDays: false, installments: parsed.parcelas.length, firstDueDate: parsed.parcelas[0].vencimento, intervalDays: 30 };
+            draft.nfe.parcelas = parsed.parcelas;
+          } else if (parsed.parcelas && parsed.parcelas.length === 1) { draft.vencimento = parsed.parcelas[0].vencimento || draft.vencimento; }
+          refresh();
+        }
+        if (parsed.cnpjFornecedor && !supExisting) {
+          cpSimpleOverlay('Fornecedor não encontrado', 'Fornecedor não encontrado. Deseja cadastrar <b>' + esc(parsed.razaoSocial || parsed.cnpjFornecedor) + '</b> usando os dados da NF-e?', function () {
+            return cpSaveSupplier({ razaoSocial: parsed.razaoSocial, nomeFantasia: parsed.razaoSocial, cnpjCpf: parsed.cnpjFornecedor }).then(function (sup) { draft.supplierId = sup.id; finishItems(); });
+          });
+        } else { if (supExisting) draft.supplierId = supExisting.id; finishItems(); }
+      }
+    }
+  }
+
+  // ---- quick-create inline (fornecedor / categoria) ----
+  function openCpSupplierQuickCreate(prefill, onSaved) {
+    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:480px"><div class="mh"><h3>Cadastrar fornecedor</h3><button class="x">×</button></div><div class="mbd">' +
+      '<label class="fld">Razão social *</label><input class="input" id="cps-rz" style="width:100%" value="' + esc((prefill && prefill.razaoSocial) || '') + '">' +
+      '<label class="fld">Nome fantasia</label><input class="input" id="cps-nf" style="width:100%" value="' + esc((prefill && prefill.nomeFantasia) || '') + '">' +
+      '<label class="fld">CNPJ/CPF</label><input class="input" id="cps-doc" style="width:100%" value="' + esc((prefill && prefill.cnpjCpf) || '') + '">' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><div><label class="fld">Telefone</label><input class="input" id="cps-tel" style="width:100%"></div><div><label class="fld">E-mail</label><input class="input" id="cps-mail" style="width:100%"></div></div>' +
+      '</div><div class="mf"><button class="btn-sm" id="cps-x">Cancelar</button><button class="btn-sm primary" id="cps-ok">Salvar</button></div></div>';
+    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
+    o.querySelector('.x').onclick = o.querySelector('#cps-x').onclick = function () { o.remove(); };
+    o.querySelector('#cps-ok').onclick = function () {
+      var rz = o.querySelector('#cps-rz').value.trim(); if (!rz) { toast('Informe a razão social', '', true); return; }
+      cpSaveSupplier({ razaoSocial: rz, nomeFantasia: o.querySelector('#cps-nf').value.trim(), cnpjCpf: o.querySelector('#cps-doc').value.trim(), telefone: o.querySelector('#cps-tel').value.trim(), email: o.querySelector('#cps-mail').value.trim() }).then(function (sup) { o.remove(); toast('Fornecedor cadastrado', rz); onSaved(sup); });
+    };
+  }
+  function openCpCategoryQuickCreate(onSaved) {
+    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:420px"><div class="mh"><h3>Criar categoria</h3><button class="x">×</button></div><div class="mbd">' +
+      '<label class="fld">Nome *</label><input class="input" id="cpc-nm" style="width:100%">' +
+      '<label class="fld">Categoria pai (opcional)</label><select class="select" id="cpc-parent" style="width:100%">' + cpCategoryOptions(null, false) + '</select>' +
+      '</div><div class="mf"><button class="btn-sm" id="cpc-x">Cancelar</button><button class="btn-sm primary" id="cpc-ok">Criar</button></div></div>';
+    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
+    o.querySelector('.x').onclick = o.querySelector('#cpc-x').onclick = function () { o.remove(); };
+    o.querySelector('#cpc-ok').onclick = function () {
+      var nm = o.querySelector('#cpc-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return; }
+      cpSaveCategory({ name: nm, parentId: o.querySelector('#cpc-parent').value || null }).then(function (cat) { o.remove(); toast('Categoria criada', nm); onSaved(cat); });
+    };
+  }
+
+  // ---- baixa (total/parcial, §32-33) ----
+  function openCpBaixaModal(headerId, mode) {
+    var h = contasPagar.find(function (x) { return x.id === headerId; }); if (!h) return;
+    var saldo = cpSaldo(h);
+    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:480px"><div class="mh"><h3>' + (mode === 'total' ? 'Baixa total do pagamento' : 'Baixa parcial do pagamento') + '</h3><button class="x">×</button></div><div class="mbd">' +
+      '<div class="cx-kv"><span class="cxl">Fornecedor</span><span class="cxv">' + esc(cpSupplierLabel(h.supplierId)) + '</span></div>' +
+      '<div class="cx-kv"><span class="cxl">Valor em aberto</span><span class="cxv">' + brl(saldo) + '</span></div>' +
+      '<label class="fld">Valor pago</label><input class="input" id="cpb-valor" style="width:100%" value="' + (mode === 'total' ? saldo.toFixed(2).replace('.', ',') : '') + '"' + (mode === 'total' ? ' readonly' : '') + '>' +
+      '<label class="fld">Data do pagamento</label><input class="input" type="date" id="cpb-data" value="' + cpToday() + '">' +
+      '<label class="fld">Conta financeira</label><select class="select" id="cpb-conta" style="width:100%">' + cpFinAccountOptions(h.financialAccountId).replace('Todas as contas financeiras', '— escolher —') + '</select>' +
+      '<label class="fld">Forma de pagamento</label><select class="select" id="cpb-forma" style="width:100%"><option value="">—</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '"' + (h.paymentMethod === f ? ' selected' : '') + '>' + esc(f) + '</option>'; }).join('') + '</select>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px"><div><label class="fld">Juros</label><input class="input" id="cpb-juros" value="0"></div><div><label class="fld">Multa</label><input class="input" id="cpb-multa" value="0"></div><div><label class="fld">Desconto</label><input class="input" id="cpb-desc" value="0"></div></div>' +
+      '<label class="fld">Observação</label><input class="input" id="cpb-obs" style="width:100%">' +
+      '</div><div class="mf"><button class="btn-sm" id="cpb-x">Cancelar</button><button class="btn-sm primary" id="cpb-ok">Confirmar baixa</button></div></div>';
+    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
+    o.querySelector('.x').onclick = o.querySelector('#cpb-x').onclick = function () { o.remove(); };
+    o.querySelector('#cpb-ok').onclick = function () {
+      var valorPago = cpParseNum(o.querySelector('#cpb-valor').value);
+      if (!valorPago || valorPago <= 0) { toast('Informe o valor pago', '', true); return; }
+      cpRegistrarBaixa(headerId, { valorPago: valorPago, date: o.querySelector('#cpb-data').value, financialAccountId: o.querySelector('#cpb-conta').value, paymentMethod: o.querySelector('#cpb-forma').value, juros: cpParseNum(o.querySelector('#cpb-juros').value) || 0, multa: cpParseNum(o.querySelector('#cpb-multa').value) || 0, desconto: cpParseNum(o.querySelector('#cpb-desc').value) || 0, observacao: o.querySelector('#cpb-obs').value.trim() || null })
+        .then(function () { o.remove(); toast('Baixa registrada', brl(valorPago)); cpRenderBody(); });
+    };
+  }
+
+  // ---- gestão de cadastros (abas Categorias / Plano de contas / Centros de custo / Fornecedores) ----
+  var CP_DRE_GROUPS = ['Custos dos produtos', 'Despesas operacionais', 'Despesas administrativas', 'Despesas comerciais', 'Despesas com pessoal', 'Despesas financeiras', 'Impostos', 'Outras despesas'];
+  function renderCpCategoriasTab() {
+    var counts = {}; contasPagar.forEach(function (h) { if (h.categoryId) counts[h.categoryId] = (counts[h.categoryId] || 0) + 1; });
+    var rows = cpCategories.slice().sort(function (a, b) { return (a.parentId ? '1' : '0') + a.name.localeCompare(b.name) < (b.parentId ? '1' : '0') + b.name.localeCompare(a.name) ? -1 : 1; }).map(function (c) {
+      return '<tr><td>' + (c.parentId ? '— ' : '') + '<b>' + esc(c.name) + '</b></td><td>' + esc(cpAccountingLabel(c.accountingAccountId)) + '</td><td>' + esc(c.dreGroup || '—') + '</td><td>' + (counts[c.id] || 0) + '</td><td><span class="badge ' + (c.active ? 'b-ok' : 'b-neutral') + '">' + (c.active ? 'Ativa' : 'Inativa') + '</span></td><td><button class="btn-sm" data-cpcatedit="' + c.id + '">Editar</button></td></tr>';
+    }).join('');
+    return '<div class="panel"><div class="ph"><h3>Categorias</h3><button class="btn-sm primary" id="cp-cat-new">+ Nova categoria</button></div><div class="table-wrap">' + (rows ? '<table><thead><tr><th>Categoria</th><th>Conta contábil</th><th>Grupo DRE</th><th>Contas vinculadas</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="empty"><p>Nenhuma categoria cadastrada.</p></div>') + '</div></div>';
+  }
+  function bindCpCategoriasTab() {
+    var n = document.getElementById('cp-cat-new'); if (n) n.onclick = function () { openCpCategoryEditor(null); };
+    app.querySelectorAll('[data-cpcatedit]').forEach(function (b) { b.onclick = function () { openCpCategoryEditor(cpCategories.find(function (c) { return c.id === b.dataset.cpcatedit; })); }; });
+  }
+  function openCpCategoryEditor(cat) {
+    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:480px"><div class="mh"><h3>' + (cat ? 'Editar categoria' : 'Nova categoria') + '</h3><button class="x">×</button></div><div class="mbd">' +
+      '<label class="fld">Nome *</label><input class="input" id="cpce-nm" style="width:100%" value="' + esc(cat ? cat.name : '') + '">' +
+      '<label class="fld">Categoria pai</label><select class="select" id="cpce-parent" style="width:100%">' + cpCategoryOptions(cat ? cat.parentId : null, false) + '</select>' +
+      '<label class="fld">Conta contábil</label><select class="select" id="cpce-cta" style="width:100%">' + cpAccountingOptions(cat ? cat.accountingAccountId : null) + '</select>' +
+      '<label class="fld">Grupo DRE</label><select class="select" id="cpce-dre" style="width:100%"><option value="">—</option>' + CP_DRE_GROUPS.map(function (g) { return '<option value="' + esc(g) + '"' + (cat && cat.dreGroup === g ? ' selected' : '') + '>' + esc(g) + '</option>'; }).join('') + '</select>' +
+      '<label class="fld">Centro de custo padrão</label><select class="select" id="cpce-cc" style="width:100%">' + cpCostCenterOptions(cat ? cat.costCenterId : null) + '</select>' +
+      '<label class="fld"><input type="checkbox" id="cpce-ativa"' + (!cat || cat.active ? ' checked' : '') + '> Ativa</label>' +
+      '</div><div class="mf"><button class="btn-sm" id="cpce-x">Cancelar</button><button class="btn-sm primary" id="cpce-ok">Salvar</button></div></div>';
+    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
+    o.querySelector('.x').onclick = o.querySelector('#cpce-x').onclick = function () { o.remove(); };
+    o.querySelector('#cpce-ok').onclick = function () {
+      var nm = o.querySelector('#cpce-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return; }
+      cpSaveCategory({ id: cat ? cat.id : null, name: nm, parentId: o.querySelector('#cpce-parent').value || null, accountingAccountId: o.querySelector('#cpce-cta').value || null, dreGroup: o.querySelector('#cpce-dre').value || null, costCenterId: o.querySelector('#cpce-cc').value || null, active: o.querySelector('#cpce-ativa').checked, createdAt: cat && cat.createdAt })
+        .then(function () { o.remove(); toast('Categoria salva', nm); cpRenderBody(); });
+    };
+  }
+
+  function renderCpPlanoContasTab() {
+    var rows = cpAccounting.slice().sort(function (a, b) { return (a.code || '').localeCompare(b.code || ''); }).map(function (a) { return '<tr><td class="mono">' + esc(a.code || '—') + '</td><td>' + esc(a.name) + '</td><td>' + esc(a.dreGroup || '—') + '</td><td><span class="badge ' + (a.active ? 'b-ok' : 'b-neutral') + '">' + (a.active ? 'Ativa' : 'Inativa') + '</span></td><td><button class="btn-sm" data-cpaccedit="' + a.id + '">Editar</button></td></tr>'; }).join('');
+    return '<div class="panel"><div class="ph"><h3>Plano de contas</h3><button class="btn-sm primary" id="cp-acc-new">+ Nova conta contábil</button></div><div class="table-wrap">' + (rows ? '<table><thead><tr><th>Código</th><th>Nome</th><th>Grupo DRE</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="empty"><p>Nenhuma conta contábil cadastrada.</p></div>') + '</div></div>';
+  }
+  function bindCpPlanoContasTab() {
+    var n = document.getElementById('cp-acc-new'); if (n) n.onclick = function () { openCpAccountingEditor(null); };
+    app.querySelectorAll('[data-cpaccedit]').forEach(function (b) { b.onclick = function () { openCpAccountingEditor(cpAccounting.find(function (a) { return a.id === b.dataset.cpaccedit; })); }; });
+  }
+  function openCpAccountingEditor(acc) {
+    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:420px"><div class="mh"><h3>' + (acc ? 'Editar conta contábil' : 'Nova conta contábil') + '</h3><button class="x">×</button></div><div class="mbd">' +
+      '<label class="fld">Código</label><input class="input" id="cpae-code" style="width:100%" value="' + esc(acc ? acc.code : '') + '" placeholder="Ex.: 3.01.01">' +
+      '<label class="fld">Nome *</label><input class="input" id="cpae-nm" style="width:100%" value="' + esc(acc ? acc.name : '') + '" placeholder="Ex.: Matéria-prima">' +
+      '<label class="fld">Grupo DRE</label><select class="select" id="cpae-dre" style="width:100%"><option value="">—</option>' + CP_DRE_GROUPS.map(function (g) { return '<option value="' + esc(g) + '"' + (acc && acc.dreGroup === g ? ' selected' : '') + '>' + esc(g) + '</option>'; }).join('') + '</select>' +
+      '<label class="fld"><input type="checkbox" id="cpae-ativa"' + (!acc || acc.active ? ' checked' : '') + '> Ativa</label>' +
+      '</div><div class="mf"><button class="btn-sm" id="cpae-x">Cancelar</button><button class="btn-sm primary" id="cpae-ok">Salvar</button></div></div>';
+    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
+    o.querySelector('.x').onclick = o.querySelector('#cpae-x').onclick = function () { o.remove(); };
+    o.querySelector('#cpae-ok').onclick = function () {
+      var nm = o.querySelector('#cpae-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return; }
+      cpSaveAccounting({ id: acc ? acc.id : null, code: o.querySelector('#cpae-code').value.trim(), name: nm, dreGroup: o.querySelector('#cpae-dre').value || null, active: o.querySelector('#cpae-ativa').checked, createdAt: acc && acc.createdAt }).then(function () { o.remove(); toast('Conta contábil salva', nm); cpRenderBody(); });
+    };
+  }
+
+  function renderCpCentrosCustoTab() {
+    var rows = cpCostCenters.slice().sort(function (a, b) { return a.name.localeCompare(b.name); }).map(function (c) { return '<tr><td>' + esc(c.name) + '</td><td><span class="badge ' + (c.active ? 'b-ok' : 'b-neutral') + '">' + (c.active ? 'Ativo' : 'Inativo') + '</span></td><td><button class="btn-sm" data-cpccedit="' + c.id + '">Editar</button></td></tr>'; }).join('');
+    return '<div class="panel"><div class="ph"><h3>Centros de custo</h3><button class="btn-sm primary" id="cp-cc-new">+ Novo centro de custo</button></div><div class="table-wrap">' + (rows ? '<table><thead><tr><th>Nome</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="empty"><p>Nenhum centro de custo cadastrado.</p></div>') + '</div></div>';
+  }
+  function bindCpCentrosCustoTab() {
+    var n = document.getElementById('cp-cc-new'); if (n) n.onclick = function () { openCpCostCenterEditor(null); };
+    app.querySelectorAll('[data-cpccedit]').forEach(function (b) { b.onclick = function () { openCpCostCenterEditor(cpCostCenters.find(function (c) { return c.id === b.dataset.cpccedit; })); }; });
+  }
+  function openCpCostCenterEditor(cc) {
+    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:380px"><div class="mh"><h3>' + (cc ? 'Editar centro de custo' : 'Novo centro de custo') + '</h3><button class="x">×</button></div><div class="mbd"><label class="fld">Nome *</label><input class="input" id="cpcce-nm" style="width:100%" value="' + esc(cc ? cc.name : '') + '"><label class="fld"><input type="checkbox" id="cpcce-ativa"' + (!cc || cc.active ? ' checked' : '') + '> Ativo</label></div><div class="mf"><button class="btn-sm" id="cpcce-x">Cancelar</button><button class="btn-sm primary" id="cpcce-ok">Salvar</button></div></div>';
+    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
+    o.querySelector('.x').onclick = o.querySelector('#cpcce-x').onclick = function () { o.remove(); };
+    o.querySelector('#cpcce-ok').onclick = function () { var nm = o.querySelector('#cpcce-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return; } cpSaveCostCenter({ id: cc ? cc.id : null, name: nm, active: o.querySelector('#cpcce-ativa').checked, createdAt: cc && cc.createdAt }).then(function () { o.remove(); toast('Centro de custo salvo', nm); cpRenderBody(); }); };
+  }
+
+  function renderCpFornecedoresTab() {
+    var rows = cpSuppliers.slice().sort(function (a, b) { return (a.nomeFantasia || a.razaoSocial).localeCompare(b.nomeFantasia || b.razaoSocial); }).map(function (s) {
+      var n = contasPagar.filter(function (h) { return h.supplierId === s.id; }).length;
+      return '<tr><td><b>' + esc(s.nomeFantasia || s.razaoSocial) + '</b></td><td class="mono">' + esc(s.cnpjCpf || '—') + '</td><td>' + esc(s.telefone || '—') + '</td><td>' + esc(s.email || '—') + '</td><td>' + n + '</td><td><span class="badge ' + (s.active ? 'b-ok' : 'b-neutral') + '">' + (s.active ? 'Ativo' : 'Inativo') + '</span></td><td><button class="btn-sm" data-cpsupedit="' + s.id + '">Editar</button></td></tr>';
+    }).join('');
+    return '<div class="panel"><div class="ph"><h3>Fornecedores</h3><button class="btn-sm primary" id="cp-sup-new">+ Novo fornecedor</button></div><div class="table-wrap">' + (rows ? '<table><thead><tr><th>Fornecedor</th><th>CNPJ/CPF</th><th>Telefone</th><th>E-mail</th><th>Contas</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="empty"><p>Nenhum fornecedor cadastrado.</p></div>') + '</div></div>';
+  }
+  function bindCpFornecedoresTab() {
+    var n = document.getElementById('cp-sup-new'); if (n) n.onclick = function () { openCpSupplierQuickCreate(null, function () { toast('Fornecedor cadastrado', ''); cpRenderBody(); }); };
+    app.querySelectorAll('[data-cpsupedit]').forEach(function (b) { b.onclick = function () { openCpSupplierFullEditor(cpSuppliers.find(function (s) { return s.id === b.dataset.cpsupedit; })); }; });
+  }
+  function openCpSupplierFullEditor(s) {
+    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:480px"><div class="mh"><h3>Editar fornecedor</h3><button class="x">×</button></div><div class="mbd">' +
+      '<label class="fld">Razão social *</label><input class="input" id="cpsf-rz" style="width:100%" value="' + esc(s.razaoSocial || '') + '">' +
+      '<label class="fld">Nome fantasia</label><input class="input" id="cpsf-nf" style="width:100%" value="' + esc(s.nomeFantasia || '') + '">' +
+      '<label class="fld">CNPJ/CPF</label><input class="input" id="cpsf-doc" style="width:100%" value="' + esc(s.cnpjCpf || '') + '">' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><div><label class="fld">Telefone</label><input class="input" id="cpsf-tel" style="width:100%" value="' + esc(s.telefone || '') + '"></div><div><label class="fld">E-mail</label><input class="input" id="cpsf-mail" style="width:100%" value="' + esc(s.email || '') + '"></div></div>' +
+      '<label class="fld">Endereço</label><input class="input" id="cpsf-end" style="width:100%" value="' + esc(s.endereco || '') + '">' +
+      '<label class="fld">Observações</label><input class="input" id="cpsf-obs" style="width:100%" value="' + esc(s.observacoes || '') + '">' +
+      '<label class="fld"><input type="checkbox" id="cpsf-ativa"' + (s.active ? ' checked' : '') + '> Ativo</label>' +
+      '</div><div class="mf"><button class="btn-sm" id="cpsf-x">Cancelar</button><button class="btn-sm primary" id="cpsf-ok">Salvar</button></div></div>';
+    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
+    o.querySelector('.x').onclick = o.querySelector('#cpsf-x').onclick = function () { o.remove(); };
+    o.querySelector('#cpsf-ok').onclick = function () {
+      var rz = o.querySelector('#cpsf-rz').value.trim(); if (!rz) { toast('Informe a razão social', '', true); return; }
+      cpSaveSupplier({ id: s.id, razaoSocial: rz, nomeFantasia: o.querySelector('#cpsf-nf').value.trim(), cnpjCpf: o.querySelector('#cpsf-doc').value.trim(), telefone: o.querySelector('#cpsf-tel').value.trim(), email: o.querySelector('#cpsf-mail').value.trim(), endereco: o.querySelector('#cpsf-end').value.trim(), observacoes: o.querySelector('#cpsf-obs').value.trim(), active: o.querySelector('#cpsf-ativa').checked, createdAt: s.createdAt })
+        .then(function () { o.remove(); toast('Fornecedor salvo', rz); cpRenderBody(); });
+    };
+  }
+
+  // ---- exportação / impressão (§8) ----
+  function cpExportXlsx(list) {
+    if (!list.length) { toast('Nada para exportar', 'Selecione ao menos uma conta.', true); return; }
+    var rows = [['Fornecedor', 'Histórico', 'Categoria', 'Conta contábil', 'Forma de pagamento', 'Conta financeira', 'Emissão', 'Competência', 'Vencimento', 'Valor', 'Valor pago', 'Saldo', 'Situação']];
+    list.forEach(function (h) { rows.push([cpSupplierLabel(h.supplierId), h.historico || '', cpCategoryPathLabel(h.categoryId), cpAccountingLabel(h.accountingAccountId), h.paymentMethod || '', cpFinAccountLabel(h.financialAccountId), h.emissao || '', h.competencia || '', h.vencimento || '', h.valor, cpValorPagoTotal(h), cpSaldo(h), CP_STATUS_LABEL[cpStatusDerivado(h)][0]]); });
+    var ws = XLSX.utils.aoa_to_sheet(rows); var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Contas a Pagar');
+    XLSX.writeFile(wb, 'contas-a-pagar-' + cpToday() + '.xlsx');
+  }
+  function cpPrintAgrupadoPorFornecedor(list) {
+    if (!list.length) { toast('Nada para imprimir', 'Selecione ao menos uma conta.', true); return; }
+    var byForn = {}; list.forEach(function (h) { var k = cpSupplierLabel(h.supplierId); (byForn[k] = byForn[k] || []).push(h); });
+    var html = '<h2>Contas a Pagar — agrupado por fornecedor</h2>' + Object.keys(byForn).sort().map(function (k) {
+      var items = byForn[k]; var total = items.reduce(function (s, h) { return s + h.valor; }, 0);
+      return '<h3>' + esc(k) + ' — ' + brl(total) + '</h3><table border="1" cellpadding="4" style="border-collapse:collapse;width:100%;font-size:12px"><tr><th>Vencimento</th><th>Histórico</th><th>Valor</th><th>Situação</th></tr>' + items.map(function (h) { return '<tr><td>' + dbr(h.vencimento) + '</td><td>' + esc(h.historico || '') + '</td><td>' + brl(h.valor) + '</td><td>' + CP_STATUS_LABEL[cpStatusDerivado(h)][0] + '</td></tr>'; }).join('') + '</table>';
+    }).join('');
+    var w = window.open('', '_blank'); if (!w) { toast('Bloqueado pelo navegador', 'Permita pop-ups para imprimir.', true); return; }
+    w.document.write('<html><head><title>Contas a Pagar</title></head><body>' + html + '</body></html>'); w.document.close(); w.print();
+  }
+
   // ---------- boot ----------
   document.querySelectorAll('#nav a').forEach(function (a) { a.onclick = function () { route = a.dataset.route; render(); }; });
   var dateInputs = document.getElementById('dateinputs');
@@ -7421,14 +8452,14 @@
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
   var opSelBtn = document.getElementById('op-selector'); if (opSelBtn) opSelBtn.onclick = function () { openOperationSelector(); };
 
   // Abre o banco; se falhar (corrompido/bloqueado/privado), ativa o modo em memória e SEGUE —
   // o sistema sempre carrega e Produtos sempre abre (só não salva). Nunca dead-end / tela branca.
   openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers'), getAll('bankaccounts'), getAll('companies'), getAll('operations')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers'), getAll('bankaccounts'), getAll('companies'), getAll('operations'), getAll('cpheader'), getAll('cpitems'), getAll('cppayments'), getAll('cpattach'), getAll('cpcategories'), getAll('cpaccounting'), getAll('cpcostcenters'), getAll('cpsuppliers'), getAll('cpsupplylinks')]);
   }).then(function (r) {
     orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
     wallet = r[5] || [];
@@ -7450,6 +8481,8 @@
     bankTransfers = (r[22] || []).sort(function (a, b) { return (b.quando || '').localeCompare(a.quando || ''); });
     bankAccounts = (r[23] || []).sort(function (a, b) { return (a.nome || '').localeCompare(b.nome || ''); });
     companies = r[24] || []; operations = r[25] || [];
+    contasPagar = r[26] || []; cpItemsAll = r[27] || []; cpPayments = r[28] || []; cpAttachments = r[29] || [];
+    cpCategories = r[30] || []; cpAccounting = r[31] || []; cpCostCenters = r[32] || []; cpSuppliers = r[33] || []; cpSupplyLinks = r[34] || [];
     var activeSetting = settings.filter(function (x) { return x.id === 'activeOperationId'; })[0];
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
     plans = (r[4] || []).map(function (p) { if (PLAN_MIGR[p.status]) p.status = PLAN_MIGR[p.status]; if (p.scopeSkus == null && p.relatedSkus) p.scopeSkus = p.relatedSkus; if (p.indicatorKind == null) p.indicatorKind = 'liquido'; return p; });
@@ -7468,6 +8501,7 @@
         orders = byOp(orders); occ = byOp(occ); wallet = byOp(wallet); acelera = byOp(acelera);
         affConv = byOp(affConv); affRpa = byOp(affRpa); affVb = byOp(affVb);
         mrRenda = byOp(mrRenda); mrShip = byOp(mrShip); mrAdj = byOp(mrAdj); mrSvc = byOp(mrSvc);
+        contasPagar = byOp(contasPagar);
       }
       if (lastImportStamp == null && batches.length) { var last = batches.map(function (b) { return b.createdAt; }).sort().pop(); lastImportStamp = last || null; }
       if (occ.length) putMany('occ', occ);
