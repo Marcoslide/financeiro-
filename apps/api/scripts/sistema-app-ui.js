@@ -6894,6 +6894,7 @@
         { l: 'Diferença', v: diferencaOk ? 'R$ 0,00' : brl(fluxo.diferenca), cls: diferencaOk ? 'pos' : 'neg' }
       ];
       var flow = '<div class="cx-section"><h4>Fluxo do dinheiro</h4><div class="cx-flow">' + flowSteps.map(function (s) { return '<div class="cx-flow-step ' + s.cls + '"><div class="cxl">' + esc(s.l) + '</div><div class="cxv">' + s.v + '</div></div>'; }).join('') + '</div></div>';
+      function h4sub(v) { return v ? ' <span class="cx-h4-sub">' + v + '</span>' : ''; }
 
       // ---- ORIGEM DO DINHEIRO — Acelera aparece UMA VEZ (resumo), nunca repete os 4 totais dentro
       // do resgate expandido (§10-15/§49 do prompt "Refazer layout"); expandir um resgate mostra só
@@ -6904,7 +6905,7 @@
         return '<details class="cx-collapse" id="rg-' + esc(r.resgate) + '"><summary>Resgate ' + esc(r.resgate) + ' — ' + nn(r.n) + ' pedido(s)</summary><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Bruto</th><th>Taxa</th><th>Líquido</th><th>Expedição</th></tr></thead><tbody>' + pedidosTbl + '</tbody></table></div></div></details>';
       }).join('');
       var creditRows = movPost.todos.filter(function (t) { return t.amount > 0 && caixaMovCategoria(t, ac) !== 'TRANSFERENCIAS_BANCARIAS'; }).map(movRow).join('');
-      var origem = '<div class="cx-section"><h4>Origem do dinheiro</h4>' +
+      var origem = '<div class="cx-section"><h4>Origem do dinheiro' + h4sub(brl(fluxo.entrou) + ' recebido') + '</h4>' +
         '<div class="cx-kv"><span class="cxl">Shopee Acelera</span><span class="cxv">' + (ac.resgatesN ? brlC(ac.valorLiquido) + ' recebido' : '—') + '</span></div>' +
         (ac.resgatesN ? ('<div class="footnote" style="margin:-2px 0 6px">' + nn(ac.resgatesN) + ' resgate(s) · ' + nn(ac.pedidosAceleraN) + ' pedido(s) · bruto ' + brlC(ac.valorBruto) + ' · taxa ' + brlC(-Math.abs(ac.taxaAcelera)) + '</div>') : '<div class="footnote" style="margin:-2px 0 6px">Nenhum resgate do Acelera consolidado nesta data.</div>') +
         (ac.resgatesN ? ('<details class="cx-collapse"><summary>Ver resgates (' + nn(ac.resgatesN) + ')</summary><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>ID Resgate</th><th>Pedidos</th><th>Bruto</th><th>Taxa</th><th>Recebido</th></tr></thead><tbody>' + resgateRows + '</tbody></table></div>' + resgateDetails + '</div></details>') : '') +
@@ -6921,7 +6922,7 @@
         var soma = neg.reduce(function (s, t) { return s + t.amount; }, 0);
         return { k: k, label: CAIXA_MOV_CAT_LABEL[k], n: neg.length, valor: soma, rows: neg.map(movRow).join('') };
       }).filter(Boolean);
-      var descontosBlock = '<div class="cx-section"><h4>Descontos e ajustes</h4>' +
+      var descontosBlock = '<div class="cx-section"><h4>Descontos e ajustes' + h4sub(fluxo.descontos ? brl(-fluxo.descontos) : null) + '</h4>' +
         (descGroups.length ? (descGroups.map(function (g) {
           return '<div class="cx-kv"><span class="cxl">' + esc(g.label) + '</span><span class="cxv neg">' + brl(g.valor) + '</span></div>';
         }).join('') + '<details class="cx-collapse"><summary>Ver movimentos (' + nn(descGroups.reduce(function (s, g) { return s + g.n; }, 0)) + ')</summary><div class="pb">' + descGroups.map(function (g) { return '<div class="footnote" style="margin:8px 0 2px"><b>' + esc(g.label) + '</b></div><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Pedido</th><th>Descrição</th><th>Valor</th><th>Situação</th></tr></thead><tbody>' + g.rows + '</tbody></table></div>'; }).join('') + '</div></details>')
@@ -6933,7 +6934,7 @@
       // só o total. Lançamento manual é exceção, escondido atrás de um botão.
       var transfAutoRows2 = transf.autoTxs.map(function (t) { return '<div class="cx-kv"><span class="cxl">' + dbr(t.date) + ' — ' + esc((t.desc || t.tipo || '').slice(0, 40)) + ' <span class="cx-badge">Carteira Shopee</span></span><span class="cxv">' + brl(Math.abs(t.amount)) + '</span></div>'; }).join('');
       var transfManualRows2 = transf.manualComDuplicidade.map(function (x) { var t = x.t; return '<div class="cx-kv"><span class="cxl">' + new Date(t.quando).toLocaleString('pt-BR') + (t.conta ? ' — ' + esc(t.conta) : '') + ' <span class="cx-badge">Lançamento manual</span>' + (x.possivelDuplicado ? ' <span class="tag warn">⚠ possível duplicidade</span>' : '') + '</span><span class="cxv">' + brl(t.valor) + '</span></div>'; }).join('');
-      var transferBlock = '<div class="cx-section"><h4>Transferência para banco</h4>' +
+      var transferBlock = '<div class="cx-section"><h4>Transferência para banco' + h4sub(brl(transf.total)) + '</h4>' +
         '<div class="cx-kv"><span class="cxl" style="font-weight:700">Total transferido</span><span class="cxv" style="font-size:16px">' + brl(transf.total) + '</span></div>' +
         (transfAutoRows2 || transfManualRows2 ? ('<details class="cx-collapse" open><summary>Ver detalhes</summary><div class="pb">' + (transfAutoRows2 || '') + (transfManualRows2 || '') + '</div></details>') : '<div class="footnote">Nenhuma transferência localizada na Carteira para este dia.</div>') +
         '<div style="margin-top:8px"><button class="btn-sm" id="bt-abrir-manual">+ Adicionar transferência não encontrada</button></div>' +
@@ -6942,7 +6943,7 @@
       // ---- DRE DO DIA (resumida — §31-32 do prompt "Refazer layout": nunca abre o detalhamento
       // inteiro por padrão; usa exatamente os mesmos números do bloco "Ver DRE completa"). ----
       var dre = caixaDreDia(dateKey);
-      var dreResumo = '<div class="cx-section"><h4>DRE do dia</h4>' +
+      var dreResumo = '<div class="cx-section"><h4>DRE do dia' + h4sub(dre.n ? (dre.lucro != null ? brlC(dre.lucro) : 'aguardando custo') : null) + '</h4>' +
         (dre.n ? (
           '<div class="cx-kv"><span class="cxl">Receita bruta</span><span class="cxv">' + brlC(dre.receitaBruta) + '</span></div>' +
           '<div class="cx-kv"><span class="cxl">Taxas Shopee</span><span class="cxv neg">' + brlC(dre.taxasCobradas) + '</span></div>' +
@@ -6979,7 +6980,7 @@
         '<div class="fin-line total"><span>= Saldo final calculado</span><b>' + (saldoCart.saldoFinalCalculado != null ? brl(saldoCart.saldoFinalCalculado) : 'sem saldo inicial conhecido') + '</b></div>' +
         (saldoCart.saldoFinalInformado != null ? ('<div class="fin-line"><span>Saldo final informado (Carteira)</span><span>' + brl(saldoCart.saldoFinalInformado) + '</span></div>') : '') +
         '</div></details>';
-      var conferencias = '<div class="cx-section"><h4>Conferências</h4>' + pedidosDetails + expedicaoDetails + pendenciasDetails + auditoriaDetails + '</div>';
+      var conferencias = '<div class="cx-section"><h4>Conferências' + h4sub((pend.total + pendCart.total) ? nn(pend.total + pendCart.total) + ' pendência(s)' : '✓ tudo identificado') + '</h4>' + pedidosDetails + expedicaoDetails + pendenciasDetails + auditoriaDetails + '</div>';
 
       // ---- FECHAMENTO (rodapé fixo) ----
       var podeFechar = pend.total === 0 && pendCart.total === 0;
