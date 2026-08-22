@@ -4947,7 +4947,46 @@ buffer/index.js:
   // Produtos→Pedidos→Expedição→Acelera→Caixa→Minha Renda — Minha Renda pode LER o resultado desta
   // função depois; o contrário nunca pode acontecer. A Ficha do Pedido (openPedidoFicha360) e o
   // Caixa consomem exatamente o mesmo retorno — nunca duas contas para o mesmo pedido.
-  function pedidoIncomeRow(orderId) { return mrRenda.find(function (r) { return r.orderId === orderId && r.ver === 'Order'; }) || null; }
+  // §41-49 do prompt "Correção Financeira": normalização + resolução canônica do cruzamento
+  // Pedido×Income. A chave correta nunca é só orderId — é operationId (da PRÓPRIA operação do
+  // pedido, não a operação ativa no seletor — importa em modo "Todas as Operações") + orderId
+  // normalizado + ver==='Order'. Nunca reduz tudo a um "sem Income cruzado" genérico: distingue
+  // por que o cruzamento não aconteceu, para nunca esconder um bug real atrás de uma mensagem vaga.
+  function normalizeOrderId(value) {
+    if (value == null) return '';
+    return String(value).replace(/[​-‍﻿\xa0]/g, '').trim();
+  }
+  var INCOME_RESOLVE_LABEL = {
+    FOUND: 'Encontrado no Income', NOT_IN_INCOME: 'Ainda não lançado no Income',
+    WRONG_OPERATION: 'Existe no Income, mas em outra operação', DUPLICATE_ORDER_ROWS: 'Mais de uma linha "Order" para este pedido no Income',
+    INVALID_ORDER_ID: 'ID do pedido inválido',
+  };
+  function resolveIncomeOrder(operationId, orderId) {
+    var key = normalizeOrderId(orderId);
+    if (!key) return { status: 'INVALID_ORDER_ID', row: null, requestedOrderId: orderId };
+    var matches = mrRenda.filter(function (r) { return r.ver === 'Order' && normalizeOrderId(r.orderId) === key; });
+    if (!matches.length) return { status: 'NOT_IN_INCOME', row: null, requestedOrderId: orderId };
+    // registros sem operationId (dado legado pré-migração) são visíveis em qualquer operação —
+    // mesma regra defensiva já usada no filtro de boot multi-operação (§Fase 10-12).
+    var sameOp = matches.filter(function (r) { return !operationId || !r.operationId || r.operationId === operationId; });
+    if (!sameOp.length) return { status: 'WRONG_OPERATION', row: null, requestedOrderId: orderId, foundInOperationId: matches[0].operationId };
+    if (sameOp.length > 1) return { status: 'DUPLICATE_ORDER_ROWS', row: sameOp[0], requestedOrderId: orderId, count: sameOp.length };
+    return { status: 'FOUND', row: sameOp[0], requestedOrderId: orderId };
+  }
+  function pedidoIncomeRow(orderId) {
+    var ord = orders.find(function (x) { return x.id === orderId; });
+    var opId = (ord && ord.operationId) || opActiveOrNull() || null;
+    var res = resolveIncomeOrder(opId, orderId);
+    return res.status === 'FOUND' ? res.row : null;
+  }
+  // Variante que também devolve o diagnóstico completo — usada pela Ficha do Pedido (Conciliação)
+  // e pelo status financeiro; pedidoIncomeRow() continua existindo para os consumidores que só
+  // precisam do valor (nunca duplica a busca — delega para a mesma resolveIncomeOrder()).
+  function pedidoIncomeResolve(orderId) {
+    var ord = orders.find(function (x) { return x.id === orderId; });
+    var opId = (ord && ord.operationId) || opActiveOrNull() || null;
+    return resolveIncomeOrder(opId, orderId);
+  }
   // Fórmula canônica do envio (PROMPT MESTRE Parte D, §27-39) — validada empiricamente contra os
   // 1.662 pedidos Order do Income real: soma dos 5 componentes com os sinais originais fecha
   // exatamente com "Subtotal de Envio" do Summary (0 centavo de diferença). Nunca mostrar o
@@ -4967,7 +5006,8 @@ buffer/index.js:
   }
   function pedidoComposicaoFinanceira(orderId) {
     var ord = orders.find(function (x) { return x.id === orderId; });
-    var mrRow = pedidoIncomeRow(orderId);
+    var incomeResolve = resolveIncomeOrder((ord && ord.operationId) || opActiveOrNull() || null, orderId);
+    var mrRow = incomeResolve.status === 'FOUND' ? incomeResolve.row : null;
     var svcRows = mrSvc.filter(function (v) { return v.orderId === orderId; });
     var receitaC = mrRow ? mrRow.preco : (ord ? Math.round(orderFinance(ord).revenue * 100) : null);
     var custoProdC = null, custoPendente = false;
@@ -5046,7 +5086,13 @@ buffer/index.js:
       var diff = mrRow.liberado - (mrRow.preco + taxasSomaSemAjusteC);
       if (Math.abs(diff) > 2) pendencia = { id: 'PENDFIN-' + orderId, origem: 'PEDIDOS', orderId: orderId, tipo: 'COMPOSICAO_FINANCEIRA', diff: diff, liberado: mrRow.liberado, calculado: mrRow.preco + taxasSomaSemAjusteC, motivo: 'Diferença financeira de ' + brlC(diff) + ' entre a composição do pedido e a Quantia Total Lançada — etapa: composição Shopee, motivo: lançamento não classificado' };
     }
-    return { orderId: orderId, temIncome: !!mrRow, mrRow: mrRow, ord: ord, svcRows: svcRows, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gEnvio: gEnvio, gOutros: gOutros, envio: envio, auditoriaFonte: auditoriaFonte, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), envioC: somaGrupo(gEnvio), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, taxasSomaSemAjusteC: taxasSomaSemAjusteC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia };
+    // §59 do prompt "Correção Financeira": status financeiro único, nunca "aproximado" tratado como
+    // definitivo — CONFIRMADO (Income encontrado e a matemática fecha), DIVERGÊNCIA (Income encontrado
+    // mas a Quantia Total Lançada não bate com a composição — pendência real) ou PROVISÓRIO (Income
+    // ainda não cobre este pedido, ou o cruzamento apontou um caso que precisa de auditoria — motivo em
+    // incomeResolve.status: NOT_IN_INCOME/WRONG_OPERATION/DUPLICATE_ORDER_ROWS/INVALID_ORDER_ID).
+    var statusFinanceiro = mrRow ? (pendencia ? 'DIVERGENCIA' : 'CONFIRMADO') : 'PROVISORIO';
+    return { orderId: orderId, temIncome: !!mrRow, mrRow: mrRow, incomeResolve: incomeResolve, statusFinanceiro: statusFinanceiro, ord: ord, svcRows: svcRows, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gEnvio: gEnvio, gOutros: gOutros, envio: envio, auditoriaFonte: auditoriaFonte, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), envioC: somaGrupo(gEnvio), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, taxasSomaSemAjusteC: taxasSomaSemAjusteC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia };
   }
   // Ficha do Pedido consolidada (Fase 2 da arquitetura) — jornada única, sem "Ficha 360" separada
   // e sem esconder taxas atrás de cliques extras: Venda → Custos → Taxas detalhadas → Margem →
@@ -6660,6 +6706,22 @@ buffer/index.js:
   }
   function walletNum(v) { if (v == null) return null; var s = String(v).trim(); if (s === '' || s === '-') return null; s = s.replace(/\s/g, ''); if (s.indexOf(',') >= 0 && s.indexOf('.') >= 0) s = s.replace(/\./g, '').replace(',', '.'); else if (s.indexOf(',') >= 0) s = s.replace(',', '.'); var n = Number(s); return isNaN(n) ? null : n; }
   function parseWalletDate(d) { var x = new Date(String(d).replace(' ', 'T')); return isNaN(x) ? null : x.toISOString(); }
+  // §26/§53 do prompt "Correção Financeira": BUG DE DATA real — parseWalletDate() acima grava
+  // t.date como um instante UTC (toISOString(), com 'Z'). t.date.slice(0,10) usado nos motores de
+  // Caixa/Carteira para agrupar por dia extraía o DIA EM UTC, enquanto dbr(t.date) — usado para
+  // EXIBIR essa mesma data — reconstrói o dia em horário LOCAL do navegador (toLocaleDateString).
+  // Um Pix/ajuste tarde da noite (ex.: 22h-23h59 local) cruza a meia-noite ao virar UTC e passava a
+  // ser agrupado no dia SEGUINTE ao que aparecia na tela — exatamente o sintoma relatado (fechamento
+  // de um dia mostrando transferência com a data do dia anterior). Corrige na FONTE do agrupamento —
+  // nunca no parser (walletKey/dedup por id permanece intocado, sem risco de duplicar reimportação) —
+  // usando os mesmos getters LOCAIS que dbr() já usa para exibir, então agrupamento e exibição nunca
+  // mais divergem.
+  function walletLocalDayKey(t) {
+    if (!t || !t.date) return null;
+    var x = new Date(t.date); if (isNaN(x)) return null;
+    var y = x.getFullYear(), m = x.getMonth() + 1, dd = x.getDate();
+    return y + '-' + (m < 10 ? '0' : '') + m + '-' + (dd < 10 ? '0' : '') + dd;
+  }
   function walletCat(tipo, desc, amount) {
     var t = normStatus(tipo), s = normStatus(desc), entrada = amount >= 0;
     if (/renda do pedido|renda de pedido|renda|liberacao/.test(t)) return 'RENDA';
@@ -6840,7 +6902,7 @@ buffer/index.js:
     if (reconstructed.length) { var c2 = cats['SEMLINHA'] = cats['SEMLINHA'] || { cat: 'SEMLINHA', n: 0, ent: 0, sai: 0 }; reconstructed.forEach(function (t) { c2.n++; if (t.amount > 0) c2.ent += t.amount; else c2.sai += t.amount; }); }
     var devDesc = real.filter(function (t) { return t.category === 'DEVOLUCAO' && t.amount < 0; });
     // dias com valor a ajustar (todo o histórico, snapshot)
-    var adjDays = {}; wallet.forEach(function (t) { if (t.adjust != null && Math.abs(t.adjust) > 0.01 && t.date) adjDays[t.date.slice(0, 10)] = 1; });
+    var adjDays = {}; wallet.forEach(function (t) { if (t.adjust != null && Math.abs(t.adjust) > 0.01 && t.date) adjDays[walletLocalDayKey(t)] = 1; });
     var adjVals = wallet.map(function (t) { return t.adjust; }).filter(function (v) { return v != null; });
     var peakAdj = adjVals.length ? adjVals.reduce(function (m, v) { return Math.abs(v) > Math.abs(m) ? v : m; }, 0) : 0;
     return {
@@ -6893,7 +6955,7 @@ buffer/index.js:
     return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="max-width:' + W + 'px">' + zero + lineA + lineB + lineC + labels + yl + '</svg>';
   }
   function walletSaldoSeries() {
-    var byDay = {}; wallet.filter(function (t) { return t.date && inPeriod(t.date); }).sort(function (a, b) { return a.date.localeCompare(b.date); }).forEach(function (t) { var d = t.date.slice(0, 10); if (!byDay[d]) byDay[d] = { label: monthDayLabel(d), a: null, b: null }; if (t.balance != null) byDay[d].a = t.balance; if (t.adjust != null) byDay[d].b = t.adjust; });
+    var byDay = {}; wallet.filter(function (t) { return t.date && inPeriod(t.date); }).sort(function (a, b) { return a.date.localeCompare(b.date); }).forEach(function (t) { var d = walletLocalDayKey(t); if (!byDay[d]) byDay[d] = { label: monthDayLabel(d), a: null, b: null }; if (t.balance != null) byDay[d].a = t.balance; if (t.adjust != null) byDay[d].b = t.adjust; });
     var arr = Object.keys(byDay).sort().map(function (k) { return byDay[k]; }); var lastA = 0, lastB = 0; arr.forEach(function (p) { if (p.a == null) p.a = lastA; else lastA = p.a; if (p.b == null) p.b = lastB; else lastB = p.b; }); return arr;
   }
   function monthDayLabel(d) { var p = d.split('-'); return p[2] + '/' + p[1]; }
@@ -7016,7 +7078,7 @@ buffer/index.js:
   // fechado, o dia vira "Revisão necessária" (§26) sem apagar o histórico anterior.
   var CLOSE_LABEL = { ABERTO: ['Aberto', 'neutral'], FECHADO: ['Fechado', 'ok'], FECHADO_COM_PENDENCIAS: ['Fechado com pendências', 'warn'], REVISAO_NECESSARIA: ['Revisão necessária', 'warn'] };
   function walletDayMetrics(dateKey) {
-    var txs = wallet.filter(function (t) { return t.date && t.date.slice(0, 10) === dateKey && t.origin === 'SHOPEE'; });
+    var txs = wallet.filter(function (t) { return t.date && walletLocalDayKey(t) === dateKey && t.origin === 'SHOPEE'; });
     var entradas = 0, saidas = 0, conciliado = 0, pendente = 0, pendN = 0;
     txs.forEach(function (t) { if (t.amount > 0) entradas += t.amount; else saidas += t.amount; if (wIsExplained(t)) conciliado += Math.abs(t.amount); else { pendente += Math.abs(t.amount); pendN++; } });
     return { dateKey: dateKey, n: txs.length, entradas: r2(entradas), saidas: r2(saidas), liquido: r2(entradas + saidas), conciliado: r2(conciliado), pendente: r2(pendente), pendN: pendN };
@@ -7052,7 +7114,7 @@ buffer/index.js:
   // continua existindo como conferência de extrato/saldo da Carteira (nunca apagada, já aprovada),
   // mas não é mais chamada "fechamento" para não sugerir um segundo encerramento oficial do dia.
   function walletFechamento() {
-    var days = {}; wallet.forEach(function (t) { if (t.date && t.origin === 'SHOPEE') days[t.date.slice(0, 10)] = 1; });
+    var days = {}; wallet.forEach(function (t) { if (t.date && t.origin === 'SHOPEE') days[walletLocalDayKey(t)] = 1; });
     var head = secHead('CARTEIRA · CONFERÊNCIA DE EXTRATO', 'Conferência diária do saldo', 'Para cada dia: veja operação, Acelera, movimentação da carteira e conciliação de SALDO juntos — feche quando estiver tudo certo, ou feche com pendências e justifique.') +
       callout('', 'O fechamento diário oficial é o Caixa', 'Esta tela confere o saldo/extrato da Carteira — não é mais o encerramento oficial do dia. Para fechar o dia (vendas, expedição, Acelera, pendências e DRE), use o menu <b>Caixa → Fechamento Diário</b>.');
     if (!Object.keys(days).length) return head + emptyBox('Nenhuma movimentação real (Shopee) importada ainda.');
@@ -7091,14 +7153,14 @@ buffer/index.js:
     if (!acelera.length) return null;
     var dias = aceleraByDia(acelera); var d = dias.filter(function (x) { return x.data === dateKey; })[0];
     if (!d) return { n: 0 };
-    var walletAcelera = wallet.filter(function (t) { return t.date && t.date.slice(0, 10) === dateKey && wEffCat(t) === 'ACELERA'; });
+    var walletAcelera = wallet.filter(function (t) { return t.date && walletLocalDayKey(t) === dateKey && wEffCat(t) === 'ACELERA'; });
     var walletCredito = r2(walletAcelera.reduce(function (s, t) { return s + t.amount; }, 0));
     var liquidoEsperado = r2(d.liquidoCalc / 100);
     var bate = Math.abs(r2(walletCredito - liquidoEsperado)) <= 0.05;
     return { n: d.resgates, antec: d.antec, taxa: d.taxa, liquidoCalc: d.liquidoCalc, walletCredito: walletCredito, liquidoEsperado: liquidoEsperado, bate: bate, temCreditoNaCarteira: walletAcelera.length > 0 };
   }
   function walletDayMov(dateKey) {
-    var txs = wallet.filter(function (t) { return t.date && t.date.slice(0, 10) === dateKey && t.origin === 'SHOPEE'; });
+    var txs = wallet.filter(function (t) { return t.date && walletLocalDayKey(t) === dateKey && t.origin === 'SHOPEE'; });
     var entradas = 0, saidas = 0, entIdent = 0, entNao = 0, saiIdent = 0, saiNao = 0;
     txs.forEach(function (t) {
       var ident = !!wOrderId(t);
@@ -7111,15 +7173,15 @@ buffer/index.js:
   // (bypassa inPeriod global — Fechamento é sempre por dia, independente do filtro de período ativo).
   function walletDayConciliacao(dateKey) {
     var rec = reconcileWallet();
-    var real = rec.txs.filter(function (t) { return t.date && t.date.slice(0, 10) === dateKey && t.origin === 'SHOPEE'; });
+    var real = rec.txs.filter(function (t) { return t.date && walletLocalDayKey(t) === dateKey && t.origin === 'SHOPEE'; });
     var g = walletOrigemDiag({ real: real });
-    var diffsDay = rec.diffs.filter(function (d) { return d.date && d.date.slice(0, 10) === dateKey; });
+    var diffsDay = rec.diffs.filter(function (d) { return d.date && walletLocalDayKey(d) === dateKey; });
     var diffsAbertas = diffsDay.filter(function (d) { return d.status === 'DIVERGENTE' && !wIsExplained(d.rec) && wStatus(d.rec) !== 'CONTESTACAO' && wStatus(d.rec) !== 'EM_ANALISE'; });
     var classificadosManual = real.filter(function (t) { var c = wgetCls(t.id); return c && c.catManual; }).length;
     var seen = {}; var items = [];
     function add(t, tipo, motivo, detalhe) { if (seen[t.id]) return; seen[t.id] = true; items.push({ t: t, tipo: tipo, motivo: motivo, detalhe: detalhe }); }
     g.divergentes.forEach(function (x) { add(x.t, 'DIVERGENCIA_VALOR', 'Diferença de valor — ' + x.origin.fonte, 'Esperado ' + brl(x.origin.esperado) + ' · Carteira ' + brl(x.t.amount) + ' · Diferença ' + brl(x.origin.diff)); });
-    g.dup.forEach(function (d) { d.itens.forEach(function (t) { if (t.date && t.date.slice(0, 10) === dateKey) add(t, 'DUPLICIDADE', 'Possível cobrança duplicada — ' + d.fonte, nn(d.itens.length) + '× o mesmo valor (' + brl(d.valor) + ') na carteira'); }); });
+    g.dup.forEach(function (d) { d.itens.forEach(function (t) { if (t.date && walletLocalDayKey(t) === dateKey) add(t, 'DUPLICIDADE', 'Possível cobrança duplicada — ' + d.fonte, nn(d.itens.length) + '× o mesmo valor (' + brl(d.valor) + ') na carteira'); }); });
     g.candidatos.forEach(function (x) { add(x.t, 'CANDIDATO', 'Candidato de conciliação — ' + x.origin.fonte, 'Valor e janela de data batem, mas sem ID exato — confirme manualmente'); });
     g.semOrigem.forEach(function (t) { add(t, 'SEM_ORIGEM', 'Origem não identificada (' + wcatLabel(wEffCat(t)) + ')', 'Fonte relevante já cobre esta data e mesmo assim não achou correspondência'); });
     diffsDay.filter(function (d) { return d.status === 'DIVERGENTE'; }).forEach(function (d) { add(d.rec, 'AJUSTE_SEM_LINHA', 'Diferença de saldo do extrato (ajuste sem linha)', 'Esperado ' + brl(d.expected) + ' · Informado ' + brl(d.informed) + ' · Diferença ' + brl(d.gap)); });
@@ -9868,7 +9930,7 @@ buffer/index.js:
   // mostra o quadro completo; walletOrigemDiag continua sendo a única fonte de "isso está
   // explicado?"). Read-only — nunca altera pedido/bip/Acelera/devolução/Income.
   function caixaDayMovimentosCarteira(dateKey) {
-    var txs = wallet.filter(function (t) { return t.origin === 'SHOPEE' && t.date && t.date.slice(0, 10) === dateKey; });
+    var txs = wallet.filter(function (t) { return t.origin === 'SHOPEE' && t.date && walletLocalDayKey(t) === dateKey; });
     var creditos = txs.filter(function (t) { return t.amount > 0; }).sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); });
     var debitos = txs.filter(function (t) { return t.amount < 0; }).sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); });
     return { creditos: creditos, debitos: debitos };
@@ -9879,7 +9941,7 @@ buffer/index.js:
   // duplicam silenciosamente um Pix já reconhecido — só sinalizam possível duplicidade (mesmo dia,
   // valor ~igual) para o operador decidir; nunca some sozinho.
   function caixaDayTransferenciasBancarias(dateKey) {
-    var autoTxs = wallet.filter(function (t) { return t.origin === 'SHOPEE' && t.date && t.date.slice(0, 10) === dateKey && wIsTransferenciaBancaria(t); });
+    var autoTxs = wallet.filter(function (t) { return t.origin === 'SHOPEE' && t.date && walletLocalDayKey(t) === dateKey && wIsTransferenciaBancaria(t); });
     var autoTotal = autoTxs.reduce(function (s, t) { return s + Math.abs(t.amount); }, 0);
     var manual = bankTransfers.filter(function (t) { return t.quando && t.quando.slice(0, 10) === dateKey; });
     var manualTotal = manual.reduce(function (s, t) { return s + t.valor; }, 0);
@@ -9891,9 +9953,9 @@ buffer/index.js:
   // inventa saldo inicial: se não há linha anterior com saldo conhecido, mostra "sem saldo inicial
   // conhecido" em vez de assumir zero.
   function caixaDaySaldoCarteira(dateKey) {
-    var antes = wallet.filter(function (t) { return t.balance != null && t.date && t.date.slice(0, 10) < dateKey; }).sort(function (a, b) { return (a.date || '').localeCompare(b.date || ''); });
+    var antes = wallet.filter(function (t) { return t.balance != null && t.date && walletLocalDayKey(t) < dateKey; }).sort(function (a, b) { return (a.date || '').localeCompare(b.date || ''); });
     var saldoInicial = antes.length ? antes[antes.length - 1].balance : null;
-    var doDia = wallet.filter(function (t) { return t.balance != null && t.date && t.date.slice(0, 10) === dateKey; }).sort(function (a, b) { return (a.date || '').localeCompare(b.date || ''); });
+    var doDia = wallet.filter(function (t) { return t.balance != null && t.date && walletLocalDayKey(t) === dateKey; }).sort(function (a, b) { return (a.date || '').localeCompare(b.date || ''); });
     var saldoFinalInformado = doDia.length ? doDia[doDia.length - 1].balance : null;
     var mov = caixaDayMovimentosCarteira(dateKey);
     var entradas = mov.creditos.reduce(function (s, t) { return s + t.amount; }, 0);
@@ -9943,7 +10005,7 @@ buffer/index.js:
   function wCarteiraResolvido(c) { return !!c && (c.internalStatus === 'RESOLVIDO' || c.internalStatus === 'EXPLICADO'); }
   function caixaDayPendenciasCarteira(dateKey) {
     if (!wallet.length) return { total: 0, itens: [] };
-    var txs = wallet.filter(function (t) { return t.origin === 'SHOPEE' && t.date && t.date.slice(0, 10) === dateKey; });
+    var txs = wallet.filter(function (t) { return t.origin === 'SHOPEE' && t.date && walletLocalDayKey(t) === dateKey; });
     var coverage = walletSourceCoverage(); var itens = [];
     txs.forEach(function (t) {
       var cat = wEffCat(t); var c = wgetCls(t.id) || {};
@@ -9977,7 +10039,7 @@ buffer/index.js:
   function caixaDayLancamentosConciliados(dateKey) {
     if (!wallet.length) return { itens: [], porCategoria: {} };
     var ac = aceleraResultadoFechamento(dateKey);
-    var txs = wallet.filter(function (t) { return t.origin === 'SHOPEE' && t.date && t.date.slice(0, 10) === dateKey; });
+    var txs = wallet.filter(function (t) { return t.origin === 'SHOPEE' && t.date && walletLocalDayKey(t) === dateKey; });
     var itens = [];
     txs.forEach(function (t) {
       var cat = wEffCat(t); var c = wgetCls(t.id) || {};
@@ -10002,11 +10064,23 @@ buffer/index.js:
   // §100-101 — Cadastro persistente de Bancos/Contas: uma vez cadastrada, a conta aparece no
   // dropdown de todos os próximos fechamentos — nunca precisa recadastrar todo dia.
   function bankAccountLabel(id) { var b = bankAccounts.find(function (x) { return x.id === id; }); return b ? (b.nome + (b.banco ? ' — ' + b.banco : '')) : null; }
+  // §31 do prompt "Correção Financeira": conta bancária precisa saber a qual EMPRESA (CNPJ) pertence
+  // — nunca mostrar conta de CNPJ errado por padrão. companyId vem da empresa da operação ativa no
+  // momento do cadastro; operationId é opcional (uma conta pode servir a mais de uma loja da mesma
+  // empresa). Contas sem companyId (cadastradas antes desta correção) continuam visíveis em qualquer
+  // empresa — mesma regra defensiva de compatibilidade já usada no resto da arquitetura multiempresa.
   function bankAccountSave(rec) {
     var id = rec.id || ('BANK-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
-    var full = { id: id, nome: rec.nome, banco: rec.banco || '', agencia: rec.agencia || '', conta: rec.conta || '', tipo: rec.tipo || '', titular: rec.titular || '', documento: rec.documento || '', observacao: rec.observacao || '', ativa: rec.ativa !== false, createdAt: rec.createdAt || new Date().toISOString() };
+    var op = opActive(); var comp = op ? opCompany(op) : null;
+    var full = { id: id, companyId: rec.companyId !== undefined ? rec.companyId : (comp ? comp.id : null), operationId: rec.operationId !== undefined ? rec.operationId : null, nome: rec.nome, banco: rec.banco || '', agencia: rec.agencia || '', conta: rec.conta || '', tipo: rec.tipo || '', titular: rec.titular || '', documento: rec.documento || '', observacao: rec.observacao || '', ativa: rec.ativa !== false, createdAt: rec.createdAt || new Date().toISOString() };
     bankAccounts = [full].concat(bankAccounts.filter(function (b) { return b.id !== id; }));
     return putMany('bankaccounts', [full]).then(function () { return full; });
+  }
+  // Contas visíveis para a empresa ativa: sem companyId (legado) OU companyId igual ao da operação
+  // ativa. Nunca lista a conta de outro CNPJ por padrão.
+  function bankAccountsForActiveCompany() {
+    var op = opActive(); var comp = op ? opCompany(op) : null; var compId = comp ? comp.id : null;
+    return bankAccounts.filter(function (b) { return !b.companyId || b.companyId === compId; });
   }
   // §W-Y do complemento: cadastrar conta DIRETO no fluxo do fechamento — nunca obrigar o operador a
   // sair da tela. Mesmo bankAccountSave/store já aprovado (§100-101); só um modal mais enxuto.
@@ -10104,6 +10178,13 @@ buffer/index.js:
     return putMany('operations', [full]).then(function () { return full; });
   }
   // §BA-BD do complemento: wizard simplificado (empresa existente ou nova + marketplace + loja).
+  // §Bug Nova Empresa (prompt mestre Parte 1): a visibilidade dos campos de empresa nova precisa
+  // depender SÓ do valor atual do select (#no-empresa), nunca de companies.length — antes disso, com
+  // companies.length > 0 o container nascia display:none mesmo com "+ Nova empresa" pré-selecionado
+  // (é sempre a primeira <option>), então a validação de "razão social" travava num campo invisível.
+  // syncNovaEmpresaFields() é a ÚNICA fonte de verdade da visibilidade, chamada tanto no render inicial
+  // quanto no onchange — nunca mais um cálculo derivado de outra coisa que não o valor do select.
+  function cnpjDigits(v) { return String(v || '').replace(/\D/g, ''); }
   function openNovaOperacaoModal() {
     var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '480px'; panel.style.maxWidth = '96vw';
     d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
@@ -10111,10 +10192,13 @@ buffer/index.js:
       var companyOptions = '<option value="__nova__">+ Nova empresa</option>' + companies.map(function (c) { return '<option value="' + esc(c.id) + '">' + esc(c.nomeFantasia || c.razaoSocial) + (c.cnpj ? ' — ' + esc(c.cnpj) : '') + '</option>'; }).join('');
       panel.innerHTML = '<div class="dh"><div><b>Nova operação</b></div><button class="x">&times;</button></div><div class="dbd">' +
         '<label class="fld">Empresa (CNPJ)</label><select class="select" id="no-empresa" style="width:100%">' + companyOptions + '</select>' +
-        '<div id="no-empresa-nova" style="display:' + (companies.length ? 'none' : 'block') + '">' +
-        '<label class="fld">Razão social</label><input class="input" id="no-razao" style="width:100%">' +
-        '<label class="fld">Nome fantasia</label><input class="input" id="no-fantasia" style="width:100%">' +
-        '<label class="fld">CNPJ</label><input class="input" id="no-cnpj" style="width:100%">' +
+        '<div id="no-empresa-nova">' +
+        '<label class="fld">Razão social *</label><input class="input" id="no-razao" style="width:100%">' +
+        '<label class="fld">Nome fantasia *</label><input class="input" id="no-fantasia" style="width:100%">' +
+        '<label class="fld">CNPJ *</label><input class="input" id="no-cnpj" style="width:100%" placeholder="00.000.000/0000-00">' +
+        '<label class="fld">Inscrição estadual</label><input class="input" id="no-ie" style="width:100%">' +
+        '<label class="fld">Observação</label><input class="input" id="no-obs" style="width:100%">' +
+        '<div id="no-err"></div>' +
         '</div>' +
         '<label class="fld">Marketplace</label><select class="select" id="no-mkt" style="width:100%"><option value="Shopee">Shopee</option><option value="Mercado Livre">Mercado Livre</option><option value="Amazon">Amazon</option><option value="Outro">Outro</option></select>' +
         '<label class="fld">Nome da loja</label><input class="input" id="no-loja" style="width:100%" placeholder="Ex.: lidermolduras">' +
@@ -10123,7 +10207,9 @@ buffer/index.js:
         '</div>';
       panel.querySelector('.x').onclick = function () { d.remove(); };
       var empresaSel = panel.querySelector('#no-empresa'); var novaDiv = panel.querySelector('#no-empresa-nova');
-      empresaSel.onchange = function () { novaDiv.style.display = empresaSel.value === '__nova__' ? 'block' : 'none'; };
+      function syncNovaEmpresaFields() { novaDiv.style.display = empresaSel.value === '__nova__' ? 'block' : 'none'; }
+      syncNovaEmpresaFields(); // estado inicial — nunca companies.length
+      empresaSel.onchange = syncNovaEmpresaFields;
       panel.querySelector('#no-salvar').onclick = function () {
         var loja = panel.querySelector('#no-loja').value.trim(); if (!loja) { toast('Informe o nome da loja', '', true); return; }
         var proceed = function (companyId) {
@@ -10132,8 +10218,14 @@ buffer/index.js:
           });
         };
         if (empresaSel.value === '__nova__') {
-          var razao = panel.querySelector('#no-razao').value.trim(); if (!razao) { toast('Informe a razão social da nova empresa', '', true); return; }
-          companySave({ razaoSocial: razao, nomeFantasia: panel.querySelector('#no-fantasia').value.trim() || razao, cnpj: panel.querySelector('#no-cnpj').value.trim() }).then(function (c) { proceed(c.id); });
+          var errEl = panel.querySelector('#no-err');
+          var razao = panel.querySelector('#no-razao').value.trim();
+          if (!razao) { errEl.innerHTML = '<div class="form-err">Informe a razão social da nova empresa.</div>'; return; }
+          var cnpjRaw = panel.querySelector('#no-cnpj').value.trim();
+          var digits = cnpjDigits(cnpjRaw);
+          if (cnpjRaw && digits.length !== 14) { errEl.innerHTML = '<div class="form-err">CNPJ inválido — informe os 14 dígitos (ou deixe em branco).</div>'; return; }
+          errEl.innerHTML = '';
+          companySave({ razaoSocial: razao, nomeFantasia: panel.querySelector('#no-fantasia').value.trim() || razao, cnpj: cnpjRaw, inscricaoEstadual: panel.querySelector('#no-ie').value.trim(), observacao: panel.querySelector('#no-obs').value.trim() }).then(function (c) { proceed(c.id); });
         } else proceed(empresaSel.value);
       };
     }
@@ -10430,7 +10522,7 @@ buffer/index.js:
       // contas/casos sem Carteira importada, com aviso de possível duplicidade (nunca soma às cegas).
       var transfAutoRows = transf.autoTxs.map(function (t) { return '<tr class="rowlink" data-wtx="' + esc(t.id) + '"><td class="nowrap">' + dbr(t.date) + '</td><td class="cell-text">' + esc((t.desc || t.tipo || '—').slice(0, 50)) + '</td><td class="nowrap">' + brl(Math.abs(t.amount)) + '</td><td><span class="tag ok">🟢 Carteira Shopee</span></td></tr>'; }).join('');
       var transfManualRows = transf.manualComDuplicidade.map(function (x) { var t = x.t; return '<div class="fin-line"><span>' + new Date(t.quando).toLocaleString('pt-BR') + (t.conta ? ' · ' + esc(t.conta) : '') + (t.observacao ? ' <span class="footnote" style="margin:0">' + esc(t.observacao) + '</span>' : '') + (x.possivelDuplicado ? ' <span class="tag warn">⚠ possível duplicidade de um Pix já importado da Carteira</span>' : '') + '</span><b>' + brl(t.valor) + '</b></div>'; }).join('');
-      var bancoOptions = '<option value="">Selecione a conta…</option>' + bankAccounts.filter(function (b) { return b.ativa !== false; }).map(function (b) { return '<option value="' + esc(b.id) + '">' + esc(b.nome) + (b.banco ? ' — ' + esc(b.banco) : '') + '</option>'; }).join('') + '<option value="__novo__">+ Cadastrar nova conta</option>';
+      var bancoOptions = '<option value="">Selecione a conta…</option>' + bankAccountsForActiveCompany().filter(function (b) { return b.ativa !== false; }).map(function (b) { return '<option value="' + esc(b.id) + '">' + esc(b.nome) + (b.banco ? ' — ' + esc(b.banco) : '') + '</option>'; }).join('') + '<option value="__novo__">+ Cadastrar nova conta</option>';
       var bloco5 = '<div class="panel"><div class="ph"><h3>5. Transferências Bancárias</h3><span class="footnote" style="margin:0">total do dia: ' + brl(transf.total) + '</span></div><div class="pb">' +
         (transf.autoTxs.length ? ('<div style="margin:4px 0"><b>Reconhecidas automaticamente na Carteira (Pix/Saque/Transferência)</b></div><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Descrição</th><th>Valor</th><th>Origem</th></tr></thead><tbody>' + transfAutoRows + '</tbody></table></div>') : '<div class="footnote" style="margin:4px 0">Nenhum Pix/Saque/Transferência reconhecido na Carteira para este dia.</div>') +
         '<div style="margin:12px 0 4px"><b>Registros manuais</b></div>' +
