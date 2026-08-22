@@ -250,7 +250,7 @@
         <option value="custom">Personalizado…</option>
       </select>
       <div class="datein" id="dateinputs"><input class="input sm" type="date" id="dfrom"><span style="color:var(--muted);font-size:12px">até</span><input class="input sm" type="date" id="dto"><button class="btn-sm primary" id="dapply">Aplicar</button></div>
-      <div class="top-store"><span class="dot"></span> Loja: <b>lidermolduras</b></div>
+      <div class="top-store" id="op-selector" style="cursor:pointer;user-select:none"><span class="dot"></span> <b id="op-selector-label">Carregando…</b> <span style="font-size:10px;margin-left:2px">▼</span></div>
       <div class="avatar">LM</div>
     </div>
     <div class="content" id="app"></div>
@@ -3839,6 +3839,27 @@ buffer/index.js:
   // §100-104: cadastro persistente de contas bancárias — cadastra uma vez, aparece no dropdown de
   // todos os próximos fechamentos.
   var bankAccounts = []; // { id, nome, banco, agencia, conta, tipo, ativa, createdAt }
+  // ---- MULTI-CNPJ / MULTI-OPERAÇÃO / MULTI-LOJA ----
+  // Empresa (CNPJ) → Operação (loja/marketplace) — hierarquia aditiva, sem quebrar nenhum dado
+  // existente. orders/wallet/acelera/mrRenda/occ/affConv/... ganham operationId (campo novo) e são
+  // FILTRADOS em memória no boot pela operação ativa — cada motor de negócio já existente (centenas
+  // de funções) continua lendo os MESMOS arrays globais sem nenhuma alteração, porque o array só
+  // contém os registros da operação ativa (ou de todas, no modo consolidado). Isso evita reescrever
+  // cada função para aceitar operationId — a fronteira multi-tenant vive só no boot/import/UI.
+  var OP_ALL = '__ALL__'; // sentinela do modo "Todas as Operações" (agregação — nunca mistura o dado gravado)
+  var companies = []; // { id, razaoSocial, nomeFantasia, cnpj, inscricaoEstadual, observacao, ativa, createdAt }
+  var operations = []; // { id, companyId, nome, marketplace, storeName, sellerId, ativa, createdAt }
+  var activeOperationId = null; // null só antes do boot terminar; depois, um id real ou OP_ALL
+  function opActive() { return operations.find(function (o) { return o.id === activeOperationId; }) || null; }
+  function opCompany(op) { return op ? companies.find(function (c) { return c.id === op.companyId; }) : null; }
+  function opLabel(op) { var c = opCompany(op); return op ? ((c ? c.nomeFantasia || c.razaoSocial : '—') + ' · ' + (op.marketplace || op.nome)) : '—'; }
+  // Toda importação exige uma operação ESPECÍFICA selecionada — nunca "Todas as Operações" (§AV do
+  // complemento). Cada import*() já tem `.catch(function(e){ toast('Falha', e.message, true); })`
+  // no chamador — rejeitar com uma mensagem clara reaproveita esse mecanismo, sem duplicar toast.
+  // Nunca lança síncrono (quebraria a cadeia de Promise do import*) — cada import*() checa
+  // opActiveOrNull() no início e devolve Promise.reject() explicitamente quando bloqueado.
+  function opActiveOrNull() { return (activeOperationId && activeOperationId !== OP_ALL) ? activeOperationId : null; }
+  var OP_BLOCK_MSG = 'Escolha uma operação específica (empresa/loja) no topo antes de importar este arquivo.';
   var walletF = { search: '', cat: '', flow: '' }; // filtros da tabela de movimentações
   var walletStamp = null;     // "atualizado até" da carteira
   var Produtos = null;
@@ -4060,7 +4081,7 @@ buffer/index.js:
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id', bankaccounts: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id', bankaccounts: 'id', companies: 'id', operations: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -4174,6 +4195,7 @@ buffer/index.js:
 
   // ============================================================ IMPORTS (Pedidos / Pós-venda)
   function importPedidos(file) {
+    var opId = opActiveOrNull(); if (!opId) return Promise.reject(new Error(OP_BLOCK_MSG));
     return file.arrayBuffer().then(function (ab) {
       var parsed = S.pedidos.parse(ab, file.name);
       if (parsed.notRecognized) throw new Error('Planilha de pedidos não reconhecida (esperado Order.all… da Shopee).');
@@ -4185,7 +4207,7 @@ buffer/index.js:
         var g = groups[id]; var rep = g.find(function (r) { return r.orderStatus; }) || g[0]; itemsSeen += g.length;
         var items = g.map(function (r) { var qty = r.quantity || 1; var subtotal = r.productSubtotal != null ? num(r.productSubtotal) : num(r.agreedPrice) * qty; return { sku: r.sku, productName: r.productName, variationName: r.variationName, qty: qty, originalPrice: num(r.originalPrice), agreedPrice: num(r.agreedPrice), subtotal: subtotal }; });
         var toIso = function (d) { return d ? new Date(d).toISOString() : null; };
-        var next = { id: id, orderStatus: rep.orderStatus, normalizedStatus: S.pedidos.normalizeStatus(rep.orderStatus), tracking: rep.trackingNumber, createdAt: toIso(rep.orderCreatedAt), returnRefundStatus: rep.returnRefundStatus, cancelReason: rep.cancelReason, city: rep.city, uf: rep.uf, recipientName: rep.recipientName, buyerUsername: rep.buyerUsername, shippingOption: rep.shippingOption, shippingMethod: rep.shippingMethod, isFbs: /^\s*(yes|sim|true)\s*$/i.test(rep.isFbs || '') || rep.shippingOption === 'Full', totalAmount: num(rep.totalAmount), grandTotal: num(rep.grandTotal), commissionNet: num(rep.commissionNet), serviceFeeNet: num(rep.serviceFeeNet), transactionFee: num(rep.transactionFee), reverseShippingFee: num(rep.reverseShippingFee), estimatedShipping: num(rep.estimatedShipping), buyerPaidShipping: num(rep.buyerPaidShipping), unitsTotal: rep.unitsTotal || items.reduce(function (s, i) { return s + i.qty; }, 0), items: items,
+        var next = { id: id, operationId: (byId[id] && byId[id].operationId) || opId, orderStatus: rep.orderStatus, normalizedStatus: S.pedidos.normalizeStatus(rep.orderStatus), tracking: rep.trackingNumber, createdAt: toIso(rep.orderCreatedAt), returnRefundStatus: rep.returnRefundStatus, cancelReason: rep.cancelReason, city: rep.city, uf: rep.uf, recipientName: rep.recipientName, buyerUsername: rep.buyerUsername, shippingOption: rep.shippingOption, shippingMethod: rep.shippingMethod, isFbs: /^\s*(yes|sim|true)\s*$/i.test(rep.isFbs || '') || rep.shippingOption === 'Full', totalAmount: num(rep.totalAmount), grandTotal: num(rep.grandTotal), commissionNet: num(rep.commissionNet), serviceFeeNet: num(rep.serviceFeeNet), transactionFee: num(rep.transactionFee), reverseShippingFee: num(rep.reverseShippingFee), estimatedShipping: num(rep.estimatedShipping), buyerPaidShipping: num(rep.buyerPaidShipping), unitsTotal: rep.unitsTotal || items.reduce(function (s, i) { return s + i.qty; }, 0), items: items,
           // §9-33 do prompt "Alterações — Sistema Marketplace Líder": pagamento/prazo/envio efetivo,
           // usados no Dashboard (pedidos feitos × pagos) e na aba Tempo de Envio.
           paidAt: toIso(rep.paidAt), shipByDate: toIso(rep.shipByDate), shippedAt: toIso(rep.shippedAt), deliveredAt: toIso(rep.deliveredAt), completedAt: toIso(rep.completedAt), cancelledAt: toIso(rep.cancelledAt) };
@@ -4227,6 +4249,7 @@ buffer/index.js:
     else if (transit && ['CHEGOU_CONFERIR', 'EM_TRANSITO'].indexOf(o.receiptState) < 0) { o.receiptState = 'EM_TRANSITO'; }
   }
   function importPosVenda(type, file) {
+    var opId = opActiveOrNull(); if (!opId) return Promise.reject(new Error(OP_BLOCK_MSG));
     return file.arrayBuffer().then(function (ab) {
       var parsed = S.posVenda.parse(ab, file.name, type);
       if (parsed.notRecognized) throw new Error('Relatório de devolução não reconhecido para o tipo selecionado.');
@@ -4261,7 +4284,7 @@ buffer/index.js:
         if (incoming.status && !SHOPEE_STATUS_KNOWN[normStatus(incoming.status)]) newStatuses[incoming.status] = true;
         var ex = byId[uid];
         if (!ex) {
-          var o = newOcc(uid, type); o.orderId = rep.orderId; o.returnId = rep.returnId;
+          var o = newOcc(uid, type); o.operationId = opId; o.orderId = rep.orderId; o.returnId = rep.returnId;
           SOURCE_FIELDS.forEach(function (f) { if (incoming[f[0]] != null) o[f[0]] = incoming[f[0]]; });
           o.requested = incoming.requested || 0; o.compensation = incoming.compensation || 0;
           o.occurredAt = incoming.occurredAt; o.orderCreatedAt = incoming.orderCreatedAt; o.returnOpenedAt = incoming.returnOpenedAt;
@@ -6628,6 +6651,7 @@ buffer/index.js:
     return res;
   }
   function importWallet(file) {
+    var opId = opActiveOrNull(); if (!opId) return Promise.reject(new Error(OP_BLOCK_MSG));
     return file.arrayBuffer().then(function (ab) {
       var parsed = parseWallet(ab, file.name);
       if (parsed.notRecognized) throw new Error('Extrato da carteira não reconhecido (esperado o relatório de transações do saldo Shopee).');
@@ -6636,7 +6660,7 @@ buffer/index.js:
       var maxSeq = wallet.reduce(function (m, t) { return Math.max(m, t.seq || 0); }, 0);
       // O extrato vem do mais NOVO para o mais antigo; invertendo obtemos a ordem cronológica real,
       // que é a sequência autoritativa para a reconciliação (mesmo com timestamps repetidos).
-      parsed.rows.slice().reverse().forEach(function (row) { var id = walletKey(row); if (byId[id]) { unch++; return; } var cat = walletCat(row.tipo, row.desc, row.amount); var orderId = extractWalletOrderId(row.orderId, row.desc); var t = { id: id, seq: ++maxSeq, origin: 'SHOPEE', date: row.date, dateRaw: row.dateRaw, tipo: row.tipo, desc: row.desc, category: cat, orderId: orderId, dir: row.dir, amount: row.amount, balance: row.balance, adjust: row.adjust, status: row.status, fileName: file.name, importedAt: importedAt }; byId[id] = t; changed.push(t); novo++; });
+      parsed.rows.slice().reverse().forEach(function (row) { var id = walletKey(row); if (byId[id]) { unch++; return; } var cat = walletCat(row.tipo, row.desc, row.amount); var orderId = extractWalletOrderId(row.orderId, row.desc); var t = { id: id, operationId: opId, seq: ++maxSeq, origin: 'SHOPEE', date: row.date, dateRaw: row.dateRaw, tipo: row.tipo, desc: row.desc, category: cat, orderId: orderId, dir: row.dir, amount: row.amount, balance: row.balance, adjust: row.adjust, status: row.status, fileName: file.name, importedAt: importedAt }; byId[id] = t; changed.push(t); novo++; });
       wallet = Object.values(byId);
       var batch = { id: 'wb' + Date.now() + Math.round(performance.now()), module: 'Carteira', filename: file.name, createdAt: importedAt, seen: parsed.rows.length, novo: novo, upd: 0, unch: unch, itemsSeen: parsed.rows.length };
       batches.unshift(batch); walletStamp = importedAt; lastImportStamp = importedAt;
@@ -7341,6 +7365,7 @@ buffer/index.js:
     return res;
   }
   function importAcelera(file) {
+    var opId = opActiveOrNull(); if (!opId) return Promise.reject(new Error(OP_BLOCK_MSG));
     return file.arrayBuffer().then(function (ab) {
       var name = (file.name || '').toLowerCase(); var text;
       if (name.slice(-5) === '.xlsx' || name.slice(-4) === '.xls') { var wb = XLSX.read(new Uint8Array(ab), { type: 'array' }); text = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]); }
@@ -7350,8 +7375,11 @@ buffer/index.js:
       var byId = {}; acelera.forEach(function (x) { byId[x.id] = x; });
       var novo = 0, upd = 0, unch = 0, changed = []; var importedAt = new Date().toISOString();
       parsed.rows.forEach(function (row) {
-        var id = 'default|' + row.resgate + '|' + row.pedido; var ex = byId[id];
-        if (!ex) { var rec = Object.assign({ id: id, storeId: 'default', firstImportAt: importedAt, lastImportAt: importedAt, fileName: file.name, history: [] }, row); byId[id] = rec; changed.push(rec); novo++; return; }
+        // §BP do complemento: a chave já era preparada para multi-loja (prefixo antes fixo em
+        // "default") — agora usa a operação ativa de verdade, nunca misturando pedido/resgate iguais
+        // de operações diferentes. .id é opaco (nunca lido fora do dedupe daqui — sempre .resgate/.pedido).
+        var id = opId + '|' + row.resgate + '|' + row.pedido; var ex = byId[id];
+        if (!ex) { var rec = Object.assign({ id: id, operationId: opId, storeId: opId, firstImportAt: importedAt, lastImportAt: importedAt, fileName: file.name, history: [] }, row); byId[id] = rec; changed.push(rec); novo++; return; }
         var same = ex.antecipado === row.antecipado && ex.taxa === row.taxa && ex.recebido === row.recebido && ex.reembolsado === row.reembolsado && ex.pendente === row.pendente && normStatus(ex.status) === normStatus(row.status) && ex.ultimaTransacao === row.ultimaTransacao;
         if (same) { unch++; return; }
         // registro evolui: preserva histórico e atualiza estado atual (§6-7)
@@ -7952,6 +7980,7 @@ buffer/index.js:
     return { type: type, rows: out };
   }
   function importAfiliados(file) {
+    var opId = opActiveOrNull(); if (!opId) return Promise.reject(new Error(OP_BLOCK_MSG));
     return file.arrayBuffer().then(function (ab) {
       var name = (file.name || '').toLowerCase(); var text;
       if (name.slice(-5) === '.xlsx' || name.slice(-4) === '.xls') { var wb = XLSX.read(new Uint8Array(ab), { type: 'array' }); text = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]); }
@@ -7962,7 +7991,7 @@ buffer/index.js:
       if (parsed.type === 'conversion') {
         store = 'affconv'; typeLabel = 'Afiliados — Conversão de Pedidos'; var byId = {}; affConv.forEach(function (x) { byId[x.id] = x; });
         parsed.rows.forEach(function (row) { var id = row.orderId + '|' + row.productId + '|' + row.modelId + '|' + row.attrId + '|' + row.orderTime; var ex = byId[id];
-          if (!ex) { var rec = Object.assign({ id: id, firstImportAt: importedAt, lastImportAt: importedAt, fileName: file.name, history: [] }, row); byId[id] = rec; changed.push(rec); novo++; return; }
+          if (!ex) { var rec = Object.assign({ id: id, operationId: opId, firstImportAt: importedAt, lastImportAt: importedAt, fileName: file.name, history: [] }, row); byId[id] = rec; changed.push(rec); novo++; return; }
           var same = ex.orderStatus === row.orderStatus && ex.dedState === row.dedState && ex.comItemAff === row.comItemAff && ex.svcFee === row.svcFee && ex.refund === row.refund && ex.chargePeriod === row.chargePeriod;
           if (same) { unch++; return; }
           ex.history = ex.history || []; ex.history.unshift({ at: importedAt, statusOld: ex.orderStatus, statusNew: row.orderStatus, dedOld: ex.dedState, dedNew: row.dedState });
@@ -7971,14 +8000,14 @@ buffer/index.js:
       } else if (parsed.type === 'rpa') {
         store = 'affrpa'; typeLabel = 'Afiliados — RPA / Fechamento Mensal'; var byId2 = {}; affRpa.forEach(function (x) { byId2[x.id] = x; });
         parsed.rows.forEach(function (row) { var id = row.month + '|' + row.affId; var ex = byId2[id];
-          if (!ex) { var rec = Object.assign({ id: id, firstImportAt: importedAt, lastImportAt: importedAt, fileName: file.name, history: [] }, row); byId2[id] = rec; changed.push(rec); novo++; return; }
+          if (!ex) { var rec = Object.assign({ id: id, operationId: opId, firstImportAt: importedAt, lastImportAt: importedAt, fileName: file.name, history: [] }, row); byId2[id] = rec; changed.push(rec); novo++; return; }
           if (ex.gross === row.gross && ex.legalName === row.legalName) { unch++; return; }
           ex.history = ex.history || []; ex.history.unshift({ at: importedAt, grossOld: ex.gross, grossNew: row.gross }); ex.gross = row.gross; ex.legalName = row.legalName; ex.lastImportAt = importedAt; changed.push(ex); upd++; });
         affRpa = Object.values(byId2);
       } else {
         store = 'affvb'; typeLabel = 'Afiliados — Comissão Extra / Validation Bill'; var byId3 = {}; affVb.forEach(function (x) { byId3[x.id] = x; });
         parsed.rows.forEach(function (row) { var id = row.validationId; var ex = byId3[id];
-          if (!ex) { var rec = Object.assign({ id: id, firstImportAt: importedAt, lastImportAt: importedAt, fileName: file.name, history: [] }, row); byId3[id] = rec; changed.push(rec); novo++; return; }
+          if (!ex) { var rec = Object.assign({ id: id, operationId: opId, firstImportAt: importedAt, lastImportAt: importedAt, fileName: file.name, history: [] }, row); byId3[id] = rec; changed.push(rec); novo++; return; }
           if (ex.totalDeducted === row.totalDeducted && ex.totalPending === row.totalPending && ex.status === row.status) { unch++; return; }
           ex.history = ex.history || []; ex.history.unshift({ at: importedAt, dedOld: ex.totalDeducted, dedNew: row.totalDeducted }); ex.monthlyExpense = row.monthlyExpense; ex.status = row.status; ex.totalDeducted = row.totalDeducted; ex.amsCredit = row.amsCredit; ex.totalPending = row.totalPending; ex.lastImportAt = importedAt; changed.push(ex); upd++; });
         affVb = Object.values(byId3);
@@ -8390,25 +8419,26 @@ buffer/index.js:
     return out;
   }
   function importMinhaRenda(file) {
+    var opId = opActiveOrNull(); if (!opId) return Promise.reject(new Error(OP_BLOCK_MSG));
     return file.arrayBuffer().then(function (ab) {
       var p = mrParseIncome(ab, file.name);
       if (p.notRecognized) throw new Error('Arquivo não reconhecido como relatório Income da Shopee (esperado abas Renda / Shipping Fee Discrepancy / Adjustment).');
       var importedAt = new Date().toISOString(); var stats = { renda: 0, ship: 0, adj: 0, svc: 0 };
       // Renda (idempotente)
       var byR = {}; mrRenda.forEach(function (x) { byR[x.id] = x; }); var chR = [];
-      p.renda.forEach(function (row, i) { var id = row.orderId + '|' + row.ver + '|' + (row.sku || '') + '|' + (row.refundId || '') + '|' + i; if (!byR[id]) { var rec = Object.assign({ id: id, fileName: file.name, importedAt: importedAt }, row); byR[id] = rec; chR.push(rec); stats.renda++; } });
+      p.renda.forEach(function (row, i) { var id = row.orderId + '|' + row.ver + '|' + (row.sku || '') + '|' + (row.refundId || '') + '|' + i; if (!byR[id]) { var rec = Object.assign({ id: id, operationId: opId, fileName: file.name, importedAt: importedAt }, row); byR[id] = rec; chR.push(rec); stats.renda++; } });
       mrRenda = Object.values(byR);
       // Shipping (preserva investigação manual §21)
       var byS = {}; mrShip.forEach(function (x) { byS[x.id] = x; }); var chS = [];
-      p.ship.forEach(function (row) { var id = row.orderId; var ex = byS[id]; if (!ex) { byS[id] = Object.assign({ id: id, invStatus: 'NAO_ANALISADO', invNote: '', invResp: '', importedAt: importedAt, fileName: file.name }, row); chS.push(byS[id]); stats.ship++; } else { ex.esperado = row.esperado; ex.real = row.real; ex.motivo = row.motivo; chS.push(ex); } });
+      p.ship.forEach(function (row) { var id = row.orderId; var ex = byS[id]; if (!ex) { byS[id] = Object.assign({ id: id, operationId: opId, invStatus: 'NAO_ANALISADO', invNote: '', invResp: '', importedAt: importedAt, fileName: file.name }, row); chS.push(byS[id]); stats.ship++; } else { ex.esperado = row.esperado; ex.real = row.real; ex.motivo = row.motivo; chS.push(ex); } });
       mrShip = Object.values(byS);
       // Adjustment
       var byA = {}; mrAdj.forEach(function (x) { byA[x.id] = x; }); var chA = [];
-      p.adj.forEach(function (row) { var id = (row.orderId || 'sem') + '|' + row.valor + '|' + row.seq; if (!byA[id]) { byA[id] = Object.assign({ id: id, importedAt: importedAt }, row); chA.push(byA[id]); stats.adj++; } });
+      p.adj.forEach(function (row) { var id = (row.orderId || 'sem') + '|' + row.valor + '|' + row.seq; if (!byA[id]) { byA[id] = Object.assign({ id: id, operationId: opId, importedAt: importedAt }, row); chA.push(byA[id]); stats.adj++; } });
       mrAdj = Object.values(byA);
       // Service Fee
       var byV = {}; mrSvc.forEach(function (x) { byV[x.id] = x; }); var chV = [];
-      p.svc.forEach(function (row) { var id = row.orderId + '|' + row.seq; if (!byV[id]) { byV[id] = Object.assign({ id: id, importedAt: importedAt }, row); chV.push(byV[id]); stats.svc++; } });
+      p.svc.forEach(function (row) { var id = row.orderId + '|' + row.seq; if (!byV[id]) { byV[id] = Object.assign({ id: id, operationId: opId, importedAt: importedAt }, row); chV.push(byV[id]); stats.svc++; } });
       mrSvc = Object.values(byV);
       mrSummary = { summary: p.summary, period: p.period, importedAt: importedAt, fileName: file.name };
       var batch = { id: 'mr' + Date.now() + Math.round(performance.now()), module: 'Minha Renda', filename: file.name, createdAt: importedAt, seen: p.renda.length, novo: stats.renda, upd: 0, unch: p.renda.length - stats.renda, itemsSeen: p.renda.length };
@@ -9923,6 +9953,133 @@ buffer/index.js:
       });
     };
   }
+  // §BK/§BL do complemento — migração idempotente: só cria a operação padrão e estampa dado legado
+  // na PRIMEIRA vez (quando ainda não existe nenhuma operação cadastrada). Rodadas seguintes do boot
+  // encontram `operations.length` > 0 e não fazem nada — nunca reescreve/duplica.
+  function opRunMigrationIfNeeded(raw) {
+    if (operations.length) return Promise.resolve();
+    var now = new Date().toISOString();
+    var company = { id: 'CO-default', razaoSocial: 'Líder Molduras LTDA', nomeFantasia: 'Líder Molduras', cnpj: '', inscricaoEstadual: '', observacao: '', ativa: true, createdAt: now };
+    var operation = { id: 'OP-default', companyId: company.id, nome: 'Líder Molduras · Shopee', marketplace: 'Shopee', storeName: 'lidermolduras', sellerId: '', ativa: true, createdAt: now };
+    companies = [company]; operations = [operation];
+    var stampsToSave = [];
+    ['orders', 'occ', 'wallet', 'affConv', 'affRpa', 'affVb', 'mrRenda', 'mrShip', 'mrAdj', 'mrSvc'].forEach(function (key) {
+      var arr = raw[key] || []; var changed = [];
+      arr.forEach(function (rec) { if (!rec.operationId) { rec.operationId = operation.id; changed.push(rec); } });
+      if (changed.length) stampsToSave.push(putMany(STORE_BY_ARRKEY[key], changed));
+    });
+    // Acelera é o único caso com re-chaveamento seguro (id sempre foi sintético/opaco, nunca lido
+    // fora do dedupe do próprio importAcelera — troca o prefixo "default|" pelo id real da operação).
+    var acArr = raw.acelera || []; var acChanged = [];
+    acArr.forEach(function (rec) {
+      if (rec.operationId) return;
+      rec.operationId = operation.id; rec.storeId = operation.id;
+      if (typeof rec.id === 'string' && rec.id.indexOf('default|') === 0) rec.id = operation.id + '|' + rec.id.slice('default|'.length);
+      acChanged.push(rec);
+    });
+    if (acChanged.length) stampsToSave.push(putMany('acelera', acChanged));
+    stampsToSave.push(putMany('companies', [company]), putMany('operations', [operation]), putMany('settings', [{ id: 'activeOperationId', data: operation.id }]));
+    return Promise.all(stampsToSave);
+  }
+  var STORE_BY_ARRKEY = { orders: 'orders', occ: 'occ', wallet: 'wallet', affConv: 'affconv', affRpa: 'affrpa', affVb: 'affvb', mrRenda: 'mrrenda', mrShip: 'mrship', mrAdj: 'mradj', mrSvc: 'mrsvc' };
+  // ---- Seletor de operação no topo (§AR/§AS/§AT) ----
+  function opUpdateSelectorLabel() {
+    var el = document.getElementById('op-selector-label'); if (!el) return;
+    if (activeOperationId === OP_ALL) { el.textContent = 'Todas as Operações'; return; }
+    var op = opActive(); el.textContent = op ? opLabel(op) : '—';
+  }
+  function opSetActive(id) {
+    activeOperationId = id;
+    return putMany('settings', [{ id: 'activeOperationId', data: id }]).then(function () { return location.reload(); });
+  }
+  // Recarrega a página após trocar de operação — o boot inteiro (filtro em memória de orders/wallet/
+  // acelera/mrRenda/occ/affConv/...) depende de rodar do zero; trocar em memória sem reload arriscaria
+  // misturar dados de duas operações nos motores que já leram os arrays antigos.
+  function openOperationSelector() {
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '440px'; panel.style.maxWidth = '96vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    var rows = operations.filter(function (o) { return o.ativa !== false; }).map(function (o) {
+      var sel = o.id === activeOperationId;
+      return '<div class="fin-line rowlink" data-opsel="' + esc(o.id) + '" style="cursor:pointer' + (sel ? ';font-weight:700' : '') + '"><span>' + (sel ? '🟢 ' : '') + esc(opLabel(o)) + '</span></div>';
+    }).join('');
+    panel.innerHTML = '<div class="dh"><div><b>Empresa / Operação</b></div><button class="x">&times;</button></div><div class="dbd">' +
+      '<div class="fin-line rowlink" data-opsel="' + OP_ALL + '" style="cursor:pointer' + (activeOperationId === OP_ALL ? ';font-weight:700' : '') + '"><span>' + (activeOperationId === OP_ALL ? '🟢 ' : '') + 'Todas as Operações <span class="footnote" style="margin:0">(visão consolidada — nunca mistura o dado gravado)</span></span></div>' +
+      '<div style="margin:10px 0 4px" class="footnote">Operações</div>' + (rows || '<div class="footnote">Nenhuma operação cadastrada.</div>') +
+      '<div style="margin-top:14px;display:flex;gap:8px"><button class="btn-sm primary" id="op-nova">+ Nova operação</button><button class="btn-sm" id="op-gerenciar">Gerenciar operações</button></div>' +
+      '</div>';
+    panel.querySelector('.x').onclick = function () { d.remove(); };
+    panel.querySelectorAll('[data-opsel]').forEach(function (b) { b.onclick = function () { var id = b.dataset.opsel; d.remove(); if (id !== activeOperationId) opSetActive(id); }; });
+    panel.querySelector('#op-nova').onclick = function () { d.remove(); openNovaOperacaoModal(); };
+    panel.querySelector('#op-gerenciar').onclick = function () { d.remove(); openGerenciarOperacoes(); };
+  }
+  function companySave(rec) {
+    var id = rec.id || ('CO-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+    var full = { id: id, razaoSocial: rec.razaoSocial, nomeFantasia: rec.nomeFantasia || rec.razaoSocial, cnpj: rec.cnpj || '', inscricaoEstadual: rec.inscricaoEstadual || '', observacao: rec.observacao || '', ativa: rec.ativa !== false, createdAt: rec.createdAt || new Date().toISOString() };
+    companies = [full].concat(companies.filter(function (c) { return c.id !== id; }));
+    return putMany('companies', [full]).then(function () { return full; });
+  }
+  function operationSave(rec) {
+    var id = rec.id || ('OP-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+    var full = { id: id, companyId: rec.companyId, nome: rec.nome, marketplace: rec.marketplace || 'Shopee', storeName: rec.storeName || '', sellerId: rec.sellerId || '', ativa: rec.ativa !== false, createdAt: rec.createdAt || new Date().toISOString() };
+    operations = [full].concat(operations.filter(function (o) { return o.id !== id; }));
+    return putMany('operations', [full]).then(function () { return full; });
+  }
+  // §BA-BD do complemento: wizard simplificado (empresa existente ou nova + marketplace + loja).
+  function openNovaOperacaoModal() {
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '480px'; panel.style.maxWidth = '96vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    function render2() {
+      var companyOptions = '<option value="__nova__">+ Nova empresa</option>' + companies.map(function (c) { return '<option value="' + esc(c.id) + '">' + esc(c.nomeFantasia || c.razaoSocial) + (c.cnpj ? ' — ' + esc(c.cnpj) : '') + '</option>'; }).join('');
+      panel.innerHTML = '<div class="dh"><div><b>Nova operação</b></div><button class="x">&times;</button></div><div class="dbd">' +
+        '<label class="fld">Empresa (CNPJ)</label><select class="select" id="no-empresa" style="width:100%">' + companyOptions + '</select>' +
+        '<div id="no-empresa-nova" style="display:' + (companies.length ? 'none' : 'block') + '">' +
+        '<label class="fld">Razão social</label><input class="input" id="no-razao" style="width:100%">' +
+        '<label class="fld">Nome fantasia</label><input class="input" id="no-fantasia" style="width:100%">' +
+        '<label class="fld">CNPJ</label><input class="input" id="no-cnpj" style="width:100%">' +
+        '</div>' +
+        '<label class="fld">Marketplace</label><select class="select" id="no-mkt" style="width:100%"><option value="Shopee">Shopee</option><option value="Mercado Livre">Mercado Livre</option><option value="Amazon">Amazon</option><option value="Outro">Outro</option></select>' +
+        '<label class="fld">Nome da loja</label><input class="input" id="no-loja" style="width:100%" placeholder="Ex.: lidermolduras">' +
+        '<label class="fld">Seller ID (opcional)</label><input class="input" id="no-seller" style="width:100%">' +
+        '<div style="margin-top:12px"><button class="btn-sm primary" id="no-salvar">Salvar operação</button></div>' +
+        '</div>';
+      panel.querySelector('.x').onclick = function () { d.remove(); };
+      var empresaSel = panel.querySelector('#no-empresa'); var novaDiv = panel.querySelector('#no-empresa-nova');
+      empresaSel.onchange = function () { novaDiv.style.display = empresaSel.value === '__nova__' ? 'block' : 'none'; };
+      panel.querySelector('#no-salvar').onclick = function () {
+        var loja = panel.querySelector('#no-loja').value.trim(); if (!loja) { toast('Informe o nome da loja', '', true); return; }
+        var proceed = function (companyId) {
+          operationSave({ companyId: companyId, nome: (companies.find(function (c) { return c.id === companyId; }) || {}).nomeFantasia + ' · ' + panel.querySelector('#no-mkt').value, marketplace: panel.querySelector('#no-mkt').value, storeName: loja, sellerId: panel.querySelector('#no-seller').value.trim() }).then(function (op) {
+            d.remove(); toast('Operação cadastrada', opLabel(op)); opSetActive(op.id);
+          });
+        };
+        if (empresaSel.value === '__nova__') {
+          var razao = panel.querySelector('#no-razao').value.trim(); if (!razao) { toast('Informe a razão social da nova empresa', '', true); return; }
+          companySave({ razaoSocial: razao, nomeFantasia: panel.querySelector('#no-fantasia').value.trim() || razao, cnpj: panel.querySelector('#no-cnpj').value.trim() }).then(function (c) { proceed(c.id); });
+        } else proceed(empresaSel.value);
+      };
+    }
+    render2();
+  }
+  // §Y do complemento: editar/inativar/reativar — nunca excluir fisicamente uma operação com histórico.
+  function openGerenciarOperacoes() {
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '640px'; panel.style.maxWidth = '96vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    function refresh() { panel.innerHTML = body(); wire(); }
+    function body() {
+      var rows = operations.map(function (o) { var c = opCompany(o); return '<tr><td class="cell-text">' + esc(c ? c.nomeFantasia || c.razaoSocial : '—') + '</td><td class="cell-text">' + esc(o.nome) + '</td><td>' + esc(o.marketplace || '—') + '</td><td class="mono">' + esc(o.storeName || '—') + '</td><td>' + (o.ativa !== false ? '<span class="tag ok">ativa</span>' : '<span class="tag neutral">inativa</span>') + '</td><td><button class="btn-sm" data-optoggle="' + esc(o.id) + '">' + (o.ativa !== false ? 'Desativar' : 'Ativar') + '</button></td></tr>'; }).join('');
+      return '<div class="dh"><div><b>Gerenciar operações</b></div><button class="x">&times;</button></div><div class="dbd">' +
+        '<div class="table-wrap"><table class="report"><thead><tr><th>Empresa</th><th>Operação</th><th>Marketplace</th><th>Loja</th><th>Status</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="empty">Nenhuma operação cadastrada.</td></tr>') + '</tbody></table></div>' +
+        '<div class="footnote" style="margin-top:8px">Uma operação com dado já importado nunca é excluída — só desativada (some do seletor, mas os dados continuam preservados e acessíveis).</div>' +
+        '<div style="margin-top:12px"><button class="btn-sm primary" id="go-nova">+ Nova operação</button></div>' +
+        '</div>';
+    }
+    function wire() {
+      panel.querySelector('.x').onclick = function () { d.remove(); };
+      panel.querySelector('#go-nova').onclick = function () { d.remove(); openNovaOperacaoModal(); };
+      panel.querySelectorAll('[data-optoggle]').forEach(function (b) { b.onclick = function () { var op = operations.find(function (x) { return x.id === b.dataset.optoggle; }); if (op) operationSave(Object.assign({}, op, { ativa: op.ativa === false })).then(refresh); }; });
+    }
+    refresh();
+  }
   function openGerenciarBancos(onDone) {
     var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '560px'; panel.style.maxWidth = '96vw';
     d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
@@ -10458,13 +10615,14 @@ buffer/index.js:
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  var opSelBtn = document.getElementById('op-selector'); if (opSelBtn) opSelBtn.onclick = function () { openOperationSelector(); };
 
   // Abre o banco; se falhar (corrompido/bloqueado/privado), ativa o modo em memória e SEGUE —
   // o sistema sempre carrega e Produtos sempre abre (só não salva). Nunca dead-end / tela branca.
   openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers'), getAll('bankaccounts')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers'), getAll('bankaccounts'), getAll('companies'), getAll('operations')]);
   }).then(function (r) {
     orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
     wallet = r[5] || [];
@@ -10485,14 +10643,33 @@ buffer/index.js:
     caixaClose = {}; (r[21] || []).forEach(function (c) { caixaClose[c.id] = c; });
     bankTransfers = (r[22] || []).sort(function (a, b) { return (b.quando || '').localeCompare(a.quando || ''); });
     bankAccounts = (r[23] || []).sort(function (a, b) { return (a.nome || '').localeCompare(b.nome || ''); });
+    companies = r[24] || []; operations = r[25] || [];
+    var activeSetting = settings.filter(function (x) { return x.id === 'activeOperationId'; })[0];
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
     plans = (r[4] || []).map(function (p) { if (PLAN_MIGR[p.status]) p.status = PLAN_MIGR[p.status]; if (p.scopeSkus == null && p.relatedSkus) p.scopeSkus = p.relatedSkus; if (p.indicatorKind == null) p.indicatorKind = 'liquido'; return p; });
     occ = occ.filter(function (o) { return !o.isDemo; }); // higiene: nunca deixar demo no banco real
-    if (occ.length) putMany('occ', occ);
-    if (lastImportStamp == null && batches.length) { var last = batches.map(function (b) { return b.createdAt; }).sort().pop(); lastImportStamp = last || null; }
-    occ = occ.concat(DEMO_CASES()); // injeta demo apenas em memória (§10-11), depois de persistir os reais
-    rebuildSkuCost();
-    render();
+    // §BK/§BL do complemento — MIGRAÇÃO MULTI-OPERAÇÃO: idempotente (só roda se ainda não existe
+    // nenhuma operação cadastrada). Dado legado (sem operationId) nunca é perdido — ganha a operação
+    // padrão "Líder Molduras · Shopee" e continua acessível normalmente a partir dela.
+    return opRunMigrationIfNeeded({ orders: orders, occ: occ, wallet: wallet, acelera: acelera, affConv: affConv, affRpa: affRpa, affVb: affVb, mrRenda: mrRenda, mrShip: mrShip, mrAdj: mrAdj, mrSvc: mrSvc }).then(function () {
+      activeOperationId = (activeSetting && activeSetting.data) || (operations[0] ? operations[0].id : null) || OP_ALL;
+      // §AS/§AT/§AU — filtro em memória pela operação ativa: cada motor de negócio já aprovado
+      // continua lendo os MESMOS arrays globais, sem nenhuma alteração — a isolação acontece aqui,
+      // uma única vez, nunca espalhada por centenas de funções. "Todas as Operações" não filtra
+      // (visão consolidada — nunca mistura o dado GRAVADO, só agrega a leitura).
+      if (activeOperationId !== OP_ALL) {
+        var byOp = function (arr) { return arr.filter(function (x) { return !x.operationId || x.operationId === activeOperationId; }); };
+        orders = byOp(orders); occ = byOp(occ); wallet = byOp(wallet); acelera = byOp(acelera);
+        affConv = byOp(affConv); affRpa = byOp(affRpa); affVb = byOp(affVb);
+        mrRenda = byOp(mrRenda); mrShip = byOp(mrShip); mrAdj = byOp(mrAdj); mrSvc = byOp(mrSvc);
+      }
+      if (lastImportStamp == null && batches.length) { var last = batches.map(function (b) { return b.createdAt; }).sort().pop(); lastImportStamp = last || null; }
+      if (occ.length) putMany('occ', occ);
+      occ = occ.concat(DEMO_CASES()); // injeta demo apenas em memória (§10-11), depois de persistir os reais
+      rebuildSkuCost();
+      opUpdateSelectorLabel();
+      render();
+    });
   }).catch(function (e) { app.innerHTML = '<div class="form-err" style="max-width:640px;margin:24px auto"><b>Não foi possível abrir o banco de dados local.</b><br>' + esc(e.message || e) + '<div style="margin-top:12px"><button class="btn-sm primary" onclick="location.reload()">Recarregar</button></div></div>'; });
 })();
 
