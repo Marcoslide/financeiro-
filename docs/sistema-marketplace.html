@@ -4284,6 +4284,12 @@ buffer/index.js:
   var INCOME_STATUS_TXT = { FOUND: '🟢 localizado', NOT_IN_INCOME: '🟡 aguardando lançamento', WRONG_OPERATION: '🔴 encontrado em outra operação — auditar isolamento', DUPLICATE_ORDER_ROWS: '🔴 mais de uma linha para este pedido — auditar planilha', INVALID_ORDER_ID: '🔴 ID do pedido inválido' };
   var STATUS_FIN_TXT = { CONFIRMADO: '🟢 Confirmado (Income cruzado, composição fecha)', DIVERGENCIA: '🔴 Divergência (Income cruzado, mas a composição não fecha com a Quantia Total Lançada)', PROVISORIO: '🟡 Provisório (composição estimada, aguardando Income)' };
   var SKU_MATCHEDBY_LABEL = { SKU: 'SKU', REFERENCE_SKU: 'SKU de referência' };
+  // Rótulos EXATOS de taxaRow que carregam filhos reais do Service Fee Details (§20-21 do prompt
+  // "Taxa de Serviço até a raiz") — nunca um regex genérico "^Taxa de serviço", que também bate com
+  // "Taxa de serviço (aproximado — sem Income cruzado)" (ESTIMATED, nunca tem filhos reais) e faz o
+  // primeiro match errado "roubar" os filhos de um dia que mistura os dois cenários.
+  var SVC_REAL_LABELS = { 'Taxa de serviço líquida': 1, 'Taxa de serviço (componentes reais — total pendente de conciliação)': 1 };
+  var SVC_CHILD_LABEL = { svc_affiliate: 'Afiliados do Vendedor', svc_transaction: 'Taxa de Transação', svc_per_item: 'Taxa por item vendido' };
 
   // ---------- período ----------
   function periodRange() {
@@ -5080,12 +5086,46 @@ buffer/index.js:
   // escopar por operação; esse era o defeito real do cruzamento Service Fee Details).
   function resolveServiceFeeDetails(operationId, orderId) {
     var key = normalizeOrderId(orderId);
-    var empty = { found: false, orderId: orderId, operationId: operationId, rows: [], totals: { afiliadosVendedor: 0, transacao: 0, porItem: 0 } };
+    var empty = { found: false, orderId: orderId, operationId: operationId, rows: [], totals: { afiliadosVendedor: 0, transacao: 0, porItem: 0 }, totalComponentes: 0 };
     if (!key) return empty;
     var rows = mrSvc.filter(function (v) { return normalizeOrderId(v.orderId) === key && (!operationId || !v.operationId || v.operationId === operationId); });
     if (!rows.length) return empty;
     var totals = rows.reduce(function (t, r) { t.afiliadosVendedor += r.afiliadosVendedor || 0; t.transacao += r.transacao || 0; t.porItem += r.porItem || 0; return t; }, { afiliadosVendedor: 0, transacao: 0, porItem: 0 });
-    return { found: true, orderId: orderId, operationId: operationId, rows: rows, totals: totals };
+    var totalComponentes = totals.afiliadosVendedor + totals.transacao + totals.porItem;
+    return { found: true, orderId: orderId, operationId: operationId, rows: rows, totals: totals, totalComponentes: totalComponentes };
+  }
+  // PROMPT "CORREÇÃO PRIORITÁRIA — TAXA DE SERVIÇO PRECISA SER ABERTA ATÉ A RAIZ": composição
+  // canônica da Taxa de Serviço — Income/Order (mrRow) e Service Fee Details (svcResolve) são
+  // resolvidos e combinados aqui, INDEPENDENTES um do outro (§6) — nunca um `if(mrRow)` escondendo
+  // os filhos reais quando só o Service Fee Details já chegou (Cenário C). Os 4 cenários do prompt:
+  //   A) Order + Service Fee Details ambos encontrados  → total real, filhos reais, conferido.
+  //   B) só Order encontrado                            → total real, sem filhos (não inventa).
+  //   C) só Service Fee Details encontrado               → filhos reais, total = soma dos filhos,
+  //      mas marcado como pendente de conciliação (o total "oficial" ainda não confirmou).
+  //   D) nenhum dos dois                                 → estimativa a partir de Pedidos (Cenário
+  //      "aguardando Income"), sem filhos.
+  // O total NUNCA é pai+filhos somados (§13/§26) — os filhos só explicam de onde o pai veio.
+  function buildServiceFeeComposition(mrRow, svcResolve, ord) {
+    var svcT = svcResolve.totals;
+    var children = svcResolve.found ? [
+      { key: 'svc_affiliate', label: 'Afiliados do Vendedor', valor: svcT.afiliadosVendedor, source: 'SERVICE_FEE_DETAILS' },
+      { key: 'svc_transaction', label: 'Taxa de Transação', valor: svcT.transacao, source: 'SERVICE_FEE_DETAILS' },
+      { key: 'svc_per_item', label: 'Taxa por item vendido', valor: svcT.porItem, source: 'SERVICE_FEE_DETAILS' },
+    ] : [];
+    var childrenTotal = svcResolve.totalComponentes;
+    if (mrRow) {
+      var difference = svcResolve.found ? (mrRow.servico - childrenTotal) : null;
+      return { total: mrRow.servico, sourceTotal: 'INCOME_ORDER', children: children, childrenTotal: childrenTotal, difference: difference, reconciliationStatus: !svcResolve.found ? 'NO_DETAIL' : (Math.abs(difference) <= 2 ? 'MATCHED' : 'PARTIAL') };
+    }
+    if (svcResolve.found) {
+      // Cenário C: os componentes são dado REAL (Service Fee Details) — nunca viram estimativa só
+      // porque o Order ainda não confirmou o total oficial. O total pai fica provisório = soma deles.
+      return { total: childrenTotal, sourceTotal: 'SERVICE_FEE_DETAILS_ONLY', children: children, childrenTotal: childrenTotal, difference: 0, reconciliationStatus: 'PENDING_ORDER_CONFIRMATION' };
+    }
+    if (ord && ord.serviceFeeNet) {
+      return { total: -Math.round((ord.serviceFeeNet || 0) * 100), sourceTotal: 'ESTIMATED', children: [], childrenTotal: 0, difference: null, reconciliationStatus: 'NO_DATA' };
+    }
+    return { total: null, sourceTotal: 'NONE', children: [], childrenTotal: 0, difference: null, reconciliationStatus: 'NO_DATA' };
   }
   // Fórmula canônica do envio (PROMPT MESTRE Parte D, §27-39) — validada empiricamente contra os
   // 1.662 pedidos Order do Income real: soma dos 5 componentes com os sinais originais fecha
@@ -5115,17 +5155,26 @@ buffer/index.js:
     var custoProdC = null, custoPendente = false;
     if (ord) { var fOrd = orderFinance(ord); if (fOrd.costPending) custoPendente = true; else custoProdC = Math.round((fOrd.productCostTotal || 0) * 100); }
     var taxaRows = [];
-    function addTaxa(label, valor, subs, origem, fieldKey) { if (valor == null) return; var cl = finClassifica(fieldKey, valor); taxaRows.push({ label: label, valor: valor, subs: subs || [], origem: origem, fieldKey: fieldKey, nat: cl.nat }); }
+    function addTaxa(label, valor, subs, origem, fieldKey, extra) { if (valor == null) return; var cl = finClassifica(fieldKey, valor); var row = { label: label, valor: valor, subs: subs || [], origem: origem, fieldKey: fieldKey, nat: cl.nat }; if (extra) Object.keys(extra).forEach(function (k) { row[k] = extra[k]; }); taxaRows.push(row); }
     var adjRows = mrAdj.filter(function (a) { return a.orderId === orderId; });
     var envio = mrRow ? subtotalEnvioPedido(orderId) : null;
+    // Taxa de Serviço: resolvida uma ÚNICA vez, independente de mrRow existir ou não (§6-7 — nunca
+    // depender de `if(mrRow)`, senão o Cenário C — Service Fee Details real mas Order ainda pendente
+    // — perde os filhos reais e cai numa estimativa que nem usa o dado real disponível).
+    var serviceFee = buildServiceFeeComposition(mrRow, svcResolve, ord);
+    var svcExtra = { children: serviceFee.children, childrenTotal: serviceFee.childrenTotal, difference: serviceFee.difference, reconciliationStatus: serviceFee.reconciliationStatus, sourceTotal: serviceFee.sourceTotal };
+    if (serviceFee.sourceTotal === 'INCOME_ORDER') {
+      addTaxa('Taxa de serviço líquida', serviceFee.total, [], serviceFee.children.length ? 'Income / Service Fee Details' : 'Income / Renda', 'servico', svcExtra);
+    } else if (serviceFee.sourceTotal === 'SERVICE_FEE_DETAILS_ONLY') {
+      addTaxa('Taxa de serviço (componentes reais — total pendente de conciliação)', serviceFee.total, [], 'Income / Service Fee Details (Order ainda não confirmado)', 'servico', svcExtra);
+    } else if (serviceFee.sourceTotal === 'ESTIMATED') {
+      addTaxa('Taxa de serviço (aproximado — sem Income cruzado)', serviceFee.total, [], 'Pedidos — sem Income cruzado para este pedido', 'servico', svcExtra);
+    }
     if (mrRow) {
       // TAXAS SHOPEE — nomes reais do Income, só o que é efetivamente débito do vendedor (§51-53).
       var comSubs = (mrRow.comissaoBruta != null && mrRow.comissaoBruta !== 0 && mrRow.comissaoBruta !== mrRow.comissao) ? [['Taxa de comissão bruta (referência)', mrRow.comissaoBruta]] : [];
       addTaxa('Taxa de comissão líquida', mrRow.comissao, comSubs, 'Income / Renda', 'comissao');
-      var svcSubs = [];
-      if (svcRows.length) { var svcT = svcResolve.totals; svcSubs = [['Taxa de Serviço Afiliados do Vendedor', svcT.afiliadosVendedor], ['Taxa de Transação', svcT.transacao], ['Taxa por item vendido', svcT.porItem]]; }
-      if (mrRow.servicoBruta != null && mrRow.servicoBruta !== 0 && mrRow.servicoBruta !== mrRow.servico) svcSubs.push(['Taxa de serviço bruta (referência)', mrRow.servicoBruta]);
-      addTaxa('Taxa de serviço líquida', mrRow.servico, svcSubs, svcRows.length ? 'Income / Service Fee Details' : 'Income / Renda', 'servico');
+      if (mrRow.servicoBruta != null && mrRow.servicoBruta !== 0 && mrRow.servicoBruta !== mrRow.servico) { /* bruto de referência — só na Auditoria (auditoriaFonte), nunca somado aqui */ }
       addTaxa('Taxa de transação', mrRow.transacao, [], 'Income / Renda', 'transacao');
       addTaxa('Taxa de comissão Afiliados do Vendedor', mrRow.afiliado, [], 'Income / Renda', 'afiliado');
       if (mrRow.taxaDevolucaoFacil) addTaxa('Taxa de Devolução Fácil Shopee', mrRow.taxaDevolucaoFacil, [], 'Income / Renda', 'taxaDevolucaoFacil');
@@ -5148,7 +5197,6 @@ buffer/index.js:
       if (envio && envio.subtotalC) addTaxa('Subtotal de Envio', envio.subtotalC, envio.comps.map(function (c) { return [c.label, c.valor]; }), 'Income / Renda (fórmula canônica)', 'envioSubtotal');
     } else if (ord) {
       addTaxa('Comissão (aproximado — sem Income cruzado)', -Math.round((ord.commissionNet || 0) * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'comissao');
-      addTaxa('Taxa de serviço (aproximado — sem Income cruzado)', -Math.round((ord.serviceFeeNet || 0) * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'servico');
       addTaxa('Taxa de transação (aproximado — sem Income cruzado)', -Math.round((ord.transactionFee || 0) * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'transacao');
       var freteAprox = -Math.round((ord.reverseShippingFee || 0) * 100);
       if (freteAprox) addTaxa('Subtotal de Envio (aproximado — sem Income cruzado)', freteAprox, [], 'Pedidos — sem Income cruzado para este pedido', 'envioSubtotal');
@@ -5194,7 +5242,7 @@ buffer/index.js:
     // ainda não cobre este pedido, ou o cruzamento apontou um caso que precisa de auditoria — motivo em
     // incomeResolve.status: NOT_IN_INCOME/WRONG_OPERATION/DUPLICATE_ORDER_ROWS/INVALID_ORDER_ID).
     var statusFinanceiro = mrRow ? (pendencia ? 'DIVERGENCIA' : 'CONFIRMADO') : 'PROVISORIO';
-    return { orderId: orderId, temIncome: !!mrRow, mrRow: mrRow, incomeResolve: incomeResolve, statusFinanceiro: statusFinanceiro, ord: ord, svcRows: svcRows, svcResolve: svcResolve, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gEnvio: gEnvio, gOutros: gOutros, envio: envio, auditoriaFonte: auditoriaFonte, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), envioC: somaGrupo(gEnvio), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, taxasSomaSemAjusteC: taxasSomaSemAjusteC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia };
+    return { orderId: orderId, temIncome: !!mrRow, mrRow: mrRow, incomeResolve: incomeResolve, statusFinanceiro: statusFinanceiro, ord: ord, svcRows: svcRows, svcResolve: svcResolve, serviceFee: serviceFee, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gEnvio: gEnvio, gOutros: gOutros, envio: envio, auditoriaFonte: auditoriaFonte, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), envioC: somaGrupo(gEnvio), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, taxasSomaSemAjusteC: taxasSomaSemAjusteC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia };
   }
   // auditOrderProductCost(orderId) — teste canônico de custo (prompt "Correção do custo + taxas"): prova,
   // item a item de um pedido real, exatamente onde a resolução SKU→variação→família→custo quebra.
@@ -5266,19 +5314,31 @@ buffer/index.js:
     // Linha zero nunca renderiza; valores brutos de referência (comSubs/servicoBruta) nunca aparecem
     // inline (só na Auditoria técnica); a decomposição de Service Fee vira uma tabela de 2 colunas
     // em vez de texto corrido — só para fieldKey 'servico', que é onde essa decomposição existe.
+    // PROMPT "Taxa de Serviço até a raiz" §8-13: filhos SEMPRE visíveis como filhos (indentação +
+    // ↳, nunca escondidos atrás de outro card/tabela), com conferência pai×filhos explícita e, quando
+    // sobra diferença não explicada, uma linha própria "Outros componentes não detalhados" — nunca
+    // vira uma categoria inventada, sempre rotulada como diferença matemática.
+    var RECON_BADGE = {
+      MATCHED: '<span class="tag ok">✓ Composição conferida</span>',
+      PARTIAL: '', // a diferença já vira sua própria linha ↳ abaixo — sem badge redundante
+      NO_DETAIL: '<span class="footnote" style="margin:0">Detalhamento não encontrado em Service Fee Details.</span>',
+      PENDING_ORDER_CONFIRMATION: '<span class="tag warn">COMPONENTES REAIS · TOTAL PENDENTE DE CONCILIAÇÃO</span>',
+      NO_DATA: '',
+    };
     var taxaLine = function (r) {
       var subHtml = '';
-      if (r.fieldKey === 'servico' && r.subs.length) {
-        // "(referência)" é o bruto — nunca aparece inline, mesmo dentro da tabela de componentes;
-        // fica só na Auditoria Técnica (mrRow.servicoBruta já está lá via auditoriaFonte).
-        var svcFilhos = r.subs.filter(function (s) { return s[1] && s[0].indexOf('(referência)') < 0; });
-        var svcTblRows = svcFilhos.map(function (s) { return '<tr><td class="cell-text">' + esc(s[0]) + '</td><td class="nowrap ' + (s[1] < 0 ? 'neg' : 'pos') + '">' + brlC(s[1]) + '</td></tr>'; }).join('');
-        // §21 do prompt "Correção do custo + taxas": conferência explícita soma dos filhos × pai —
-        // os filhos só EXPLICAM o valor da Taxa de serviço líquida, nunca somam por cima dele.
-        var svcSomaFilhos = svcFilhos.reduce(function (s, x) { return s + x[1]; }, 0);
-        var svcDiff = svcSomaFilhos - r.valor;
-        var svcConf = svcFilhos.length ? ('<div class="footnote" style="margin:2px 0 6px">' + (Math.abs(svcDiff) < 2 ? '✓ Composição conferida (soma dos componentes = Taxa de serviço líquida)' : '⚠ Diferença de ' + brlC(svcDiff) + ' entre a soma dos componentes e a Taxa de serviço líquida') + '</div>') : '';
-        subHtml = svcTblRows ? '<div class="table-wrap" style="margin:2px 0 8px"><table class="report" style="font-size:12.5px"><thead><tr><th>Componente</th><th>Valor</th></tr></thead><tbody>' + svcTblRows + '</tbody></table></div>' + svcConf : '';
+      if (r.fieldKey === 'servico') {
+        // §10 do prompt: os 3 componentes SEMPRE aparecem quando a fonte foi encontrada — mesmo um
+        // valor zero é informação real (ex.: pedido sem afiliado envolvido), nunca "escondido".
+        var childRows = (r.children || []).map(function (c) {
+          return '<div class="fin-line" style="padding-left:18px;font-size:13px;border-left:2px solid var(--line);margin-left:4px"><span>↳ ' + esc(c.label) + '</span><span class="' + (c.valor < 0 ? 'neg' : 'pos') + '">' + brlC(c.valor) + '</span></div>';
+        }).join('');
+        var diffRow = '';
+        if (r.reconciliationStatus === 'PARTIAL' && r.difference != null && Math.abs(r.difference) > 2) {
+          diffRow = '<div class="fin-line" style="padding-left:18px;font-size:13px;border-left:2px solid var(--line);margin-left:4px"><span>↳ Outros componentes não detalhados <span class="footnote" style="margin:0">(diferença entre total e componentes disponíveis)</span></span><span class="' + (r.difference < 0 ? 'neg' : 'pos') + '">' + brlC(r.difference) + '</span></div>';
+        }
+        var badge = RECON_BADGE[r.reconciliationStatus] || '';
+        subHtml = childRows + diffRow + (badge ? '<div style="padding-left:18px;margin:2px 0 6px">' + badge + '</div>' : '');
       } else if (r.fieldKey === 'ampLiquido' && r.subs.length) {
         subHtml = '<div class="footnote" style="margin:2px 0 6px">' + r.subs.filter(function (s) { return s[1]; }).map(function (s) { return '↳ ' + esc(s[0]) + ': ' + brlC(s[1]); }).join(' · ') + '</div>';
       }
@@ -8697,9 +8757,12 @@ buffer/index.js:
       var byA = {}; mrAdj.forEach(function (x) { byA[x.id] = x; }); var chA = [];
       p.adj.forEach(function (row) { var id = (row.orderId || 'sem') + '|' + row.valor + '|' + row.seq; if (!byA[id]) { byA[id] = Object.assign({ id: id, operationId: opId, importedAt: importedAt }, row); chA.push(byA[id]); stats.adj++; } });
       mrAdj = Object.values(byA);
-      // Service Fee
-      var byV = {}; mrSvc.forEach(function (x) { byV[x.id] = x; }); var chV = [];
-      p.svc.forEach(function (row) { var id = row.orderId + '|' + row.seq; if (!byV[id]) { byV[id] = Object.assign({ id: id, operationId: opId, importedAt: importedAt }, row); chV.push(byV[id]); stats.svc++; } });
+      // Service Fee — §5 do prompt "Taxa de Serviço até a raiz": a chave persistida PRECISA incluir
+      // operationId, senão o mesmo orderId+seq de duas operações diferentes se sobrescreve no import
+      // (o filtro por operação em resolveServiceFeeDetails() já era correto — o defeito estava aqui,
+      // na gravação, que perdia silenciosamente a linha da operação B ao reimportar a operação A).
+      var byV = {}; mrSvc.forEach(function (x) { byV[(x.operationId || '') + '|' + x.orderId + '|' + x.seq] = x; }); var chV = [];
+      p.svc.forEach(function (row) { var id = opId + '|' + row.orderId + '|' + row.seq; if (!byV[id]) { var rec = Object.assign({ id: id, operationId: opId, importedAt: importedAt }, row); byV[id] = rec; chV.push(rec); stats.svc++; } });
       mrSvc = Object.values(byV);
       mrSummary = { summary: p.summary, period: p.period, importedAt: importedAt, fileName: file.name };
       var batch = { id: 'mr' + Date.now() + Math.round(performance.now()), module: 'Minha Renda', filename: file.name, createdAt: importedAt, seen: p.renda.length, novo: stats.renda, upd: 0, unch: p.renda.length - stats.renda, itemsSeen: p.renda.length };
@@ -10079,19 +10142,25 @@ buffer/index.js:
   // valor é recalculado aqui: soma-se exatamente o que a função canônica de Pedidos já apurou.
   function caixaDreDia(dateKey) {
     var pagas = orders.filter(function (o) { return o.paidAt && o.paidAt.slice(0, 10) === dateKey; });
-    var receitaBruta = 0, custoTotal = 0, custoConhecidoN = 0, comIncomeN = 0, envioTotal = 0;
+    var receitaBruta = 0, custoTotal = 0, custoConhecidoN = 0, comIncomeN = 0, comSvcDetailsN = 0, envioTotal = 0;
     var mapReducoes = {}, mapTaxas = {}, mapCreditos = {}, mapOutros = {};
+    // §21/§26-27 do prompt "Taxa de Serviço até a raiz": os filhos da Taxa de Serviço são agregados
+    // num mapa SEPARADO (mapSvcChildren) — BREAKDOWN_REFERENCE, nunca somado a mapTaxas (ECONOMIC_TOTAL)
+    // — senão a DRE dobraria o valor (pai + filhos). mapSvcChildren só existe pra explicar/detalhar.
+    var mapSvcChildren = { svc_affiliate: 0, svc_transaction: 0, svc_per_item: 0 };
     function soma(map, rows) { rows.forEach(function (r) { map[r.label] = (map[r.label] || 0) + r.valor; }); }
     pagas.forEach(function (o) {
       var c = pedidoComposicaoFinanceira(o.id);
       receitaBruta += (c.receitaC || 0);
       soma(mapReducoes, c.gDescontos); soma(mapTaxas, c.gTaxas); soma(mapCreditos, c.gCreditos); soma(mapOutros, c.gOutros);
+      if (c.serviceFee && c.serviceFee.children.length) { comSvcDetailsN++; c.serviceFee.children.forEach(function (ch) { mapSvcChildren[ch.key] = (mapSvcChildren[ch.key] || 0) + ch.valor; }); }
       if (c.envio) envioTotal += c.envio.subtotalC;
       if (c.custoProdC != null) { custoTotal += c.custoProdC; custoConhecidoN++; }
       if (c.temIncome) comIncomeN++;
     });
     var toLines = function (map) { return Object.keys(map).map(function (k) { return { label: k, valor: map[k] }; }).filter(function (l) { return l.valor; }).sort(function (a, b) { return a.valor - b.valor; }); };
     var linhasReducoes = toLines(mapReducoes), linhasTaxas = toLines(mapTaxas), linhasCreditos = toLines(mapCreditos), linhasOutros = toLines(mapOutros);
+    var linhasSvcChildren = Object.keys(mapSvcChildren).map(function (k) { return { key: k, label: SVC_CHILD_LABEL[k], valor: mapSvcChildren[k] }; });
     var descComerciais = linhasReducoes.reduce(function (s, l) { return s + l.valor; }, 0);
     var taxasCobradas = linhasTaxas.reduce(function (s, l) { return s + l.valor; }, 0);
     var creditos = linhasCreditos.reduce(function (s, l) { return s + l.valor; }, 0);
@@ -10102,7 +10171,7 @@ buffer/index.js:
     var custoCompleto = pagas.length > 0 && custoConhecidoN === pagas.length;
     var lucro = custoCompleto ? receitaLiquida - custoTotal + acTaxa : null;
     var margem = (receitaBruta && lucro != null) ? r2(lucro / receitaBruta * 100) : null;
-    return { n: pagas.length, comIncomeN: comIncomeN, receitaBruta: receitaBruta, descComerciais: descComerciais, linhasReducoes: linhasReducoes, envioTotal: envioTotal, taxasCobradas: taxasCobradas, linhasTaxas: linhasTaxas, creditos: creditos, linhasCreditos: linhasCreditos, outros: outros, linhasOutros: linhasOutros, receitaLiquida: receitaLiquida, custoTotal: custoConhecidoN ? custoTotal : null, custoConhecidoN: custoConhecidoN, custoCompleto: custoCompleto, acTaxa: acTaxa, temAcelera: !!ac.resgatesN, eventosPosteriores: eventosPosteriores, lucro: lucro, margem: margem };
+    return { n: pagas.length, comIncomeN: comIncomeN, comSvcDetailsN: comSvcDetailsN, receitaBruta: receitaBruta, descComerciais: descComerciais, linhasReducoes: linhasReducoes, envioTotal: envioTotal, taxasCobradas: taxasCobradas, linhasTaxas: linhasTaxas, linhasSvcChildren: linhasSvcChildren, creditos: creditos, linhasCreditos: linhasCreditos, outros: outros, linhasOutros: linhasOutros, receitaLiquida: receitaLiquida, custoTotal: custoConhecidoN ? custoTotal : null, custoConhecidoN: custoConhecidoN, custoCompleto: custoCompleto, acTaxa: acTaxa, temAcelera: !!ac.resgatesN, eventosPosteriores: eventosPosteriores, lucro: lucro, margem: margem };
   }
   // Conta colunas do Income com valor real ainda sem destino — lê mrRenda DIRETO (dado bruto já
   // marcado por linha durante a importação), nunca mrEngine()/mrCamposNaoClassificados() (Minha Renda).
@@ -10114,18 +10183,28 @@ buffer/index.js:
   // §68-69 do prompt "Correção Financeira": toda categoria relevante da DRE precisa ser clicável e
   // abrir os pedidos que formam o total — soma dos pedidos == total exibido. Reaproveita exatamente
   // as mesmas taxaRows já calculadas por pedidoComposicaoFinanceira() (nunca soma de novo por fora).
-  function caixaDreDrillOpen(dateKey, label) {
+  // childKey opcional (§22-25 do prompt "Taxa de Serviço até a raiz"): quando informado, abre o
+  // drill-down de um FILHO específico da Taxa de Serviço (Afiliados/Transação/Por item) — soma pelos
+  // mesmos comp.serviceFee.children já calculados por pedidoComposicaoFinanceira(), nunca um cálculo
+  // novo. Sem childKey, comportamento idêntico ao anterior (drill de uma linha-pai qualquer).
+  function caixaDreDrillOpen(dateKey, label, childKey) {
     var vendas = caixaDayVendas(dateKey);
     var rows = []; var soma = 0;
     vendas.pedidos.forEach(function (o) {
       var comp = pedidoComposicaoFinanceira(o.id);
-      var r = comp.taxaRows.find(function (x) { return x.label === label; });
-      if (r) { rows.push({ orderId: o.id, valor: r.valor }); soma += r.valor; }
+      if (childKey) {
+        var ch = comp.serviceFee && comp.serviceFee.children.find(function (c) { return c.key === childKey; });
+        if (ch && ch.valor) { rows.push({ orderId: o.id, valor: ch.valor }); soma += ch.valor; }
+      } else {
+        var r = comp.taxaRows.find(function (x) { return x.label === label; });
+        if (r) { rows.push({ orderId: o.id, valor: r.valor }); soma += r.valor; }
+      }
     });
     var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '520px'; panel.style.maxWidth = '96vw'; panel.style.zIndex = '65';
     d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
     var tbl = rows.map(function (r) { return '<tr class="rowlink" data-goped360="' + esc(r.orderId) + '"><td class="mono">' + esc(r.orderId) + '</td><td class="nowrap ' + (r.valor < 0 ? 'neg' : 'pos') + '">' + brlC(r.valor) + '</td></tr>'; }).join('');
-    panel.innerHTML = '<div class="dh"><div><b>' + esc(label) + '</b></div><button class="x">&times;</button></div><div class="dbd">' +
+    var titulo = childKey ? (SVC_CHILD_LABEL[childKey] || childKey) : label;
+    panel.innerHTML = '<div class="dh"><div><b>' + esc(titulo) + '</b>' + (childKey ? '<span class="footnote" style="margin:4px 0 0">componente de ' + esc(label) + '</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' +
       '<div class="footnote" style="margin-bottom:8px">' + nn(rows.length) + ' pedido(s) de ' + nn(vendas.n) + ' compõem esta linha da DRE de ' + esc(dbr(dateKey)) + '.</div>' +
       '<div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Valor</th></tr></thead><tbody>' + (tbl || '<tr><td colspan="2" class="empty">Nenhum pedido com este componente neste dia.</td></tr>') + '</tbody></table></div>' +
       '<div class="fin-line total" style="margin-top:8px"><span>Soma dos pedidos</span><b>' + brlC(soma) + '</b></div>' +
@@ -10136,13 +10215,24 @@ buffer/index.js:
   function caixaDreBlock(dre, dateKey) {
     var line = function (label, v, opts) { opts = opts || {}; return '<div class="fin-line' + (opts.total ? ' total' : '') + '"><span>' + (opts.op ? '<b>' + opts.op + '</b> ' : '') + esc(label) + (opts.note ? ' <span class="footnote" style="margin:0">' + esc(opts.note) + '</span>' : '') + '</span><b class="' + (v == null ? '' : v < 0 ? 'neg' : v > 0 ? 'pos' : '') + '">' + (v == null ? 'não disponível' : brlC(v)) + '</b></div>'; };
     var subLine = function (label, v) { return '<div class="fin-line rowlink" style="padding-left:14px;font-size:13px" data-dredrill="' + esc(label) + '"><span>↳ ' + esc(label) + '</span><span class="' + (v < 0 ? 'neg' : 'pos') + '">' + brlC(v) + '</span></div>'; };
+    // §20-21 do prompt "Taxa de Serviço até a raiz": abaixo da linha-pai "Taxa de serviço", os
+    // FILHOS (Afiliados/Transação/Por item) entram mais indentados ainda — cada um clicável ao seu
+    // próprio drill-down (§23-25) — nunca somados de novo em taxasCobradas (mapSvcChildren é um mapa
+    // à parte, ver caixaDreDia).
+    var subLineTaxa = function (l) {
+      var isServico = dre.linhasSvcChildren.length && SVC_REAL_LABELS[l.label];
+      var childrenHtml = (isServico && dre.linhasSvcChildren.length) ? dre.linhasSvcChildren.map(function (c) {
+        return '<div class="fin-line rowlink" style="padding-left:28px;font-size:12.5px;border-left:2px solid var(--line);margin-left:16px" data-dredrillchild="' + esc(l.label) + '|' + esc(c.key) + '"><span>↳ ' + esc(c.label) + '</span><span class="' + (c.valor < 0 ? 'neg' : 'pos') + '">' + brlC(c.valor) + '</span></div>';
+      }).join('') : '';
+      return subLine(l.label, l.valor) + childrenHtml;
+    };
     if (!dre.n) return '<div class="panel"><div class="ph"><h3>DRE do dia</h3></div><div class="pb"><span class="tag neutral">Nenhum pedido pago neste dia.</span></div></div>';
     // §106-111 do prompt mestre: abre cada grupo pelo nome real das linhas que o compõem — nunca uma
     // linha genérica "Taxas cobradas da Líder"/"Descontos Bancados pela Líder" escondendo a origem.
     var body = line('Receita Bruta (Preço do Produto)', dre.receitaBruta, { note: nn(dre.n) + ' pedidos pagos' }) +
       line('Reduções / Descontos do Pedido', dre.descComerciais, { op: '−' }) + dre.linhasReducoes.map(function (l) { return subLine(l.label, l.valor); }).join('') +
       (dre.envioTotal ? line('Subtotal de Envio', dre.envioTotal, { op: dre.envioTotal < 0 ? '−' : '+' }) : '') +
-      line('Taxas Shopee', dre.taxasCobradas, { op: '−' }) + dre.linhasTaxas.map(function (l) { return subLine(l.label, l.valor); }).join('') +
+      line('Taxas Shopee', dre.taxasCobradas, { op: '−' }) + dre.linhasTaxas.map(subLineTaxa).join('') +
       (dre.creditos ? line('Créditos / Incentivos Shopee', dre.creditos, { op: '+' }) + dre.linhasCreditos.map(function (l) { return subLine(l.label, l.valor); }).join('') : '') +
       (dre.outros ? line('Outros Ajustes', dre.outros, { op: '−' }) + dre.linhasOutros.map(function (l) { return subLine(l.label, l.valor); }).join('') : '') +
       line('Receita Líquida', dre.receitaLiquida, { total: true, op: '=' }) +
@@ -10151,7 +10241,7 @@ buffer/index.js:
       (dre.eventosPosteriores.length ? '<div class="footnote" style="margin:4px 0">Eventos Posteriores: ' + nn(dre.eventosPosteriores.length) + ' registrado(s) neste dia (ver Fechamento).</div>' : '') +
       line('Lucro', dre.lucro, { total: true, op: '=' }) +
       '<div class="fin-line"><span>Margem sobre a Receita Bruta</span><b class="' + (dre.margem == null ? '' : dre.margem >= 0 ? 'pos' : 'neg') + '">' + (dre.margem == null ? '—' : pct(dre.margem)) + '</b></div>';
-    return '<div class="panel"><div class="ph"><h3>DRE do dia</h3><span class="footnote" style="margin:0">motor nativo do Caixa — não depende de Minha Renda · ' + nn(dre.comIncomeN) + ' de ' + nn(dre.n) + ' pedidos com Income cruzado</span></div><div class="pb" style="padding-top:0">' + body + '</div></div>';
+    return '<div class="panel"><div class="ph"><h3>DRE do dia</h3><span class="footnote" style="margin:0">motor nativo do Caixa — não depende de Minha Renda · ' + nn(dre.comIncomeN) + ' de ' + nn(dre.n) + ' pedidos com Income cruzado · ' + nn(dre.comSvcDetailsN) + ' de ' + nn(dre.n) + ' com Service Fee Details</span></div><div class="pb" style="padding-top:0">' + body + '</div></div>';
   }
   function caixaDayExpedicao(dateKey) {
     var sess = expSessions.find(function (s) { return s.dataOperacional === dateKey; });
@@ -11056,6 +11146,7 @@ buffer/index.js:
       var btAbrir = panel.querySelector('#bt-abrir-manual'); if (btAbrir) btAbrir.onclick = function () { openTransferenciaManualModal(dateKey, refresh); };
       panel.querySelectorAll('[data-wtx]').forEach(function (b) { b.onclick = function () { openWalletTx(b.dataset.wtx, function () { refresh(); render(); }); }; });
       panel.querySelectorAll('[data-dredrill]').forEach(function (b) { b.onclick = function () { caixaDreDrillOpen(dateKey, b.dataset.dredrill); }; });
+      panel.querySelectorAll('[data-dredrillchild]').forEach(function (b) { b.onclick = function () { var parts = b.dataset.dredrillchild.split('|'); caixaDreDrillOpen(dateKey, parts[0], parts[1]); }; });
     }
     refresh();
   }
@@ -11145,9 +11236,22 @@ buffer/index.js:
     var pedRows = [['Pedido', 'Status', 'Valor (R$)', 'Lucro (R$)', 'Custo conhecido']];
     vendas.pedidos.forEach(function (o) { var c = pedidoComposicaoFinanceira(o.id); pedRows.push([o.id, S.pedidos.labels[o.normalizedStatus] || o.orderStatus, o.totalAmount || 0, c.resultadoC != null ? c.resultadoC / 100 : '', c.custoProdC != null ? 'sim' : 'não']); });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pedRows), 'Pedidos');
-    // §132: nome real, pedido, valor, origem — nunca um total genérico por pedido.
-    var taxRows = [['Nome real (Income)', 'Pedido', 'Valor (R$)', 'Origem']];
-    vendas.pedidos.forEach(function (o) { var c = pedidoComposicaoFinanceira(o.id); if (!c.temIncome) return; c.gTaxas.concat(c.gDescontos).concat(c.gCreditos).concat(c.gOutros).forEach(function (r) { taxRows.push([r.label, o.id, r.valor / 100, r.origem]); }); });
+    // §35 do prompt "Taxa de Serviço até a raiz": Categoria Pai / Subcategoria / Pedido / Valor /
+    // Fonte — os filhos da Taxa de Serviço entram como linhas próprias (Subcategoria preenchida),
+    // nunca somados de novo no total econômico (linha de resumo separada, ao final).
+    var taxRows = [['Categoria Pai', 'Subcategoria', 'Pedido', 'Valor (R$)', 'Fonte']];
+    var svcTotalEconomico = 0;
+    vendas.pedidos.forEach(function (o) {
+      var c = pedidoComposicaoFinanceira(o.id);
+      if (!c.temIncome && !(c.serviceFee && c.serviceFee.children.length)) return;
+      c.gTaxas.concat(c.gDescontos).concat(c.gCreditos).concat(c.gOutros).forEach(function (r) {
+        taxRows.push([r.label, '', o.id, r.valor / 100, r.origem]);
+        if (r.fieldKey === 'servico') svcTotalEconomico += r.valor;
+        if (r.children && r.children.length) r.children.forEach(function (ch) { if (ch.valor) taxRows.push([r.label, ch.label, o.id, ch.valor / 100, 'Service Fee Details']); });
+      });
+    });
+    taxRows.push([]);
+    taxRows.push(['Taxa de Serviço — total econômico (nunca soma pai + filhos)', '', '', svcTotalEconomico / 100, '']);
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(taxRows), 'Taxas');
     // Subtotal de Envio canônico por pedido (§27-39) — só pedidos com impacto líquido != 0.
     var envioRows = [['Pedido', 'Taxa frete comprador (R$)', 'Frete parceiro (R$)', 'Desconto frete Shopee (R$)', 'Envio reverso (R$)', 'Devolução vendedor (R$)', 'Subtotal de Envio (R$)']];
@@ -11184,7 +11288,7 @@ buffer/index.js:
       dreRows.push(['Receita Bruta', dre.receitaBruta / 100]);
       dre.linhasReducoes.forEach(function (l) { dreRows.push(['  ' + l.label, l.valor / 100]); });
       if (dre.envioTotal) dreRows.push(['Subtotal de Envio', dre.envioTotal / 100]);
-      dre.linhasTaxas.forEach(function (l) { dreRows.push(['  ' + l.label, l.valor / 100]); });
+      dre.linhasTaxas.forEach(function (l) { dreRows.push(['  ' + l.label, l.valor / 100]); if (dre.linhasSvcChildren.length && SVC_REAL_LABELS[l.label]) dre.linhasSvcChildren.forEach(function (c) { dreRows.push(['    ↳ ' + c.label, c.valor / 100]); }); });
       dre.linhasCreditos.forEach(function (l) { dreRows.push(['  ' + l.label, l.valor / 100]); });
       dre.linhasOutros.forEach(function (l) { dreRows.push(['  ' + l.label, l.valor / 100]); });
       dreRows.push(['Receita Líquida', dre.receitaLiquida / 100]);
@@ -11224,7 +11328,11 @@ buffer/index.js:
       '<div class="psection"><h2>Pendências do Fluxo (' + nn(pend.total) + ')</h2>' + thTable(['Pedido', 'Origem', 'Motivo'], pend.operacionais.concat(pend.financeiras).slice(0, 60).map(function (i) { return '<tr><td>' + esc(i.orderId) + '</td><td>' + esc(i.origem) + '</td><td>' + esc(i.motivo) + '</td></tr>'; })) + '</div>' +
       '<div class="psection"><h2>Transferências Bancárias</h2>' + thTable(['Origem', 'Data/hora', 'Descrição/Conta', 'Valor'], transf.autoTxs.map(function (t) { return '<tr><td>Automático (Carteira)</td><td>' + dbr(t.date) + '</td><td>' + esc(t.desc || t.tipo || '—') + '</td><td>' + brl(Math.abs(t.amount)) + '</td></tr>'; }).concat(transf.manual.map(function (t) { return '<tr><td>Manual</td><td>' + new Date(t.quando).toLocaleString('pt-BR') + '</td><td>' + esc(t.conta || '—') + '</td><td>' + brl(t.valor) + '</td></tr>'; }))) + prow('Total transferido', transf.total, true) + '</div>' +
       '<div class="psection"><h2>Pendências da Carteira (' + nn(pendCart.total) + ')</h2>' + thTable(['Pedido', 'Problema', 'Valor'], pendCart.itens.slice(0, 60).map(function (it) { return '<tr><td>' + esc(wOrderId(it.t) || '— Não identificado') + '</td><td>' + esc(it.motivo) + '</td><td>' + brl(it.t.amount) + '</td></tr>'; })) + '</div>' +
-      '<div class="psection"><h2>DRE Completa</h2>' + (dre.n ? (prow('Receita Bruta', dre.receitaBruta / 100) + prow('Reduções / Descontos', dre.descComerciais / 100) + (dre.envioTotal ? prow('Subtotal de Envio', dre.envioTotal / 100) : '') + prow('Taxas Shopee', dre.taxasCobradas / 100) + (dre.creditos ? prow('Créditos / Incentivos', dre.creditos / 100) : '') + prow('Receita Líquida', dre.receitaLiquida / 100, true) + prow('Custo dos Produtos', dre.custoTotal != null ? dre.custoTotal / 100 : '—') + (dre.temAcelera ? prow('Taxa do Acelera', dre.acTaxa / 100) : '') + prow('Lucro', dre.lucro != null ? dre.lucro / 100 : '—', true) + prow('Margem', dre.margem != null ? pct(dre.margem) : '—')) : '<div class="prow">Nenhum pedido pago neste dia.</div>') + '</div>' +
+      '<div class="psection"><h2>DRE Completa</h2>' + (dre.n ? (prow('Receita Bruta', dre.receitaBruta / 100) + prow('Reduções / Descontos', dre.descComerciais / 100) + (dre.envioTotal ? prow('Subtotal de Envio', dre.envioTotal / 100) : '') + prow('Taxas Shopee', dre.taxasCobradas / 100) +
+        // §34 do prompt "Taxa de Serviço até a raiz": nunca imprimir só "Taxa de serviço" — os
+        // filhos entram logo abaixo, mais indentados, sem alterar o total (que é sempre o pai).
+        dre.linhasTaxas.map(function (l) { var isServico = dre.linhasSvcChildren.length && SVC_REAL_LABELS[l.label]; return prow('　' + l.label, l.valor / 100) + (isServico ? dre.linhasSvcChildren.map(function (c) { return prow('　　↳ ' + c.label, c.valor / 100); }).join('') : ''); }).join('') +
+        (dre.creditos ? prow('Créditos / Incentivos', dre.creditos / 100) : '') + prow('Receita Líquida', dre.receitaLiquida / 100, true) + prow('Custo dos Produtos', dre.custoTotal != null ? dre.custoTotal / 100 : '—') + (dre.temAcelera ? prow('Taxa do Acelera', dre.acTaxa / 100) : '') + prow('Lucro', dre.lucro != null ? dre.lucro / 100 : '—', true) + prow('Margem', dre.margem != null ? pct(dre.margem) : '—')) : '<div class="prow">Nenhum pedido pago neste dia.</div>') + '</div>' +
       '<div class="pfooter"><div class="prow"><span>Responsável pelo fechamento</span><span>' + esc((st.rec && st.rec.closedBy) || '—') + '</span></div><div class="prow"><span>Status</span><span>' + esc(lbl ? lbl[0] : st.status) + '</span></div><div class="prow"><span>Impresso em</span><span>' + new Date().toLocaleString('pt-BR') + '</span></div></div>' +
       '</div>';
     var target = document.getElementById('caixa-print-doc');
