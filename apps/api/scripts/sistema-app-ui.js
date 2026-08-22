@@ -6152,7 +6152,7 @@
         caixaCloseDay(dateKey, 'FECHADO_COM_RESSALVA', 'Operador', justificativa.trim()).then(function () { toast('Caixa fechado com ressalva', dbr(dateKey)); refresh(); render(); });
       };
       var xl = panel.querySelector('#caixa-xlsx'); if (xl) xl.onclick = function () { caixaExportarXlsx(dateKey); toast('Planilha gerada', 'Fechamento_Caixa_' + dateKey + '.xlsx'); };
-      var pr = panel.querySelector('#caixa-print'); if (pr) pr.onclick = function () { window.print(); };
+      var pr = panel.querySelector('#caixa-print'); if (pr) pr.onclick = function () { caixaImprimirFechamento(dateKey); };
       var btReg = panel.querySelector('#bt-registrar'); if (btReg) btReg.onclick = function () {
         var valor = walletNum(panel.querySelector('#bt-valor').value);
         if (valor == null || valor <= 0) { toast('Informe um valor válido', '', true); return; }
@@ -6186,41 +6186,63 @@
   // §24-27: exportação XLSX do fechamento — sempre respeita o dia aberto no momento (nunca um
   // período diferente do que está sendo visto). Reaproveita os mesmos motores/leituras já usados
   // na tela — nunca uma segunda fonte de números só para o arquivo exportado.
+  // §130-132 do prompt mestre: abas Resumo/Pedidos/Taxas/Envio/Expedição/Acelera/Créditos Carteira/
+  // Débitos Carteira/Pendências/DRE/Histórico. Taxas lista nome real + pedido + valor + origem —
+  // nunca um total genérico.
   function caixaExportarXlsx(dateKey) {
-    var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = caixaDayAcelera(dateKey), pend = caixaDayPendencias(dateKey), pendCart = caixaDayPendenciasCarteira(dateKey);
+    var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = caixaDayAcelera(dateKey), pend = caixaDayPendencias(dateKey), pendCart = caixaDayPendenciasCarteira(dateKey), mov = caixaDayMovimentosCarteira(dateKey);
     var dayTransfers = bankTransfers.filter(function (t) { return t.quando && t.quando.slice(0, 10) === dateKey; });
     var totalTransferido = dayTransfers.reduce(function (s, t) { return s + t.valor; }, 0);
     var wb = XLSX.utils.book_new();
     var resumo = [['Fechamento de Caixa', dbr(dateKey)], [],
       ['Pedidos pagos', vendas.n], ['Faturamento (R$)', vendas.valor], ['Lucro atual (R$)', vendas.nLucroConhecido ? vendas.lucroC / 100 : ''],
       ['Esperados (Expedição)', exp.esperados != null ? exp.esperados : ''], ['Expedidos', exp.expedidos], ['Faltaram', exp.faltaram != null ? exp.faltaram : ''],
-      ['Resgates Acelera', ac.n || 0], ['Antecipado (R$)', ac.antec != null ? ac.antec / 100 : ''], ['Taxa Acelera (R$)', ac.taxa != null ? ac.taxa / 100 : ''], ['Recebido líquido (R$)', ac.liquido != null ? ac.liquido / 100 : ''],
+      ['Resgates Acelera', ac.n || 0], ['Antecipado bruto (R$)', ac.antec != null ? ac.antec / 100 : ''], ['Taxa Acelera (R$)', ac.taxa != null ? ac.taxa / 100 : ''], ['Recebido líquido via Acelera (R$)', ac.liquido != null ? ac.liquido / 100 : ''],
       ['Transferido para o banco (R$)', dayTransfers.length ? totalTransferido : ''], ['Permanência operacional na carteira (R$)', (ac.liquido != null && dayTransfers.length) ? r2(ac.liquido / 100 - totalTransferido) : ''],
+      ['Créditos na Carteira (qtd)', mov.creditos.length], ['Débitos na Carteira (qtd)', mov.debitos.length],
       ['Pendências do fluxo', pend.total], ['Pendências da carteira', pendCart.total]];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(resumo), 'Resumo');
     var pedRows = [['Pedido', 'Status', 'Valor (R$)', 'Lucro (R$)', 'Custo conhecido']];
     vendas.pedidos.forEach(function (o) { var c = pedidoComposicaoFinanceira(o.id); pedRows.push([o.id, S.pedidos.labels[o.normalizedStatus] || o.orderStatus, o.totalAmount || 0, c.resultadoC != null ? c.resultadoC / 100 : '', c.custoProdC != null ? 'sim' : 'não']); });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pedRows), 'Pedidos');
-    // §81: só entra aqui o que é despesa real nossa — pago pela Shopee/comprador/informativo nunca entra.
-    var taxRows = [['Pedido', 'Taxas cobradas da Líder (R$)', 'Descontos bancados pela Líder (R$)', 'Créditos/incentivos (R$)', 'Reembolsos/outros (R$)']];
-    vendas.pedidos.forEach(function (o) { var c = pedidoComposicaoFinanceira(o.id); if (!c.temIncome) return; taxRows.push([o.id, c.taxasCobradasC / 100, c.descontosComerciaisC / 100, c.creditosC / 100, c.outrosC / 100]); });
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(taxRows), 'Taxas cobradas da Líder');
+    // §132: nome real, pedido, valor, origem — nunca um total genérico por pedido.
+    var taxRows = [['Nome real (Income)', 'Pedido', 'Valor (R$)', 'Origem']];
+    vendas.pedidos.forEach(function (o) { var c = pedidoComposicaoFinanceira(o.id); if (!c.temIncome) return; c.gTaxas.concat(c.gDescontos).concat(c.gCreditos).concat(c.gOutros).forEach(function (r) { taxRows.push([r.label, o.id, r.valor / 100, r.origem]); }); });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(taxRows), 'Taxas');
+    // Subtotal de Envio canônico por pedido (§27-39) — só pedidos com impacto líquido != 0.
+    var envioRows = [['Pedido', 'Taxa frete comprador (R$)', 'Frete parceiro (R$)', 'Desconto frete Shopee (R$)', 'Envio reverso (R$)', 'Devolução vendedor (R$)', 'Subtotal de Envio (R$)']];
+    vendas.pedidos.forEach(function (o) { var env = subtotalEnvioPedido(o.id); if (!env || !env.subtotalC) return; envioRows.push([o.id, env.comps[0].valor / 100, env.comps[1].valor / 100, env.comps[2].valor / 100, env.comps[3].valor / 100, env.comps[4].valor / 100, env.subtotalC / 100]); });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(envioRows), 'Envio');
     var expRows = [['Pedido', 'Modalidade', 'Tipo', 'Situação', 'Expedido em']];
     exp.itens.forEach(function (i) { expRows.push([i.orderId, i.modalidade, i.isFbs ? 'Full' : 'Normal', i.situacao, i.expedidoAt ? dbr(i.expedidoAt) : '']); });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(expRows), 'Expedição');
     var acRows2 = [['Resgates', 'Antecipado (R$)', 'Taxa (R$)', 'Recebido (R$)']]; if (ac.n) acRows2.push([ac.n, ac.antec / 100, ac.taxa / 100, ac.liquido / 100]);
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(acRows2), 'Acelera');
+    var credRows = [['Data/hora', 'Descrição', 'Valor (R$)', 'Pedido', 'Resgate', 'Classificação', 'Situação']];
+    mov.creditos.forEach(function (t) { credRows.push([new Date(t.date).toLocaleString('pt-BR'), t.desc || t.tipo || '—', t.amount, wOrderId(t) || '— Não identificado', wCreditResgateId(t) || '—', wcatLabel(wEffCat(t)), WSTATUS[wStatus(t)]]); });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(credRows), 'Créditos Carteira');
+    var debRows = [['Data/hora', 'Descrição', 'Valor (R$)', 'Pedido', 'Origem', 'Categoria', 'Situação']];
+    mov.debitos.forEach(function (t) { debRows.push([new Date(t.date).toLocaleString('pt-BR'), t.desc || t.tipo || '—', t.amount, wOrderId(t) || '— Não identificado', wProvavelOrigem(t), wcatLabel(wEffCat(t)), WSTATUS[wStatus(t)]]); });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(debRows), 'Débitos Carteira');
+    // §131: uma única aba "Pendências" com origem explícita por linha (Pedidos/Expedição/Acelera/Carteira).
     var pendRows2 = [['Pedido', 'Origem', 'Motivo/Valor']];
     pend.operacionais.forEach(function (i) { pendRows2.push([i.orderId, i.origem, i.motivo]); });
     pend.financeiras.forEach(function (f) { pendRows2.push([f.orderId, f.origem, f.motivo]); });
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pendRows2), 'Pendências do Fluxo');
-    // §100: aba separada — nunca junto com as pendências do fluxo.
-    var pendCartRows2 = [['Pedido', 'Movimento', 'Valor (R$)', 'Problema']];
-    pendCart.itens.forEach(function (it) { pendCartRows2.push([wOrderId(it.t) || '— Não identificado', it.t.tipo || it.t.desc || '—', it.t.amount, it.motivo]); });
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pendCartRows2), 'Pendências da Carteira');
+    pendCart.itens.forEach(function (it) { pendRows2.push([wOrderId(it.t) || '— Não identificado', 'CARTEIRA', it.motivo + ' (' + brl(it.t.amount) + ')']); });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pendRows2), 'Pendências');
     var dre = caixaDreDia(dateKey);
     if (dre.n) {
-      var dreRows = [['Linha', 'Valor (R$)'], ['Receita Bruta', dre.receitaBruta / 100], ['Descontos Bancados pela Líder', dre.descComerciais / 100], ['Taxas Cobradas da Líder', dre.taxasCobradas / 100], ['Créditos/Incentivos', dre.creditos / 100], ['Reembolsos e Outros Ajustes', dre.outros / 100], ['Receita Líquida', dre.receitaLiquida / 100], ['Custo dos Produtos', dre.custoTotal != null ? dre.custoTotal / 100 : ''], ['Lucro', dre.lucro != null ? dre.lucro / 100 : '']];
+      var dreRows = [['Linha', 'Valor (R$)']];
+      dreRows.push(['Receita Bruta', dre.receitaBruta / 100]);
+      dre.linhasReducoes.forEach(function (l) { dreRows.push(['  ' + l.label, l.valor / 100]); });
+      if (dre.envioTotal) dreRows.push(['Subtotal de Envio', dre.envioTotal / 100]);
+      dre.linhasTaxas.forEach(function (l) { dreRows.push(['  ' + l.label, l.valor / 100]); });
+      dre.linhasCreditos.forEach(function (l) { dreRows.push(['  ' + l.label, l.valor / 100]); });
+      dre.linhasOutros.forEach(function (l) { dreRows.push(['  ' + l.label, l.valor / 100]); });
+      dreRows.push(['Receita Líquida', dre.receitaLiquida / 100]);
+      dreRows.push(['Custo dos Produtos', dre.custoTotal != null ? dre.custoTotal / 100 : '']);
+      if (dre.temAcelera) dreRows.push(['Taxa do Acelera', dre.acTaxa / 100]);
+      dreRows.push(['Lucro', dre.lucro != null ? dre.lucro / 100 : '']);
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dreRows), 'DRE');
     }
     var rec = caixaClose[dateKey];
@@ -6228,6 +6250,36 @@
     (rec && rec.history || []).forEach(function (h) { histRows.push([new Date(h.at).toLocaleString('pt-BR'), h.status, h.justificativa || '', h.pendTotal]); });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(histRows), 'Histórico');
     XLSX.writeFile(wb, 'Fechamento_Caixa_' + dateKey + '.xlsx');
+  }
+  // §125-129 do prompt mestre: documento de impressão/PDF DEDICADO — nunca a tela inteira. Monta
+  // #caixa-print-doc (escondido normalmente; a folha de estilo do shell só o exibe em @media print,
+  // escondendo tudo o mais) com a estrutura exata do §127, sem sidebar/topbar/filtros/botões.
+  function caixaImprimirFechamento(dateKey) {
+    var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = caixaDayAcelera(dateKey), pend = caixaDayPendencias(dateKey), pendCart = caixaDayPendenciasCarteira(dateKey), mov = caixaDayMovimentosCarteira(dateKey);
+    var st = caixaDayStatus(dateKey); var lbl = CAIXA_LABEL[st.status];
+    var margem = vendas.valor ? r2(vendas.lucroC / 100 / vendas.valor * 100) : null;
+    var dayTransfers = bankTransfers.filter(function (t) { return t.quando && t.quando.slice(0, 10) === dateKey; });
+    var totalTransferido = dayTransfers.reduce(function (s, t) { return s + t.valor; }, 0);
+    var somaCred = mov.creditos.reduce(function (s, t) { return s + t.amount; }, 0), somaDeb = mov.debitos.reduce(function (s, t) { return s + t.amount; }, 0);
+    var dre = caixaDreDia(dateKey);
+    var prow = function (label, v, total) { return '<div class="prow' + (total ? ' ptotal' : '') + '"><span>' + esc(label) + '</span><span class="' + (typeof v === 'number' ? (v < 0 ? 'pneg' : 'ppos') : '') + '">' + (typeof v === 'number' ? brl(v) : esc(v)) + '</span></div>'; };
+    var thTable = function (headers, rows) { return '<table><thead><tr>' + headers.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') + '</tr></thead><tbody>' + (rows.length ? rows.join('') : '<tr><td colspan="' + headers.length + '">—</td></tr>') + '</tbody></table>'; };
+    var html = '<div class="pdoc">' +
+      '<h1>FECHAMENTO DE CAIXA — ' + esc(dbr(dateKey)) + '</h1><div class="psub">Sistema Marketplace — Líder</div>' +
+      '<div class="psection"><h2>Resumo do Dia</h2>' + prow('Pedidos pagos', vendas.n) + prow('Faturamento', vendas.valor) + prow('Lucro', vendas.nLucroConhecido ? vendas.lucroC / 100 : 'aguardando custo') + prow('Margem', margem != null ? pct(margem) : '—') + '</div>' +
+      '<div class="psection"><h2>Expedição</h2>' + prow('Esperados', exp.esperados != null ? exp.esperados : '—') + prow('Expedidos', exp.expedidos) + prow('Pendentes', exp.faltaram != null ? exp.faltaram : '—') + '</div>' +
+      '<div class="psection"><h2>Acelera</h2>' + prow('Bruto', ac.antec != null ? ac.antec / 100 : '—') + prow('Taxa', ac.taxa != null ? -Math.abs(ac.taxa) / 100 : '—') + prow('Líquido', ac.liquido != null ? ac.liquido / 100 : '—') + '</div>' +
+      '<div class="psection"><h2>Pendências do Fluxo (' + nn(pend.total) + ')</h2>' + thTable(['Pedido', 'Origem', 'Motivo'], pend.operacionais.concat(pend.financeiras).slice(0, 60).map(function (i) { return '<tr><td>' + esc(i.orderId) + '</td><td>' + esc(i.origem) + '</td><td>' + esc(i.motivo) + '</td></tr>'; })) + '</div>' +
+      '<div class="psection"><h2>Carteira</h2>' + prow('Créditos (' + nn(mov.creditos.length) + ')', somaCred) + prow('Débitos (' + nn(mov.debitos.length) + ')', somaDeb) + prow('Saldo após movimentos', r2(somaCred + somaDeb)) + '</div>' +
+      '<div class="psection"><h2>Transferências Bancárias</h2>' + thTable(['Data/hora', 'Conta', 'Valor'], dayTransfers.map(function (t) { return '<tr><td>' + new Date(t.quando).toLocaleString('pt-BR') + '</td><td>' + esc(t.conta || '—') + '</td><td>' + brl(t.valor) + '</td></tr>'; })) + (dayTransfers.length ? prow('Total transferido', totalTransferido) : '') + '</div>' +
+      '<div class="psection"><h2>Pendências da Carteira (' + nn(pendCart.total) + ')</h2>' + thTable(['Pedido', 'Problema', 'Valor'], pendCart.itens.slice(0, 60).map(function (it) { return '<tr><td>' + esc(wOrderId(it.t) || '— Não identificado') + '</td><td>' + esc(it.motivo) + '</td><td>' + brl(it.t.amount) + '</td></tr>'; })) + '</div>' +
+      '<div class="psection"><h2>DRE Completa</h2>' + (dre.n ? (prow('Receita Bruta', dre.receitaBruta / 100) + prow('Reduções / Descontos', dre.descComerciais / 100) + (dre.envioTotal ? prow('Subtotal de Envio', dre.envioTotal / 100) : '') + prow('Taxas Shopee', dre.taxasCobradas / 100) + (dre.creditos ? prow('Créditos / Incentivos', dre.creditos / 100) : '') + prow('Receita Líquida', dre.receitaLiquida / 100, true) + prow('Custo dos Produtos', dre.custoTotal != null ? dre.custoTotal / 100 : '—') + (dre.temAcelera ? prow('Taxa do Acelera', dre.acTaxa / 100) : '') + prow('Lucro', dre.lucro != null ? dre.lucro / 100 : '—', true) + prow('Margem', dre.margem != null ? pct(dre.margem) : '—')) : '<div class="prow">Nenhum pedido pago neste dia.</div>') + '</div>' +
+      '<div class="pfooter"><div class="prow"><span>Responsável pelo fechamento</span><span>' + esc((st.rec && st.rec.closedBy) || '—') + '</span></div><div class="prow"><span>Status</span><span>' + esc(lbl ? lbl[0] : st.status) + '</span></div><div class="prow"><span>Impresso em</span><span>' + new Date().toLocaleString('pt-BR') + '</span></div></div>' +
+      '</div>';
+    var target = document.getElementById('caixa-print-doc');
+    if (!target) { toast('Impressão indisponível', 'Recarregue a página e tente novamente.', true); return; }
+    target.innerHTML = html;
+    setTimeout(function () { window.print(); }, 30);
   }
   function renderCaixa() {
     // §87: sem subaba própria "Pendências da Carteira" — os créditos/débitos/pendências da Carteira

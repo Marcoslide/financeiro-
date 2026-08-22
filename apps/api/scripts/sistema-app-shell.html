@@ -185,6 +185,29 @@
   .datein{display:none;gap:6px;align-items:center}
   .datein.on{display:inline-flex}
   .datein input{padding:6px 8px;font-size:12px}
+  /* §125-129 do prompt mestre: impressão/PDF do Fechamento de Caixa nunca imprime a tela inteira
+     (sidebar/topbar/filtros/botões) — só o documento dedicado montado em #caixa-print-doc. */
+  #caixa-print-doc{display:none}
+  .pdoc{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;color:#1a2233;font-size:12px}
+  .pdoc h1{font-size:18px;margin:0 0 4px}
+  .pdoc h2{font-size:13px;margin:16px 0 6px;padding-bottom:4px;border-bottom:1.5px solid #1a2233;text-transform:uppercase;letter-spacing:.03em}
+  .pdoc .psub{color:#64708a;margin:0 0 14px}
+  .pdoc table{width:100%;border-collapse:collapse;margin-bottom:4px}
+  .pdoc thead{display:table-header-group}
+  .pdoc th,.pdoc td{border:1px solid #d8dee8;padding:4px 6px;text-align:left;font-size:11px;word-break:break-word}
+  .pdoc th{background:#eef1f7}
+  .pdoc tr{page-break-inside:avoid}
+  .pdoc .prow{display:flex;justify-content:space-between;border-bottom:1px solid #eef1f7;padding:2px 0}
+  .pdoc .ptotal{font-weight:700;border-top:1.5px solid #1a2233;margin-top:2px;padding-top:4px}
+  .pdoc .pneg{color:#a02020}.pdoc .ppos{color:#0f7a4f}
+  .pdoc .psection{page-break-inside:avoid;margin-bottom:10px}
+  .pdoc .pfooter{margin-top:18px;padding-top:8px;border-top:1px solid #1a2233;font-size:11px;color:#64708a}
+  @media print{
+    body *{visibility:hidden}
+    #caixa-print-doc,#caixa-print-doc *{visibility:visible}
+    #caixa-print-doc{display:block;position:absolute;left:0;top:0;width:100%}
+    @page{size:A4;margin:16mm 12mm}
+  }
 </style>
 </head>
 <body>
@@ -233,6 +256,7 @@
     <div class="content" id="app"></div>
   </div>
 </div>
+<div id="caixa-print-doc"></div>
 <!--XLSX--><!--BUNDLE--><!--UI-->
 </body>
 </html>
