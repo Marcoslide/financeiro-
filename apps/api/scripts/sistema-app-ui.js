@@ -6703,7 +6703,7 @@
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(conciliacaoRows), 'Conciliação');
     var descPostRows = [['Categoria', 'Data', 'Pedido', 'Descrição Shopee', 'Valor (R$)', 'Origem', 'Situação']];
     Object.keys(pcatX).forEach(function (k) { pcatX[k].itens.forEach(function (t) { descPostRows.push([CAIXA_MOV_CAT_LABEL[k], dbr(t.date), wOrderId(t) || '— Não identificado', t.desc || t.tipo || '—', t.amount, wProvavelOrigem(t), pendCart.itens.some(function (it) { return it.t.id === t.id; }) ? 'Pendência' : 'Conciliado']); }); });
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(descPostRows), 'Descontos e Créditos Posteriores');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(descPostRows), 'Descontos e Créditos Post.');
     var pedRows = [['Pedido', 'Status', 'Valor (R$)', 'Lucro (R$)', 'Custo conhecido']];
     vendas.pedidos.forEach(function (o) { var c = pedidoComposicaoFinanceira(o.id); pedRows.push([o.id, S.pedidos.labels[o.normalizedStatus] || o.orderStatus, o.totalAmount || 0, c.resultadoC != null ? c.resultadoC / 100 : '', c.custoProdC != null ? 'sim' : 'não']); });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pedRows), 'Pedidos');
