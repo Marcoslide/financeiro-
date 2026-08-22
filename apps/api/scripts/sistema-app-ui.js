@@ -365,6 +365,11 @@
     // nunca remove hífen/barra/números, que fazem parte real do SKU.
     return String(value).replace(/[​-‍﻿ ]/g, '').trim().replace(/\s+/g, ' ').toLowerCase();
   }
+  // §22-31 do prompt "Correção definitiva de SKU/Variações/Famílias/Custo": o ÍNDICE nunca decide
+  // conflito — só REGISTRA todas as candidatas (ativas e inativas) que reivindicam uma chave de SKU,
+  // com status do anúncio, productId e matchedBy. Quem decide é resolveSkuCostByKey(), por prioridade
+  // determinística. Isso separa corretamente "existe mais de uma candidata" (fato, sempre guardado)
+  // de "qual delas vale" (regra, aplicada na leitura — nunca perdida ao reindexar).
   function rebuildSkuCost() {
     skuCost = {}; skuAliasIndex = {}; skuConflicts = {}; skuVarById = {}; skuFamById = {};
     if (!Produtos) return;
@@ -372,54 +377,74 @@
     data.families.forEach(function (f) { skuFamById[f.id] = f; });
     data.variations.forEach(function (v) { skuVarById[v.id] = v; });
     var prodStatusById = {}; data.products.forEach(function (p) { prodStatusById[p.id] = p.status; });
-    function addAlias(key, matchedBy, v) {
+    function addCandidate(rawSku, matchedBy, v) {
+      if (!rawSku) return;
+      var key = normalizeSkuKey(rawSku);
+      if (!key) return;
       var list = skuAliasIndex[key] = skuAliasIndex[key] || [];
-      if (!list.some(function (r) { return r.variationId === v.id; })) list.push({ variationId: v.id, matchedBy: matchedBy });
+      if (list.some(function (c) { return c.variationId === v.id && c.matchedBy === matchedBy; })) return;
+      list.push({ variationId: v.id, productId: v.productId, status: prodStatusById[v.productId] || 'ACTIVE', matchedBy: matchedBy });
     }
-    // Causa real encontrada em catálogo de produção: um anúncio relistado/clonado no Shopee mantém
-    // o mesmo SKU do anúncio antigo — as duas variações disputam a mesma chave e o custo nunca chega
-    // ao Pedido (SKU_CONFLITANTE), mesmo com o usuário classificando corretamente. 1ª passada: só
-    // variações de anúncios ATIVOS disputam a chave — um anúncio marcado INATIVO (ação explícita já
-    // existente em Produtos, nunca uma adivinhança) deixa de bloquear a resolução sozinho.
-    data.variations.forEach(function (v) {
-      var active = prodStatusById[v.productId] !== 'INACTIVE';
-      if (!active) return;
-      if (v.sku) { var k1 = normalizeSkuKey(v.sku); if (k1) addAlias(k1, 'SKU', v); }
-      if (v.referenceSku) { var k2 = normalizeSkuKey(v.referenceSku); if (k2) addAlias(k2, 'REFERENCE_SKU', v); }
-    });
-    // 2ª passada: preenche com variações INATIVAS apenas as chaves que NENHUM anúncio ativo
-    // reivindicou — preserva o comportamento anterior enquanto o usuário não classificou nada como
-    // inativo (a imensa maioria dos catálogos, onde só existe 1 variação por SKU).
-    data.variations.forEach(function (v) {
-      var active = prodStatusById[v.productId] !== 'INACTIVE';
-      if (active) return;
-      if (v.sku) { var k1 = normalizeSkuKey(v.sku); if (k1 && !skuAliasIndex[k1]) addAlias(k1, 'SKU', v); }
-      if (v.referenceSku) { var k2 = normalizeSkuKey(v.referenceSku); if (k2 && !skuAliasIndex[k2]) addAlias(k2, 'REFERENCE_SKU', v); }
-    });
-    Object.keys(skuAliasIndex).forEach(function (key) { if (skuAliasIndex[key].length > 1) skuConflicts[key] = true; }); // SKU_CONFLICT — auditável via resolveSkuCost().motivo
+    data.variations.forEach(function (v) { addCandidate(v.sku, 'SKU', v); addCandidate(v.referenceSku, 'REFERENCE_SKU', v); });
     // skuCost legado — mantido só para leituras remanescentes que apenas checam vínculo (nunca uma
     // segunda fonte de verdade: sempre derivado de resolveSkuCost(), a função canônica).
-    Object.keys(skuAliasIndex).forEach(function (key) { var r = resolveSkuCostByKey(key, key); skuCost[key] = { linked: true, cost: r.found ? r.cost : null, familyName: r.familyName || null }; });
+    Object.keys(skuAliasIndex).forEach(function (key) {
+      var r = resolveSkuCostByKey(key, key);
+      skuCost[key] = { linked: true, cost: r.found ? r.cost : null, familyName: r.familyName || null };
+      if (/^SKU_CONFLIT/.test(r.motivo || '')) skuConflicts[key] = true; // auditável via resolveSkuCost().motivo
+    });
   }
   // Função canônica de resolução — TODOS os módulos (Pedidos/orderFinance, Ficha do Pedido, Devolução,
   // Minha Renda, Caixa, Inteligência) devem chamar resolveSkuCost(), nunca ler skuCost[...] direto.
-  // Prioridade determinística: 1) SKU exato normalizado, 2) SKU de referência exato normalizado,
-  // 3) não encontrado → pendência com motivo auditável. Nunca fuzzy matching, nunca cruza por nome.
-  function resolveSkuCostByKey(key, requestedSku) {
+  // Nunca fuzzy matching, nunca cruza por nome de produto — sempre pelo código exato.
+  //
+  // Ordem de prioridade (§31), aplicada só entre as candidatas já registradas para a chave:
+  //  1. identificador Shopee forte de variação do próprio item do Pedido (itemHint.variationId) —
+  //     hoje nenhum parser de Order.all da Shopee testado traz esse campo (só "Número de referência
+  //     SKU"), então esta camada normalmente não participa; a arquitetura já fica pronta para recebê-
+  //     la sem precisar de outro resolver, sem exigir alterar o parser agora sem prova de que falta.
+  //  2. v.sku exato + anúncio ATIVO, único → resolve.
+  //  3. v.referenceSku exato + anúncio ATIVO, único → resolve (SKU exato sempre vence referenceSku).
+  //  4. v.sku exato + só candidatas INATIVAS, única → HISTORICAL_INACTIVE_MATCH (pedido antigo de
+  //     anúncio já inativado/relistado — não é motivo pra nunca mais calcular o custo desse pedido).
+  //  5. v.referenceSku exato + só candidatas INATIVAS, única → idem, via referenceSku.
+  //  6. mais de uma candidata no mesmo nível (2 anúncios ATIVOS com o mesmo SKU, ou 2+ INATIVOS sem
+  //     nenhum identificador pra desempatar) → SKU_CONFLITANTE / SKU_CONFLITANTE_HISTORICAL. Nunca
+  //     escolhe uma arbitrariamente.
+  function resolveSkuCostByKey(key, requestedSku, itemHint) {
     if (!key) return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
-    if (skuConflicts[key]) return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE' };
-    var list = skuAliasIndex[key];
-    if (!list || !list.length) return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
-    var reg = list[0];
-    var v = skuVarById[reg.variationId];
-    if (!v) return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
-    if (!v.familyId) return { found: false, requestedSku: requestedSku, matchedBy: reg.matchedBy, canonicalSku: v.sku, variationId: v.id, productId: v.productId, motivo: 'SEM_FAMILIA' };
-    var f = skuFamById[v.familyId];
-    if (!f || f.currentCostAmount == null) return { found: false, requestedSku: requestedSku, matchedBy: reg.matchedBy, canonicalSku: v.sku, variationId: v.id, productId: v.productId, familyId: v.familyId, familyName: f ? f.name : null, motivo: 'FAMILIA_SEM_CUSTO' };
-    return { found: true, matchedBy: reg.matchedBy, requestedSku: requestedSku, canonicalSku: v.sku, variationId: v.id, productId: v.productId, familyId: v.familyId, familyName: f.name, cost: Number(f.currentCostAmount) };
+    var candidates = skuAliasIndex[key];
+    if (!candidates || !candidates.length) return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
+    function finalize(cand, regra) {
+      var v = skuVarById[cand.variationId];
+      if (!v) return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
+      if (!v.familyId) return { found: false, requestedSku: requestedSku, matchedBy: cand.matchedBy, canonicalSku: v.sku, variationId: v.id, productId: v.productId, motivo: 'SEM_FAMILIA', regra: regra };
+      var f = skuFamById[v.familyId];
+      if (!f || f.currentCostAmount == null) return { found: false, requestedSku: requestedSku, matchedBy: cand.matchedBy, canonicalSku: v.sku, variationId: v.id, productId: v.productId, familyId: v.familyId, familyName: f ? f.name : null, motivo: 'FAMILIA_SEM_CUSTO', regra: regra };
+      return { found: true, matchedBy: cand.matchedBy, requestedSku: requestedSku, canonicalSku: v.sku, variationId: v.id, productId: v.productId, familyId: v.familyId, familyName: f.name, cost: Number(f.currentCostAmount), regra: regra };
+    }
+    if (itemHint && itemHint.variationId) {
+      var strong = candidates.filter(function (c) { return c.variationId === itemHint.variationId; })[0];
+      if (strong) return finalize(strong, 'STRONG_VARIATION_ID');
+    }
+    function tier(matchedBy, activeOnly) { return candidates.filter(function (c) { return c.matchedBy === matchedBy && (activeOnly ? c.status !== 'INACTIVE' : c.status === 'INACTIVE'); }); }
+    var activeSku = tier('SKU', true);
+    if (activeSku.length === 1) return finalize(activeSku[0], 'ACTIVE_EXACT_SKU');
+    if (activeSku.length > 1) return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE', candidatos: activeSku };
+    var activeRef = tier('REFERENCE_SKU', true);
+    if (activeRef.length === 1) return finalize(activeRef[0], 'ACTIVE_REFERENCE_SKU');
+    if (activeRef.length > 1) return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE', candidatos: activeRef };
+    var inactiveSku = tier('SKU', false);
+    if (inactiveSku.length === 1) return finalize(inactiveSku[0], 'HISTORICAL_INACTIVE_MATCH');
+    if (inactiveSku.length > 1) return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE_HISTORICAL', candidatos: inactiveSku };
+    var inactiveRef = tier('REFERENCE_SKU', false);
+    if (inactiveRef.length === 1) return finalize(inactiveRef[0], 'HISTORICAL_INACTIVE_MATCH');
+    if (inactiveRef.length > 1) return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE_HISTORICAL', candidatos: inactiveRef };
+    return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
   }
-  function resolveSkuCost(sku) { return resolveSkuCostByKey(normalizeSkuKey(sku), sku); }
-  var SKU_MOTIVO_LABEL = { SKU_NAO_LOCALIZADO: 'SKU não localizado em Produtos', SEM_FAMILIA: 'Família não atribuída', FAMILIA_SEM_CUSTO: 'Custo da família não informado', SKU_CONFLITANTE: 'Conflito de SKU — o mesmo código aparece em variações diferentes' };
+  function resolveSkuCost(sku, itemHint) { return resolveSkuCostByKey(normalizeSkuKey(sku), sku, itemHint); }
+  var SKU_MOTIVO_LABEL = { SKU_NAO_LOCALIZADO: 'SKU não localizado em Produtos', SEM_FAMILIA: 'Família não atribuída', FAMILIA_SEM_CUSTO: 'Custo da família não informado', SKU_CONFLITANTE: 'Conflito de SKU — mais de um anúncio ATIVO usa o mesmo código', SKU_CONFLITANTE_HISTORICAL: 'Conflito de SKU — mais de um anúncio INATIVO usa o mesmo código, sem identificador para desempatar' };
+  var SKU_REGRA_LABEL = { STRONG_VARIATION_ID: 'Identificador de variação do pedido', ACTIVE_EXACT_SKU: 'SKU exato · anúncio ativo', ACTIVE_REFERENCE_SKU: 'SKU de referência · anúncio ativo', HISTORICAL_INACTIVE_MATCH: 'Correspondência histórica · anúncio inativo' };
   // §44/§59 do prompt "Correção Financeira": rótulos únicos para incomeResolve.status/statusFinanceiro,
   // usados na Ficha do Pedido — declarados no escopo do módulo (não dentro de openPedidoFicha360) para
   // ficarem disponíveis independente da ordem de montagem dos blocos dentro da função.
@@ -1358,6 +1383,8 @@
         referenceSku: variation ? variation.referenceSku : null, productId: r.productId || null,
         familyId: r.familyId || null, familyName: r.familyName || (family ? family.name : null),
         currentCostAmount: family ? family.currentCostAmount : null, resolveResult: r,
+        regraVencedora: r.regra || null, regraVencedoraLabel: r.regra ? (SKU_REGRA_LABEL[r.regra] || r.regra) : null,
+        candidatos: r.candidatos || aliases,
         qty: it.qty, custoUnitario: custoUnit, custoTotal: custoUnit != null ? custoUnit * it.qty : null,
         status: r.found ? 'OK' : (r.motivo || 'FALHA'),
       };
