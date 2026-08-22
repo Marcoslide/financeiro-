@@ -3811,7 +3811,10 @@ buffer/index.js:
   // Camada 1 (Saldo do Dia): "Transferência para o banco" — evento manual PURO Carteira→Banco.
   // Nunca altera Acelera/Pedido/receita/lucro — só registra que dinheiro saiu da carteira para o
   // banco, com histórico. Lista simples (não indexada por dia: pode ser lançada a qualquer momento).
-  var bankTransfers = []; // { id, valor(R$), quando(ISO), conta, observacao, criadoPor, createdAt }
+  var bankTransfers = []; // { id, valor(R$), quando(ISO), conta, contaId, observacao, criadoPor, createdAt }
+  // §100-104: cadastro persistente de contas bancárias — cadastra uma vez, aparece no dropdown de
+  // todos os próximos fechamentos.
+  var bankAccounts = []; // { id, nome, banco, agencia, conta, tipo, ativa, createdAt }
   var walletF = { search: '', cat: '', flow: '' }; // filtros da tabela de movimentações
   var walletStamp = null;     // "atualizado até" da carteira
   var Produtos = null;
@@ -4024,7 +4027,7 @@ buffer/index.js:
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id', bankaccounts: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -6805,9 +6808,6 @@ buffer/index.js:
   // "Ajustes e Divergências" + "Central de Pendências"). Reaproveita os motores já aprovados
   // (walletOrigemDiag/walletDiag/wgetCls/wsetCls/WSTATUS) — não cria um segundo mecanismo de status.
   var WPROBLEMA = { DIVERGENCIA_VALOR: 'Diferença de valor', DUPLICIDADE: 'Possível duplicação', CANDIDATO: 'Candidato de conciliação', SEM_ORIGEM: 'Débito sem origem identificada', CREDITO_SEM_ORIGEM: 'Crédito sem origem identificada', DESCONTO_INDEVIDO: 'Possível desconto indevido', AJUSTE_SEM_LINHA: 'Ajuste sem linha' };
-  // §59/§63 — estado de conciliação por lançamento, para exibição (🟢🟡⚪🔴🟠). Não recalcula nada:
-  // só rotula o que walletOrigemDiag/walletPendItems/manual flags já apuraram.
-  var WSITUACAO = { CONCILIADO: '🟢 Conciliado — origem exata', PROVAVEL: '🟡 Origem provável', CREDITO_SEM_ORIGEM: '🟡 Crédito sem origem identificada', FORA_COBERTURA: '⚪ Fora da cobertura das fontes', SEM_ORIGEM: '🔴 Sem origem', DIVERGENTE: '🔴 Valor divergente', DUPLICIDADE: '🔴 Possível duplicidade', DESCONTO_INDEVIDO: '🔴 Possível desconto indevido', MANUAL_PENDENTE: '🟠 Classificação manual pendente' };
   var walletPendF = { status: '', tipo: '' };
   function walletPendItems(m) {
     var g = walletOrigemDiag(m); var seen = {}; var items = [];
@@ -6824,13 +6824,6 @@ buffer/index.js:
     var diag = walletDiag(m);
     diag.divergentes.forEach(function (d) { add(d.rec, 'AJUSTE_SEM_LINHA', 'Diferença de saldo do extrato (ajuste sem linha)', 'Esperado ' + brl(d.expected) + ' · Informado ' + brl(d.informed) + ' · Diferença ' + brl(d.gap), 'SEM_ORIGEM'); });
     return items;
-  }
-  // §61 — itens fora da cobertura das fontes (⚪): não são pendência real (a fonte relevante ainda
-  // não importou dado para o período), mas precisam aparecer na tela de Pendências da Carteira para
-  // nunca esconder um débito/crédito não explicado.
-  function walletForaCoberturaItems(m) {
-    var g = walletOrigemDiag(m);
-    return g.foraCobertura.map(function (t) { return { t: t, tipo: 'FORA_COBERTURA', motivo: 'Fora da cobertura de conciliação (' + wcatLabel(wEffCat(t)) + ')', detalhe: 'A fonte relevante ainda não importou dado para este período — não é pendência, mas segue sem origem confirmada.', situacao: 'FORA_COBERTURA' }; });
   }
   function walletConferencia() {
     var m = walletMetrics(); var items = walletPendItems(m);
@@ -9621,6 +9614,22 @@ buffer/index.js:
     var fin = caixaDayVendas(dateKey).pendFin;
     return { operacionais: pend, financeiras: fin, total: pend.length + fin.length };
   }
+  // ID do resgate Acelera de um crédito da Carteira, quando localizável — join direto por pedido
+  // (não recalcula nada do Acelera, só lê o registro já importado).
+  function wCreditResgateId(t) {
+    var oid = wOrderId(t); if (!oid || !acelera.length) return null;
+    var rec = acelera.find(function (r) { return r.pedido === oid; });
+    return rec ? rec.resgate : null;
+  }
+  // §86-91 — TODOS os créditos e débitos da Carteira NESTE DIA, não só as pendências (a Carteira
+  // mostra o quadro completo; walletOrigemDiag continua sendo a única fonte de "isso está
+  // explicado?"). Read-only — nunca altera pedido/bip/Acelera/devolução/Income.
+  function caixaDayMovimentosCarteira(dateKey) {
+    var txs = wallet.filter(function (t) { return t.origin === 'SHOPEE' && t.date && t.date.slice(0, 10) === dateKey; });
+    var creditos = txs.filter(function (t) { return t.amount > 0; }).sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); });
+    var debitos = txs.filter(function (t) { return t.amount < 0; }).sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); });
+    return { creditos: creditos, debitos: debitos };
+  }
   // Pendências da Carteira NESTE DIA — mesmos blocos atômicos já aprovados (walletOrigin/wEffCat/
   // wgetCls/walletInCoverage/WALLET_ORIGEM_CATS), só sem passar pelo filtro de período global (o
   // dia do fechamento é fixo, não deve mudar se o usuário tiver outro período selecionado alhures).
@@ -9645,10 +9654,51 @@ buffer/index.js:
   }
   // Camada 1 — registra uma transferência da Carteira para o banco. Evento manual PURO: nunca toca
   // Acelera/Pedido/receita/lucro — só um log auditável de "dinheiro saiu da carteira para o banco".
-  function caixaRegistrarTransferenciaBanco(valor, quandoISO, conta, observacao) {
-    var rec = { id: 'BT-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8), valor: r2(valor), quando: quandoISO, conta: conta || null, observacao: observacao || null, criadoPor: 'Operador', createdAt: new Date().toISOString() };
+  // §102-104: permite mais de uma por dia, sempre vinculada a uma conta cadastrada (contaId).
+  function caixaRegistrarTransferenciaBanco(valor, quandoISO, conta, observacao, contaId) {
+    var rec = { id: 'BT-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8), valor: r2(valor), quando: quandoISO, conta: conta || null, contaId: contaId || null, observacao: observacao || null, criadoPor: 'Operador', createdAt: new Date().toISOString() };
     bankTransfers = [rec].concat(bankTransfers);
     return putMany('banktransfers', [rec]).then(function () { return rec; });
+  }
+  // §100-101 — Cadastro persistente de Bancos/Contas: uma vez cadastrada, a conta aparece no
+  // dropdown de todos os próximos fechamentos — nunca precisa recadastrar todo dia.
+  function bankAccountLabel(id) { var b = bankAccounts.find(function (x) { return x.id === id; }); return b ? (b.nome + (b.banco ? ' — ' + b.banco : '')) : null; }
+  function bankAccountSave(rec) {
+    var id = rec.id || ('BANK-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+    var full = { id: id, nome: rec.nome, banco: rec.banco || '', agencia: rec.agencia || '', conta: rec.conta || '', tipo: rec.tipo || '', ativa: rec.ativa !== false, createdAt: rec.createdAt || new Date().toISOString() };
+    bankAccounts = [full].concat(bankAccounts.filter(function (b) { return b.id !== id; }));
+    return putMany('bankaccounts', [full]).then(function () { return full; });
+  }
+  function openGerenciarBancos(onDone) {
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '560px'; panel.style.maxWidth = '96vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    function refresh() { panel.innerHTML = body(); wire(); }
+    function body() {
+      var rows = bankAccounts.map(function (b) { return '<tr><td class="cell-text">' + esc(b.nome) + '</td><td class="cell-text">' + esc(b.banco || '—') + '</td><td class="mono">' + esc(b.agencia || '—') + '</td><td class="mono">' + esc(b.conta || '—') + '</td><td>' + esc(b.tipo || '—') + '</td><td>' + (b.ativa !== false ? '<span class="tag ok">ativa</span>' : '<span class="tag neutral">inativa</span>') + '</td><td><button class="btn-sm" data-bankedit="' + esc(b.id) + '">Editar</button> <button class="btn-sm" data-banktoggle="' + esc(b.id) + '">' + (b.ativa !== false ? 'Desativar' : 'Ativar') + '</button></td></tr>'; }).join('');
+      var table = '<div class="table-wrap"><table class="report"><thead><tr><th>Nome</th><th>Banco</th><th>Agência</th><th>Conta</th><th>Tipo</th><th>Status</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="7" class="empty">Nenhuma conta cadastrada ainda.</td></tr>') + '</tbody></table></div>';
+      var form = '<div class="panel" style="margin-top:10px"><div class="ph"><h3>Nova conta</h3></div><div class="pb"><div style="display:flex;gap:8px;flex-wrap:wrap">' +
+        '<input class="input sm" id="bk-nome" placeholder="Nome da conta" style="width:180px">' +
+        '<input class="input sm" id="bk-banco" placeholder="Banco" style="width:140px">' +
+        '<input class="input sm" id="bk-agencia" placeholder="Agência" style="width:100px">' +
+        '<input class="input sm" id="bk-conta" placeholder="Conta" style="width:120px">' +
+        '<select class="select sm" id="bk-tipo"><option value="">Tipo</option><option value="Corrente">Corrente</option><option value="Poupança">Poupança</option><option value="Digital">Digital</option></select>' +
+        '<button class="btn-sm primary" id="bk-salvar">Salvar</button></div></div></div>';
+      return '<div class="dh"><div><b>Gerenciar bancos / contas</b></div><button class="x">&times;</button></div><div class="dbd">' + table + form + '</div>';
+    }
+    function wire() {
+      panel.querySelector('.x').onclick = function () { d.remove(); if (onDone) onDone(); };
+      panel.querySelector('#bk-salvar').onclick = function () {
+        var nome = panel.querySelector('#bk-nome').value.trim(); if (!nome) { toast('Informe o nome da conta', '', true); return; }
+        bankAccountSave({ nome: nome, banco: panel.querySelector('#bk-banco').value.trim(), agencia: panel.querySelector('#bk-agencia').value.trim(), conta: panel.querySelector('#bk-conta').value.trim(), tipo: panel.querySelector('#bk-tipo').value }).then(function () { toast('Conta cadastrada', nome); refresh(); });
+      };
+      panel.querySelectorAll('[data-banktoggle]').forEach(function (b) { b.onclick = function () { var acc = bankAccounts.find(function (x) { return x.id === b.dataset.banktoggle; }); if (acc) bankAccountSave(Object.assign({}, acc, { ativa: acc.ativa === false })).then(refresh); }; });
+      panel.querySelectorAll('[data-bankedit]').forEach(function (b) { b.onclick = function () {
+        var acc = bankAccounts.find(function (x) { return x.id === b.dataset.bankedit; }); if (!acc) return;
+        var nome = prompt('Nome da conta:', acc.nome); if (nome == null) return;
+        bankAccountSave(Object.assign({}, acc, { nome: nome.trim() || acc.nome })).then(refresh);
+      }; });
+    }
+    refresh();
   }
   function caixaDiasComMovimento() {
     var days = {};
@@ -9781,40 +9831,59 @@ buffer/index.js:
       var margem = vendas.valor ? r2(vendas.lucroC / 100 / vendas.valor * 100) : null;
       var custoConhecido = vendas.pedidos.filter(function (o) { return pedidoComposicaoFinanceira(o.id).custoProdC != null; }).length;
       var naoClass = caixaCamposNaoClassificadosCount();
-      // Camada 1 — Saldo do Dia: recebido via Acelera (rastreável até resgate→pedidos, nunca digitado
-      // à mão) + transferências para o banco (evento manual PURO Carteira→Banco — nunca altera
-      // Acelera/Pedido/receita/lucro). São duas movimentações SEPARADAS, nunca somadas/subtraídas
-      // silenciosamente uma da outra a menos que ambas existam de fato neste dia (§87).
+      // §80-99 do prompt mestre: Fechamento organizado nas 6 camadas numeradas pedidas —
+      // 1.Recebido via Acelera → 2.Pendências do Fluxo → 3.Movimentos da Carteira (créditos/débitos/
+      // pendências, TODOS visíveis — não só pendências) → 4.Transferência para Banco →
+      // 5.Resultado/DRE → 6.Pendências e Conciliação (checklist final).
+      var mov = caixaDayMovimentosCarteira(dateKey);
+      // 1. RECEBIDO VIA ACELERA — histórico da antecipação NUNCA muda por causa de movimento
+      // posterior da Carteira (§83/§85): valor bruto/taxa/líquido continuam sendo os do Acelera.
+      var bloco1 = '<div class="panel"><div class="ph"><h3>1. Recebido via Acelera</h3></div><div class="pb">' +
+        (ac.n ? (kv('Pedidos expedidos esperados', nn(exp.esperados != null ? exp.esperados : exp.expedidos)) + kv('Resgates', nn(ac.n)) + kv('Valor bruto', brlC(ac.antec)) + kv('Taxa Acelera', brlC(ac.taxa)) + kv('Valor líquido recebido', brlC(ac.liquido))) : '<div class="footnote" style="padding:0 0 10px">Nenhum resgate do Acelera consolidado nesta data.</div>') +
+        '</div></div>';
+      // 2. PENDÊNCIAS DO FLUXO — Vendas/Expedição/Financeiro como contexto + a tabela de pendências.
+      var pendRows = pend.operacionais.slice(0, 60).map(function (i) { return '<tr><td class="mono">' + esc(i.orderId) + '</td><td class="cell-text">' + esc(i.motivo) + '</td><td><button class="btn-sm" data-caixapendop="' + esc(i.orderId) + '">Resolver</button></td></tr>'; }).join('') +
+        pend.financeiras.slice(0, 60).map(function (f) { return '<tr><td class="mono">' + esc(f.orderId) + '</td><td class="cell-text">' + esc(f.motivo) + '</td><td><button class="btn-sm" data-goped360="' + esc(f.orderId) + '">Ver pedido</button> <button class="btn-sm" data-caixapendfin="' + esc(f.orderId) + '">Resolver</button></td></tr>'; }).join('');
+      var bloco2 = '<div class="panel"><div class="ph"><h3>2. Pendências do Fluxo</h3><span class="footnote" style="margin:0">' + nn(pend.total) + ' no total</span></div><div class="pb">' +
+        kv('Pedidos pagos', nn(vendas.n)) + kv('Faturamento', brl(vendas.valor)) + kv('Lucro atual', vendas.nLucroConhecido ? brlC(vendas.lucroC) : 'aguardando custo') + kv('Margem', margem != null ? pct(margem) : '—') +
+        kv('Expedição — esperados / confirmados / faltaram', exp.temSessao ? (nn(exp.esperados) + ' / ' + nn(exp.expedidos) + ' / ' + nn(exp.faltaram)) : (nn(exp.expedidos) + ' confirmados (sem Sessão de Expedição registrada)')) +
+        kv('Taxas conferidas (Income cruzado)', (vendas.n - vendas.pendFin.length) + ' de ' + vendas.n + ' pedidos') + kv('Custos conferidos', nn(custoConhecido) + ' de ' + nn(vendas.n) + ' pedidos') + kv('Valores não classificados (total importado — não restrito a este dia)', nn(naoClass) + ' coluna(s)') +
+        '</div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Problema</th><th></th></tr></thead><tbody>' + (pendRows || '<tr><td colspan="3" class="empty">Nenhuma pendência neste dia. 🎉</td></tr>') + '</tbody></table></div></div>';
+      // 3. MOVIMENTOS DA CARTEIRA — §86-91: TODOS os créditos e débitos aparecem (não só pendências),
+      // em 3 grupos separados. Read-only sobre pedido/bip/Acelera/devolução/Income — só classifica o
+      // lançamento da Carteira via o mesmo drawer já aprovado (openWalletTx).
+      var credRows = mov.creditos.slice(0, 80).map(function (t) { var rid = wCreditResgateId(t); return '<tr class="rowlink" data-wtx="' + esc(t.id) + '"><td class="nowrap">' + new Date(t.date).toLocaleString('pt-BR') + '</td><td class="cell-text">' + esc((t.desc || t.tipo || '—').slice(0, 40)) + '</td><td class="nowrap pos">' + brl(t.amount) + '</td><td class="mono">' + esc(wOrderId(t) || '— Não identificado') + '</td><td class="mono">' + esc(rid || '—') + '</td><td>' + esc(wcatLabel(wEffCat(t))) + '</td><td>' + esc(WSTATUS[wStatus(t)]) + '</td></tr>'; }).join('');
+      var debRows = mov.debitos.slice(0, 80).map(function (t) { return '<tr class="rowlink" data-wtx="' + esc(t.id) + '"><td class="nowrap">' + new Date(t.date).toLocaleString('pt-BR') + '</td><td class="cell-text">' + esc((t.desc || t.tipo || '—').slice(0, 40)) + '</td><td class="nowrap neg">' + brl(t.amount) + '</td><td class="mono">' + esc(wOrderId(t) || '— Não identificado') + '</td><td class="cell-text">' + esc(wProvavelOrigem(t)) + '</td><td>' + esc(wcatLabel(wEffCat(t))) + '</td><td>' + esc(WSTATUS[wStatus(t)]) + '</td></tr>'; }).join('');
+      var pendCartRows = pendCart.itens.slice(0, 60).map(function (it) { return '<tr class="rowlink" data-wtx="' + esc(it.t.id) + '"><td class="mono">' + esc(wOrderId(it.t) || '— Não identificado') + '</td><td class="cell-text">' + esc(it.motivo) + '</td><td class="nowrap">' + brl(it.t.amount) + '</td><td><button class="btn-sm" data-wtx="' + esc(it.t.id) + '">Classificar / Resolver</button></td></tr>'; }).join('');
+      var bloco3 = '<div class="panel"><div class="ph"><h3>3. Movimentos da Carteira</h3><span class="footnote" style="margin:0">' + nn(mov.creditos.length) + ' crédito(s) · ' + nn(mov.debitos.length) + ' débito(s) · ' + nn(pendCart.total) + ' pendência(s)</span></div><div class="pb">' +
+        '<div style="margin:4px 0"><b>Créditos</b></div><div class="table-wrap"><table class="report"><thead><tr><th>Data/hora</th><th>Descrição</th><th>Valor</th><th>Pedido</th><th>Resgate</th><th>Classificação</th><th>Situação</th></tr></thead><tbody>' + (credRows || '<tr><td colspan="7" class="empty">Nenhum crédito neste dia.</td></tr>') + '</tbody></table></div>' +
+        '<div style="margin:12px 0 4px"><b>Débitos</b></div><div class="table-wrap"><table class="report"><thead><tr><th>Data/hora</th><th>Descrição</th><th>Valor</th><th>Pedido</th><th>Origem</th><th>Categoria</th><th>Situação</th></tr></thead><tbody>' + (debRows || '<tr><td colspan="7" class="empty">Nenhum débito neste dia.</td></tr>') + '</tbody></table></div>' +
+        '<div style="margin:12px 0 4px"><b>Pendências</b> <span class="footnote" style="margin:0">débito/crédito sem origem, duplicidade, valor divergente, ID não localizado</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Problema</th><th>Valor</th><th></th></tr></thead><tbody>' + (pendCartRows || '<tr><td colspan="4" class="empty">Nenhuma pendência da carteira neste dia. 🎉</td></tr>') + '</tbody></table></div>' +
+        '</div></div>';
+      // 4. TRANSFERÊNCIA PARA BANCO — evento manual PURO Carteira→Banco (§102-104): nunca reduz
+      // faturamento/lucro/Acelera, só um log auditável com histórico. Permite mais de uma por dia.
       var dayTransfers = bankTransfers.filter(function (t) { return t.quando && t.quando.slice(0, 10) === dateKey; });
       var totalTransferido = dayTransfers.reduce(function (s, t) { return s + t.valor; }, 0);
       var permanencia = (ac.liquido != null && dayTransfers.length) ? r2(ac.liquido / 100 - totalTransferido) : null;
       var transfRows = dayTransfers.map(function (t) { return '<div class="fin-line"><span>' + new Date(t.quando).toLocaleString('pt-BR') + (t.conta ? ' · ' + esc(t.conta) : '') + (t.observacao ? ' <span class="footnote" style="margin:0">' + esc(t.observacao) + '</span>' : '') + '</span><b>' + brl(t.valor) + '</b></div>'; }).join('');
-      var blocoSaldo = '<div class="panel"><div class="ph"><h3>0. Saldo do Dia</h3></div><div class="pb">' +
-        (ac.n ? (kv('Recebido via Acelera (bruto antecipado)', brlC(ac.antec)) + kv('Taxa Acelera', brlC(ac.taxa)) + kv('Valor líquido recebido', brlC(ac.liquido))) : '<div class="footnote" style="padding:0 0 10px">Nenhum resgate do Acelera consolidado nesta data.</div>') +
-        '<div style="margin-top:8px"><b>Transferências para o banco registradas neste dia</b></div>' +
+      var bancoOptions = '<option value="">Selecione a conta…</option>' + bankAccounts.filter(function (b) { return b.ativa !== false; }).map(function (b) { return '<option value="' + esc(b.id) + '">' + esc(b.nome) + (b.banco ? ' — ' + esc(b.banco) : '') + '</option>'; }).join('');
+      var bloco4 = '<div class="panel"><div class="ph"><h3>4. Transferência para Banco</h3></div><div class="pb">' +
         (transfRows || '<div class="footnote" style="margin:4px 0">Nenhuma transferência registrada para este dia.</div>') +
         (dayTransfers.length ? '<div class="fin-line total"><span>Total transferido</span><b>' + brl(totalTransferido) + '</b></div>' : '') +
         (permanencia != null ? '<div class="fin-line"><span>Recebido via Acelera − Transferido ao banco</span><b>' + brl(permanencia) + '</b></div><div class="footnote" style="margin:2px 0 8px">= permanência operacional na carteira (não é lucro nem pendência — só o que ainda não saiu para o banco)</div>' : '') +
         '<div class="panel" style="margin-top:10px;background:var(--bg2,#f7f8fa)"><div class="pb" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">' +
+        '<div><label class="fld">Conta destino</label><select class="select sm" id="bt-conta" style="width:220px">' + bancoOptions + '</select></div>' +
         '<div><label class="fld">Valor (R$)</label><input class="input sm" id="bt-valor" style="width:120px" placeholder="0,00"></div>' +
         '<div><label class="fld">Data/hora</label><input class="input sm" type="datetime-local" id="bt-quando" value="' + esc(dateKey) + 'T12:00" style="width:190px"></div>' +
-        '<div><label class="fld">Conta / banco (opcional)</label><input class="input sm" id="bt-conta" style="width:160px"></div>' +
         '<div style="flex:1;min-width:160px"><label class="fld">Observação (opcional)</label><input class="input sm" id="bt-obs" style="width:100%"></div>' +
         '<button class="btn-sm primary" id="bt-registrar">Registrar transferência</button>' +
+        (!bankAccounts.length ? '<span class="footnote" style="margin:0">Nenhuma conta cadastrada — vá em Caixa → Gerenciar bancos.</span>' : '') +
         '</div></div>' +
         '</div></div>';
-      var blocoVendas = '<div class="panel"><div class="ph"><h3>1. Vendas</h3></div><div class="pb">' + kv('Pedidos pagos', nn(vendas.n)) + kv('Faturamento', brl(vendas.valor)) + kv('Lucro atual', vendas.nLucroConhecido ? brlC(vendas.lucroC) : 'aguardando custo') + kv('Margem', margem != null ? pct(margem) : '—') + kv('Composição financeira conferida', (vendas.n - vendas.pendFin.length) + ' de ' + vendas.n + ' pedidos') + '</div></div>';
-      var blocoExp = '<div class="panel"><div class="ph"><h3>2. Expedição</h3></div><div class="pb">' + (exp.temSessao ? (kv('Esperados', nn(exp.esperados)) + kv('Confirmados', nn(exp.expedidos)) + kv('Faltaram', nn(exp.faltaram))) : callout('', 'Sem Sessão de Expedição registrada para este dia', 'Contagem por confirmação de saída (bipe/Full) datada neste dia: ' + nn(exp.expedidos) + '.')) + '</div></div>';
-      var blocoAc = !acelera.length ? '' : ('<div class="panel"><div class="ph"><h3>3. Acelera</h3></div><div class="pb">' + (ac.n ? (kv('Resgates', nn(ac.n)) + kv('Valor antecipado', brlC(ac.antec)) + kv('Taxa Acelera', brlC(ac.taxa)) + kv('Valor recebido', brlC(ac.liquido))) : '<div class="footnote" style="padding:0 16px 12px">Nenhum resgate do Acelera consolidado nesta data.</div>') + '</div></div>');
-      var blocoFin = '<div class="panel"><div class="ph"><h3>4. Financeiro</h3></div><div class="pb">' + kv('Taxas conferidas (Income cruzado)', (vendas.n - vendas.pendFin.length) + ' de ' + vendas.n + ' pedidos') + kv('Custos conferidos', nn(custoConhecido) + ' de ' + nn(vendas.n) + ' pedidos') + kv('Diferenças financeiras em aberto', nn(vendas.pendFin.length)) + kv('Valores não classificados (total importado — não restrito a este dia)', nn(naoClass) + ' coluna(s)') + '</div></div>';
-      var dreBlock = caixaDreBlock(caixaDreDia(dateKey));
-      var pendRows = pend.operacionais.slice(0, 60).map(function (i) { return '<tr><td class="mono">' + esc(i.orderId) + '</td><td class="cell-text">' + esc(i.motivo) + '</td><td><button class="btn-sm" data-caixapendop="' + esc(i.orderId) + '">Resolver</button></td></tr>'; }).join('') +
-        pend.financeiras.slice(0, 60).map(function (f) { return '<tr><td class="mono">' + esc(f.orderId) + '</td><td class="cell-text">' + esc(f.motivo) + '</td><td><button class="btn-sm" data-goped360="' + esc(f.orderId) + '">Ver pedido</button> <button class="btn-sm" data-caixapendfin="' + esc(f.orderId) + '">Resolver</button></td></tr>'; }).join('');
-      var pendTable = '<div class="panel"><div class="ph"><h3>5. Pendências do Fluxo</h3><span class="footnote" style="margin:0">' + nn(pend.total) + ' no total</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Problema</th><th></th></tr></thead><tbody>' + (pendRows || '<tr><td colspan="3" class="empty">Nenhuma pendência neste dia. 🎉</td></tr>') + '</tbody></table></div></div>';
-      var pendCartRows = pendCart.itens.slice(0, 60).map(function (it) { return '<tr class="rowlink" data-wtx="' + esc(it.t.id) + '"><td class="mono">' + esc(wOrderId(it.t) || '— Não identificado') + '</td><td class="cell-text">' + esc(it.motivo) + '</td><td class="nowrap">' + brl(it.t.amount) + '</td><td><button class="btn-sm" data-wtx="' + esc(it.t.id) + '">Classificar / Resolver</button></td></tr>'; }).join('');
-      var pendCartTable = '<div class="panel"><div class="ph"><h3>6. Pendências da Carteira</h3><span class="footnote" style="margin:0">' + nn(pendCart.total) + ' no total</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Problema</th><th>Valor</th><th></th></tr></thead><tbody>' + (pendCartRows || '<tr><td colspan="4" class="empty">Nenhuma pendência da carteira neste dia. 🎉</td></tr>') + '</tbody></table></div></div>';
-      // §68-72: checklist visual das duas famílias de pendência ANTES de fechar — nunca esconde.
-      var checklist = '<div class="panel"><div class="ph"><h3>Checklist de fechamento</h3></div><div class="pb"><div class="kstrip" style="flex-wrap:wrap">' +
+      // 5. RESULTADO / DRE — motor nativo do Caixa, nomes reais.
+      var bloco5 = caixaDreBlock(caixaDreDia(dateKey));
+      // 6. PENDÊNCIAS E CONCILIAÇÃO — checklist visual das duas famílias ANTES de fechar (§117).
+      var checklist = '<div class="panel"><div class="ph"><h3>6. Pendências e Conciliação</h3></div><div class="pb"><div class="kstrip" style="flex-wrap:wrap">' +
         [['PEDIDOS', vendas.pendFin.length], ['EXPEDIÇÃO', pend.operacionais.length], ['ACELERA', pend.operacionais.filter(function (i) { return i.origem === 'ACELERA'; }).length], ['CARTEIRA', pendCart.total]].map(function (x) {
           return '<div class="kc"><div class="kl">' + x[0] + '</div><div class="kv" style="font-size:15px">' + (x[1] ? '🔴 ' + nn(x[1]) + ' pendência(s)' : '✅ ok') + '</div></div>';
         }).join('') + '</div></div></div>';
@@ -9822,13 +9891,11 @@ buffer/index.js:
       var footer = '<div class="panel"><div class="pb" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
         '<button class="btn-sm' + (podeFechar ? ' primary' : '') + '"' + (podeFechar ? '' : ' disabled title="Só é possível Fechar sem pendências — use Fechar com ressalva"') + ' id="caixa-close">Fechar Caixa</button>' +
         '<button class="btn-sm' + (podeFechar ? '' : ' primary') + '" id="caixa-closeress">Fechar com ressalva</button>' +
-        '<button class="btn-sm" id="caixa-xlsx" title="Planilha com Resumo/Pedidos/Taxas/Expedição/Acelera/Pendências/DRE/Histórico — sempre do dia aberto aqui">Exportar XLSX</button>' +
+        '<button class="btn-sm" id="caixa-xlsx" title="Planilha com Resumo/Pedidos/Taxas/Envio/Expedição/Acelera/Créditos/Débitos/Pendências/DRE/Histórico — sempre do dia aberto aqui">Exportar XLSX</button>' +
         '<button class="btn-sm" id="caixa-print" title="Abre a impressão do navegador — use \'Salvar como PDF\' para gerar o documento de auditoria">Imprimir / PDF</button>' +
         (st.rec ? '<span class="footnote" style="margin:0">último registro: ' + esc(CAIXA_LABEL[st.rec.status] ? CAIXA_LABEL[st.rec.status][0] : st.rec.status) + ' por ' + esc(st.rec.closedBy || '—') + ' em ' + new Date(st.rec.closedAt).toLocaleString('pt-BR') + '</span>' : '') +
         '</div>' + (st.rec && st.rec.eventosPosteriores && st.rec.eventosPosteriores.length ? '<div class="pb" style="padding-top:0"><div class="footnote"><b>Eventos posteriores:</b> ' + st.rec.eventosPosteriores.map(function (e) { return esc(e.orderId) + ' — ' + esc(e.descricao) + ' (' + new Date(e.at).toLocaleDateString('pt-BR') + ')'; }).join(' · ') + '</div></div>' : '') + '</div>';
-      // Ordem §82 (impressão/PDF): Saldo do dia → Fluxo (Pedidos/Expedição/Acelera/Pendências) →
-      // Carteira → DRE (Lucro/Margem) → Situação/Responsável (footer).
-      return '<div class="dh"><div><b>FECHAMENTO — ' + esc(dbr(dateKey)) + '</b> <span class="tag ' + lbl[1] + '" style="margin-left:6px">' + lbl[0] + '</span>' + (st.status === 'REVISAO_NECESSARIA' ? ' <span class="footnote" style="margin:0">⚠ movimento posterior a este fechamento</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' + blocoSaldo + blocoVendas + blocoExp + blocoAc + blocoFin + pendTable + pendCartTable + dreBlock + checklist + footer + '</div>';
+      return '<div class="dh"><div><b>FECHAMENTO — ' + esc(dbr(dateKey)) + '</b> <span class="tag ' + lbl[1] + '" style="margin-left:6px">' + lbl[0] + '</span>' + (st.status === 'REVISAO_NECESSARIA' ? ' <span class="footnote" style="margin:0">⚠ movimento posterior a este fechamento</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' + bloco1 + bloco2 + bloco3 + bloco4 + bloco5 + checklist + footer + '</div>';
     }
     function wire() {
       panel.querySelector('.x').onclick = function () { d.remove(); };
@@ -9864,8 +9931,8 @@ buffer/index.js:
         var valor = walletNum(panel.querySelector('#bt-valor').value);
         if (valor == null || valor <= 0) { toast('Informe um valor válido', '', true); return; }
         var quando = panel.querySelector('#bt-quando').value; if (!quando) { toast('Informe a data/hora', '', true); return; }
-        var conta = panel.querySelector('#bt-conta').value.trim() || null; var obs = panel.querySelector('#bt-obs').value.trim() || null;
-        caixaRegistrarTransferenciaBanco(valor, new Date(quando).toISOString(), conta, obs).then(function () { toast('Transferência registrada', brl(valor)); refresh(); render(); });
+        var contaId = panel.querySelector('#bt-conta').value || null; var conta = contaId ? bankAccountLabel(contaId) : null; var obs = panel.querySelector('#bt-obs').value.trim() || null;
+        caixaRegistrarTransferenciaBanco(valor, new Date(quando).toISOString(), conta, obs, contaId).then(function () { toast('Transferência registrada', brl(valor)); refresh(); render(); });
       };
       // Pendências da Carteira: reaproveita o MESMO drawer de classificação da Carteira (openWalletTx)
       // — nunca um segundo mecanismo de resolução, e nunca altera pedido/bip/Acelera/devolução/Income.
@@ -9886,40 +9953,10 @@ buffer/index.js:
   }
   function bindCaixaHistoricoView() { app.querySelectorAll('[data-caixadia]').forEach(function (b) { b.onclick = function () { openCaixaFechamentoDia(b.dataset.caixadia); }; }); }
 
-  // ============ CAIXA · PENDÊNCIAS DA CARTEIRA (Camada 4) ============
-  // §54-67 do prompt mestre: nenhum débito/crédito da Carteira pode ficar sem explicação. Esta tela
-  // NÃO cria um segundo motor de conciliação — é uma leitura, dentro do Caixa, do mesmo motor já
-  // aprovado da Carteira (walletOrigin/walletOrigemDiag/walletPendItems/wgetCls/wsetCls). Read-only
-  // sobre Pedidos/Acelera/Devolução/Income/Afiliados: nunca altera pedido, bip, Acelera, devolução ou
-  // Income — só classifica/vincula o LANÇAMENTO da carteira (mesmo mecanismo que a Carteira já usa).
-  var caixaCarteiraPendF = { tipo: '', situacao: '' };
+  // §87 do prompt mestre: a antiga subaba "Pendências da Carteira" foi incorporada diretamente no
+  // Fechamento do Dia (bloco "3. Movimentos da Carteira", com TODOS os créditos/débitos, não só
+  // pendências) — nunca uma segunda tela/motor concorrente. wProvavelOrigem() continua sendo usada ali.
   function wProvavelOrigem(t) { var o = walletOrigin(t); return o ? o.fonte : '—'; }
-  function caixaPendenciasCarteiraView() {
-    var head = secHead('CAIXA · PENDÊNCIAS DA CARTEIRA', 'Todo débito e crédito precisa de explicação', 'A pergunta não é só "o saldo bate?" — é "esse dinheiro saiu (ou entrou), por quê?". Cruza cada lançamento da Carteira com Pedidos, Acelera, Devolução, Minha Renda/Income e Afiliados (só leitura — nunca altera esses módulos) e mostra o que ainda não tem origem confirmada.') +
-      callout('', 'Dois conceitos diferentes', '<b>Saldo matemático conferido</b> (o extrato bate aritmeticamente) é diferente de <b>origem financeira conciliada</b> (sabemos exatamente de onde veio/para onde foi cada valor). Um lançamento pode fechar no saldo e ainda assim não ter origem identificada — é exatamente isso que esta tela lista, e nunca resolve sozinho como "Outro".');
-    if (!wallet.length) return head + emptyBox('Nenhum extrato da Carteira importado ainda.');
-    var m = walletMetrics();
-    var items = walletPendItems(m).concat(walletForaCoberturaItems(m));
-    var counts = {}; items.forEach(function (it) { counts[it.tipo] = (counts[it.tipo] || 0) + 1; });
-    var strip = kstrip(Object.keys(WPROBLEMA).map(function (k) { return { l: WPROBLEMA[k], v: nn(counts[k] || 0), cls: (k === 'CANDIDATO' || k === 'FORA_COBERTURA') ? '' : (counts[k] ? 'red' : 'green') }; }).concat([{ l: '⚪ Fora da cobertura das fontes', v: nn(counts.FORA_COBERTURA || 0), cls: '' }]));
-    var toolbar = '<div class="toolbar2" style="margin-top:8px">' +
-      '<select class="select sm" id="ccptipo"><option value="">Problema: todos</option>' + Object.keys(WPROBLEMA).concat(['FORA_COBERTURA']).map(function (k) { var lbl = WPROBLEMA[k] || 'Fora da cobertura das fontes'; return '<option value="' + k + '"' + (caixaCarteiraPendF.tipo === k ? ' selected' : '') + '>' + lbl + ' (' + nn(counts[k] || 0) + ')</option>'; }).join('') + '</select>' +
-      (caixaCarteiraPendF.tipo ? '<button class="link-btn" id="ccpclear">limpar filtro</button>' : '') + '</div>';
-    var filtered = items.filter(function (it) { return !caixaCarteiraPendF.tipo || it.tipo === caixaCarteiraPendF.tipo; });
-    var rows = filtered.slice(0, 300).map(function (it) {
-      var t = it.t; var isRec = t.origin === 'SISTEMA';
-      var movimento = isRec ? 'Diferença de saldo reconstruída' : (t.tipo || t.desc || '—');
-      var origemProv = it.tipo === 'AJUSTE_SEM_LINHA' ? '—' : wProvavelOrigem(t);
-      return '<tr class="rowlink" data-wtx="' + esc(t.id) + '"><td class="nowrap">' + dbr(t.date) + '</td><td class="mono">' + wOrderCell(t) + '</td><td class="cell-text">' + esc(String(movimento).slice(0, 60)) + '</td><td class="nowrap ' + (t.amount < 0 ? 'neg' : 'pos') + '"><b>' + brl(t.amount) + '</b></td><td class="cell-text">' + esc(origemProv) + '</td><td class="cell-text">' + esc(it.motivo) + '<div class="footnote" style="margin:0">' + esc(it.detalhe) + '</div></td><td class="nowrap">' + esc(WSITUACAO[it.situacao] || it.situacao) + '</td><td class="nowrap"><button class="btn-sm" data-wtx="' + esc(t.id) + '">Classificar / Resolver</button></td></tr>';
-    }).join('');
-    var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Pedido</th><th>Movimento</th><th>Valor</th><th>Origem provável</th><th>Problema</th><th>Situação</th><th>Ação</th></tr></thead><tbody>' + (rows || '<tr><td colspan="8" class="empty">Nenhum item neste filtro. 🎉</td></tr>') + '</tbody></table></div></div>';
-    return head + strip + toolbar + '<div class="count-line" style="margin-top:8px"><b>' + nn(filtered.length) + '</b> item(ns)</div>' + table;
-  }
-  function bindCaixaPendenciasCarteiraView() {
-    var s1 = document.getElementById('ccptipo'); if (s1) s1.onchange = function () { caixaCarteiraPendF.tipo = s1.value; render(); };
-    var cl = document.getElementById('ccpclear'); if (cl) cl.onclick = function () { caixaCarteiraPendF = { tipo: '', situacao: '' }; render(); };
-    app.querySelectorAll('[data-wtx]').forEach(function (b) { b.onclick = function () { openWalletTx(b.dataset.wtx, function () { render(); }); }; });
-  }
   // §24-27: exportação XLSX do fechamento — sempre respeita o dia aberto no momento (nunca um
   // período diferente do que está sendo visto). Reaproveita os mesmos motores/leituras já usados
   // na tela — nunca uma segunda fonte de números só para o arquivo exportado.
@@ -9967,12 +10004,14 @@ buffer/index.js:
     XLSX.writeFile(wb, 'Fechamento_Caixa_' + dateKey + '.xlsx');
   }
   function renderCaixa() {
-    app.innerHTML = '<div class="subtabs">' + [['dashboard', 'Dashboard'], ['fechamento', 'Fechamento do Dia'], ['carteira', 'Pendências da Carteira'], ['historico', 'Histórico']].map(function (t) { return '<div class="subtab' + (caixaSub === t[0] ? ' active' : '') + '" data-caixasub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><div id="caixabody" style="margin-top:14px"></div>';
+    // §87: sem subaba própria "Pendências da Carteira" — os créditos/débitos/pendências da Carteira
+    // vivem dentro do Fechamento do Dia (bloco "3. Movimentos da Carteira").
+    app.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0">' + [['dashboard', 'Dashboard'], ['fechamento', 'Fechamento do Dia'], ['historico', 'Histórico']].map(function (t) { return '<div class="subtab' + (caixaSub === t[0] ? ' active' : '') + '" data-caixasub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm" id="caixa-bancos">Gerenciar bancos</button></div><div id="caixabody" style="margin-top:14px"></div>';
     var body = document.getElementById('caixabody');
-    body.innerHTML = caixaSub === 'fechamento' ? caixaFechamentoView() : caixaSub === 'carteira' ? caixaPendenciasCarteiraView() : caixaSub === 'historico' ? caixaHistoricoView() : caixaDashboardView();
+    body.innerHTML = caixaSub === 'fechamento' ? caixaFechamentoView() : caixaSub === 'historico' ? caixaHistoricoView() : caixaDashboardView();
     app.querySelectorAll('[data-caixasub]').forEach(function (t) { t.onclick = function () { caixaSub = t.dataset.caixasub; render(); }; });
+    var gb = document.getElementById('caixa-bancos'); if (gb) gb.onclick = function () { openGerenciarBancos(function () { render(); }); };
     if (caixaSub === 'fechamento') bindCaixaFechamentoView();
-    else if (caixaSub === 'carteira') bindCaixaPendenciasCarteiraView();
     else if (caixaSub === 'historico') bindCaixaHistoricoView();
     else bindCaixaDashboardView();
   }
@@ -9993,7 +10032,7 @@ buffer/index.js:
   // o sistema sempre carrega e Produtos sempre abre (só não salva). Nunca dead-end / tela branca.
   openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers'), getAll('bankaccounts')]);
   }).then(function (r) {
     orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
     wallet = r[5] || [];
@@ -10013,6 +10052,7 @@ buffer/index.js:
     var pendR = settings.filter(function (x) { return x.id === 'pendResolucoes'; })[0]; if (pendR && pendR.data) pendResolucoes = pendR.data;
     caixaClose = {}; (r[21] || []).forEach(function (c) { caixaClose[c.id] = c; });
     bankTransfers = (r[22] || []).sort(function (a, b) { return (b.quando || '').localeCompare(a.quando || ''); });
+    bankAccounts = (r[23] || []).sort(function (a, b) { return (a.nome || '').localeCompare(b.nome || ''); });
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
     plans = (r[4] || []).map(function (p) { if (PLAN_MIGR[p.status]) p.status = PLAN_MIGR[p.status]; if (p.scopeSkus == null && p.relatedSkus) p.scopeSkus = p.relatedSkus; if (p.indicatorKind == null) p.indicatorKind = 'liquido'; return p; });
     occ = occ.filter(function (o) { return !o.isDemo; }); // higiene: nunca deixar demo no banco real
