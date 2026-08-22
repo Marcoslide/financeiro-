@@ -19,7 +19,10 @@
   // ---------- estado compartilhado ----------
   var route = 'dashboard', DB = null;
   var orders = [], occ = [], batches = [], plans = [];
-  var skuCost = {}; // sku(lower) -> { linked:true, cost:number|null, familyName:string|null }
+  var skuCost = {}; // legado — chave normalizada -> {linked,cost,familyName} (retrocompat, derivado de resolveSkuCost)
+  var skuAliasIndex = {}; // chave normalizada -> [{variationId, matchedBy:'SKU'|'REFERENCE_SKU'}] (todas as variações que reivindicam esta chave)
+  var skuConflicts = {}; // chave normalizada -> true quando 2+ variações distintas reivindicam a mesma chave
+  var skuVarById = {}, skuFamById = {}; // snapshot de Produtos no momento do último rebuildSkuCost()
   var lastImportStamp = null; // "Atualizado com dados até…" (§31)
   var wallet = [];            // extrato da carteira (linhas SHOPEE; reconstruídas são calculadas)
   var walletCls = {};         // classificação INTERNA por id (separada do dado Shopee; preservada na reimportação) —
@@ -348,18 +351,59 @@
     document.getElementById('memrepair').onclick = function () { try { indexedDB.deleteDatabase(DB_NAME); } catch (e) { } setTimeout(function () { location.reload(); }, 300); };
   }
 
-  // ---------- índice SKU → custo (Produtos alimenta Pedidos, §42) ----------
+  // ---------- índice SKU → custo (Produtos alimenta Pedidos e demais módulos) ----------
+  // CORREÇÃO URGENTE — custo de Produtos não chegava em Pedidos quando o SKU do Pedido correspondia
+  // ao referenceSku da variação (e não ao v.sku). O custo continua morando exclusivamente na FAMÍLIA
+  // (nunca copiado para Pedido/variação/Minha Renda/Caixa) — o que muda é só o MECANISMO DE RESOLUÇÃO:
+  // cada variação agora é localizável por v.sku OU v.referenceSku, ambos apontando para a mesma
+  // variação/família/custo. Normaliza espaços/caixa mas nunca hífen/barra/números (fariam parte real
+  // do SKU). Se dois registros diferentes disputarem a mesma chave normalizada, marca SKU_CONFLICT —
+  // nunca escolhe um dos dois arbitrariamente nem aplica custo errado a um pedido.
+  function normalizeSkuKey(value) {
+    if (value == null) return '';
+    // remove zero-width space/joiners (U+200B-200D), BOM (U+FEFF) e espaço não separável (U+00A0) —
+    // nunca remove hífen/barra/números, que fazem parte real do SKU.
+    return String(value).replace(/[​-‍﻿ ]/g, '').trim().replace(/\s+/g, ' ').toLowerCase();
+  }
   function rebuildSkuCost() {
-    skuCost = {};
+    skuCost = {}; skuAliasIndex = {}; skuConflicts = {}; skuVarById = {}; skuFamById = {};
     if (!Produtos) return;
     var data = Produtos.getData();
-    var famById = {}; data.families.forEach(function (f) { famById[f.id] = f; });
-    data.variations.forEach(function (v) {
-      if (!v.sku) return;
-      var f = v.familyId ? famById[v.familyId] : null;
-      skuCost[v.sku.toLowerCase()] = { linked: true, cost: f && f.currentCostAmount != null ? Number(f.currentCostAmount) : null, familyName: f ? f.name : null };
-    });
+    data.families.forEach(function (f) { skuFamById[f.id] = f; });
+    data.variations.forEach(function (v) { skuVarById[v.id] = v; });
+    function registerAlias(rawSku, matchedBy, v) {
+      if (!rawSku) return;
+      var key = normalizeSkuKey(rawSku);
+      if (!key) return;
+      var list = skuAliasIndex[key] = skuAliasIndex[key] || [];
+      if (!list.some(function (r) { return r.variationId === v.id; })) list.push({ variationId: v.id, matchedBy: matchedBy });
+      if (list.length > 1) skuConflicts[key] = true; // SKU_CONFLICT — auditável via resolveSkuCost().motivo
+    }
+    data.variations.forEach(function (v) { registerAlias(v.sku, 'SKU', v); registerAlias(v.referenceSku, 'REFERENCE_SKU', v); });
+    // skuCost legado — mantido só para leituras remanescentes que apenas checam vínculo (nunca uma
+    // segunda fonte de verdade: sempre derivado de resolveSkuCost(), a função canônica).
+    Object.keys(skuAliasIndex).forEach(function (key) { var r = resolveSkuCostByKey(key, key); skuCost[key] = { linked: true, cost: r.found ? r.cost : null, familyName: r.familyName || null }; });
   }
+  // Função canônica de resolução — TODOS os módulos (Pedidos/orderFinance, Ficha do Pedido, Devolução,
+  // Minha Renda, Caixa, Inteligência) devem chamar resolveSkuCost(), nunca ler skuCost[...] direto.
+  // Prioridade determinística: 1) SKU exato normalizado, 2) SKU de referência exato normalizado,
+  // 3) não encontrado → pendência com motivo auditável. Nunca fuzzy matching, nunca cruza por nome.
+  function resolveSkuCostByKey(key, requestedSku) {
+    if (!key) return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
+    if (skuConflicts[key]) return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE' };
+    var list = skuAliasIndex[key];
+    if (!list || !list.length) return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
+    var reg = list[0];
+    var v = skuVarById[reg.variationId];
+    if (!v) return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
+    if (!v.familyId) return { found: false, requestedSku: requestedSku, matchedBy: reg.matchedBy, canonicalSku: v.sku, variationId: v.id, productId: v.productId, motivo: 'SEM_FAMILIA' };
+    var f = skuFamById[v.familyId];
+    if (!f || f.currentCostAmount == null) return { found: false, requestedSku: requestedSku, matchedBy: reg.matchedBy, canonicalSku: v.sku, variationId: v.id, productId: v.productId, familyId: v.familyId, familyName: f ? f.name : null, motivo: 'FAMILIA_SEM_CUSTO' };
+    return { found: true, matchedBy: reg.matchedBy, requestedSku: requestedSku, canonicalSku: v.sku, variationId: v.id, productId: v.productId, familyId: v.familyId, familyName: f.name, cost: Number(f.currentCostAmount) };
+  }
+  function resolveSkuCost(sku) { return resolveSkuCostByKey(normalizeSkuKey(sku), sku); }
+  var SKU_MOTIVO_LABEL = { SKU_NAO_LOCALIZADO: 'SKU não localizado em Produtos', SEM_FAMILIA: 'Família não atribuída', FAMILIA_SEM_CUSTO: 'Custo da família não informado', SKU_CONFLITANTE: 'Conflito de SKU — o mesmo código aparece em variações diferentes' };
+  var SKU_MATCHEDBY_LABEL = { SKU: 'SKU', REFERENCE_SKU: 'SKU de referência' };
 
   // ---------- período ----------
   function periodRange() {
@@ -385,10 +429,10 @@
   // ---------- financeiro do pedido (recalculado ao vivo com custo atual de Produtos) ----------
   function orderFinance(o) {
     var items = o.items.map(function (it) {
-      var c = it.sku ? skuCost[it.sku.toLowerCase()] : null;
-      var linked = !!c;
-      var costUnit = c && c.cost != null ? c.cost : null;
-      return { subtotal: it.subtotal, costTotal: costUnit != null ? costUnit * it.qty : null, costUnknown: !linked || costUnit == null, linked: linked, costUnit: costUnit };
+      var r = it.sku ? resolveSkuCost(it.sku) : { found: false, requestedSku: it.sku, motivo: 'SKU_NAO_LOCALIZADO' };
+      var linked = r.found;
+      var costUnit = r.found ? r.cost : null;
+      return { subtotal: it.subtotal, costTotal: costUnit != null ? costUnit * it.qty : null, costUnknown: !linked, linked: linked, costUnit: costUnit, skuResolve: r };
     });
     var fin = S.pedidos.computeFinance({ commissionNet: o.commissionNet, serviceFeeNet: o.serviceFeeNet, transactionFee: o.transactionFee, reverseShippingFee: o.reverseShippingFee, items: items });
     fin._items = items;
@@ -437,7 +481,7 @@
   // Campos vindos da SHOPEE que o importador controla e compara (§44). Os campos internos
   // (responsável, causa, recebimento, etc.) NUNCA são tocados pela importação (§46).
   var SOURCE_FIELDS = [['status', 'Status Shopee'], ['reason', 'Motivo'], ['tracking', 'Rastreio'], ['trackingStatus', 'Status do rastreio'], ['reasonRevised', 'Motivo revisado'], ['resolution', 'Solução'], ['returnType', 'Tipo'], ['disputeReason', 'Motivo da disputa'], ['sellerNote', 'Observação'], ['disputeDeadline', 'Ação do vendedor até'], ['requested', 'Reembolso solicitado'], ['compensation', 'Compensação']];
-  function occMapItems(g) { return g.map(function (r) { return { sku: r.sku, productName: r.productName, variationName: r.variationName, qty: r.quantity, unitPrice: r.unitPrice, skuLinked: !!(r.sku && skuCost[r.sku.toLowerCase()]) }; }); }
+  function occMapItems(g) { return g.map(function (r) { return { sku: r.sku, productName: r.productName, variationName: r.variationName, qty: r.quantity, unitPrice: r.unitPrice, skuLinked: !!(r.sku && resolveSkuCost(r.sku).found) }; }); }
   function finalizeOcc(o) { o.exposure = S.posVenda.classify(o.status, o.requested || 0, o.compensation || 0); upsertImportEvents(o, o.exposure, o.requested || 0, o.compensation || 0); recomputeOccImpact(o); initReceipt(o); autoReceiptFromTracking(o); o.hasSellerWindow = !!o.disputeDeadline; }
   // Shopee informou conclusão do retorno → interno vira "conferir" (nunca "recebido"; a baixa é manual §41-42).
   function autoReceiptFromTracking(o) {
@@ -640,7 +684,7 @@
       dadosAtualizadosAteBadge() +
       devPeriodBar() +
       '<div class="subtabs">' + subtab('pedidos', 'pedidos', 'Pedidos') + subtab('pedidos', 'expedicao', 'Expedição') + subtab('pedidos', 'dashboard', 'Dashboard') + subtab('pedidos', 'import', 'Importações') + '</div>' +
-      (sub.pedidos === 'dashboard' ? pedidosDashboard() : sub.pedidos === 'import' ? importsFor('Pedidos') : (sub.pedidos === 'expedicao' || sub.pedidos === 'tempoenvio') ? pedidosExpedicao() : pedidosList());
+      (sub.pedidos === 'dashboard' ? pedidosDashboard() : sub.pedidos === 'import' ? importsFor('Pedidos') + pedidosSkuDiag() : (sub.pedidos === 'expedicao' || sub.pedidos === 'tempoenvio') ? pedidosExpedicao() : pedidosList());
     document.getElementById('imp-ped').onclick = function () { fileInput(function (f) { importPedidos(f).then(function (b) { render(); toast('Pedidos importados', b.seen + ' pedidos · ' + b.novo + ' novos · ' + b.upd + ' atualizados · ' + b.unch + ' sem alteração'); }).catch(function (e) { toast('Falha', e.message, true); }); }); };
     bindSubtabs('pedidos');
     bindDevPeriodBar();
@@ -1315,17 +1359,27 @@
     // itens), sem espalhar em vários cards. Família/custo reaproveitam o vínculo SKU→família→custo já
     // feito em Produtos — nunca recalculado aqui. ----
     var itemRows = ord ? ord.items.map(function (it) {
-      var c = it.sku ? skuCost[it.sku.toLowerCase()] : null;
-      var custoUnit = c && c.cost != null ? c.cost : null;
+      var r = it.sku ? resolveSkuCost(it.sku) : { found: false, requestedSku: it.sku, motivo: 'SKU_NAO_LOCALIZADO' };
+      var custoUnit = r.found ? r.cost : null;
       var custoTotal = custoUnit != null ? r2(custoUnit * it.qty) : null;
       var unitPrice = it.agreedPrice != null ? it.agreedPrice : (it.subtotal != null && it.qty ? r2(it.subtotal / it.qty) : null);
-      return { produto: it.productName, sku: it.sku, variacao: it.variationName, familia: c ? c.familyName : null, qty: it.qty, unitPrice: unitPrice, total: it.subtotal, custoUnit: custoUnit, custoTotal: custoTotal, linked: !!c };
+      return { produto: it.productName, sku: it.sku, skuEncontrado: r.canonicalSku || null, variacao: it.variationName, familia: r.familyName || null, qty: it.qty, unitPrice: unitPrice, total: it.subtotal, custoUnit: custoUnit, custoTotal: custoTotal, linked: r.found, matchedBy: r.matchedBy, motivo: r.motivo };
     }) : [];
+    // §10 do prompt de correção de custo: "Forma do cruzamento" (SKU exato × SKU de referência) fica
+    // discreta em tooltip no próprio SKU — só para auditoria, nunca um card extra. §14: cada falha usa
+    // o motivo real (nunca um genérico "custo pendente" escondendo se é SKU inexistente, sem família,
+    // família sem custo ou conflito de SKU).
     var dadosVendaBlock = '<div class="panel"><div class="ph"><h3>2. Produto e Venda</h3></div><div class="pb">' +
       kv('Pedido', orderId) + kv('Status Shopee', ord ? (S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus) : '—') + kv('Data de criação', ord ? dbr(ord.createdAt) : '—') + kv('Data de pagamento', ord && ord.paidAt ? dbr(ord.paidAt) : '—') + kv('BR / Rastreamento', ord ? ord.tracking : '—') + (ord && ord.isFbs ? kv('Full/FBS', 'Sim') : '') +
-      (itemRows.length ? '<div class="table-wrap" style="margin-top:8px"><table class="report"><thead><tr><th>Produto</th><th>SKU</th><th>Variação</th><th>Família</th><th>Qtd</th><th>Valor unit.</th><th>Valor total</th><th>Custo unit.</th><th>Custo total</th></tr></thead><tbody>' +
-        itemRows.map(function (r) { return '<tr><td class="cell-text">' + esc(r.produto || '—') + '</td><td class="mono">' + esc(r.sku || '—') + '</td><td>' + esc(r.variacao || '—') + '</td><td>' + esc(r.familia || (r.linked ? '—' : '⚠ sem vínculo')) + '</td><td>' + nn(r.qty) + '</td><td class="nowrap">' + (r.unitPrice != null ? brl(r.unitPrice) : '—') + '</td><td class="nowrap">' + (r.total != null ? brl(r.total) : '—') + '</td><td class="nowrap">' + (r.custoUnit != null ? brl(r.custoUnit) : '<span class="tag warn">sem custo</span>') + '</td><td class="nowrap">' + (r.custoTotal != null ? brl(r.custoTotal) : '—') + '</td></tr>'; }).join('') +
+      (itemRows.length ? '<div class="table-wrap" style="margin-top:8px"><table class="report"><thead><tr><th>Produto</th><th>SKU do Pedido</th><th>SKU em Produtos</th><th>Variação</th><th>Família</th><th>Qtd</th><th>Valor unit.</th><th>Valor total</th><th>Custo unit.</th><th>Custo total</th></tr></thead><tbody>' +
+        itemRows.map(function (r) {
+          var cruzTitle = r.matchedBy ? 'Cruzamento: ' + esc(SKU_MATCHEDBY_LABEL[r.matchedBy] || r.matchedBy) : (r.motivo ? esc(SKU_MOTIVO_LABEL[r.motivo] || r.motivo) : '');
+          var skuEncontradoCell = r.linked ? '<span title="' + cruzTitle + '">' + esc(r.skuEncontrado || r.sku || '—') + (r.matchedBy === 'REFERENCE_SKU' ? ' <span class="tag info" style="font-size:10px" title="' + cruzTitle + '">via ref.</span>' : '') + '</span>' : '<span class="tag warn" title="' + cruzTitle + '">' + esc(SKU_MOTIVO_LABEL[r.motivo] ? (r.motivo === 'SKU_NAO_LOCALIZADO' ? 'não localizado' : r.motivo === 'SEM_FAMILIA' ? 'sem família' : r.motivo === 'FAMILIA_SEM_CUSTO' ? 'sem custo' : 'conflito') : '—') + '</span>';
+          var custoCell = r.custoUnit != null ? brl(r.custoUnit) : '<span class="tag warn" title="' + cruzTitle + '">' + esc(SKU_MOTIVO_LABEL[r.motivo] || 'sem custo') + '</span>';
+          return '<tr><td class="cell-text">' + esc(r.produto || '—') + '</td><td class="mono">' + esc(r.sku || '—') + '</td><td class="mono">' + skuEncontradoCell + '</td><td>' + esc(r.variacao || '—') + '</td><td>' + esc(r.familia || '—') + '</td><td>' + nn(r.qty) + '</td><td class="nowrap">' + (r.unitPrice != null ? brl(r.unitPrice) : '—') + '</td><td class="nowrap">' + (r.total != null ? brl(r.total) : '—') + '</td><td class="nowrap">' + custoCell + '</td><td class="nowrap">' + (r.custoTotal != null ? brl(r.custoTotal) : '—') + '</td></tr>';
+        }).join('') +
         '</tbody></table></div>' : '') +
+      (itemRows.some(function (r) { return !r.linked; }) ? '<div class="footnote" style="margin-top:6px">⚠ Custo parcialmente pendente — pelo menos um item deste pedido não tem custo cadastrado (passe o mouse sobre o item para ver o motivo).</div>' : '') +
       '</div></div>';
 
     // ---- §14 do prompt de reorganização: EVENTOS DO PEDIDO — Expedição/Acelera/Carteira/Devolução
@@ -1776,7 +1830,7 @@
   // §21: reaproveitamento/destino do item conferido — controle interno de recuperação (§22-24).
   var REAPROV_LABELS = { SIM: 'Sim', PARCIAL: 'Parcialmente', NAO: 'Não' };
   var DESTINO_LABELS = { ESTOQUE: 'Voltar ao estoque', RETRABALHO: 'Retrabalho', SEGUNDA_LINHA: 'Segunda linha', DESCARTE: 'Descarte', OUTRO: 'Outro' };
-  function itemCustoUnit(sku) { var c = sku ? skuCost[sku.toLowerCase()] : null; return c && c.cost != null ? c.cost : null; }
+  function itemCustoUnit(sku) { var r = sku ? resolveSkuCost(sku) : null; return r && r.found ? r.cost : null; }
   function openConferir(idOrCode, onDone) {
     var o = occ.find(function (x) { return x.id === idOrCode; });
     if (!o) { var m = findOccByCode(idOrCode); if (m.length) o = m[0]; }
@@ -2701,7 +2755,7 @@
       var sel = function (label, val, map, field) { return '<label class="fld">' + label + '</label><select class="select" data-set="' + field + '" style="width:100%">' + Object.keys(map).map(function (k) { return '<option value="' + k + '"' + (val === k ? ' selected' : '') + '>' + map[k] + '</option>'; }).join('') + '</select>'; };
       var inp = function (label, val, field, ph) { return '<label class="fld">' + label + '</label><input class="input" data-inp="' + field + '" style="width:100%" value="' + esc(val || '') + '" placeholder="' + (ph || '') + '">'; };
       var it0 = (o.items || [])[0] || {};
-      var fam = it0.sku ? (skuCost[it0.sku.toLowerCase()] && skuCost[it0.sku.toLowerCase()].familyName) : null;
+      var fam = it0.sku ? resolveSkuCost(it0.sku).familyName : null;
       var vendaData = occVendaData(o), aberturaData = occAberturaData(o), diasDepois = occDiasVendaAteAbertura(o);
       var resultado = casoResultado(o); var jornadaTxt = casoProximaAcao(o);
       var prazoTxt = o.disputeDeadline ? prazoTexto(o.disputeDeadline) : null;
@@ -4751,7 +4805,7 @@
       g.taxaDevol = cross.reliable && g.n ? r2(g.devN / g.n * 100) : null;
       g.devLoss = cross.reliable ? g.devLoss : null;
       g.outrosMR = g.nMR === g.n && g.nMR > 0 ? (g.liberado - g.preco - g.taxasShopee - g.custoAfiliado) : null;
-      if (cross.reliable) { var fc = skuCost[String(g.sku).toLowerCase()]; g.familia = fc ? (fc.familyName || null) : null; }
+      if (cross.reliable) { var fc = resolveSkuCost(String(g.sku)); g.familia = fc.found ? fc.familyName : (fc.familyName || null); }
       return g;
     });
     // §37: "ação comercial" (incentivo + ajuste, colunas reais do Income) faz parte do total canônico
@@ -5660,6 +5714,31 @@
   function panelImports() { return '<div class="panel"><div class="ph"><h3>Importações recentes</h3><span class="footnote" style="margin:0">' + batches.length + '</span></div><div class="table-wrap"><table><thead><tr><th>Módulo</th><th>Arquivo</th><th>Registros</th><th>Novos</th><th>Atualizados</th><th>Sem alteração</th><th>Data</th></tr></thead><tbody>' + (batches.length ? batches.slice(0, 20).map(impRow).join('') : '<tr><td colspan="7" class="empty">Nenhuma importação ainda.</td></tr>') + '</tbody></table></div></div>'; }
   function importsFor(mod) { var list = batches.filter(function (b) { return b.module.indexOf(mod) === 0; }); return '<div class="panel"><div class="ph"><h3>Histórico de importações — ' + esc(mod) + '</h3></div><div class="table-wrap"><table><thead><tr><th>Arquivo</th><th>Registros</th><th>Novos</th><th>Atualizados</th><th>Sem alteração</th><th>Período</th><th>Data</th></tr></thead><tbody>' + (list.length ? list.map(function (b) { return '<tr><td>' + esc(b.filename) + '</td><td>' + nn(b.seen) + (b.itemsSeen ? ' <span class="footnote">(' + nn(b.itemsSeen) + ' itens)</span>' : '') + '</td><td>' + nn(b.novo) + '</td><td>' + nn(b.upd) + '</td><td>' + nn(b.unch || 0) + '</td><td class="footnote">' + (b.periodStart ? dbr(b.periodStart) + '–' + dbr(b.periodEnd) : '—') + '</td><td class="footnote">' + new Date(b.createdAt).toLocaleString('pt-BR') + '</td></tr>'; }).join('') : '<tr><td colspan="7" class="empty">Nenhuma importação neste módulo.</td></tr>') + '</tbody></table></div></div>'; }
   function impRow(b) { return '<tr><td>' + esc(b.module) + '</td><td>' + esc(b.filename) + '</td><td>' + nn(b.seen) + '</td><td>' + nn(b.novo) + '</td><td>' + nn(b.upd) + '</td><td>' + nn(b.unch || 0) + '</td><td class="footnote">' + new Date(b.createdAt).toLocaleString('pt-BR') + '</td></tr>'; }
+  // §13 do prompt "custo de produtos não chega em Pedidos": diagnóstico determinístico — prova, item a
+  // item, por que cada pedido não recebeu custo (nunca um "custo pendente" genérico). Some ao índice
+  // canônico (resolveSkuCost/skuAliasIndex) — não recalcula nada, só expõe o motivo já resolvido.
+  function pedidosSkuDiag() {
+    var rows = [];
+    pedidosInPeriod().forEach(function (o) {
+      (o.items || []).forEach(function (it) {
+        if (!it.sku) return;
+        var key = normalizeSkuKey(it.sku);
+        var r = resolveSkuCostByKey(key, it.sku);
+        if (r.found) return;
+        var list = skuAliasIndex[key] || [];
+        var existeSku = list.some(function (a) { return a.matchedBy === 'SKU'; });
+        var existeRef = list.some(function (a) { return a.matchedBy === 'REFERENCE_SKU'; });
+        rows.push({ orderId: o.id, sku: it.sku, produto: it.productName, variacao: it.variationName, existeSku: existeSku, existeRef: existeRef, familia: r.familyName || null, motivo: r.motivo });
+      });
+    });
+    var motivoCount = {}; rows.forEach(function (r) { motivoCount[r.motivo] = (motivoCount[r.motivo] || 0) + 1; });
+    var resumo = Object.keys(motivoCount).map(function (m) { return esc(SKU_MOTIVO_LABEL[m] || m) + ': <b>' + motivoCount[m] + '</b>'; }).join(' · ');
+    return '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Pedidos com SKU não cruzado</h3><span class="footnote" style="margin:0">' + nn(rows.length) + ' item(ns) no período selecionado</span></div><div class="pb">' +
+      (rows.length ? ('<div class="footnote" style="margin-bottom:8px">' + resumo + '</div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>SKU recebido em Pedidos</th><th>Produto</th><th>Variação</th><th>Existe como v.sku?</th><th>Existe como v.referenceSku?</th><th>Família</th><th>Custo</th><th>Motivo da falha</th></tr></thead><tbody>' +
+        rows.map(function (r) { return '<tr><td class="mono">' + esc(r.orderId) + '</td><td class="mono">' + esc(r.sku) + '</td><td class="cell-text">' + esc(r.produto || '—') + '</td><td>' + esc(r.variacao || '—') + '</td><td>' + (r.existeSku ? '🟢 Sim' : '⚪ Não') + '</td><td>' + (r.existeRef ? '🟢 Sim' : '⚪ Não') + '</td><td>' + esc(r.familia || '—') + '</td><td>—</td><td><span class="tag warn">' + esc(SKU_MOTIVO_LABEL[r.motivo] || r.motivo) + '</span></td></tr>'; }).join('') +
+        '</tbody></table></div>') : '<span class="tag ok">🟢 Todos os SKUs do período foram cruzados com Produtos.</span>') +
+      '</div></div>';
+  }
 
   // ============================================================ MÓDULO PRODUTOS (completo, isolado)
   // Restaurado da versão completa: master→variações, KPIs clicáveis, busca em tempo
