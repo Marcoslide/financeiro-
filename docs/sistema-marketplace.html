@@ -4891,6 +4891,23 @@ buffer/index.js:
   // função depois; o contrário nunca pode acontecer. A Ficha do Pedido (openPedidoFicha360) e o
   // Caixa consomem exatamente o mesmo retorno — nunca duas contas para o mesmo pedido.
   function pedidoIncomeRow(orderId) { return mrRenda.find(function (r) { return r.orderId === orderId && r.ver === 'Order'; }) || null; }
+  // Fórmula canônica do envio (PROMPT MESTRE Parte D, §27-39) — validada empiricamente contra os
+  // 1.662 pedidos Order do Income real: soma dos 5 componentes com os sinais originais fecha
+  // exatamente com "Subtotal de Envio" do Summary (0 centavo de diferença). Nunca mostrar o
+  // "Frete cobrado pelo parceiro logístico" isolado como se fosse todo custo nosso — só o líquido.
+  function subtotalEnvioPedido(orderId) {
+    var mrRow = pedidoIncomeRow(orderId);
+    if (!mrRow) return null;
+    var comps = [
+      { label: 'Taxa de frete paga pelo comprador', valor: mrRow.fretePagoComprador || 0 },
+      { label: 'Frete cobrado pelo parceiro logístico', valor: mrRow.freteParceiro || 0 },
+      { label: 'Desconto de frete pela Shopee', valor: mrRow.descontoFrete || 0 },
+      { label: 'Taxa de envio reverso', valor: mrRow.envioReverso || 0 },
+      { label: 'Taxa de devolução do vendedor', valor: mrRow.taxaDevolucaoVendedor || 0 },
+    ];
+    var subtotalC = comps.reduce(function (s, c) { return s + c.valor; }, 0);
+    return { orderId: orderId, comps: comps, subtotalC: subtotalC };
+  }
   function pedidoComposicaoFinanceira(orderId) {
     var ord = orders.find(function (x) { return x.id === orderId; });
     var mrRow = pedidoIncomeRow(orderId);
@@ -4901,45 +4918,78 @@ buffer/index.js:
     var taxaRows = [];
     function addTaxa(label, valor, subs, origem, fieldKey) { if (valor == null) return; var cl = finClassifica(fieldKey, valor); taxaRows.push({ label: label, valor: valor, subs: subs || [], origem: origem, fieldKey: fieldKey, nat: cl.nat }); }
     var adjRows = mrAdj.filter(function (a) { return a.orderId === orderId; });
+    var envio = mrRow ? subtotalEnvioPedido(orderId) : null;
     if (mrRow) {
-      var comSubs = (mrRow.comissaoBruta != null && mrRow.comissaoBruta !== 0 && mrRow.comissaoBruta !== mrRow.comissao) ? [['Comissão bruta', mrRow.comissaoBruta], ['Desconto/ajuste aplicado pela Shopee', mrRow.comissao - mrRow.comissaoBruta]] : [];
-      addTaxa('Comissão Shopee', mrRow.comissao, comSubs, 'Income', 'comissao');
+      // TAXAS SHOPEE — nomes reais do Income, só o que é efetivamente débito do vendedor (§51-53).
+      var comSubs = (mrRow.comissaoBruta != null && mrRow.comissaoBruta !== 0 && mrRow.comissaoBruta !== mrRow.comissao) ? [['Taxa de comissão bruta (referência)', mrRow.comissaoBruta]] : [];
+      addTaxa('Taxa de comissão líquida', mrRow.comissao, comSubs, 'Income / Renda', 'comissao');
       var svcSubs = [];
-      if (svcRows.length) { var svcT = { afil: 0, trans: 0, item: 0 }; svcRows.forEach(function (v) { svcT.afil += v.afiliadosVendedor; svcT.trans += v.transacao; svcT.item += v.porItem; }); svcSubs = [['Afiliados do vendedor', svcT.afil], ['Transação', svcT.trans], ['Por item vendido', svcT.item]]; }
-      addTaxa('Taxa de serviço', mrRow.servico, svcSubs, svcRows.length ? 'Income / Service Fee Details' : 'Income', 'servico');
-      addTaxa('Taxa de transação', mrRow.transacao, [], 'Income', 'transacao');
-      addTaxa('Participação em ação comercial (incentivo)', mrRow.incentivoAcaoComercial, [], 'Income', 'incentivoAcaoComercial');
-      addTaxa('Participação em ação comercial (ajuste)', mrRow.ajusteAcaoComercial, [], 'Income', 'ajusteAcaoComercial');
-      addTaxa('Programa de frete (frete parceiro)', mrRow.freteParceiro, [], 'Income', 'freteParceiro');
-      addTaxa('Desconto de frete (Shopee)', mrRow.descontoFrete, [], 'Income', 'descontoFrete');
-      addTaxa('Envio reverso', mrRow.envioReverso, [], 'Income', 'envioReverso');
-      addTaxa('Afiliado', mrRow.afiliado, [], 'Income', 'afiliado');
-      addTaxa('Cupom', mrRow.cupom, [], 'Income', 'cupom');
-      addTaxa('Ajuste PIX', mrRow.pix, [], 'Income', 'pix');
-      addTaxa('Reembolso', mrRow.reembolso, [], 'Income', 'reembolso');
+      if (svcRows.length) { var svcT = { afil: 0, trans: 0, item: 0 }; svcRows.forEach(function (v) { svcT.afil += v.afiliadosVendedor; svcT.trans += v.transacao; svcT.item += v.porItem; }); svcSubs = [['Taxa de Serviço Afiliados do Vendedor', svcT.afil], ['Taxa de Transação', svcT.trans], ['Taxa por item vendido', svcT.item]]; }
+      if (mrRow.servicoBruta != null && mrRow.servicoBruta !== 0 && mrRow.servicoBruta !== mrRow.servico) svcSubs.push(['Taxa de serviço bruta (referência)', mrRow.servicoBruta]);
+      addTaxa('Taxa de serviço líquida', mrRow.servico, svcSubs, svcRows.length ? 'Income / Service Fee Details' : 'Income / Renda', 'servico');
+      addTaxa('Taxa de transação', mrRow.transacao, [], 'Income / Renda', 'transacao');
+      addTaxa('Taxa de comissão Afiliados do Vendedor', mrRow.afiliado, [], 'Income / Renda', 'afiliado');
+      if (mrRow.taxaDevolucaoFacil) addTaxa('Taxa de Devolução Fácil Shopee', mrRow.taxaDevolucaoFacil, [], 'Income / Renda', 'taxaDevolucaoFacil');
+      if (mrRow.taxaRecargaAutomatica) addTaxa('Taxa da Recarga Automática (Pedido)', mrRow.taxaRecargaAutomatica, [], 'Income / Renda', 'taxaRecargaAutomatica');
+      // REDUÇÕES / DESCONTOS DO PEDIDO — nunca "taxa", nomes reais (§22-24/§54).
+      addTaxa('Cupom', mrRow.cupom, [], 'Income / Renda', 'cupom');
+      addTaxa('Ajuste por pagamento via PIX', mrRow.pix, [], 'Income / Renda', 'pix');
+      addTaxa('Valor do Reembolso', mrRow.reembolso, [], 'Income / Renda', 'reembolso');
+      if (mrRow.voucherSeller) addTaxa('Voucher subsidiado pelo Seller', mrRow.voucherSeller, [], 'Income / Renda', 'voucherSeller');
+      if (mrRow.voucherCompartilhado) addTaxa('Voucher compartilhado subsidiado pelo Seller', mrRow.voucherCompartilhado, [], 'Income / Renda', 'voucherCompartilhado');
+      if (mrRow.coinCashbackSeller) addTaxa('Coin Cashback subsidiado pelo Seller', mrRow.coinCashbackSeller, [], 'Income / Renda', 'coinCashbackSeller');
+      if (mrRow.coinCashbackCompartilhado) addTaxa('Coin Cashback compartilhado subsidiado pelo Seller', mrRow.coinCashbackCompartilhado, [], 'Income / Renda', 'coinCashbackCompartilhado');
+      // CRÉDITOS / INCENTIVOS — positivos quando aplicáveis, nunca custo (§24-25).
+      addTaxa('Incentivo Shopee para ação comercial', mrRow.incentivoAcaoComercial, [], 'Income / Renda', 'incentivoAcaoComercial');
+      if (mrRow.incentivoCupom) addTaxa('Incentivo de cupom', mrRow.incentivoCupom, [], 'Income / Renda', 'incentivoCupom');
+      // AMP — Acréscimo e Dedução normalmente se anulam (§26); só aparece se sobrar resíduo real.
+      var ampLiquido = (mrRow.amp || 0) + (mrRow.deducaoAmp || 0);
+      if (ampLiquido) addTaxa('AMP (Acréscimo/Dedução — resíduo não compensado)', ampLiquido, [['Acréscimo por Método de Pagamento (AMP)', mrRow.amp || 0], ['Dedução de AMP', mrRow.deducaoAmp || 0]], 'Income / Renda', 'ampLiquido');
+      // ENVIO — fórmula canônica única (§27-39), nunca componentes isolados como custo.
+      if (envio && envio.subtotalC) addTaxa('Subtotal de Envio', envio.subtotalC, envio.comps.map(function (c) { return [c.label, c.valor]; }), 'Income / Renda (fórmula canônica)', 'envioSubtotal');
     } else if (ord) {
-      addTaxa('Comissão (aproximado)', -Math.round((ord.commissionNet || 0) * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'comissao');
-      addTaxa('Taxa de serviço (aproximado)', -Math.round((ord.serviceFeeNet || 0) * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'servico');
-      addTaxa('Taxa de transação (aproximado)', -Math.round((ord.transactionFee || 0) * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'transacao');
-      addTaxa('Frete reverso (aproximado)', -Math.round((ord.reverseShippingFee || 0) * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'envioReverso');
+      addTaxa('Comissão (aproximado — sem Income cruzado)', -Math.round((ord.commissionNet || 0) * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'comissao');
+      addTaxa('Taxa de serviço (aproximado — sem Income cruzado)', -Math.round((ord.serviceFeeNet || 0) * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'servico');
+      addTaxa('Taxa de transação (aproximado — sem Income cruzado)', -Math.round((ord.transactionFee || 0) * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'transacao');
+      var freteAprox = -Math.round((ord.reverseShippingFee || 0) * 100);
+      if (freteAprox) addTaxa('Subtotal de Envio (aproximado — sem Income cruzado)', freteAprox, [], 'Pedidos — sem Income cruzado para este pedido', 'envioSubtotal');
     }
-    adjRows.forEach(function (a) { addTaxa(a.desc || 'Ajuste', a.valor, [], 'Adjustment', 'ajusteGenerico'); });
+    adjRows.forEach(function (a) { addTaxa(a.desc || 'Ajuste (Adjustment)', a.valor, [], 'Adjustment', 'ajusteGenerico'); });
+    // Valores de referência da fonte — NUNCA somados na composição/DRE (§13/§20/§109): comissão e
+    // serviço brutos, ajuste por participação em ação comercial, promoção de desconto no frete.
+    // Ficam disponíveis só para auditoria — exatamente como o Summary os separa em "Outros Valores
+    // de Referência". Incluir qualquer um destes na soma quebra a reconciliação com Quantia Total
+    // Lançada (confirmado empiricamente: 1.662/1.662 pedidos reais fecham SEM eles, 1.117 quebram COM).
+    var auditoriaFonte = mrRow ? [
+      { label: 'Taxa de comissão bruta', valor: mrRow.comissaoBruta, nota: 'Outros Valores de Referência — não somado' },
+      { label: 'Taxa de serviço bruta', valor: mrRow.servicoBruta, nota: 'Outros Valores de Referência — não somado' },
+      { label: 'Ajuste por participação em ação comercial', valor: mrRow.ajusteAcaoComercial, nota: 'Outros Valores de Referência — não somado' },
+      { label: 'Promoção de Desconto no Frete', valor: mrRow.promocaoDescontoFrete, nota: 'Outros Valores de Referência — não somado' },
+    ].filter(function (a) { return a.valor; }) : [];
     var gTaxas = taxaRows.filter(function (r) { return r.nat === 'DEBITO_VENDEDOR'; });
-    var gDescontos = taxaRows.filter(function (r) { return r.nat === 'DESCONTO_COMERCIAL_VENDEDOR'; });
+    var gDescontos = taxaRows.filter(function (r) { return r.nat === 'DESCONTO_COMERCIAL_VENDEDOR' || r.nat === 'REEMBOLSO_DEVOLUCAO'; });
     var gCreditos = taxaRows.filter(function (r) { return r.nat === 'CREDITO_VENDEDOR'; });
-    var gOutros = taxaRows.filter(function (r) { return ['DEBITO_VENDEDOR', 'DESCONTO_COMERCIAL_VENDEDOR', 'CREDITO_VENDEDOR'].indexOf(r.nat) < 0; });
+    var gEnvio = taxaRows.filter(function (r) { return r.fieldKey === 'envioSubtotal'; });
+    var gOutros = taxaRows.filter(function (r) { return ['DEBITO_VENDEDOR', 'DESCONTO_COMERCIAL_VENDEDOR', 'REEMBOLSO_DEVOLUCAO', 'CREDITO_VENDEDOR'].indexOf(r.nat) < 0 && r.fieldKey !== 'envioSubtotal'; });
     var somaGrupo = function (g) { return g.reduce(function (s, r) { return s + r.valor; }, 0); };
     var taxasSomaC = taxaRows.reduce(function (s, r) { return s + r.valor; }, 0);
     var resultadoC = (receitaC != null && custoProdC != null) ? (receitaC + taxasSomaC - custoProdC) : null;
     var margemPct = (resultadoC != null && receitaC) ? r2(resultadoC / receitaC * 100) : null;
     // Pendência de Composição — NASCE aqui, em Pedidos. Nunca recriada por outro módulo (Caixa só
-    // consome .pendencia); mesma fórmula/tolerância que já era usada (§21 da Ficha).
+    // consome .pendencia). Tolerância de 2 centavos (arredondamento) — validado empiricamente: com a
+    // fórmula correta, 1.662/1.662 pedidos reais do Income fecham com 0 centavo de diferença (§7/§133-136).
+    // Adjustment (mrAdj) é EVENTO POSTERIOR (§45-48) — acontece DEPOIS da liberação original e nunca
+    // reescreve o pedido; por isso NUNCA entra na conferência da Quantia Total Lançada (que descreve
+    // só o momento da liberação original), mas continua dentro de taxasSomaC/resultadoC (impacta o
+    // lucro real do pedido de verdade). Excluí-lo daqui evitou falsos positivos em pedidos com
+    // reembolso/compensação posterior nos dados reais.
+    var taxasSomaSemAjusteC = taxaRows.filter(function (r) { return r.fieldKey !== 'ajusteGenerico'; }).reduce(function (s, r) { return s + r.valor; }, 0);
     var pendencia = null;
     if (mrRow) {
-      var diff = mrRow.liberado - (mrRow.preco + taxasSomaC);
-      if (Math.abs(diff) > 100) pendencia = { id: 'PENDFIN-' + orderId, origem: 'PEDIDOS', orderId: orderId, tipo: 'COMPOSICAO_FINANCEIRA', diff: diff, liberado: mrRow.liberado, calculado: mrRow.preco + taxasSomaC, motivo: 'Diferença financeira de ' + brlC(diff) + ' entre a composição do pedido e o Pagamento Liberado — etapa: composição Shopee, motivo: lançamento não classificado' };
+      var diff = mrRow.liberado - (mrRow.preco + taxasSomaSemAjusteC);
+      if (Math.abs(diff) > 2) pendencia = { id: 'PENDFIN-' + orderId, origem: 'PEDIDOS', orderId: orderId, tipo: 'COMPOSICAO_FINANCEIRA', diff: diff, liberado: mrRow.liberado, calculado: mrRow.preco + taxasSomaSemAjusteC, motivo: 'Diferença financeira de ' + brlC(diff) + ' entre a composição do pedido e a Quantia Total Lançada — etapa: composição Shopee, motivo: lançamento não classificado' };
     }
-    return { orderId: orderId, temIncome: !!mrRow, mrRow: mrRow, ord: ord, svcRows: svcRows, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gOutros: gOutros, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia };
+    return { orderId: orderId, temIncome: !!mrRow, mrRow: mrRow, ord: ord, svcRows: svcRows, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gEnvio: gEnvio, gOutros: gOutros, envio: envio, auditoriaFonte: auditoriaFonte, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), envioC: somaGrupo(gEnvio), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, taxasSomaSemAjusteC: taxasSomaSemAjusteC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia };
   }
   // Ficha do Pedido consolidada (Fase 2 da arquitetura) — jornada única, sem "Ficha 360" separada
   // e sem esconder taxas atrás de cliques extras: Venda → Custos → Taxas detalhadas → Margem →
@@ -4966,14 +5016,17 @@ buffer/index.js:
 
     // Conferência matemática determinística (§21 do prompt de reorganização): total informado ×
     // soma dos componentes. Nunca usa IA — só soma campos já importados de Income/Service Fee Details.
-    function conferencia(total, soma) { if (total == null) return ''; var dif = total - soma; var bate = Math.abs(dif) <= 100; return '<span class="tag ' + (bate ? 'ok' : 'warn') + '">' + (bate ? '🟢 Conferido' : '🔴 Divergência de ' + brlC(dif)) + '</span>'; }
+    // Mesma tolerância da Pendência de Composição canônica (2 centavos) — §7/§106 do prompt mestre:
+    // validado empiricamente contra os 1.662 pedidos Order do Income real, 0 centavo de diferença.
+    function conferencia(total, soma) { if (total == null) return ''; var dif = total - soma; var bate = Math.abs(dif) <= 2; return '<span class="tag ' + (bate ? 'ok' : 'warn') + '">' + (bate ? '🟢 Conferido' : '🔴 Divergência de ' + brlC(dif)) + '</span>'; }
 
     // ---- §9-13 do prompt de reorganização: TAXAS E DESCONTOS é UMA ÚNICA LISTA VERTICAL —
     // nunca um card por taxa. Componentes decomponíveis (comissão bruta→líquida, taxa de serviço→
     // afiliados/transação/por item) entram como sub-linhas indentadas, só para EXPLICAR — nunca somados
     // de novo no total (a linha-pai já é a soma dos componentes).
     var taxaRows = comp.taxaRows, adjRows = comp.adjRows, taxasSomaC = comp.taxasSomaC;
-    var taxasConf = mrRow ? conferencia(mrRow.liberado, mrRow.preco + taxasSomaC) : '';
+    // Adjustment é evento posterior — nunca entra na conferência da liberação original (§45-48).
+    var taxasConf = mrRow ? conferencia(mrRow.liberado, mrRow.preco + comp.taxasSomaSemAjusteC) : '';
     var taxaLine = function (r) {
       var sub = r.subs.length ? '<div class="footnote" style="margin:2px 0 6px">' + r.subs.map(function (s) { return '↳ ' + esc(s[0]) + ': ' + brlC(s[1]); }).join(' · ') + '</div>' : '';
       return '<div class="fin-line rowlink" title="Fonte: ' + esc(r.origem) + '"><span>' + esc(r.label) + '</span><b class="' + (r.valor < 0 ? 'neg' : r.valor > 0 ? 'pos' : '') + '">' + brlC(r.valor) + '</b></div>' + sub;
@@ -4982,17 +5035,31 @@ buffer/index.js:
     // NÓS (débitos reais do vendedor, sempre visível primeiro) de DESCONTOS COMERCIAIS e
     // CRÉDITOS/INCENTIVOS (subseções só aparecem quando têm conteúdo). A SOMA dos três grupos +
     // reembolso continua sendo exatamente taxasSomaC — nenhum valor foi recalculado, só reagrupado.
-    var gTaxas = comp.gTaxas, gDescontos = comp.gDescontos, gCreditos = comp.gCreditos, gOutros = comp.gOutros;
+    var gTaxas = comp.gTaxas, gDescontos = comp.gDescontos, gCreditos = comp.gCreditos, gOutros = comp.gOutros, gEnvio = comp.gEnvio, envio = comp.envio, auditoriaFonte = comp.auditoriaFonte;
     var somaGrupo = comp.somaGrupo;
     var grupoBlock = function (titulo, g, sempreMostra) {
       if (!g.length && !sempreMostra) return '';
       var soma = somaGrupo(g);
       return '<div style="margin-top:10px"><div class="footnote" style="margin:0 0 4px;text-transform:uppercase;letter-spacing:.02em">' + esc(titulo) + '</div>' + (g.length ? g.map(taxaLine).join('') + '<div class="fin-line" style="margin-top:2px"><span>Subtotal — ' + esc(titulo.toLowerCase()) + '</span><b class="' + (soma < 0 ? 'neg' : soma > 0 ? 'pos' : '') + '">' + brlC(soma) + '</b></div>' : '<span class="tag neutral">nenhum lançamento deste tipo neste pedido</span>') + '</div>';
     };
-    var taxasBlock = '<div class="panel"><div class="ph"><h3>Taxas e Descontos</h3>' + taxasConf + '</div><div class="pb">' +
-      (taxaRows.length ? grupoBlock('Taxas cobradas da Líder', gTaxas, true) + grupoBlock('Descontos bancados pela Líder', gDescontos, false) + grupoBlock('Créditos / incentivos', gCreditos, false) + grupoBlock('Reembolsos e outros ajustes', gOutros, false) +
+    // ENVIO (§27-39): só aparece quando o Subtotal de Envio é diferente de zero — quando os
+    // componentes se compensam (comprador + Shopee cobrindo o frete parceiro), a Líder não teve
+    // impacto líquido de frete e a seção some, exatamente como o prompt exige (§32-36).
+    var envioBlock = '';
+    if (gEnvio.length && envio && envio.subtotalC) {
+      var envioComps = envio.comps.filter(function (c) { return c.valor; }).map(function (c) { return '<div class="fin-line"><span>' + esc(c.label) + '</span><span class="' + (c.valor < 0 ? 'neg' : 'pos') + '">' + brlC(c.valor) + '</span></div>'; }).join('');
+      envioBlock = '<div style="margin-top:10px"><div class="footnote" style="margin:0 0 4px;text-transform:uppercase;letter-spacing:.02em">Envio</div>' +
+        '<div class="fin-line"><span>Subtotal de Envio</span><b class="' + (envio.subtotalC < 0 ? 'neg' : 'pos') + '">' + brlC(envio.subtotalC) + '</b></div>' +
+        '<details style="margin-top:2px"><summary style="cursor:pointer;font-size:13px;color:var(--muted,#666)">Ver composição</summary><div style="margin-top:4px">' + envioComps + '<div class="fin-line" style="margin-top:2px"><span>Impacto líquido para a Líder</span><b class="' + (envio.subtotalC < 0 ? 'neg' : 'pos') + '">' + brlC(envio.subtotalC) + '</b></div></div></details></div>';
+    }
+    var auditoriaBlock = auditoriaFonte.length ? '<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Auditoria da fonte (valores de referência — nunca somados)</summary><div style="margin-top:6px">' +
+      auditoriaFonte.map(function (a) { return '<div class="fin-line"><span>' + esc(a.label) + ' <span class="footnote" style="margin:0">(' + esc(a.nota) + ')</span></span><span class="' + (a.valor < 0 ? 'neg' : 'pos') + '">' + brlC(a.valor) + '</span></div>'; }).join('') +
+      '</div></details>' : '';
+    var taxasBlock = '<div class="panel"><div class="ph"><h3>Taxas Shopee</h3>' + taxasConf + '</div><div class="pb">' +
+      (taxaRows.length ? grupoBlock('Taxas Shopee', gTaxas, true) + grupoBlock('Reduções / Descontos do Pedido', gDescontos, false) + envioBlock + grupoBlock('Créditos / Incentivos', gCreditos, false) + grupoBlock('Outros ajustes', gOutros, false) +
         '<div class="fin-line total" style="margin-top:10px"><span>Total (todos os grupos)</span><b class="' + (taxasSomaC < 0 ? 'neg' : 'pos') + '">' + brlC(taxasSomaC) + '</b></div>' : '<span class="tag neutral">sem dados de taxas para este pedido</span>') +
-      (shipRow ? '<div class="footnote" style="margin-top:8px">Frete — divergência sobre o esperado (não somada ao total acima): esperado ' + brl(shipRow.esperado) + ' · real ' + brl(shipRow.real) + ' · diferença ' + brl(shipRow.real - shipRow.esperado) + '.</div>' : '') +
+      auditoriaBlock +
+      (shipRow ? '<div class="footnote" style="margin-top:8px">Shipping Fee Discrepancy — frete cobrado acima do esperado (auditoria, não altera o Subtotal de Envio acima): esperado ' + brl(shipRow.esperado) + ' · real ' + brl(shipRow.real) + ' · diferença ' + brl(shipRow.real - shipRow.esperado) + '.</div>' : '') +
       '<div class="footnote" style="margin-top:6px">' + (mrRow ? 'Origem principal: Minha Renda (Income) · Pedido ' + esc(orderId) : ord ? 'Origem: Pedidos (aproximado — sem Minha Renda para este pedido)' : 'sem fonte') + '</div>' +
       '</div></div>';
 
@@ -5107,10 +5174,11 @@ buffer/index.js:
     var pagamentoLiquidoC = receitaC != null ? receitaC + taxasSomaC : null;
     var resultadoBlock = '<div class="panel"><div class="ph"><h3>Resultado do Pedido</h3></div><div class="pb">' +
       fLine('Venda', receitaC) +
-      (gDescontos.length ? fLine('− Descontos bancados pela Líder', somaGrupo(gDescontos)) : '') +
-      fLine('− Taxas cobradas da Líder', somaGrupo(gTaxas)) +
-      (gCreditos.length ? fLine('+ Créditos / incentivos Shopee', somaGrupo(gCreditos)) : '') +
-      (gOutros.length ? fLine('− Reembolsos e outros ajustes', somaGrupo(gOutros)) : '') +
+      (gDescontos.length ? fLine('− Reduções / Descontos do Pedido', somaGrupo(gDescontos)) : '') +
+      fLine('− Taxas Shopee', somaGrupo(gTaxas)) +
+      (gEnvio.length && envio && envio.subtotalC ? fLine((envio.subtotalC < 0 ? '− ' : '+ ') + 'Subtotal de Envio', envio.subtotalC) : '') +
+      (gCreditos.length ? fLine('+ Créditos / Incentivos Shopee', somaGrupo(gCreditos)) : '') +
+      (gOutros.length ? fLine('− Outros ajustes', somaGrupo(gOutros)) : '') +
       fLine('= Pagamento líquido Shopee (subtotal)', pagamentoLiquidoC, { total: true }) +
       fLine('− Custo do produto', custoProdC != null ? -custoProdC : null) +
       (custoAfilCents ? fLine('− Custo de afiliados (sem Minha Renda para este pedido)', -custoAfilCents) : '') +
@@ -8162,16 +8230,21 @@ buffer/index.js:
     comissao: { nat: 'DEBITO_VENDEDOR', suporta: 'VENDEDOR' },
     servico: { nat: 'DEBITO_VENDEDOR', suporta: 'VENDEDOR' },
     transacao: { nat: 'DEBITO_VENDEDOR', suporta: 'VENDEDOR' },
-    freteParceiro: { nat: 'DEBITO_VENDEDOR', suporta: 'VENDEDOR' },
-    envioReverso: { nat: 'DEBITO_VENDEDOR', suporta: 'VENDEDOR' },
-    afiliado: { nat: 'DEBITO_VENDEDOR', suporta: 'VENDEDOR' },
+    afiliado: { nat: 'DEBITO_VENDEDOR', suporta: 'VENDEDOR' }, // "Taxa de comissão Afiliados do Vendedor" — DIFERENTE de "Taxa de Serviço Afiliados do Vendedor" (Service Fee Details, §18)
+    taxaDevolucaoFacil: { nat: 'DEBITO_VENDEDOR', suporta: 'VENDEDOR' },
+    taxaRecargaAutomatica: { nat: 'DEBITO_VENDEDOR', suporta: 'VENDEDOR' },
     cupom: { nat: 'DESCONTO_COMERCIAL_VENDEDOR', suporta: 'VENDEDOR' },
+    pix: { nat: 'DESCONTO_COMERCIAL_VENDEDOR', suporta: 'VENDEDOR' }, // "Ajuste por pagamento via PIX" — reduz o liberado mas NUNCA é taxa (§22)
+    voucherSeller: { nat: 'DESCONTO_COMERCIAL_VENDEDOR', suporta: 'VENDEDOR' },
+    voucherCompartilhado: { nat: 'DESCONTO_COMERCIAL_VENDEDOR', suporta: 'VENDEDOR' },
+    coinCashbackSeller: { nat: 'DESCONTO_COMERCIAL_VENDEDOR', suporta: 'VENDEDOR' },
+    coinCashbackCompartilhado: { nat: 'DESCONTO_COMERCIAL_VENDEDOR', suporta: 'VENDEDOR' },
     reembolso: { nat: 'REEMBOLSO_DEVOLUCAO', suporta: 'COMPARTILHADO' },
     incentivoAcaoComercial: { nat: 'SIGN' },
-    ajusteAcaoComercial: { nat: 'SIGN' },
-    pix: { nat: 'SIGN' },
-    descontoFrete: { nat: 'SIGN' }, // "Desconto de frete pela Shopee" — tipicamente um crédito, mas o sinal real decide
+    incentivoCupom: { nat: 'SIGN' }, // "Incentivo de cupom" — positivo quando aplicável, nunca custo (§24)
     ajusteGenerico: { nat: 'SIGN' }, // ajustes avulsos (mrAdj) — sem nome de campo Income fixo, classificados pelo próprio sinal
+    ampLiquido: { nat: 'SIGN' }, // AMP + Dedução de AMP líquidos — só aparece quando NÃO se anulam (§26)
+    envioSubtotal: { nat: 'SIGN' }, // Subtotal de Envio canônico (subtotalEnvioPedido) — só aparece quando != 0 (§31-36)
     estimatedShipping: { nat: 'INFORMATIVO', suporta: 'DESCONHECIDO' }, // "Valor estimado do frete" — nunca entra em cálculo de custo
     buyerPaidShipping: { nat: 'PAGO_COMPRADOR', suporta: 'COMPRADOR' }, // frete pago pelo comprador — nunca é custo nosso
   };
@@ -9484,20 +9557,36 @@ buffer/index.js:
   // ---- DRE do dia — motor NATIVO do Caixa: agrega pedidoComposicaoFinanceira() (Pedidos) dos
   // pedidos pagos do dia. Zero chamadas a mrEngine()/mrPeriodEngine()/mrResultadoDetalhado() —
   // funciona mesmo que Minha Renda nunca tenha sido usada (teste de isolamento da arquitetura).
+  // §105-111 do prompt mestre: a DRE precisa abrir as taxas com o NOME REAL de cada componente
+  // (nunca uma linha genérica "Taxas cobradas da Líder") — agrega, por rótulo real, os mesmos
+  // taxaRows que pedidoComposicaoFinanceira() já classificou para cada pedido pago do dia. Nenhum
+  // valor é recalculado aqui: soma-se exatamente o que a função canônica de Pedidos já apurou.
   function caixaDreDia(dateKey) {
     var pagas = orders.filter(function (o) { return o.paidAt && o.paidAt.slice(0, 10) === dateKey; });
-    var receitaBruta = 0, descComerciais = 0, taxasCobradas = 0, creditos = 0, outros = 0, custoTotal = 0, custoConhecidoN = 0, comIncomeN = 0;
+    var receitaBruta = 0, custoTotal = 0, custoConhecidoN = 0, comIncomeN = 0, envioTotal = 0;
+    var mapReducoes = {}, mapTaxas = {}, mapCreditos = {}, mapOutros = {};
+    function soma(map, rows) { rows.forEach(function (r) { map[r.label] = (map[r.label] || 0) + r.valor; }); }
     pagas.forEach(function (o) {
       var c = pedidoComposicaoFinanceira(o.id);
-      receitaBruta += (c.receitaC || 0); descComerciais += c.descontosComerciaisC; taxasCobradas += c.taxasCobradasC; creditos += c.creditosC; outros += c.outrosC;
+      receitaBruta += (c.receitaC || 0);
+      soma(mapReducoes, c.gDescontos); soma(mapTaxas, c.gTaxas); soma(mapCreditos, c.gCreditos); soma(mapOutros, c.gOutros);
+      if (c.envio) envioTotal += c.envio.subtotalC;
       if (c.custoProdC != null) { custoTotal += c.custoProdC; custoConhecidoN++; }
       if (c.temIncome) comIncomeN++;
     });
-    var receitaLiquida = receitaBruta + descComerciais + taxasCobradas + creditos + outros;
+    var toLines = function (map) { return Object.keys(map).map(function (k) { return { label: k, valor: map[k] }; }).filter(function (l) { return l.valor; }).sort(function (a, b) { return a.valor - b.valor; }); };
+    var linhasReducoes = toLines(mapReducoes), linhasTaxas = toLines(mapTaxas), linhasCreditos = toLines(mapCreditos), linhasOutros = toLines(mapOutros);
+    var descComerciais = linhasReducoes.reduce(function (s, l) { return s + l.valor; }, 0);
+    var taxasCobradas = linhasTaxas.reduce(function (s, l) { return s + l.valor; }, 0);
+    var creditos = linhasCreditos.reduce(function (s, l) { return s + l.valor; }, 0);
+    var outros = linhasOutros.reduce(function (s, l) { return s + l.valor; }, 0);
+    var ac = caixaDayAcelera(dateKey); var acTaxa = ac.n ? -Math.abs(ac.taxa) : 0;
+    var eventosPosteriores = (caixaClose[dateKey] && caixaClose[dateKey].eventosPosteriores) || [];
+    var receitaLiquida = receitaBruta + descComerciais + envioTotal + taxasCobradas + creditos + outros;
     var custoCompleto = pagas.length > 0 && custoConhecidoN === pagas.length;
-    var lucro = custoCompleto ? receitaLiquida - custoTotal : null;
+    var lucro = custoCompleto ? receitaLiquida - custoTotal + acTaxa : null;
     var margem = (receitaBruta && lucro != null) ? r2(lucro / receitaBruta * 100) : null;
-    return { n: pagas.length, comIncomeN: comIncomeN, receitaBruta: receitaBruta, descComerciais: descComerciais, taxasCobradas: taxasCobradas, creditos: creditos, outros: outros, receitaLiquida: receitaLiquida, custoTotal: custoConhecidoN ? custoTotal : null, custoConhecidoN: custoConhecidoN, custoCompleto: custoCompleto, lucro: lucro, margem: margem };
+    return { n: pagas.length, comIncomeN: comIncomeN, receitaBruta: receitaBruta, descComerciais: descComerciais, linhasReducoes: linhasReducoes, envioTotal: envioTotal, taxasCobradas: taxasCobradas, linhasTaxas: linhasTaxas, creditos: creditos, linhasCreditos: linhasCreditos, outros: outros, linhasOutros: linhasOutros, receitaLiquida: receitaLiquida, custoTotal: custoConhecidoN ? custoTotal : null, custoConhecidoN: custoConhecidoN, custoCompleto: custoCompleto, acTaxa: acTaxa, temAcelera: !!ac.n, eventosPosteriores: eventosPosteriores, lucro: lucro, margem: margem };
   }
   // Conta colunas do Income com valor real ainda sem destino — lê mrRenda DIRETO (dado bruto já
   // marcado por linha durante a importação), nunca mrEngine()/mrCamposNaoClassificados() (Minha Renda).
@@ -9508,14 +9597,20 @@ buffer/index.js:
   }
   function caixaDreBlock(dre) {
     var line = function (label, v, opts) { opts = opts || {}; return '<div class="fin-line' + (opts.total ? ' total' : '') + '"><span>' + (opts.op ? '<b>' + opts.op + '</b> ' : '') + esc(label) + (opts.note ? ' <span class="footnote" style="margin:0">' + esc(opts.note) + '</span>' : '') + '</span><b class="' + (v == null ? '' : v < 0 ? 'neg' : v > 0 ? 'pos' : '') + '">' + (v == null ? 'não disponível' : brlC(v)) + '</b></div>'; };
+    var subLine = function (label, v) { return '<div class="fin-line" style="padding-left:14px;font-size:13px"><span>↳ ' + esc(label) + '</span><span class="' + (v < 0 ? 'neg' : 'pos') + '">' + brlC(v) + '</span></div>'; };
     if (!dre.n) return '<div class="panel"><div class="ph"><h3>DRE do dia</h3></div><div class="pb"><span class="tag neutral">Nenhum pedido pago neste dia.</span></div></div>';
-    var body = line('Receita Bruta', dre.receitaBruta, { note: nn(dre.n) + ' pedidos pagos' }) +
-      line('Descontos Bancados pela Líder', dre.descComerciais, { op: '−' }) +
-      line('Taxas Cobradas da Líder', dre.taxasCobradas, { op: '−' }) +
-      line('Créditos / Incentivos Shopee', dre.creditos, { op: '+' }) +
-      line('Reembolsos e Outros Ajustes', dre.outros, { op: '−' }) +
+    // §106-111 do prompt mestre: abre cada grupo pelo nome real das linhas que o compõem — nunca uma
+    // linha genérica "Taxas cobradas da Líder"/"Descontos Bancados pela Líder" escondendo a origem.
+    var body = line('Receita Bruta (Preço do Produto)', dre.receitaBruta, { note: nn(dre.n) + ' pedidos pagos' }) +
+      line('Reduções / Descontos do Pedido', dre.descComerciais, { op: '−' }) + dre.linhasReducoes.map(function (l) { return subLine(l.label, l.valor); }).join('') +
+      (dre.envioTotal ? line('Subtotal de Envio', dre.envioTotal, { op: dre.envioTotal < 0 ? '−' : '+' }) : '') +
+      line('Taxas Shopee', dre.taxasCobradas, { op: '−' }) + dre.linhasTaxas.map(function (l) { return subLine(l.label, l.valor); }).join('') +
+      (dre.creditos ? line('Créditos / Incentivos Shopee', dre.creditos, { op: '+' }) + dre.linhasCreditos.map(function (l) { return subLine(l.label, l.valor); }).join('') : '') +
+      (dre.outros ? line('Outros Ajustes', dre.outros, { op: '−' }) + dre.linhasOutros.map(function (l) { return subLine(l.label, l.valor); }).join('') : '') +
       line('Receita Líquida', dre.receitaLiquida, { total: true, op: '=' }) +
-      line('Custo dos Produtos', dre.custoTotal, { op: '−', note: nn(dre.custoConhecidoN) + ' de ' + nn(dre.n) + ' pedidos com custo cadastrado' }) +
+      line('Custo dos Produtos', dre.custoTotal, { op: '−', note: nn(dre.custoConhecidoN) + ' de ' + nn(dre.n) + ' pedidos com custo cadastrado (Produtos)' }) +
+      (dre.temAcelera ? line('Taxa do Acelera', dre.acTaxa, { op: '−' }) : '') +
+      (dre.eventosPosteriores.length ? '<div class="footnote" style="margin:4px 0">Eventos Posteriores: ' + nn(dre.eventosPosteriores.length) + ' registrado(s) neste dia (ver Fechamento).</div>' : '') +
       line('Lucro', dre.lucro, { total: true, op: '=' }) +
       '<div class="fin-line"><span>Margem sobre a Receita Bruta</span><b class="' + (dre.margem == null ? '' : dre.margem >= 0 ? 'pos' : 'neg') + '">' + (dre.margem == null ? '—' : pct(dre.margem)) + '</b></div>';
     return '<div class="panel"><div class="ph"><h3>DRE do dia</h3><span class="footnote" style="margin:0">motor nativo do Caixa — não depende de Minha Renda · ' + nn(dre.comIncomeN) + ' de ' + nn(dre.n) + ' pedidos com Income cruzado</span></div><div class="pb" style="padding-top:0">' + body + '</div></div>';
