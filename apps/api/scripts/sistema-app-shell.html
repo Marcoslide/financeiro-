@@ -164,6 +164,31 @@
   .kstrip .kc .ks{font-size:11.5px;color:var(--muted);margin-top:4px}
   .kstrip .kc.red .kv{color:var(--err)}.kstrip .kc.amber .kv{color:var(--warn)}.kstrip .kc.green .kv{color:var(--ok)}.kstrip .kc.blue .kv{color:var(--brand-2)}.kstrip .kc.orange .kv{color:#e0662a}
   @media(max-width:720px){.kstrip .kc{border-right:none;border-bottom:1px solid var(--line)}}
+  /* ---- Caixa: visual financeiro profissional (prompt "Refazer layout do Fechamento") ---- */
+  .cx-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  .cx-head b{font-size:17px}
+  .cx-sub{font-size:12.5px;color:var(--muted);margin-top:2px}
+  .cx-section{margin:18px 0 10px}
+  .cx-section h4{font-size:12px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+  .cx-flow{display:flex;align-items:stretch;gap:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--panel);box-shadow:var(--shadow)}
+  .cx-flow-step{flex:1;min-width:110px;padding:12px 14px;text-align:center;border-right:1px dashed var(--line);position:relative}
+  .cx-flow-step:last-child{border-right:none}
+  .cx-flow-step .cxl{font-size:10.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--muted)}
+  .cx-flow-step .cxv{font-size:17px;font-weight:800;margin-top:4px}
+  .cx-flow-step.neg .cxv{color:var(--err)}.cx-flow-step.pos .cxv{color:var(--ok)}.cx-flow-step.neu .cxv{color:var(--brand-2)}
+  .cx-flow-step:not(:last-child)::after{content:'→';position:absolute;right:-9px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:13px;z-index:1}
+  @media(max-width:640px){.cx-flow{flex-direction:column}.cx-flow-step{border-right:none;border-bottom:1px dashed var(--line);text-align:left}.cx-flow-step:last-child{border-bottom:none}.cx-flow-step:not(:last-child)::after{content:'↓';right:auto;left:14px;top:auto;bottom:-9px;transform:none}}
+  .cx-kv{display:flex;justify-content:space-between;gap:10px;padding:5px 0;font-size:13px}
+  .cx-kv .cxl{color:var(--muted)}
+  .cx-kv .cxv{font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
+  .cx-badge{display:inline-block;padding:1px 6px;border-radius:5px;font-size:10px;font-weight:700;background:var(--info-bg);color:var(--info)}
+  details.cx-collapse{border:1px solid var(--line);border-radius:10px;margin-top:8px;overflow:hidden}
+  details.cx-collapse>summary{cursor:pointer;padding:10px 14px;font-weight:700;font-size:13px;list-style:none;display:flex;justify-content:space-between;align-items:center;background:var(--bg2,#f7f8fa)}
+  details.cx-collapse>summary::-webkit-details-marker{display:none}
+  details.cx-collapse>summary::after{content:'▸';color:var(--muted);font-size:11px}
+  details.cx-collapse[open]>summary::after{content:'▾'}
+  details.cx-collapse>.pb{padding:10px 14px}
+  .cx-footer{position:sticky;bottom:0;background:var(--panel);border-top:1px solid var(--line);padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
   .callout{border-radius:12px;padding:14px 16px 15px;margin-bottom:16px;border-left:4px solid var(--info);background:var(--info-bg)}
   .callout .ct{font-weight:800;font-size:13.5px;margin-bottom:5px;color:#1b4c99}
   .callout .cbody{font-size:13px;line-height:1.5;color:var(--ink)}
