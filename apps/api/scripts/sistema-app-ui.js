@@ -5466,7 +5466,35 @@
         diag.campos.map(function (c) { return '<tr><td class="cell-text">' + esc(c.label) + '</td><td class="nowrap">' + brlC(c.raw) + '</td><td class="nowrap">' + brlC(c.motor) + '</td><td class="nowrap' + (c.ok ? '' : ' neg') + '">' + brlC(c.diff) + '</td><td>' + (c.ok ? '<span class="tag ok">bate</span>' : '<span class="tag warn">divergente</span>') + '</td></tr>'; }).join('') +
         '</tbody></table></div></div>';
     })() : '';
-    return head + counts + incomeAudit + diagBlock + fieldMap + naoClassBlock + '<div class="panel"><div class="ph"><h3>Importações</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Quando</th><th>Arquivo</th><th>Linhas</th><th>Novos</th></tr></thead><tbody>' + (impRows || '<tr><td colspan="4" class="empty">—</td></tr>') + '</tbody></table></div></div>';
+    return head + counts + incomeAudit + diagBlock + mrAuditoriaFreteBlock() + fieldMap + naoClassBlock + '<div class="panel"><div class="ph"><h3>Importações</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Quando</th><th>Arquivo</th><th>Linhas</th><th>Novos</th></tr></thead><tbody>' + (impRows || '<tr><td colspan="4" class="empty">—</td></tr>') + '</tbody></table></div></div>';
+  }
+  // §40-44 do prompt mestre: a aba Shipping Fee Discrepancy só mostra fretes cobrados ACIMA do
+  // esperado — serve para AUDITORIA, nunca para concluir prejuízo automaticamente (§42). Cruza cada
+  // linha com o Subtotal de Envio canônico do próprio pedido: a discrepância pode ter sido
+  // integralmente compensada pelo comprador/Shopee, e nesse caso o impacto líquido é zero.
+  function mrAuditoriaFreteBlock() {
+    if (!mrShip.length) return '';
+    var totalEsperado = mrShip.reduce(function (s, x) { return s + x.esperado; }, 0);
+    var totalReal = mrShip.reduce(function (s, x) { return s + x.real; }, 0);
+    var totalDiff = totalReal - totalEsperado;
+    var comImpacto = 0, semImpacto = 0;
+    var rows = mrShip.slice().sort(function (a, b) { return (b.real - b.esperado) - (a.real - a.esperado); }).slice(0, 200).map(function (s) {
+      var env = subtotalEnvioPedido(s.orderId);
+      var compComprador = env ? env.comps[0].valor : null; // Taxa de frete paga pelo comprador
+      var compShopee = env ? env.comps[2].valor : null; // Desconto de frete pela Shopee
+      var subtotal = env ? env.subtotalC : null;
+      if (subtotal) comImpacto++; else if (env) semImpacto++;
+      return '<tr class="rowlink" data-goped360="' + esc(s.orderId) + '"><td class="mono">' + esc(s.orderId) + '</td><td class="nowrap">' + brl(s.esperado) + '</td><td class="nowrap">' + brl(s.real) + '</td><td class="nowrap' + (s.real - s.esperado > 0 ? ' neg' : '') + '">' + brl(s.real - s.esperado) + '</td><td class="nowrap">' + (compComprador != null ? brl(compComprador) : '—') + '</td><td class="nowrap">' + (compShopee != null ? brl(compShopee) : '—') + '</td><td class="nowrap">' + (subtotal != null ? brl(subtotal) : '— sem Income') + '</td><td class="nowrap' + (subtotal ? (subtotal < 0 ? ' neg' : ' pos') : '') + '"><b>' + (subtotal != null ? brl(subtotal) : '—') + '</b></td></tr>';
+    }).join('');
+    var strip = kstrip([
+      { l: 'Pedidos com discrepância', v: nn(mrShip.length), cls: 'blue' },
+      { l: 'Frete esperado (total)', v: brl(totalEsperado), cls: 'blue' },
+      { l: 'Frete real cobrado (total)', v: brl(totalReal), cls: 'blue' },
+      { l: 'Diferença bruta (total)', v: brl(totalDiff), cls: totalDiff > 0 ? 'amber' : 'green', s: 'nunca é prejuízo automático — ver Impacto Líquido' },
+      { l: 'Com impacto líquido real na Líder', v: nn(comImpacto), cls: comImpacto ? 'amber' : 'green' },
+      { l: 'Compensado (impacto líquido zero)', v: nn(semImpacto), cls: 'green' },
+    ]);
+    return '<div class="panel"><div class="ph"><h3>Auditoria de Frete (Shipping Fee Discrepancy)</h3><span class="footnote" style="margin:0">só mostra frete cobrado acima do esperado — discrepância ≠ perda financeira automática (§42)</span></div><div class="pb">' + strip + '</div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Frete esperado</th><th>Frete real (parceiro)</th><th>Diferença</th><th>Compensação comprador</th><th>Compensação Shopee</th><th>Subtotal de Envio</th><th>Impacto Líquido</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
   }
 
   // ---------- INTELIGÊNCIA ----------
