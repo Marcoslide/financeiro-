@@ -462,6 +462,7 @@
     if (p === '30d') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29) };
     if (p === 'month') return { from: new Date(now.getFullYear(), now.getMonth(), 1) };
     if (p === 'prevmonth') return { from: new Date(now.getFullYear(), now.getMonth() - 1, 1), to: new Date(now.getFullYear(), now.getMonth(), 1) };
+    if (p === 'year') return { from: new Date(now.getFullYear(), 0, 1) };
     if (p === 'custom') { var r = {}; if (customRange.from) r.from = new Date(customRange.from + 'T00:00:00'); if (customRange.to) r.to = new Date(customRange.to + 'T23:59:59'); return r; }
     return {};
   }
@@ -1913,7 +1914,7 @@
   }
   // Barra de período compartilhada por todo o módulo Devolução (§18-19) + selo "atualizado até".
   function devPeriodBar() {
-    var opts = [['all', 'Todo o período'], ['today', 'Hoje'], ['yesterday', 'Ontem'], ['7d', 'Últimos 7 dias'], ['15d', 'Últimos 15 dias'], ['30d', 'Últimos 30 dias'], ['month', 'Este mês'], ['prevmonth', 'Mês anterior'], ['custom', 'Personalizado']];
+    var opts = [['all', 'Todo o período'], ['today', 'Hoje'], ['yesterday', 'Ontem'], ['7d', 'Últimos 7 dias'], ['15d', 'Últimos 15 dias'], ['30d', 'Últimos 30 dias'], ['month', 'Este mês'], ['prevmonth', 'Mês anterior'], ['year', 'Ano atual'], ['custom', 'Personalizado']];
     var sel = '<select class="select sm" id="devperiod">' + opts.map(function (o) { return '<option value="' + o[0] + '"' + (periodSel.value === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>';
     var dates = '<span class="datein' + (periodSel.value === 'custom' ? ' on' : '') + '" id="devdates"><input class="input sm" type="date" id="devfrom" value="' + esc(customRange.from || '') + '"><span style="color:var(--muted);font-size:12px">até</span><input class="input sm" type="date" id="devto" value="' + esc(customRange.to || '') + '"><button class="btn-sm primary" id="devapply">Aplicar</button></span>';
     var stamp = lastImportStamp ? '<span class="footnote" style="margin:0">Atualizado com dados até ' + new Date(lastImportStamp).toLocaleString('pt-BR') + '</span>' : '<span class="footnote" style="margin:0">Sem importações ainda</span>';
@@ -6738,6 +6739,109 @@
     rec.eventosPosteriores = (rec.eventosPosteriores || []).concat([{ at: new Date().toISOString(), orderId: orderId, descricao: descricao }]);
     return putMany('caixafechamentos', [rec]);
   }
+  // ==================== DASHBOARD GERENCIAL DO CAIXA (por período) ====================
+  // Parte 7/8 do prompt "Correção do custo + taxas...": o Dashboard deixa de responder só por
+  // "hoje" e passa a agregar QUALQUER período — reaproveitando o MESMO seletor global de período
+  // (periodSel/periodRange/customRange) já usado em Pedidos/Devolução/Minha Renda (§48 — nunca duas
+  // definições de período), e SEMPRE somando o que caixaDreDia()/aceleraResultadoFechamento()/
+  // caixaFluxoDia() já apuram por dia — nunca um cálculo agregado paralelo.
+  function ymdKey(y, m, d) { return y + '-' + (m < 10 ? '0' : '') + m + '-' + (d < 10 ? '0' : '') + d; }
+  function caixaPeriodDays(range) {
+    var today = new Date();
+    var from = range.from ? new Date(range.from) : null;
+    var to = range.to ? new Date(range.to) : today;
+    if (range.to && range.to.getHours() === 0 && range.to.getMinutes() === 0) { to = new Date(range.to); to.setDate(to.getDate() - 1); } // limite superior EXCLUSIVO (ex.: "mês anterior")
+    if (to > today) to = today;
+    if (!from) {
+      var mv = caixaDiasComMovimento(); // "Todo o período": usa o dia mais antigo com movimento real
+      if (!mv.length) return [];
+      from = new Date(mv[mv.length - 1] + 'T00:00:00');
+    }
+    var days = [], cur = new Date(from.getFullYear(), from.getMonth(), from.getDate()), end = new Date(to.getFullYear(), to.getMonth(), to.getDate()), guard = 0;
+    while (cur <= end && guard < 760) { days.push(ymdKey(cur.getFullYear(), cur.getMonth() + 1, cur.getDate())); cur.setDate(cur.getDate() + 1); guard++; }
+    return days;
+  }
+  // Agrega dia a dia — nunca recalcula: soma exatamente o que cada motor canônico já apurou por
+  // dia. dre.lucro só entra na soma quando TODOS os pedidos daquele dia têm custo conhecido (mesma
+  // regra de "não inventar lucro" que já vale para um único dia); dias parciais ficam contados à
+  // parte, nunca silenciosamente tratados como lucro zero.
+  function caixaPeriodEngine(days) {
+    var e = { totFat: 0, totTaxas: 0, totCusto: 0, custoConhecidoN: 0, totPedidosPagos: 0, totAcTaxa: 0, totAcLiquido: 0, totAcBruto: 0, totLucro: 0, diasComLucro: 0, diasComMovimento: 0, diasSemCustoCompleto: 0, totPedidosExpedidos: 0, totTransferido: 0, totPend: 0, saidasMap: {}, porDia: [] };
+    days.forEach(function (dk) {
+      var dre = caixaDreDia(dk), ac = aceleraResultadoFechamento(dk), fluxo = caixaFluxoDia(dk), exp = caixaDayExpedicao(dk), st = caixaDayStatus(dk);
+      if (dre.n) e.diasComMovimento++;
+      e.totFat += dre.receitaBruta; e.totTaxas += dre.taxasCobradas; e.totPedidosPagos += dre.n;
+      if (dre.custoConhecidoN) { e.totCusto += dre.custoTotal; e.custoConhecidoN += dre.custoConhecidoN; }
+      if (dre.n && !dre.custoCompleto) e.diasSemCustoCompleto++;
+      if (ac.resgatesN) { e.totAcTaxa += ac.taxaAcelera; e.totAcLiquido += ac.valorLiquido; e.totAcBruto += ac.valorBruto; }
+      if (dre.lucro != null) { e.totLucro += dre.lucro; e.diasComLucro++; }
+      e.totPedidosExpedidos += exp.expedidos; e.totTransferido += fluxo.transferido; e.totPend += (st.pend.total + st.pendCart.total);
+      dre.linhasTaxas.forEach(function (l) { e.saidasMap[l.label] = (e.saidasMap[l.label] || 0) + l.valor; });
+      e.porDia.push({ dateKey: dk, n: dre.n, faturamento: dre.receitaBruta, taxas: dre.taxasCobradas, custo: dre.custoConhecidoN ? dre.custoTotal : null, custoCompleto: dre.custoCompleto, lucro: dre.lucro, margem: dre.margem, acRecebido: ac.resgatesN ? ac.valorLiquido : 0, transferido: fluxo.transferido, pend: st.pend.total + st.pendCart.total, status: st.status });
+    });
+    e.totFat = r2(e.totFat); e.totTransferido = r2(e.totTransferido);
+    e.margem = (e.totFat && e.diasSemCustoCompleto === 0 && e.diasComMovimento) ? r2(e.totLucro / e.totFat * 100) : null;
+    return e;
+  }
+  // Comparação determinística com o período ANTERIOR de mesmo tamanho (§62) — nunca IA, só matemática.
+  function caixaPeriodComparacao(days, eng) {
+    if (!days.length) return null;
+    var n = days.length, first = new Date(days[0] + 'T00:00:00'), cur = new Date(first);
+    cur.setDate(cur.getDate() - n);
+    var prevDays = []; for (var i = 0; i < n; i++) { prevDays.push(ymdKey(cur.getFullYear(), cur.getMonth() + 1, cur.getDate())); cur.setDate(cur.getDate() + 1); }
+    var prev = caixaPeriodEngine(prevDays);
+    function delta(a, b) { if (!b) return null; return r2((a - b) / Math.abs(b) * 100); }
+    return {
+      prevDays: prevDays, prev: prev,
+      deltaFat: delta(eng.totFat, prev.totFat),
+      deltaLucro: (eng.margem != null && prev.margem != null) ? delta(eng.totLucro, prev.totLucro) : null,
+      deltaMargemPP: (eng.margem != null && prev.margem != null) ? r2(eng.margem - prev.margem) : null,
+      deltaTaxas: delta(Math.abs(eng.totTaxas), Math.abs(prev.totTaxas)),
+    };
+  }
+  function fmtDelta(v, invert) { if (v == null) return '<span class="footnote" style="margin:0">sem período anterior comparável</span>'; var good = invert ? v <= 0 : v >= 0; return '<span class="' + (good ? 'pos' : 'neg') + '" style="font-weight:700">' + (v > 0 ? '+' : '') + pct(v) + '</span>'; }
+  // Gráfico 1 — Faturamento × Lucro por dia (§52): barra = faturamento, linha = lucro (só nos dias
+  // com custo completo; dias parciais ficam com um marcador vazio, nunca uma reta inventada).
+  function svgCaixaFatLucro(porDia) {
+    if (!porDia.length) return '<div class="footnote">Sem dias no período.</div>';
+    var W = Math.max(560, porDia.length * 34), H = 240, padL = 60, padR = 16, padB = 30, padT = 14;
+    var maxFat = Math.max.apply(null, porDia.map(function (d) { return d.faturamento / 100; }).concat([1]));
+    var minLucro = Math.min.apply(null, porDia.filter(function (d) { return d.lucro != null; }).map(function (d) { return d.lucro / 100; }).concat([0]));
+    var maxScale = Math.max(maxFat, 1); var y0 = H - padB, ih = H - padB - padT;
+    var step = (W - padL - padR) / porDia.length, bw = Math.min(20, step * 0.55);
+    function yFor(v) { var span = maxScale - Math.min(0, minLucro); return y0 - ((v - Math.min(0, minLucro)) / span) * ih; }
+    var bars = porDia.map(function (d, i) {
+      var x = padL + i * step + (step - bw) / 2, h = (d.faturamento / 100 / maxScale) * ih;
+      var tip = dbr(d.dateKey) + '\nFaturamento: ' + brl(d.faturamento / 100) + '\nLucro: ' + (d.lucro != null ? brl(d.lucro / 100) : (d.n ? 'custo incompleto' : 'sem vendas'));
+      return '<rect x="' + x.toFixed(1) + '" y="' + (y0 - h).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + Math.max(0, h).toFixed(1) + '" fill="#3b7ddd" opacity="0.85" style="cursor:pointer" data-caixadia="' + esc(d.dateKey) + '"><title>' + esc(tip) + '</title></rect>';
+    }).join('');
+    var pts = porDia.map(function (d, i) { var x = padL + i * step + step / 2; return d.lucro != null ? { x: x, y: yFor(d.lucro / 100), v: d.lucro } : null; });
+    var pathPts = pts.filter(Boolean);
+    var path = pathPts.length > 1 ? '<polyline points="' + pathPts.map(function (p) { return p.x.toFixed(1) + ',' + p.y.toFixed(1); }).join(' ') + '" fill="none" stroke="#1fa971" stroke-width="2.2"/>' : '';
+    var dots = pts.map(function (p, i) { if (!p) return ''; return '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="3" fill="' + (p.v < 0 ? '#d13b3b' : '#1fa971') + '"><title>' + esc(dbr(porDia[i].dateKey) + ' — Lucro: ' + brl(p.v / 100)) + '</title></circle>'; }).join('');
+    var zeroY = minLucro < 0 ? '<line x1="' + padL + '" x2="' + (W - padR) + '" y1="' + yFor(0).toFixed(1) + '" y2="' + yFor(0).toFixed(1) + '" stroke="#c8cede" stroke-dasharray="3,3"/>' : '';
+    var step2 = Math.max(1, Math.ceil(porDia.length / 10));
+    var labels = porDia.map(function (d, i) { if (i % step2 !== 0 && i !== porDia.length - 1) return ''; var x = padL + i * step + step / 2; return '<text x="' + x.toFixed(1) + '" y="' + (H - 8) + '" font-size="10" fill="#64708a" text-anchor="middle">' + esc(monthDayLabel(d.dateKey)) + '</text>'; }).join('');
+    var yl = '<text x="4" y="' + (padT + 4) + '" font-size="10" fill="#64708a">' + brl(maxScale) + '</text><text x="4" y="' + (y0 + 4) + '" font-size="10" fill="#64708a">R$ 0</text>';
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="max-width:' + W + 'px">' + zeroY + bars + path + dots + labels + yl + '</svg>';
+  }
+  // Gráfico 2 — Onde o dinheiro saiu (§53): barras horizontais por categoria de taxa real do período.
+  function svgCaixaSaidas(saidasMap, custoC, acTaxaC) {
+    var rows = Object.keys(saidasMap).map(function (k) { return { label: k, v: Math.abs(saidasMap[k]) }; });
+    if (custoC) rows.push({ label: 'Custo do produto', v: Math.abs(custoC) });
+    if (acTaxaC) rows.push({ label: 'Taxa Acelera', v: Math.abs(acTaxaC) });
+    rows = rows.filter(function (r) { return r.v > 0; }).sort(function (a, b) { return b.v - a.v; }).slice(0, 10);
+    if (!rows.length) return '<div class="footnote">Nenhuma saída registrada no período.</div>';
+    var W = 560, rh = 26, H = rows.length * rh + 20, padL = 190, padR = 70;
+    var max = Math.max.apply(null, rows.map(function (r) { return r.v; }));
+    var body = rows.map(function (r, i) {
+      var y = 10 + i * rh, w = (r.v / max) * (W - padL - padR);
+      return '<text x="' + (padL - 8) + '" y="' + (y + rh * 0.62) + '" font-size="11.5" fill="#2a3142" text-anchor="end">' + esc(r.label.length > 26 ? r.label.slice(0, 25) + '…' : r.label) + '</text>' +
+        '<rect x="' + padL + '" y="' + (y + 3) + '" width="' + Math.max(2, w).toFixed(1) + '" height="' + (rh - 9) + '" rx="3" fill="#d13b3b" opacity="0.82"/>' +
+        '<text x="' + (padL + w + 6) + '" y="' + (y + rh * 0.62) + '" font-size="11" fill="#64708a">' + esc(brlC(-r.v)) + '</text>';
+    }).join('');
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="max-width:' + W + 'px">' + body + '</svg>';
+  }
   // ---- Inteligência do dia (§13): tudo linkável ao pedido correspondente ----
   function caixaInteligenciaDia(dateKey) {
     var vendas = caixaDayVendas(dateKey);
@@ -6765,39 +6869,133 @@
     if (!x) return '<div class="kc"><div class="kl">' + esc(titulo) + '</div><div class="footnote" style="margin-top:4px">sem dados suficientes</div></div>';
     return '<div class="kc' + (comLink ? ' rowlink" data-goped360="' + esc(x.orderId) : '') + '"><div class="kl">' + esc(titulo) + '</div>' + renderFn(x) + '</div>';
   }
-  function caixaDashboardView() {
-    var dateKey = caixaDashDate || new Date().toISOString().slice(0, 10);
-    var head = secHead('CAIXA · DASHBOARD', 'Como foi o negócio neste dia?', 'Consolida Pedidos, Expedição, Acelera e Pendências para o dia selecionado — só leitura dos motores já aprovados, nunca recalcula nada.');
-    if (!orders.length) return head + emptyBox('Importe os Pedidos para começar.');
-    var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = aceleraResultadoFechamento(dateKey), pend = caixaDayPendencias(dateKey);
-    var margem = vendas.valor ? r2(vendas.lucroC / 100 / vendas.valor * 100) : null;
-    var datePicker = '<div class="panel"><div class="pb" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><label class="fld" style="margin:0">Dia</label><input type="date" class="input sm" id="caixadate" value="' + esc(dateKey) + '" style="width:170px"><span class="footnote" style="margin:0">' + esc(dbr(dateKey)) + '</span><button class="btn-sm" data-caixagofech="' + esc(dateKey) + '" style="margin-left:auto">Abrir Fechamento deste dia</button></div></div>';
-    var stripVendas = kstrip([{ l: 'Pedidos pagos', v: nn(vendas.n), cls: 'blue' }, { l: 'Faturamento', v: brl(vendas.valor), cls: 'blue' }, { l: 'Lucro atual', v: vendas.nLucroConhecido ? brlC(vendas.lucroC) : '—', cls: vendas.lucroC >= 0 ? 'green' : 'red', s: nn(vendas.nLucroConhecido) + ' de ' + nn(vendas.n) + ' com custo conhecido' }, { l: 'Margem', v: margem != null ? pct(margem) : '—', cls: 'blue' }]);
-    var stripExp = kstrip([{ l: 'Esperados', v: exp.esperados != null ? nn(exp.esperados) : '—', cls: 'blue' }, { l: 'Expedidos', v: nn(exp.expedidos), cls: 'green' }, { l: 'Faltaram', v: exp.faltaram != null ? nn(exp.faltaram) : '—', cls: exp.faltaram ? 'amber' : 'green' }]);
-    var stripAc = kstrip([{ l: 'Resgates', v: nn(ac.resgatesN || 0), cls: 'blue' }, { l: 'Antecipado', v: ac.resgatesN ? brlC(ac.valorBruto) : '—', cls: 'blue' }, { l: 'Taxa Acelera', v: ac.resgatesN ? brlC(ac.taxaAcelera) : '—', cls: 'blue' }, { l: 'Recebido (líquido)', v: ac.resgatesN ? brlC(ac.valorLiquido) : '—', cls: 'green' }]);
-    var valorPend = pend.financeiras.reduce(function (s, f) { return s + Math.abs(f.diff); }, 0);
-    var stripPend = kstrip([{ l: 'Pendências', v: nn(pend.total), cls: pend.total ? 'red' : 'green' }, { l: 'Valor financeiro envolvido', v: brlC(valorPend), cls: valorPend ? 'amber' : 'green' }]);
-    var inte = caixaInteligenciaDia(dateKey);
-    var inteligencia = '<div class="panel"><div class="ph"><h3>Inteligência do dia</h3></div><div class="pb"><div class="kstrip" style="flex-wrap:wrap">' +
-      caixaCard('Maior lucro', inte.maiorLucro, function (x) { return '<div class="kv pos" style="font-size:15px">' + brlC(x.c.resultadoC) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + ' · ' + esc((x.it.productName || '—').slice(0, 24)) + '</div>'; }, true) +
-      caixaCard('Maior prejuízo', inte.maiorPrejuizo, function (x) { return '<div class="kv neg" style="font-size:15px">' + brlC(x.c.resultadoC) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + ' · ' + esc((x.it.productName || '—').slice(0, 24)) + '</div>'; }, true) +
-      caixaCard('Produto/SKU mais lucrativo', inte.melhorSku, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.lucro) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.sku) + ' · ' + esc((x.produto || '—').slice(0, 24)) + '</div>'; }, false) +
-      caixaCard('Produto/SKU com pior resultado', inte.piorSku, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.lucro) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.sku) + ' · ' + esc((x.produto || '—').slice(0, 24)) + '</div>'; }, false) +
-      caixaCard('Maior taxa do dia', inte.maiorTaxa, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.taxa) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + '</div>'; }, true) +
-      caixaCard('Maior desconto do dia', inte.maiorDesconto, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.desconto) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + '</div>'; }, true) +
-      caixaCard('Maior pendência do dia', inte.maiorPend, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.valor) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + '</div>'; }, true) +
-      '</div></div></div>';
-    return head + datePicker + '<div class="panel"><div class="ph"><h3>Vendas</h3></div><div class="pb">' + stripVendas + '</div></div>' +
-      '<div class="panel"><div class="ph"><h3>Expedição</h3></div><div class="pb">' + stripExp + '</div></div>' +
-      '<div class="panel"><div class="ph"><h3>Acelera</h3></div><div class="pb">' + stripAc + '</div></div>' +
-      '<div class="panel"><div class="ph"><h3>Pendências</h3></div><div class="pb">' + stripPend + '</div></div>' +
-      inteligencia +
-      '<div class="footnote" style="padding:8px 0">Para conferir, resolver pendências e fechar o dia, use Caixa → Fechamento Diário.</div>';
+  // §59 do prompt: melhores/piores do PERÍODO INTEIRO — não só do último dia. maiorLucro/Prejuízo/
+  // Taxa/Desconto/Pendência são max/min associativos (reaproveita caixaInteligenciaDia por dia, sem
+  // duplicar a lógica de comparação); melhorSku/piorSku exigem somar por SKU atravessando os dias.
+  function caixaPeriodMelhoresPiores(days) {
+    var maiorLucro = null, maiorPrejuizo = null, maiorTaxa = null, maiorDesconto = null, maiorPend = null;
+    var bySku = {};
+    days.forEach(function (dk) {
+      var inte = caixaInteligenciaDia(dk);
+      if (inte.maiorLucro && (!maiorLucro || inte.maiorLucro.c.resultadoC > maiorLucro.c.resultadoC)) maiorLucro = inte.maiorLucro;
+      if (inte.maiorPrejuizo && (!maiorPrejuizo || inte.maiorPrejuizo.c.resultadoC < maiorPrejuizo.c.resultadoC)) maiorPrejuizo = inte.maiorPrejuizo;
+      if (inte.maiorTaxa && (!maiorTaxa || inte.maiorTaxa.taxa > maiorTaxa.taxa)) maiorTaxa = inte.maiorTaxa;
+      if (inte.maiorDesconto && (!maiorDesconto || inte.maiorDesconto.desconto > maiorDesconto.desconto)) maiorDesconto = inte.maiorDesconto;
+      if (inte.maiorPend && (!maiorPend || inte.maiorPend.valor > maiorPend.valor)) maiorPend = inte.maiorPend;
+      caixaDayVendas(dk).pedidos.forEach(function (o) {
+        var c = pedidoComposicaoFinanceira(o.id); if (c.resultadoC == null) return;
+        var it = (o.items || [])[0] || {}; var k = it.sku || o.id;
+        var g = bySku[k] = bySku[k] || { sku: k, produto: it.productName, lucro: 0, n: 0 }; g.lucro += c.resultadoC; g.n++;
+      });
+    });
+    var skuArr = Object.values(bySku);
+    var melhorSku = skuArr.length ? skuArr.reduce(function (a, b) { return b.lucro > a.lucro ? b : a; }) : null;
+    var piorSku = skuArr.length ? skuArr.reduce(function (a, b) { return b.lucro < a.lucro ? b : a; }) : null;
+    return { maiorLucro: maiorLucro, maiorPrejuizo: maiorPrejuizo, melhorSku: melhorSku, piorSku: piorSku, maiorTaxa: maiorTaxa, maiorDesconto: maiorDesconto, maiorPend: maiorPend };
   }
+  // Dashboard gerencial do Caixa — Parte 7/8 do prompt "Correção do custo + taxas...": deixou de
+  // responder só por "hoje" e passa a responder por QUALQUER período, reaproveitando o seletor
+  // global (devPeriodBar/periodRange — nunca uma segunda definição de período) e somando, dia a dia,
+  // exatamente o que os motores canônicos já aprovados apuram.
+  function caixaDashboardView() {
+    var head = secHead('CAIXA · DASHBOARD', 'Visão gerencial do negócio', 'Faturamento, lucro, taxas, custo, Acelera e pendências agregados no período selecionado — sempre somando o que os motores já aprovados (caixaDreDia/aceleraResultadoFechamento/caixaFluxoDia) apuram por dia, nunca um cálculo paralelo.');
+    if (!orders.length) return head + emptyBox('Importe os Pedidos para começar.');
+    var range = periodRange();
+    var days = caixaPeriodDays(range);
+    var periodBar = devPeriodBar();
+    if (!days.length) return head + periodBar + emptyBox('Nenhum movimento (pedido pago, Acelera ou expedição) no período selecionado.');
+    var eng = caixaPeriodEngine(days);
+    var cmp = caixaPeriodComparacao(days, eng);
+
+    // ---- KPIs (§49-51): 3 linhas, no máximo 12 KPIs úteis — nunca empilhar cards demais.
+    var margemTxt = eng.margem != null ? pct(eng.margem) : (eng.diasSemCustoCompleto ? '—' : '—');
+    var row1 = kstrip([
+      { l: 'Faturamento', v: brl(eng.totFat), cls: 'blue', s: cmp ? fmtDelta(cmp.deltaFat) + ' vs período anterior' : undefined },
+      { l: 'Receita Líquida', v: brlC(eng.totFat * 100 + eng.totTaxas), cls: 'blue' },
+      { l: 'Lucro', v: eng.diasSemCustoCompleto === 0 ? brlC(eng.totLucro) : brlC(eng.totLucro) + ' (parcial)', cls: eng.totLucro >= 0 ? 'green' : 'red', s: eng.diasSemCustoCompleto ? nn(eng.diasSemCustoCompleto) + ' dia(s) com custo pendente, não somados' : (cmp ? fmtDelta(cmp.deltaLucro) + ' vs período anterior' : undefined) },
+      { l: 'Margem', v: margemTxt, cls: 'blue', s: cmp && cmp.deltaMargemPP != null ? (cmp.deltaMargemPP >= 0 ? '+' : '') + r2(cmp.deltaMargemPP) + ' p.p. vs período anterior' : (eng.diasSemCustoCompleto ? 'custo incompleto em ' + nn(eng.diasSemCustoCompleto) + ' dia(s)' : undefined) },
+    ]);
+    var row2 = kstrip([
+      { l: 'Pedidos pagos', v: nn(eng.totPedidosPagos), cls: 'blue' },
+      { l: 'Pedidos expedidos', v: nn(eng.totPedidosExpedidos), cls: 'blue' },
+      { l: 'Recebido via Acelera', v: eng.totAcLiquido ? brlC(eng.totAcLiquido) : '—', cls: 'green' },
+      { l: 'Transferido para banco', v: brl(eng.totTransferido), cls: 'blue' },
+    ]);
+    var occPeriodo = occInPeriod(); var expo = sumExposure(occPeriodo);
+    var row3 = kstrip([
+      { l: 'Taxas Shopee', v: brlC(eng.totTaxas), cls: 'red' },
+      { l: 'Custo dos produtos', v: eng.custoConhecidoN ? brlC(-eng.totCusto) : '—', cls: 'amber', s: eng.custoConhecidoN + ' de ' + eng.totPedidosPagos + ' pedidos com custo conhecido' },
+      { l: 'Devoluções / perdas', v: brl(-expo.confirmedLoss), cls: expo.confirmedLoss ? 'red' : 'green', s: nn(occPeriodo.length) + ' ocorrência(s) no período' },
+      { l: 'Pendências financeiras', v: nn(eng.totPend), cls: eng.totPend ? 'amber' : 'green' },
+    ]);
+
+    // ---- Gráficos (§52-53): grid 2 colunas no desktop, empilhado no mobile.
+    var chart1 = chartCard('Faturamento × Lucro por dia', legendSwatch([['Faturamento', '#3b7ddd'], ['Lucro', '#1fa971']]), svgCaixaFatLucro(eng.porDia));
+    var chart2 = chartCard('Onde o dinheiro saiu', '', svgCaixaSaidas(eng.saidasMap, eng.custoConhecidoN ? eng.totCusto : 0, eng.totAcTaxa));
+    var chartsGrid = '<div class="grid2">' + chart1 + chart2 + '</div>';
+
+    // ---- Conciliação do período (§61)
+    var fechados = eng.porDia.filter(function (d) { return d.status === 'FECHADO'; }).length;
+    var ressalva = eng.porDia.filter(function (d) { return d.status === 'FECHADO_COM_RESSALVA'; }).length;
+    var abertos = eng.porDia.filter(function (d) { return d.status === 'ABERTO'; }).length;
+    var revisao = eng.porDia.filter(function (d) { return d.status === 'REVISAO_NECESSARIA'; }).length;
+    var conciliacao = '<div class="cx-section"><h4>Conciliação do período</h4>' + kstrip([
+      { l: 'Dias fechados', v: nn(fechados), cls: 'green' }, { l: 'Fechados com ressalva', v: nn(ressalva), cls: ressalva ? 'amber' : 'green' },
+      { l: 'Dias abertos', v: nn(abertos), cls: abertos ? 'blue' : 'green' }, { l: 'Precisam revisão', v: nn(revisao), cls: revisao ? 'red' : 'green' },
+    ]) + '</div>';
+
+    // ---- Taxas do período (tabela — §60)
+    var totTaxasAbs = Object.values(eng.saidasMap).reduce(function (s, v) { return s + Math.abs(v); }, 0);
+    var taxaPedRows = {}; eng.porDia.forEach(function (d) { }); // pedidos afetados por taxa: aproximado pelo nº de pedidos pagos com Income no período (mesma granularidade do dre)
+    var taxasRows = Object.keys(eng.saidasMap).sort(function (a, b) { return Math.abs(eng.saidasMap[b]) - Math.abs(eng.saidasMap[a]); }).map(function (k) {
+      var v = eng.saidasMap[k];
+      return '<tr><td class="cell-text">' + esc(k) + '</td><td class="nowrap neg">' + brlC(v) + '</td><td>' + (totTaxasAbs ? pct(r2(Math.abs(v) / totTaxasAbs * 100)) : '—') + '</td></tr>';
+    }).join('');
+    var taxasTable = '<div class="cx-section"><h4>Taxas do período</h4>' + (taxasRows ? '<div class="table-wrap"><table class="report"><thead><tr><th>Taxa</th><th>Valor</th><th>% do total de taxas</th></tr></thead><tbody>' + taxasRows + '</tbody></table></div>' : '<div class="footnote">Nenhuma taxa registrada no período.</div>') + '</div>';
+
+    // ---- Melhores e piores do período (§59)
+    var mp = caixaPeriodMelhoresPiores(days);
+    var melhoresPiores = '<div class="cx-section"><h4>Melhores e piores do período</h4><div class="kstrip" style="flex-wrap:wrap">' +
+      caixaCard('Pedido mais lucrativo', mp.maiorLucro, function (x) { return '<div class="kv pos" style="font-size:15px">' + brlC(x.c.resultadoC) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + ' · ' + esc((x.it.productName || '—').slice(0, 24)) + '</div>'; }, true) +
+      caixaCard('Pedido com maior prejuízo', mp.maiorPrejuizo, function (x) { return '<div class="kv neg" style="font-size:15px">' + brlC(x.c.resultadoC) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + ' · ' + esc((x.it.productName || '—').slice(0, 24)) + '</div>'; }, true) +
+      caixaCard('Produto/SKU mais lucrativo', mp.melhorSku, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.lucro) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.sku) + ' · ' + nn(x.n) + ' pedido(s)</div>'; }, false) +
+      caixaCard('Produto/SKU com maior prejuízo', mp.piorSku, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.lucro) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.sku) + ' · ' + nn(x.n) + ' pedido(s)</div>'; }, false) +
+      caixaCard('Maior taxa (pedido)', mp.maiorTaxa, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.taxa) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + '</div>'; }, true) +
+      caixaCard('Maior desconto (pedido)', mp.maiorDesconto, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.desconto) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + '</div>'; }, true) +
+      caixaCard('Maior pendência', mp.maiorPend, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.valor) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + '</div>'; }, true) +
+      '</div></div>';
+
+    // ---- Filtro por operação — só relevante em modo consolidado (§63-64): nunca mistura dado
+    // gravado, só soma por cima o que cada operação já apurou isoladamente.
+    var opBreakdown = '';
+    if (activeOperationId === OP_ALL && operations.length > 1) {
+      var opRows = operations.map(function (op) {
+        var opOrders = orders.filter(function (o) { return o.operationId === op.id; });
+        if (!opOrders.length) return null;
+        var fat = 0, luc = 0, lucOk = true, taxas = 0;
+        days.forEach(function (dk) {
+          var pagas = opOrders.filter(function (o) { return o.paidAt && o.paidAt.slice(0, 10) === dk; });
+          pagas.forEach(function (o) { var c = pedidoComposicaoFinanceira(o.id); fat += (c.receitaC || 0) / 100; taxas += c.taxasSomaC || 0; if (c.resultadoC != null) luc += c.resultadoC; else lucOk = false; });
+        });
+        return '<tr><td>' + esc(opLabel(op)) + '</td><td class="nowrap">' + brl(fat) + '</td><td class="nowrap">' + (lucOk ? brlC(luc) : brlC(luc) + ' (parcial)') + '</td><td>' + (fat && lucOk ? pct(r2(luc / 100 / fat * 100)) : '—') + '</td><td class="nowrap neg">' + brlC(taxas) + '</td></tr>';
+      }).filter(Boolean).join('');
+      if (opRows) opBreakdown = '<div class="cx-section"><h4>Por operação</h4><div class="table-wrap"><table class="report"><thead><tr><th>Operação</th><th>Faturamento</th><th>Lucro</th><th>Margem</th><th>Taxas</th></tr></thead><tbody>' + opRows + '</tbody></table></div></div>';
+    }
+
+    // ---- Resumo por dia (§57-58): tabela ordenável, clique abre o Fechamento daquele dia.
+    var diaRows = eng.porDia.slice().sort(function (a, b) { return b.dateKey.localeCompare(a.dateKey); }).map(function (d) {
+      var lbl = CAIXA_LABEL[d.status];
+      return '<tr class="rowlink" data-caixadia="' + esc(d.dateKey) + '"><td class="nowrap">' + dbr(d.dateKey) + '</td><td class="nowrap">' + brlC(d.faturamento) + '</td><td class="nowrap neg">' + brlC(d.taxas) + '</td><td class="nowrap">' + (d.custo != null ? brlC(-d.custo) : '—') + '</td><td class="nowrap">' + (d.lucro != null ? brlC(d.lucro) : (d.n ? 'parcial' : '—')) + '</td><td>' + (d.margem != null ? pct(d.margem) : '—') + '</td><td class="nowrap">' + (d.acRecebido ? brlC(d.acRecebido) : '—') + '</td><td class="nowrap">' + brl(d.transferido) + '</td><td>' + (d.pend || '—') + '</td><td><span class="tag ' + lbl[1] + '">' + lbl[0] + '</span></td></tr>';
+    }).join('');
+    var tabelaDias = '<div class="cx-section"><h4>Resumo por dia' + h4subG(nn(days.length) + ' dia(s)') + '</h4><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Faturamento</th><th>Taxas</th><th>Custo</th><th>Lucro</th><th>Margem</th><th>Acelera</th><th>Banco</th><th>Pend.</th><th>Status</th></tr></thead><tbody>' + diaRows + '</tbody></table></div></div>';
+
+    return head + periodBar + row1 + row2 + row3 + chartsGrid + opBreakdown + conciliacao + taxasTable + melhoresPiores + tabelaDias;
+  }
+  function h4subG(v) { return v ? ' <span class="cx-h4-sub">' + v + '</span>' : ''; }
   function bindCaixaDashboardView() {
-    var dt = document.getElementById('caixadate'); if (dt) dt.onchange = function () { caixaDashDate = dt.value || null; render(); };
+    bindDevPeriodBar();
     app.querySelectorAll('[data-goped360]').forEach(function (b) { if (b.dataset.goped360) b.onclick = function () { openPedidoFicha360(b.dataset.goped360); }; });
-    var gf = app.querySelector('[data-caixagofech]'); if (gf) gf.onclick = function () { caixaSub = 'fechamento'; render(); setTimeout(function () { openCaixaFechamentoDia(gf.dataset.caixagofech); }, 60); };
+    app.querySelectorAll('[data-caixadia]').forEach(function (b) { b.onclick = function () { caixaSub = 'fechamento'; render(); setTimeout(function () { openCaixaFechamentoDia(b.dataset.caixadia); }, 60); }; });
   }
   function caixaFechamentoView() {
     var head = secHead('CAIXA · FECHAMENTO DIÁRIO', 'Confira, resolva e feche o dia', 'Para cada dia: vendas, expedição, Acelera, financeiro e pendências juntos — feche quando estiver tudo certo, ou feche com ressalva e justifique. Um dia só fica "Fechado" quando alguém clica em fechar.');

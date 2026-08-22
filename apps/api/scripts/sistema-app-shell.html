@@ -182,6 +182,8 @@
   .cx-flow-step .cxl{font-size:10.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--muted)}
   .cx-flow-step .cxv{font-size:17px;font-weight:800;margin-top:4px}
   .cx-flow-step.neg .cxv{color:var(--err)}.cx-flow-step.pos .cxv{color:var(--ok)}.cx-flow-step.neu .cxv{color:var(--brand-2)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+  @media (max-width:900px){.grid2{grid-template-columns:1fr}}
   .cx-flow-step:not(:last-child)::after{content:'→';position:absolute;right:-9px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:13px;z-index:1}
   @media(max-width:640px){.cx-flow{flex-direction:column}.cx-flow-step{border-right:none;border-bottom:1px dashed var(--line);text-align:left}.cx-flow-step:last-child{border-bottom:none}.cx-flow-step:not(:last-child)::after{content:'↓';right:auto;left:14px;top:auto;bottom:-9px;transform:none}}
   .cx-kv{display:flex;justify-content:space-between;gap:10px;padding:5px 0;font-size:13px}
