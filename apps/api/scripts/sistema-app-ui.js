@@ -371,15 +371,32 @@
     var data = Produtos.getData();
     data.families.forEach(function (f) { skuFamById[f.id] = f; });
     data.variations.forEach(function (v) { skuVarById[v.id] = v; });
-    function registerAlias(rawSku, matchedBy, v) {
-      if (!rawSku) return;
-      var key = normalizeSkuKey(rawSku);
-      if (!key) return;
+    var prodStatusById = {}; data.products.forEach(function (p) { prodStatusById[p.id] = p.status; });
+    function addAlias(key, matchedBy, v) {
       var list = skuAliasIndex[key] = skuAliasIndex[key] || [];
       if (!list.some(function (r) { return r.variationId === v.id; })) list.push({ variationId: v.id, matchedBy: matchedBy });
-      if (list.length > 1) skuConflicts[key] = true; // SKU_CONFLICT — auditável via resolveSkuCost().motivo
     }
-    data.variations.forEach(function (v) { registerAlias(v.sku, 'SKU', v); registerAlias(v.referenceSku, 'REFERENCE_SKU', v); });
+    // Causa real encontrada em catálogo de produção: um anúncio relistado/clonado no Shopee mantém
+    // o mesmo SKU do anúncio antigo — as duas variações disputam a mesma chave e o custo nunca chega
+    // ao Pedido (SKU_CONFLITANTE), mesmo com o usuário classificando corretamente. 1ª passada: só
+    // variações de anúncios ATIVOS disputam a chave — um anúncio marcado INATIVO (ação explícita já
+    // existente em Produtos, nunca uma adivinhança) deixa de bloquear a resolução sozinho.
+    data.variations.forEach(function (v) {
+      var active = prodStatusById[v.productId] !== 'INACTIVE';
+      if (!active) return;
+      if (v.sku) { var k1 = normalizeSkuKey(v.sku); if (k1) addAlias(k1, 'SKU', v); }
+      if (v.referenceSku) { var k2 = normalizeSkuKey(v.referenceSku); if (k2) addAlias(k2, 'REFERENCE_SKU', v); }
+    });
+    // 2ª passada: preenche com variações INATIVAS apenas as chaves que NENHUM anúncio ativo
+    // reivindicou — preserva o comportamento anterior enquanto o usuário não classificou nada como
+    // inativo (a imensa maioria dos catálogos, onde só existe 1 variação por SKU).
+    data.variations.forEach(function (v) {
+      var active = prodStatusById[v.productId] !== 'INACTIVE';
+      if (active) return;
+      if (v.sku) { var k1 = normalizeSkuKey(v.sku); if (k1 && !skuAliasIndex[k1]) addAlias(k1, 'SKU', v); }
+      if (v.referenceSku) { var k2 = normalizeSkuKey(v.referenceSku); if (k2 && !skuAliasIndex[k2]) addAlias(k2, 'REFERENCE_SKU', v); }
+    });
+    Object.keys(skuAliasIndex).forEach(function (key) { if (skuAliasIndex[key].length > 1) skuConflicts[key] = true; }); // SKU_CONFLICT — auditável via resolveSkuCost().motivo
     // skuCost legado — mantido só para leituras remanescentes que apenas checam vínculo (nunca uma
     // segunda fonte de verdade: sempre derivado de resolveSkuCost(), a função canônica).
     Object.keys(skuAliasIndex).forEach(function (key) { var r = resolveSkuCostByKey(key, key); skuCost[key] = { linked: true, cost: r.found ? r.cost : null, familyName: r.familyName || null }; });
@@ -696,6 +713,7 @@
     if (sub.pedidos === 'pedidos') bindPedidosList();
     if (sub.pedidos === 'expedicao' || sub.pedidos === 'tempoenvio') bindPedidosExpedicao();
     if (sub.pedidos === 'dashboard') bindPedidosDashboard();
+    if (sub.pedidos === 'import') app.querySelectorAll('[data-open]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.open); }; });
   }
   function bindPedidosDashboard() { var s = document.getElementById('peddashbasis'); if (s) s.onchange = function () { pedDashBasis = s.value; render(); }; }
   // ---------- Expedição / Bipe (§1 do prompt de reorganização): "vendido" ≠ "expedido" ----------
@@ -1194,6 +1212,21 @@
     var opId = (ord && ord.operationId) || opActiveOrNull() || null;
     return resolveIncomeOrder(opId, orderId);
   }
+  // resolveServiceFeeDetails(operationId, orderId) — cruzamento canônico do Service Fee Details,
+  // espelhando resolveIncomeOrder(): normalizeOrderId() (nunca comparação crua de string — IDs com
+  // espaço/caractere invisível de um dos lados precisam cruzar) + escopo por operationId (mrSvc já
+  // recebe operationId no import de Minha Renda e já é filtrado no boot — mas o consumidor em
+  // pedidoComposicaoFinanceira() ainda comparava v.orderId === orderId direto, sem normalizar nem
+  // escopar por operação; esse era o defeito real do cruzamento Service Fee Details).
+  function resolveServiceFeeDetails(operationId, orderId) {
+    var key = normalizeOrderId(orderId);
+    var empty = { found: false, orderId: orderId, operationId: operationId, rows: [], totals: { afiliadosVendedor: 0, transacao: 0, porItem: 0 } };
+    if (!key) return empty;
+    var rows = mrSvc.filter(function (v) { return normalizeOrderId(v.orderId) === key && (!operationId || !v.operationId || v.operationId === operationId); });
+    if (!rows.length) return empty;
+    var totals = rows.reduce(function (t, r) { t.afiliadosVendedor += r.afiliadosVendedor || 0; t.transacao += r.transacao || 0; t.porItem += r.porItem || 0; return t; }, { afiliadosVendedor: 0, transacao: 0, porItem: 0 });
+    return { found: true, orderId: orderId, operationId: operationId, rows: rows, totals: totals };
+  }
   // Fórmula canônica do envio (PROMPT MESTRE Parte D, §27-39) — validada empiricamente contra os
   // 1.662 pedidos Order do Income real: soma dos 5 componentes com os sinais originais fecha
   // exatamente com "Subtotal de Envio" do Summary (0 centavo de diferença). Nunca mostrar o
@@ -1213,9 +1246,11 @@
   }
   function pedidoComposicaoFinanceira(orderId) {
     var ord = orders.find(function (x) { return x.id === orderId; });
-    var incomeResolve = resolveIncomeOrder((ord && ord.operationId) || opActiveOrNull() || null, orderId);
+    var opIdOrd = (ord && ord.operationId) || opActiveOrNull() || null;
+    var incomeResolve = resolveIncomeOrder(opIdOrd, orderId);
     var mrRow = incomeResolve.status === 'FOUND' ? incomeResolve.row : null;
-    var svcRows = mrSvc.filter(function (v) { return v.orderId === orderId; });
+    var svcResolve = resolveServiceFeeDetails(opIdOrd, orderId);
+    var svcRows = svcResolve.rows;
     var receitaC = mrRow ? mrRow.preco : (ord ? Math.round(orderFinance(ord).revenue * 100) : null);
     var custoProdC = null, custoPendente = false;
     if (ord) { var fOrd = orderFinance(ord); if (fOrd.costPending) custoPendente = true; else custoProdC = Math.round((fOrd.productCostTotal || 0) * 100); }
@@ -1228,7 +1263,7 @@
       var comSubs = (mrRow.comissaoBruta != null && mrRow.comissaoBruta !== 0 && mrRow.comissaoBruta !== mrRow.comissao) ? [['Taxa de comissão bruta (referência)', mrRow.comissaoBruta]] : [];
       addTaxa('Taxa de comissão líquida', mrRow.comissao, comSubs, 'Income / Renda', 'comissao');
       var svcSubs = [];
-      if (svcRows.length) { var svcT = { afil: 0, trans: 0, item: 0 }; svcRows.forEach(function (v) { svcT.afil += v.afiliadosVendedor; svcT.trans += v.transacao; svcT.item += v.porItem; }); svcSubs = [['Taxa de Serviço Afiliados do Vendedor', svcT.afil], ['Taxa de Transação', svcT.trans], ['Taxa por item vendido', svcT.item]]; }
+      if (svcRows.length) { var svcT = svcResolve.totals; svcSubs = [['Taxa de Serviço Afiliados do Vendedor', svcT.afiliadosVendedor], ['Taxa de Transação', svcT.transacao], ['Taxa por item vendido', svcT.porItem]]; }
       if (mrRow.servicoBruta != null && mrRow.servicoBruta !== 0 && mrRow.servicoBruta !== mrRow.servico) svcSubs.push(['Taxa de serviço bruta (referência)', mrRow.servicoBruta]);
       addTaxa('Taxa de serviço líquida', mrRow.servico, svcSubs, svcRows.length ? 'Income / Service Fee Details' : 'Income / Renda', 'servico');
       addTaxa('Taxa de transação', mrRow.transacao, [], 'Income / Renda', 'transacao');
@@ -1299,7 +1334,35 @@
     // ainda não cobre este pedido, ou o cruzamento apontou um caso que precisa de auditoria — motivo em
     // incomeResolve.status: NOT_IN_INCOME/WRONG_OPERATION/DUPLICATE_ORDER_ROWS/INVALID_ORDER_ID).
     var statusFinanceiro = mrRow ? (pendencia ? 'DIVERGENCIA' : 'CONFIRMADO') : 'PROVISORIO';
-    return { orderId: orderId, temIncome: !!mrRow, mrRow: mrRow, incomeResolve: incomeResolve, statusFinanceiro: statusFinanceiro, ord: ord, svcRows: svcRows, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gEnvio: gEnvio, gOutros: gOutros, envio: envio, auditoriaFonte: auditoriaFonte, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), envioC: somaGrupo(gEnvio), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, taxasSomaSemAjusteC: taxasSomaSemAjusteC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia };
+    return { orderId: orderId, temIncome: !!mrRow, mrRow: mrRow, incomeResolve: incomeResolve, statusFinanceiro: statusFinanceiro, ord: ord, svcRows: svcRows, svcResolve: svcResolve, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gEnvio: gEnvio, gOutros: gOutros, envio: envio, auditoriaFonte: auditoriaFonte, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), envioC: somaGrupo(gEnvio), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, taxasSomaSemAjusteC: taxasSomaSemAjusteC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia };
+  }
+  // auditOrderProductCost(orderId) — teste canônico de custo (prompt "Correção do custo + taxas"): prova,
+  // item a item de um pedido real, exatamente onde a resolução SKU→variação→família→custo quebra.
+  // Nunca recalcula nada por conta própria — só expõe o resultado já produzido por normalizeSkuKey(),
+  // resolveSkuCost() e orderFinance(), que continuam sendo a única fonte de verdade.
+  function auditOrderProductCost(orderId) {
+    var ord = orders.find(function (x) { return x.id === orderId; });
+    if (!ord) return { orderId: orderId, found: false, motivo: 'PEDIDO_NAO_ENCONTRADO' };
+    var f = orderFinance(ord);
+    var items = ord.items.map(function (it, idx) {
+      var key = it.sku ? normalizeSkuKey(it.sku) : '';
+      var aliases = key ? (skuAliasIndex[key] || []) : [];
+      var conflict = key ? !!skuConflicts[key] : false;
+      var r = f._items[idx] ? f._items[idx].skuResolve : (it.sku ? resolveSkuCost(it.sku) : { found: false, motivo: 'SKU_NAO_LOCALIZADO' });
+      var variation = r.variationId ? skuVarById[r.variationId] : null;
+      var family = r.familyId ? skuFamById[r.familyId] : null;
+      var custoUnit = r.found ? r.cost : null;
+      return {
+        skuPedido: it.sku, normalizedSku: key, aliasesEncontrados: aliases, conflict: conflict,
+        variationId: r.variationId || null, canonicalSku: r.canonicalSku || (variation ? variation.sku : null),
+        referenceSku: variation ? variation.referenceSku : null, productId: r.productId || null,
+        familyId: r.familyId || null, familyName: r.familyName || (family ? family.name : null),
+        currentCostAmount: family ? family.currentCostAmount : null, resolveResult: r,
+        qty: it.qty, custoUnitario: custoUnit, custoTotal: custoUnit != null ? custoUnit * it.qty : null,
+        status: r.found ? 'OK' : (r.motivo || 'FALHA'),
+      };
+    });
+    return { operationId: ord.operationId || null, orderId: orderId, items: items, orderFinance: f, composicao: pedidoComposicaoFinanceira(orderId) };
   }
   // Ficha do Pedido consolidada (Fase 2 da arquitetura) — jornada única, sem "Ficha 360" separada
   // e sem esconder taxas atrás de cliques extras: Venda → Custos → Taxas detalhadas → Margem →
@@ -1346,8 +1409,14 @@
       if (r.fieldKey === 'servico' && r.subs.length) {
         // "(referência)" é o bruto — nunca aparece inline, mesmo dentro da tabela de componentes;
         // fica só na Auditoria Técnica (mrRow.servicoBruta já está lá via auditoriaFonte).
-        var svcTblRows = r.subs.filter(function (s) { return s[1] && s[0].indexOf('(referência)') < 0; }).map(function (s) { return '<tr><td class="cell-text">' + esc(s[0]) + '</td><td class="nowrap ' + (s[1] < 0 ? 'neg' : 'pos') + '">' + brlC(s[1]) + '</td></tr>'; }).join('');
-        subHtml = svcTblRows ? '<div class="table-wrap" style="margin:2px 0 8px"><table class="report" style="font-size:12.5px"><thead><tr><th>Componente</th><th>Valor</th></tr></thead><tbody>' + svcTblRows + '</tbody></table></div>' : '';
+        var svcFilhos = r.subs.filter(function (s) { return s[1] && s[0].indexOf('(referência)') < 0; });
+        var svcTblRows = svcFilhos.map(function (s) { return '<tr><td class="cell-text">' + esc(s[0]) + '</td><td class="nowrap ' + (s[1] < 0 ? 'neg' : 'pos') + '">' + brlC(s[1]) + '</td></tr>'; }).join('');
+        // §21 do prompt "Correção do custo + taxas": conferência explícita soma dos filhos × pai —
+        // os filhos só EXPLICAM o valor da Taxa de serviço líquida, nunca somam por cima dele.
+        var svcSomaFilhos = svcFilhos.reduce(function (s, x) { return s + x[1]; }, 0);
+        var svcDiff = svcSomaFilhos - r.valor;
+        var svcConf = svcFilhos.length ? ('<div class="footnote" style="margin:2px 0 6px">' + (Math.abs(svcDiff) < 2 ? '✓ Composição conferida (soma dos componentes = Taxa de serviço líquida)' : '⚠ Diferença de ' + brlC(svcDiff) + ' entre a soma dos componentes e a Taxa de serviço líquida') + '</div>') : '';
+        subHtml = svcTblRows ? '<div class="table-wrap" style="margin:2px 0 8px"><table class="report" style="font-size:12.5px"><thead><tr><th>Componente</th><th>Valor</th></tr></thead><tbody>' + svcTblRows + '</tbody></table></div>' + svcConf : '';
       } else if (r.fieldKey === 'ampLiquido' && r.subs.length) {
         subHtml = '<div class="footnote" style="margin:2px 0 6px">' + r.subs.filter(function (s) { return s[1]; }).map(function (s) { return '↳ ' + esc(s[0]) + ': ' + brlC(s[1]); }).join(' · ') + '</div>';
       }
@@ -5486,7 +5555,7 @@
     var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '620px'; panel.style.maxWidth = '96vw';
     d.appendChild(panel); d.onclick = function (ev) { if (ev.target === d) d.remove(); }; document.body.appendChild(d);
     var ord = orders.find(function (x) { return x.id === orderId; }); var oc = occ.find(function (x) { return !x.isDemo && x.orderId === orderId; }); var ship = mrShip.find(function (x) { return x.id === orderId; });
-    var svc = mrSvc.filter(function (x) { return x.orderId === orderId; });
+    var svc = resolveServiceFeeDetails((ord && ord.operationId) || opActiveOrNull() || null, orderId).rows;
     panel.innerHTML = '<div class="dh"><div><b>Pedido ' + esc(orderId) + '</b> <span class="footnote">Extrato financeiro</span></div><button class="x">&times;</button></div><div class="dbd">' +
       '<div class="panel"><div class="ph"><h3>Renda (Income)</h3></div><div class="pb">' + kv('Preço do produto', brlC(o.preco)) + kv('Reembolso', brlC(o.reembolso)) + kv('PIX', brlC(o.pix)) + kv('Cupom', brlC(o.cupom)) + kv('Comissão', brlC(o.comissao)) + kv('Serviço', brlC(o.servico)) + kv('Afiliado', brlC(o.afiliado)) + kv('Frete parceiro', brlC(o.freteParceiro)) + kv('Pagamento liberado', brlC(o.liberado)) + '</div></div>' +
       (svc.length ? '<div class="panel"><div class="ph"><h3>Composição da taxa de serviço</h3></div><div class="pb">' + svc.map(function (v) { return kv('Afiliados vendedor', brlC(v.afiliadosVendedor)) + kv('Transação', brlC(v.transacao)) + kv('Por item vendido', brlC(v.porItem)); }).join('') + '</div></div>' : '') +
@@ -5809,7 +5878,7 @@
     var resumo = Object.keys(motivoCount).map(function (m) { return esc(SKU_MOTIVO_LABEL[m] || m) + ': <b>' + motivoCount[m] + '</b>'; }).join(' · ');
     return '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Pedidos com SKU não cruzado</h3><span class="footnote" style="margin:0">' + nn(rows.length) + ' item(ns) no período selecionado</span></div><div class="pb">' +
       (rows.length ? ('<div class="footnote" style="margin-bottom:8px">' + resumo + '</div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>SKU recebido em Pedidos</th><th>Produto</th><th>Variação</th><th>Existe como v.sku?</th><th>Existe como v.referenceSku?</th><th>Família</th><th>Custo</th><th>Motivo da falha</th></tr></thead><tbody>' +
-        rows.map(function (r) { return '<tr><td class="mono">' + esc(r.orderId) + '</td><td class="mono">' + esc(r.sku) + '</td><td class="cell-text">' + esc(r.produto || '—') + '</td><td>' + esc(r.variacao || '—') + '</td><td>' + (r.existeSku ? '🟢 Sim' : '⚪ Não') + '</td><td>' + (r.existeRef ? '🟢 Sim' : '⚪ Não') + '</td><td>' + esc(r.familia || '—') + '</td><td>—</td><td><span class="tag warn">' + esc(SKU_MOTIVO_LABEL[r.motivo] || r.motivo) + '</span></td></tr>'; }).join('') +
+        rows.map(function (r) { return '<tr><td class="mono rowlink" data-open="' + esc(r.orderId) + '" style="cursor:pointer;text-decoration:underline">' + esc(r.orderId) + '</td><td class="mono">' + esc(r.sku) + '</td><td class="cell-text">' + esc(r.produto || '—') + '</td><td>' + esc(r.variacao || '—') + '</td><td>' + (r.existeSku ? '🟢 Sim' : '⚪ Não') + '</td><td>' + (r.existeRef ? '🟢 Sim' : '⚪ Não') + '</td><td>' + esc(r.familia || '—') + '</td><td>—</td><td><span class="tag warn">' + esc(SKU_MOTIVO_LABEL[r.motivo] || r.motivo) + '</span></td></tr>'; }).join('') +
         '</tbody></table></div>') : '<span class="tag ok">🟢 Todos os SKUs do período foram cruzados com Produtos.</span>') +
       '</div></div>';
   }
@@ -5970,7 +6039,10 @@
     function confirmModal(title, body, onYes, onNo) { var o = overlay('<div class="mh"><h3>' + esc(title) + '</h3><button class="x">×</button></div><div class="mbd"><p style="margin-top:0">' + esc(body) + '</p></div><div class="mf"><button class="btn-sm" id="no">Cancelar</button><button class="btn-sm primary" id="yes">Aplicar</button></div>'); o.querySelector('.x').onclick = o.querySelector('#no').onclick = function () { o.remove(); if (onNo) onNo(); }; o.querySelector('#yes').onclick = function () { o.remove(); onYes(); }; }
     function renderBulk() { var el = q('#bulk'); if (!S2.selected.size) { el.innerHTML = ''; return; } el.innerHTML = '<div class="bulkbar"><b>' + nn(S2.selected.size) + ' SKUs selecionados</b><div class="spacer"></div><button class="btn-sm primary" id="bAssign">Classificar família</button><button class="btn-sm" id="bPrice">Preço de fechamento</button><button class="btn-sm" id="bOff">Inativar</button><button class="btn-sm" id="bOn">Ativar</button><button class="btn-sm" id="bClr">Limpar</button></div>'; q('#bAssign').onclick = openAssign; q('#bPrice').onclick = openBulkPrice; q('#bClr').onclick = function () { S2.selected.clear(); S2.allFiltered = false; refresh(); }; q('#bOff').onclick = function () { statusBulk('INACTIVE'); }; q('#bOn').onclick = function () { statusBulk('ACTIVE'); }; }
     function selIds() { return Array.from(S2.selected); }
-    function statusBulk(st) { var pset = {}; selIds().forEach(function (id) { var v = S2.variations.find(function (x) { return x.id === id; }); if (v) pset[v.productId] = 1; }); var ch = []; S2.products.forEach(function (p) { if (pset[p.id]) { p.status = st; ch.push(p); } }); dbPut('products', ch).then(function () { S2.selected.clear(); S2.allFiltered = false; refresh(); toast('Status alterado', 'Anúncios ' + (st === 'ACTIVE' ? 'ativados' : 'inativados') + '.'); }); }
+    // Ativar/Inativar muda o status do PRODUTO, que agora também afeta a resolução de conflito de SKU
+    // (rebuildSkuCost ignora variações de anúncios inativos) — por isso precisa disparar onChange()
+    // igual a saveVars/afterFamChange, e não só persistir o array de produtos sozinho.
+    function statusBulk(st) { var pset = {}; selIds().forEach(function (id) { var v = S2.variations.find(function (x) { return x.id === id; }); if (v) pset[v.productId] = 1; }); var ch = []; S2.products.forEach(function (p) { if (pset[p.id]) { p.status = st; ch.push(p); } }); dbPut('products', ch).then(function () { onChange(); S2.selected.clear(); S2.allFiltered = false; refresh(); toast('Status alterado', 'Anúncios ' + (st === 'ACTIVE' ? 'ativados' : 'inativados') + '.'); }); }
     function openAssign() {
       var ids = selIds(), actives = S2.families.filter(function (f) { return f.status === 'ACTIVE'; });
       var o = overlay('<div class="mh"><h3>Classificar família</h3><button class="x">×</button></div><div class="mbd"><p class="footnote" style="margin-top:0"><b>' + ids.length + '</b> SKUs serão alterados.</p><div id="ab"></div></div><div class="mf" id="af"></div>');
