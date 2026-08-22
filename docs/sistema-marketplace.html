@@ -3847,11 +3847,12 @@ buffer/index.js:
   var mrProdFilter = 'todos'; // filtro rápido da tabela de Produtos e SKUs (§9-13 do prompt de alterações pontuais)
   // Expedição / Bipe (Pedidos): registro de saída física, chave = ID do pedido (idempotente).
   var shipBip = {};   // orderId -> { id, orderId, bipedAt, bipedBy, note, history: [] }
-  // §33: Full/FBS é logística da própria Shopee — por padrão NÃO entra na fila de expedição própria
-  // (evita confundir "precisa sair fisicamente daqui" com pedidos que o centro de distribuição da
-  // Shopee já resolve). "Incluir Full" liga de volta quando for útil analisar tudo junto.
-  var pedExpF = { search: '', status: '', includeFull: false };
-  var pedExpView = 'fila'; // 'fila' (bipagem) | 'prazos' (Tempo de Envio, absorvido em Expedição)
+  // PROMPT MESTRE §59-73: Expedição vira tela operacional única — Full/FBS sempre aparece na fila
+  // (nunca mais um toggle "Incluir Full" escondendo pedidos), só que rotulado como "aguardando
+  // confirmação Shopee"/"confirmação Shopee" em vez de "falta bipar"/"bipado" (nunca exige bip para
+  // Full). Prazo (vencido/hoje/amanhã/próximos) e ordenação por timestamp canônico entram como
+  // filtro + coluna na mesma tabela — nunca mais uma tela separada só para prazos (§66).
+  var pedExpF = { search: '', status: '', prazo: '', modalidade: '', sort: 'prazo' };
   // Sessão de Expedição (prompt Expedição/Full/FBS §5-6/§13/§24/§79): retrato CONGELADO do que
   // deveria sair num dia operacional — nunca reescrito por importações futuras. "Data operacional"
   // (o dia que a sessão representa) é sempre distinta de "data/hora real do bipe" (quando cada
@@ -4622,54 +4623,88 @@ buffer/index.js:
     // a mesma ficha duas vezes por causa do bubbling do clique do botão.
     app.querySelectorAll('[data-pendped]').forEach(function (tr) { tr.onclick = function () { pendenciaDrawer(tr.dataset.pendped); }; });
   }
+  // Rótulo de expedição por linha — nunca "falta bipar" para Full (§63): Full não precisa de bip,
+  // a confirmação é a própria transição de status Shopee (§72). Reaproveita pedidoExpedidoInfo()
+  // (motor único de "isto já saiu?") e teClassifica()/shipDeadlineTs() (prazo, já aprovados).
+  function expRowLabel(o) {
+    var info = pedidoExpedidoInfo(o);
+    if (o.isFbs) return info.expedido ? { tag: 'ok', txt: 'Expedido Full — confirmação Shopee', at: info.at } : { tag: 'warn', txt: 'Full — aguardando confirmação Shopee', at: null };
+    return info.expedido ? { tag: 'ok', txt: 'Bipado', at: info.at } : { tag: 'warn', txt: 'Falta bipar', at: null };
+  }
   function pedidosExpedicao() {
-    var head = secHead('PEDIDOS · EXPEDIÇÃO', 'A Enviar × Bipado', 'A fila é exatamente a aba A Enviar de Pedidos — nada mais. O bipe confirma que a caixa realmente saiu; não altera o status Shopee.');
+    var head = secHead('PEDIDOS · EXPEDIÇÃO', 'Bipar e confirmar a saída', 'A fila é exatamente a aba A Enviar de Pedidos. Normal confirma por bipe; Full/FBS confirma sozinho quando a Shopee muda o status para Enviado — nunca exige bip.');
     if (!orders.length) return head + emptyBox('Importe os Pedidos para começar a controlar a expedição.');
-    var aEnviarAll = orders.filter(function (o) { return o.normalizedStatus === 'A_ENVIAR'; });
-    var fullCount = aEnviarAll.filter(function (o) { return o.isFbs; }).length;
-    var baseList = pedExpF.includeFull ? aEnviarAll : aEnviarAll.filter(function (o) { return !o.isFbs; });
+    var baseList = orders.filter(function (o) { return o.normalizedStatus === 'A_ENVIAR'; });
     var bipados = baseList.filter(function (o) { return pedIsExpedido(o.id); });
     var faltando = baseList.filter(function (o) { return !pedIsExpedido(o.id); });
-    // anomalia (§4): bipado mas o pedido não está (mais) em A Enviar — status Shopee já avançou,
-    // foi cancelado, ou o ID bipado nem existe em Pedidos. Nunca escondido — sempre mostrado à parte.
-    var bipadosForaFila = Object.keys(shipBip).map(function (oid) { return { oid: oid, o: orders.find(function (x) { return x.id === oid; }), b: shipBip[oid] }; }).filter(function (x) { return !x.o || x.o.normalizedStatus !== 'A_ENVIAR'; });
+    var pendTotal = pendenciasConferencia().filter(function (i) { return ['PEND_FINANCEIRA', 'PEND_OPERACIONAL', 'PEND_EXPEDICAO', 'INVESTIGAR'].indexOf(i.situacao) >= 0; }).length;
+    // §68: KPIs simples, só isso.
     var strip = kstrip([
-      { l: 'A Enviar', v: nn(baseList.length), cls: 'blue' },
-      { l: 'Bipados', v: nn(bipados.length), cls: 'green' },
+      { l: 'Deveriam sair', v: nn(baseList.length), cls: 'blue' },
+      { l: 'Expedidos', v: nn(bipados.length), cls: 'green' },
       { l: 'Faltando', v: nn(faltando.length), cls: faltando.length ? 'amber' : 'green' },
-      { l: 'Bipados fora da fila A Enviar', v: nn(bipadosForaFila.length), cls: bipadosForaFila.length ? 'red' : 'green', s: 'já não está mais em A Enviar' },
+      { l: 'Pendências', v: nn(pendTotal), cls: pendTotal ? 'red' : 'green' },
     ]);
-    var bipe = '<div class="panel"><div class="ph"><h3>Bipar etiqueta</h3><span class="footnote" style="margin:0">leitor USB/Bluetooth (emite como teclado) ou digite o BR/ID e pressione Enter</span></div><div class="pb"><div style="display:flex;gap:8px;max-width:480px"><input class="input" id="bipinput" placeholder="BR (rastreamento) ou ID do pedido" autofocus style="flex:1"><button class="btn-sm primary" id="bipbtn">Registrar saída</button></div><div class="footnote" style="margin-top:8px">Aceita o BR da etiqueta (resolvido para o pedido pelo rastreamento) ou o ID do pedido digitado direto. Se o BR não for encontrado, ou aparecer em mais de um pedido, nada é registrado automaticamente — você revisa antes. Leitura por câmera não está implementada nesta versão — exigiria uma biblioteca de decodificação de código de barras, que não incluímos para não declarar um recurso não testado.</div></div></div>';
+    // §60: campo de bipe GRANDE no topo — primeiro elemento da tela, sempre.
+    var bipe = '<div class="panel" style="border:2px solid var(--accent,#2b4bd6)"><div class="ph"><h3>BIPAR PEDIDO</h3><span class="footnote" style="margin:0">leitor USB/Bluetooth (emite como teclado) ou digite e pressione Enter</span></div><div class="pb"><div style="display:flex;gap:10px"><input class="input" id="bipinput" placeholder="Digite ou escaneie o ID do pedido (ou o BR)" autofocus style="flex:1;font-size:20px;padding:14px 16px;height:auto"><button class="btn-sm primary" id="bipbtn" style="font-size:16px;padding:0 24px">BIPAR</button></div><div class="footnote" style="margin-top:8px">Aceita o BR da etiqueta (resolvido pelo rastreamento) ou o ID do pedido. Se o BR não for encontrado, ou aparecer em mais de um pedido, nada é registrado automaticamente. Duplicidade (pedido já bipado) é avisada, não bloqueada silenciosamente.</div></div></div>';
+    // §65/§67: filtros de prazo/modalidade/busca/ordenação por timestamp canônico — nunca texto.
+    var filtros = '<div class="toolbar2" style="margin-top:8px;flex-wrap:wrap">' +
+      '<select class="select sm" id="expprazo"><option value=""' + (!pedExpF.prazo ? ' selected' : '') + '>Prazo: Todos</option><option value="vencidos"' + (pedExpF.prazo === 'vencidos' ? ' selected' : '') + '>Vencidos</option><option value="hoje"' + (pedExpF.prazo === 'hoje' ? ' selected' : '') + '>Hoje</option><option value="amanha"' + (pedExpF.prazo === 'amanha' ? ' selected' : '') + '>Amanhã</option><option value="proximos"' + (pedExpF.prazo === 'proximos' ? ' selected' : '') + '>Próximos</option></select>' +
+      '<select class="select sm" id="expmod"><option value=""' + (!pedExpF.modalidade ? ' selected' : '') + '>Modalidade: Todos</option><option value="normal"' + (pedExpF.modalidade === 'normal' ? ' selected' : '') + '>Normal</option><option value="full"' + (pedExpF.modalidade === 'full' ? ' selected' : '') + '>Full</option></select>' +
+      '<input class="input sm" id="expq" style="width:220px" placeholder="Pedido / SKU / produto…" value="' + esc(pedExpF.search) + '">' +
+      '<select class="select sm" id="expsort">' + [['prazo', 'Vence primeiro'], ['prazo_desc', 'Vence por último'], ['criacao', 'Pedido mais antigo'], ['criacao_desc', 'Pedido mais recente']].map(function (o) { return '<option value="' + o[0] + '"' + (pedExpF.sort === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>' +
+      '</div>';
     var q = pedExpF.search.toLowerCase();
-    var list = baseList.filter(function (o) { if (pedExpF.status === 'expedido' && !pedIsExpedido(o.id)) return false; if (pedExpF.status === 'pendente' && pedIsExpedido(o.id)) return false; if (q && o.id.toLowerCase().indexOf(q) < 0 && (o.tracking || '').toLowerCase().indexOf(q) < 0) return false; return true; }).sort(function (a, b) { var ba = shipBip[a.id], bb = shipBip[b.id]; if (ba && bb) return bb.bipedAt.localeCompare(ba.bipedAt); if (ba) return -1; if (bb) return 1; return (b.createdAt || '').localeCompare(a.createdAt || ''); });
-    var chips = [['', 'Todos'], ['expedido', 'Bipados'], ['pendente', 'Faltando']];
-    var rows = list.slice(0, 200).map(function (o) { var b = shipBip[o.id]; var st = b ? pedidoConciliacaoStatus(o.id) : null; return '<tr' + (b ? '' : ' style="background:#fff8ef"') + '><td class="mono">' + esc(o.id) + '</td><td class="mono">' + esc(o.tracking || '—') + '</td><td class="nowrap">' + dbr(o.createdAt) + '</td><td>' + (b ? '<span class="tag ok">bipado</span> <span class="footnote" style="margin:0">' + new Date(b.bipedAt).toLocaleString('pt-BR') + '</span>' : '<span class="tag warn">faltando</span>') + '</td><td>' + (st ? '<span class="tag">' + esc(st.label) + '</span>' : '—') + '</td><td><button class="btn-sm" data-goped360="' + esc(o.id) + '">Ficha do Pedido</button></td></tr>'; }).join('');
-    var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>BR</th><th>Data venda</th><th>Expedição</th><th>Conciliação</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="empty">Nenhum pedido neste filtro.</td></tr>') + '</tbody></table></div></div>';
+    var filtered = baseList.filter(function (o) {
+      if (pedExpF.status === 'expedido' && !pedIsExpedido(o.id)) return false;
+      if (pedExpF.status === 'pendente' && pedIsExpedido(o.id)) return false;
+      if (pedExpF.modalidade === 'normal' && o.isFbs) return false;
+      if (pedExpF.modalidade === 'full' && !o.isFbs) return false;
+      if (pedExpF.prazo) {
+        var cl = teClassifica(o);
+        if (pedExpF.prazo === 'vencidos' && cl !== 'ATRASADO') return false;
+        if (pedExpF.prazo === 'hoje' && cl !== 'VENCE_HOJE') return false;
+        if (pedExpF.prazo === 'amanha') { if (!o.shipByDate) return false; var amanha = new Date(Date.now() + 864e5); if (new Date(o.shipByDate).toDateString() !== amanha.toDateString()) return false; }
+        if (pedExpF.prazo === 'proximos' && ['ATRASADO', 'VENCE_HOJE'].indexOf(cl) >= 0) return false;
+      }
+      if (q) { var it0 = (o.items || [])[0] || {}; if (o.id.toLowerCase().indexOf(q) < 0 && (o.tracking || '').toLowerCase().indexOf(q) < 0 && (it0.sku || '').toLowerCase().indexOf(q) < 0 && (it0.productName || '').toLowerCase().indexOf(q) < 0) return false; }
+      return true;
+    });
+    var SORTS = {
+      prazo: function (a, b) { return shipDeadlineTs(a) - shipDeadlineTs(b); },
+      prazo_desc: function (a, b) { return shipDeadlineTs(b) - shipDeadlineTs(a); },
+      criacao: function (a, b) { return (a.createdAt || '').localeCompare(b.createdAt || ''); },
+      criacao_desc: function (a, b) { return (b.createdAt || '').localeCompare(a.createdAt || ''); },
+    };
+    var list = filtered.slice().sort(SORTS[pedExpF.sort] || SORTS.prazo);
+    // §61-64: TRÊS ABAS — Todos / Falta Bipar / Bipados (contadores sobre baseList inteira, não o filtro atual).
+    var tabsExp = [['', 'TODOS', baseList.length], ['pendente', 'FALTA BIPAR', faltando.length], ['expedido', 'BIPADOS', bipados.length]];
+    var tabsHtml = '<div class="tabs" style="margin-top:10px">' + tabsExp.map(function (t) { return '<div class="tab' + (pedExpF.status === t[0] ? ' active' : '') + '" data-expst="' + t[0] + '">' + t[1] + ' <span class="tag">' + nn(t[2]) + '</span></div>'; }).join('') + '</div>';
+    var rows = list.slice(0, 300).map(function (o) {
+      var lb = expRowLabel(o); var tecl = teClassifica(o); var telbl = TE_LABELS[tecl];
+      var it0 = (o.items || [])[0] || {};
+      return '<tr class="rowlink" data-open="' + esc(o.id) + '"><td class="mono">' + esc(o.id) + '</td><td class="mono">' + esc(o.tracking || '—') + '</td><td class="cell-text">' + esc((it0.productName || '—').slice(0, 28)) + '</td><td>' + (o.isFbs ? '<span class="tag info">Full</span>' : 'Normal') + '</td><td>' + (o.shipByDate ? new Date(o.shipByDate).toLocaleString('pt-BR') : '—') + '</td><td><span class="tag ' + telbl[1] + '">' + telbl[0] + '</span>' + (!o.shippedAt && tecl !== 'SEM_PRAZO' ? ' <span class="footnote" style="margin:0">' + teCountdownTxt(o) + '</span>' : '') + '</td><td><span class="tag ' + lb.tag + '">' + esc(lb.txt) + '</span>' + (lb.at ? ' <span class="footnote" style="margin:0">' + new Date(lb.at).toLocaleString('pt-BR') + '</span>' : '') + '</td></tr>';
+    }).join('');
+    var table = '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>BR</th><th>Produto</th><th>Modalidade</th><th>Prazo de envio</th><th>Situação do prazo</th><th>Expedição</th></tr></thead><tbody>' + (rows || '<tr><td colspan="7" class="empty">Nenhum pedido neste filtro.</td></tr>') + '</tbody></table></div></div>';
+    // anomalia (§4, preservado): bipado mas o pedido não está (mais) em A Enviar. Nunca escondido.
+    var bipadosForaFila = Object.keys(shipBip).map(function (oid) { return { oid: oid, o: orders.find(function (x) { return x.id === oid; }), b: shipBip[oid] }; }).filter(function (x) { return !x.o || x.o.normalizedStatus !== 'A_ENVIAR'; });
     var anomaliaRows = bipadosForaFila.slice(0, 100).map(function (x) { return '<tr><td class="mono">' + esc(x.oid) + '</td><td>' + (x.o ? '<span class="pill ' + x.o.normalizedStatus + '">' + esc(S.pedidos.labels[x.o.normalizedStatus] || x.o.normalizedStatus) + '</span>' : '<span class="tag warn">pedido não encontrado em Pedidos</span>') + '</td><td class="nowrap">' + new Date(x.b.bipedAt).toLocaleString('pt-BR') + '</td>' + (x.o ? '<td><button class="btn-sm" data-goped360="' + esc(x.oid) + '">Ficha do Pedido</button></td>' : '<td>—</td>') + '</tr>'; }).join('');
     var anomaliaBox = bipadosForaFila.length ? '<div class="panel"><div class="ph"><h3>Bipados que não estão em A Enviar</h3><span class="footnote" style="margin:0">o bipe existe, mas o status Shopee do pedido já mudou (ou o ID não existe em Pedidos) — revise</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Status atual</th><th>Bipado em</th><th></th></tr></thead><tbody>' + anomaliaRows + '</tbody></table></div></div>' : '';
-    // §17-21 Full/FBS: Tempo de Envio absorvido aqui como uma segunda visão da mesma tela — nunca
-    // uma aba própria de novo. "Fila de bipagem" é o operacional do dia; "Prazos de envio" é o
-    // mesmo teQueue()/shipDeadlineTs() de sempre, sem nenhuma alteração de cálculo.
-    var viewToggle = '<div class="chips" style="margin-top:4px"><span class="chip' + (pedExpView === 'fila' ? ' chip-on' : '') + '" data-expview="fila">Fila de bipagem</span><span class="chip' + (pedExpView === 'prazos' ? ' chip-on' : '') + '" data-expview="prazos">Prazos de envio</span></div>';
-    if (pedExpView === 'prazos') return head + expSessaoBlock() + pendenciasConferenciaBlock() + viewToggle + tempoEnvioBody();
-    return head + expSessaoBlock() + pendenciasConferenciaBlock() + viewToggle + strip + bipe +
-      '<div class="chips">' + chips.map(function (c) { return '<span class="chip' + (pedExpF.status === c[0] ? ' chip-on' : '') + '" data-expst="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '<span class="chip' + (pedExpF.includeFull ? ' chip-on' : '') + '" data-expfull="1" title="Full/FBS é despachado pelo centro de distribuição da Shopee — por padrão fica fora desta fila própria">Incluir Full (' + nn(fullCount) + ')</span></div>' +
-      '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="expq" style="width:260px" placeholder="Buscar ID do pedido ou BR…" value="' + esc(pedExpF.search) + '"></div>' +
-      '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos em A Enviar' + (!pedExpF.includeFull && fullCount ? ' <span class="footnote">(' + nn(fullCount) + ' Full/FBS fora da fila — expedidos pela Shopee)</span>' : '') + '</div>' +
-      table + anomaliaBox;
+    return head + bipe + strip + tabsHtml + filtros + '<div class="count-line" style="margin-top:8px"><b>' + nn(list.length) + '</b> pedidos</div>' + table + expSessaoBlock() + pendenciasConferenciaBlock() + anomaliaBox;
   }
   function bindPedidosExpedicao() {
-    bindExpSessaoBlock();
-    bindPendenciasConferenciaBlock();
-    app.querySelectorAll('[data-expview]').forEach(function (c) { c.onclick = function () { pedExpView = c.dataset.expview; render(); }; });
-    if (pedExpView === 'prazos') { bindTempoEnvioBody(); return; }
     var bi = document.getElementById('bipinput'); var doRegister = function () { var v = bi.value; bipRegister(v).then(function (rec) { bi.value = ''; render(); var el = document.getElementById('bipinput'); if (el) el.focus(); toast('Expedição registrada', rec.orderId); }).catch(function (e) { toast('Falha', e.message, true); }); };
     if (bi) bi.onkeydown = function (e) { if (e.key === 'Enter') doRegister(); };
     var bb = document.getElementById('bipbtn'); if (bb) bb.onclick = doRegister;
     app.querySelectorAll('[data-expst]').forEach(function (c) { c.onclick = function () { pedExpF.status = c.dataset.expst; render(); }; });
-    var ef = app.querySelector('[data-expfull]'); if (ef) ef.onclick = function () { pedExpF.includeFull = !pedExpF.includeFull; render(); };
+    var pz = document.getElementById('expprazo'); if (pz) pz.onchange = function () { pedExpF.prazo = pz.value; render(); };
+    var md = document.getElementById('expmod'); if (md) md.onchange = function () { pedExpF.modalidade = md.value; render(); };
+    var so = document.getElementById('expsort'); if (so) so.onchange = function () { pedExpF.sort = so.value; render(); };
     var q = document.getElementById('expq'); if (q) { var t; q.oninput = function () { clearTimeout(t); t = setTimeout(function () { var v = q.value; pedExpF.search = v; render(); var el = document.getElementById('expq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
+    app.querySelectorAll('[data-open]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.open); }; });
     app.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.goped360); }; });
+    bindExpSessaoBlock();
+    bindPendenciasConferenciaBlock();
   }
   // Correção do usuário (§1): a aba OFICIAL precisa espelhar exatamente a contagem de status da
   // Shopee — nunca um agrupamento mais amplo por baixo do mesmo número. "Cancelado" mostra só
@@ -4793,87 +4828,6 @@ buffer/index.js:
   // entram aqui, mesmo que tenham shipByDate preenchido (misturá-los foi a causa raiz do problema:
   // a coluna "restante" mostrava data de envio já ocorrida ao lado de contagens regressivas reais,
   // fazendo a ordem cronológica correta parecer embaralhada na leitura visual).
-  function teQueue() { return pedidosInPeriod().filter(function (o) { return o.shipByDate && o.normalizedStatus === 'A_ENVIAR'; }); }
-  var teF = { classe: '', preset: '', full: '', modalidade: '', search: '', sort: 'prazo' };
-  // §17-21 do prompt Full/FBS: Tempo de Envio deixa de ser aba própria e passa a viver DENTRO de
-  // Expedição (nav vira Pedidos | Expedição | Dashboard | Importações) — mesma categorização de
-  // vencidos/vence hoje/vence amanhã/próximos e o mesmo shipDeadlineTs() canônico, sem alterar nada.
-  function tempoEnvioBody() {
-    var head = '<div class="panel"><div class="ph"><h3>Prazos de Envio</h3><span class="footnote" style="margin:0">Evitar atraso e penalização da Shopee — prazo real vem da planilha (Data prevista de envio)</span></div></div>';
-    var base = teQueue();
-    if (!base.length) return head + emptyBox('Nenhum pedido com prazo de envio informado no período. Importe/atualize a planilha de Pedidos.');
-    var now = new Date();
-    var list = base;
-    if (teF.preset === 'hoje') list = list.filter(function (o) { return new Date(o.shipByDate).toDateString() === now.toDateString(); });
-    else if (teF.preset === 'amanha') { var amanha = new Date(now.getTime() + 864e5); list = list.filter(function (o) { return new Date(o.shipByDate).toDateString() === amanha.toDateString(); }); }
-    else if (teF.preset === '24h') list = list.filter(function (o) { var d = new Date(o.shipByDate) - now; return d >= 0 && d <= 24 * 36e5; });
-    else if (teF.preset === '48h') list = list.filter(function (o) { var d = new Date(o.shipByDate) - now; return d >= 0 && d <= 48 * 36e5; });
-    if (teF.classe) list = list.filter(function (o) { return teClassifica(o) === teF.classe; });
-    if (teF.full === 'full') list = list.filter(function (o) { return o.isFbs; });
-    else if (teF.full === 'nfull') list = list.filter(function (o) { return !o.isFbs; });
-    if (teF.modalidade) list = list.filter(function (o) { return o.shippingOption === teF.modalidade; });
-    if (teF.search) { var q = teF.search.toLowerCase(); list = list.filter(function (o) { return o.id.toLowerCase().indexOf(q) >= 0 || (o.tracking || '').toLowerCase().indexOf(q) >= 0 || o.items.some(function (i) { return (i.sku || '').toLowerCase().indexOf(q) >= 0 || (i.productName || '').toLowerCase().indexOf(q) >= 0; }); }); }
-    // Correção do usuário (§1/§3): ordenação SEMPRE pelo timestamp canônico (shipDeadlineTs), nunca
-    // por texto de apresentação. Novas opções pedidas: vence primeiro/último, pagamento antigo/
-    // recente, pedido antigo/recente — além das já existentes (produto/modalidade/full/status).
-    var SORTS = {
-      prazo: function (a, b) { return shipDeadlineTs(a) - shipDeadlineTs(b); },
-      prazo_desc: function (a, b) { return shipDeadlineTs(b) - shipDeadlineTs(a); },
-      pagamento: function (a, b) { return (a.paidAt || '').localeCompare(b.paidAt || ''); },
-      pagamento_desc: function (a, b) { return (b.paidAt || '').localeCompare(a.paidAt || ''); },
-      criacao: function (a, b) { return (a.createdAt || '').localeCompare(b.createdAt || ''); },
-      criacao_desc: function (a, b) { return (b.createdAt || '').localeCompare(a.createdAt || ''); },
-      produto: function (a, b) { return ((a.items[0] && a.items[0].productName) || '').localeCompare((b.items[0] && b.items[0].productName) || ''); },
-      modalidade: function (a, b) { return (a.shippingOption || '').localeCompare(b.shippingOption || ''); },
-      full: function (a, b) { return (b.isFbs ? 1 : 0) - (a.isFbs ? 1 : 0); },
-      full_desc: function (a, b) { return (a.isFbs ? 1 : 0) - (b.isFbs ? 1 : 0); },
-      status: function (a, b) { return (a.normalizedStatus || '').localeCompare(b.normalizedStatus || ''); },
-    };
-    list = list.slice().sort(SORTS[teF.sort] || SORTS.prazo);
-    // cards
-    var counts = {}; base.forEach(function (o) { var c = teClassifica(o); counts[c] = (counts[c] || 0) + 1; });
-    var pendentes = base.filter(function (o) { return !o.shippedAt; });
-    var enviadosNoPrazo = counts.ENVIADO_NO_PRAZO || 0, enviadosAtrasado = counts.ENVIADO_ATRASADO || 0;
-    var pctPrazo = (enviadosNoPrazo + enviadosAtrasado) ? r2(enviadosNoPrazo / (enviadosNoPrazo + enviadosAtrasado) * 100) : null;
-    var strip = kstrip([
-      { l: 'A enviar (com prazo)', v: nn(pendentes.length), cls: 'blue' },
-      { l: 'Atrasados', v: nn(counts.ATRASADO || 0), cls: (counts.ATRASADO ? 'red' : 'green') },
-      { l: 'Vencem hoje', v: nn(counts.VENCE_HOJE || 0), cls: (counts.VENCE_HOJE ? 'amber' : 'green') },
-      { l: 'Próximos do vencimento', v: nn(counts.PROXIMO_DO_PRAZO || 0), cls: 'amber' },
-      { l: 'Enviados no prazo', v: nn(enviadosNoPrazo), cls: 'green' },
-      { l: 'Enviados atrasados', v: nn(enviadosAtrasado), cls: (enviadosAtrasado ? 'red' : 'green') },
-      { l: '% enviados no prazo', v: pctPrazo != null ? pct(pctPrazo) : '—', cls: 'blue' },
-    ]);
-    var classeChips = '<div class="chips"><span class="chip' + (!teF.classe ? ' chip-on' : '') + '" data-teclasse="">Todas</span>' + Object.keys(TE_LABELS).filter(function (k) { return counts[k]; }).map(function (k) { return '<span class="chip' + (teF.classe === k ? ' chip-on' : '') + '" data-teclasse="' + k + '">' + TE_LABELS[k][0] + ' <b>' + nn(counts[k]) + '</b></span>'; }).join('') + '</div>';
-    var presetChips = [['', 'Todos'], ['hoje', 'Hoje'], ['amanha', 'Amanhã'], ['24h', 'Próximas 24h'], ['48h', 'Próximas 48h']];
-    var modOptions = {}; base.forEach(function (o) { if (o.shippingOption) modOptions[o.shippingOption] = 1; });
-    var rows = list.slice(0, 300).map(function (o) {
-      var it = (o.items || [])[0] || {}; var cl = teClassifica(o); var lb = TE_LABELS[cl];
-      return '<tr class="rowlink" data-open="' + esc(o.id) + '"><td class="mono">' + esc(o.id) + '</td><td class="mono">' + esc(o.tracking || '—') + '</td><td class="cell-text">' + esc((it.productName || '—').slice(0, 30)) + '</td><td class="mono">' + esc(it.sku || '—') + '</td><td class="nowrap">' + (o.paidAt ? dbr(o.paidAt) : '—') + '</td><td class="nowrap">' + (o.shipByDate ? new Date(o.shipByDate).toLocaleString('pt-BR') : '—') + '</td><td class="nowrap">' + (o.shippedAt ? new Date(o.shippedAt).toLocaleString('pt-BR') : teCountdownTxt(o)) + '</td><td>' + esc(o.shippingOption || '—') + '</td><td>' + (o.isFbs ? '<span class="tag info">Full</span>' : '—') + '</td><td class="cell-text">' + esc(S.pedidos.labels[o.normalizedStatus] || o.orderStatus || '—') + '</td><td><span class="tag ' + lb[1] + '">' + lb[0] + '</span></td></tr>';
-    }).join('');
-    return head + strip + classeChips +
-      '<div class="chips" style="margin-top:6px"><span class="footnote" style="margin:0 4px 0 0;align-self:center">Janela:</span>' + presetChips.map(function (c) { return '<span class="chip' + (teF.preset === c[0] ? ' chip-on' : '') + '" data-tepreset="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
-      '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="teq" style="width:240px" placeholder="Buscar pedido, BR, SKU, produto…" value="' + esc(teF.search) + '">' +
-      '<select class="select sm" id="tefull"><option value=""' + (!teF.full ? ' selected' : '') + '>Full e não Full</option><option value="full"' + (teF.full === 'full' ? ' selected' : '') + '>Só Full</option><option value="nfull"' + (teF.full === 'nfull' ? ' selected' : '') + '>Só não Full</option></select>' +
-      '<select class="select sm" id="temod"><option value="">Todas as modalidades</option>' + Object.keys(modOptions).map(function (m) { return '<option value="' + esc(m) + '"' + (teF.modalidade === m ? ' selected' : '') + '>' + esc(m) + '</option>'; }).join('') + '</select>' +
-      '<select class="select sm" id="tesort">' + [
-        ['prazo', 'Vence primeiro'], ['prazo_desc', 'Vence por último'],
-        ['pagamento', 'Pagamento mais antigo'], ['pagamento_desc', 'Pagamento mais recente'],
-        ['criacao', 'Pedido mais antigo'], ['criacao_desc', 'Pedido mais recente'],
-        ['produto', 'Produto'], ['modalidade', 'Modalidade'], ['full', 'Full primeiro'], ['full_desc', 'Normal primeiro'], ['status', 'Status'],
-      ].map(function (o) { return '<option value="' + o[0] + '"' + (teF.sort === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
-      '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos' + (list.length > 300 ? ' (mostrando 300)' : '') + '</div>' +
-      '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>BR</th><th>Produto</th><th>SKU</th><th>Pagamento</th><th>Prazo de envio</th><th>Enviado / restante</th><th>Modalidade</th><th>Full?</th><th>Status Shopee</th><th>Situação do prazo</th></tr></thead><tbody>' + (rows || '<tr><td colspan="11" class="empty">Nenhum pedido neste filtro.</td></tr>') + '</tbody></table></div></div>';
-  }
-  function bindTempoEnvioBody() {
-    app.querySelectorAll('[data-teclasse]').forEach(function (c) { c.onclick = function () { teF.classe = c.dataset.teclasse; render(); }; });
-    app.querySelectorAll('[data-tepreset]').forEach(function (c) { c.onclick = function () { teF.preset = c.dataset.tepreset; render(); }; });
-    var fu = document.getElementById('tefull'); if (fu) fu.onchange = function () { teF.full = fu.value; render(); };
-    var md = document.getElementById('temod'); if (md) md.onchange = function () { teF.modalidade = md.value; render(); };
-    var so = document.getElementById('tesort'); if (so) so.onchange = function () { teF.sort = so.value; render(); };
-    var q = document.getElementById('teq'); if (q) { var deb; q.oninput = function () { clearTimeout(deb); deb = setTimeout(function () { var v = q.value; teF.search = v; render(); var el = document.getElementById('teq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 200); }; }
-    app.querySelectorAll('[data-open]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.open); }; });
-  }
 
   // ---------- FICHA FINANCEIRA 360º DO PEDIDO ----------
   // O ID do pedido é a chave central: consolida Pedidos, Produtos (custo), Minha Renda (taxas
