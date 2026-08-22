@@ -117,7 +117,16 @@
   function brl(v) { return (v == null || isNaN(v)) ? 'R$ 0,00' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
   function pct(v) { return v == null ? '—' : (Math.round(v * 100) / 100).toLocaleString('pt-BR') + '%'; }
   function num(s) { return s == null || s === '' ? 0 : Number(s); }
-  function dbr(d) { if (!d) return '—'; var x = new Date(d); return isNaN(x) ? '—' : x.toLocaleDateString('pt-BR'); }
+  // Causa raiz do bug "Caixa mostra o Acelera do dia errado": datas SEM hora (ex.: dateKey "2026-08-18",
+  // vindas de orders.paidAt.slice(0,10), expSessions.dataOperacional, aceleraByDia().data) eram
+  // formatadas com `new Date(str)`, que o JS interpreta como UTC meia-noite — em fusos negativos
+  // (America/Sao_Paulo) isso exibe o dia ANTERIOR. O dado em si (a chave usada para buscar o Acelera)
+  // sempre esteve correto; só o RÓTULO ficava errado, fazendo o botão do dia 19/08 exibir "18/08" e
+  // abrir com os números corretos de 19/08 — parecendo, na tela, "18/08 mostrando dado de 19/08".
+  // Corrigido na raiz (mesma técnica já usada em acLocalDate, agora generalizada): datas puras
+  // YYYY-MM-DD são sempre interpretadas como LOCAIS; qualquer outro formato (timestamp completo com
+  // hora/offset, Date, epoch) mantém o comportamento original. Nenhum offset manual (+1/-1) foi usado.
+  function dbr(d) { if (!d) return '—'; var s = typeof d === 'string' ? d : null; var bare = s && /^\d{4}-\d{2}-\d{2}$/.test(s.slice(0, 10)) && s.length <= 10; var x = bare ? new Date(s + 'T00:00:00') : new Date(d); return isNaN(x) ? '—' : x.toLocaleDateString('pt-BR'); }
   function toast(title, body, err) { var el = document.createElement('div'); el.className = 'toast' + (err ? ' err' : ''); el.innerHTML = '<div class="tt">' + esc(title) + '</div><div>' + esc(body) + '</div>'; document.body.appendChild(el); setTimeout(function () { el.remove(); }, 6000); }
 
   // ===== Devolução — estado operacional + impacto determinístico (mesmas regras do backend) =====
@@ -1210,41 +1219,74 @@
     var taxaRows = comp.taxaRows, adjRows = comp.adjRows, taxasSomaC = comp.taxasSomaC;
     // Adjustment é evento posterior — nunca entra na conferência da liberação original (§45-48).
     var taxasConf = mrRow ? conferencia(mrRow.liberado, mrRow.preco + comp.taxasSomaSemAjusteC) : '';
+    // §Correção CAIXA×FICHA (Parte 2): reorganização puramente VISUAL — nenhum valor recalculado.
+    // Linha zero nunca renderiza; valores brutos de referência (comSubs/servicoBruta) nunca aparecem
+    // inline (só na Auditoria técnica); a decomposição de Service Fee vira uma tabela de 2 colunas
+    // em vez de texto corrido — só para fieldKey 'servico', que é onde essa decomposição existe.
     var taxaLine = function (r) {
-      var sub = r.subs.length ? '<div class="footnote" style="margin:2px 0 6px">' + r.subs.map(function (s) { return '↳ ' + esc(s[0]) + ': ' + brlC(s[1]); }).join(' · ') + '</div>' : '';
-      return '<div class="fin-line rowlink" title="Fonte: ' + esc(r.origem) + '"><span>' + esc(r.label) + '</span><b class="' + (r.valor < 0 ? 'neg' : r.valor > 0 ? 'pos' : '') + '">' + brlC(r.valor) + '</b></div>' + sub;
+      var subHtml = '';
+      if (r.fieldKey === 'servico' && r.subs.length) {
+        // "(referência)" é o bruto — nunca aparece inline, mesmo dentro da tabela de componentes;
+        // fica só na Auditoria Técnica (mrRow.servicoBruta já está lá via auditoriaFonte).
+        var svcTblRows = r.subs.filter(function (s) { return s[1] && s[0].indexOf('(referência)') < 0; }).map(function (s) { return '<tr><td class="cell-text">' + esc(s[0]) + '</td><td class="nowrap ' + (s[1] < 0 ? 'neg' : 'pos') + '">' + brlC(s[1]) + '</td></tr>'; }).join('');
+        subHtml = svcTblRows ? '<div class="table-wrap" style="margin:2px 0 8px"><table class="report" style="font-size:12.5px"><thead><tr><th>Componente</th><th>Valor</th></tr></thead><tbody>' + svcTblRows + '</tbody></table></div>' : '';
+      } else if (r.fieldKey === 'ampLiquido' && r.subs.length) {
+        subHtml = '<div class="footnote" style="margin:2px 0 6px">' + r.subs.filter(function (s) { return s[1]; }).map(function (s) { return '↳ ' + esc(s[0]) + ': ' + brlC(s[1]); }).join(' · ') + '</div>';
+      }
+      return '<div class="fin-line rowlink" title="Fonte: ' + esc(r.origem) + '"><span>' + esc(r.label) + '</span><b class="' + (r.valor < 0 ? 'neg' : r.valor > 0 ? 'pos' : '') + '">' + brlC(r.valor) + '</b></div>' + subHtml;
     };
-    // §80-90 do prompt Full/FBS: a lista deixa de ser um monte único — separa TAXAS COBRADAS DE
-    // NÓS (débitos reais do vendedor, sempre visível primeiro) de DESCONTOS COMERCIAIS e
-    // CRÉDITOS/INCENTIVOS (subseções só aparecem quando têm conteúdo). A SOMA dos três grupos +
-    // reembolso continua sendo exatamente taxasSomaC — nenhum valor foi recalculado, só reagrupado.
     var gTaxas = comp.gTaxas, gDescontos = comp.gDescontos, gCreditos = comp.gCreditos, gOutros = comp.gOutros, gEnvio = comp.gEnvio, envio = comp.envio, auditoriaFonte = comp.auditoriaFonte;
     var somaGrupo = comp.somaGrupo;
+    // Linhas com valor zero nunca renderizam (nem aqui, nem nas sub-tabelas) — a soma do grupo usa
+    // sempre o grupo ORIGINAL (somaGrupo(g)), idêntica à do grupo filtrado (zero não muda soma).
     var grupoBlock = function (titulo, g, sempreMostra) {
-      if (!g.length && !sempreMostra) return '';
+      var gf = g.filter(function (r) { return r.valor; });
+      if (!gf.length && !sempreMostra) return '';
       var soma = somaGrupo(g);
-      return '<div style="margin-top:10px"><div class="footnote" style="margin:0 0 4px;text-transform:uppercase;letter-spacing:.02em">' + esc(titulo) + '</div>' + (g.length ? g.map(taxaLine).join('') + '<div class="fin-line" style="margin-top:2px"><span>Subtotal — ' + esc(titulo.toLowerCase()) + '</span><b class="' + (soma < 0 ? 'neg' : soma > 0 ? 'pos' : '') + '">' + brlC(soma) + '</b></div>' : '<span class="tag neutral">nenhum lançamento deste tipo neste pedido</span>') + '</div>';
+      return (gf.length ? gf.map(taxaLine).join('') : '<span class="tag neutral">nenhum lançamento deste tipo neste pedido</span>') +
+        (gf.length > 1 ? '<div class="fin-line" style="margin-top:2px"><span>Subtotal — ' + esc(titulo.toLowerCase()) + '</span><b class="' + (soma < 0 ? 'neg' : soma > 0 ? 'pos' : '') + '">' + brlC(soma) + '</b></div>' : '');
     };
-    // ENVIO (§27-39): só aparece quando o Subtotal de Envio é diferente de zero — quando os
-    // componentes se compensam (comprador + Shopee cobrindo o frete parceiro), a Líder não teve
-    // impacto líquido de frete e a seção some, exatamente como o prompt exige (§32-36).
-    var envioBlock = '';
+    // 3. TAXAS SHOPEE DESCONTADAS DO VENDEDOR — só taxas reais, nomes reais, zero nunca aparece.
+    var bloco3Taxas = '<div class="panel"><div class="ph"><h3>3. Taxas Shopee Descontadas do Vendedor</h3></div><div class="pb">' +
+      (gTaxas.length ? grupoBlock('Taxas Shopee', gTaxas, true) : '<span class="tag neutral">sem taxas cobradas neste pedido</span>') +
+      '</div></div>';
+    // 4. ENVIO (§27-39): só aparece quando o impacto líquido é diferente de zero.
+    var bloco4Envio = '';
     if (gEnvio.length && envio && envio.subtotalC) {
       var envioComps = envio.comps.filter(function (c) { return c.valor; }).map(function (c) { return '<div class="fin-line"><span>' + esc(c.label) + '</span><span class="' + (c.valor < 0 ? 'neg' : 'pos') + '">' + brlC(c.valor) + '</span></div>'; }).join('');
-      envioBlock = '<div style="margin-top:10px"><div class="footnote" style="margin:0 0 4px;text-transform:uppercase;letter-spacing:.02em">Envio</div>' +
+      bloco4Envio = '<div class="panel"><div class="ph"><h3>4. Envio</h3></div><div class="pb">' +
         '<div class="fin-line"><span>Subtotal de Envio</span><b class="' + (envio.subtotalC < 0 ? 'neg' : 'pos') + '">' + brlC(envio.subtotalC) + '</b></div>' +
-        '<details style="margin-top:2px"><summary style="cursor:pointer;font-size:13px;color:var(--muted,#666)">Ver composição</summary><div style="margin-top:4px">' + envioComps + '<div class="fin-line" style="margin-top:2px"><span>Impacto líquido para a Líder</span><b class="' + (envio.subtotalC < 0 ? 'neg' : 'pos') + '">' + brlC(envio.subtotalC) + '</b></div></div></details></div>';
+        '<details style="margin-top:2px"><summary style="cursor:pointer;font-size:13px;color:var(--muted,#666)">Ver composição</summary><div style="margin-top:4px">' + envioComps + '</div></details></div></div>';
     }
-    var auditoriaBlock = auditoriaFonte.length ? '<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Auditoria da fonte (valores de referência — nunca somados)</summary><div style="margin-top:6px">' +
+    // 5. AJUSTES QUE AFETARAM O REPASSE — PIX, Cupom, Reembolso, outros ajustes reais (nunca taxa).
+    // Recolhido por padrão; só renderiza quando existe algum valor (§44-49 do complemento da Ficha).
+    var gAjustes = gDescontos.concat(gOutros);
+    var somaAjustes = somaGrupo(gDescontos) + somaGrupo(gOutros);
+    var bloco5Ajustes = gAjustes.filter(function (r) { return r.valor; }).length ? '<div class="panel"><div class="ph"><h3>5. Ajustes que Afetaram o Repasse</h3></div><div class="pb">' +
+      '<details><summary style="cursor:pointer;font-weight:600">Ver ajustes (' + brlC(somaAjustes) + ')</summary><div style="margin-top:6px">' + grupoBlock('Ajustes', gAjustes, true) + '</div></details>' +
+      '</div></div>' : '';
+    // 6. CRÉDITOS / COMPENSAÇÕES — só quando existem.
+    var bloco6Creditos = gCreditos.filter(function (r) { return r.valor; }).length ? '<div class="panel"><div class="ph"><h3>6. Créditos / Compensações</h3></div><div class="pb">' + grupoBlock('Créditos', gCreditos, true) + '</div></div>' : '';
+    // 7. CONCILIAÇÃO DO PAGAMENTO — equação explícita, substitui "Total (todos os grupos)". Usa
+    // exatamente os mesmos grupos já somados (taxasSomaSemAjusteC == gDescontos+gEnvio+gTaxas+
+    // gCreditos, validado empiricamente contra 1.662 pedidos reais) — nenhuma conta nova.
+    var pagamentoLiberadoC = mrRow ? mrRow.liberado : (receitaC != null ? receitaC + taxasSomaC : null);
+    var bloco7Conciliacao = mrRow ? '<div class="panel"><div class="ph"><h3>7. Conciliação do Pagamento</h3></div><div class="pb">' +
+      fLine('Preço do produto', mrRow.preco) +
+      (somaGrupo(gDescontos) ? fLine('Ajustes / reduções do pedido', somaGrupo(gDescontos)) : '') +
+      (envio && envio.subtotalC ? fLine('Subtotal de envio', envio.subtotalC) : '') +
+      fLine('Taxas Shopee', somaGrupo(gTaxas)) +
+      (somaGrupo(gCreditos) ? fLine('Créditos', somaGrupo(gCreditos)) : '') +
+      '<div class="fin-line total"><span>= Pagamento Liberado Shopee</span><b>' + brlC(pagamentoLiberadoC) + '</b></div>' +
+      '<div style="margin-top:4px">' + taxasConf + '</div>' +
+      '</div></div>' : '<div class="panel"><div class="ph"><h3>7. Conciliação do Pagamento</h3></div><div class="pb"><span class="tag neutral">Sem Income cruzado para este pedido — conciliação indisponível.</span></div></div>';
+    var auditoriaBlock = (auditoriaFonte.length || shipRow) ? '<div class="panel"><div class="ph"><h3>Auditoria Técnica</h3></div><div class="pb">' +
+      '<details><summary style="cursor:pointer;font-weight:600">Ver campos brutos, origem e valores não contabilizados</summary><div style="margin-top:6px">' +
       auditoriaFonte.map(function (a) { return '<div class="fin-line"><span>' + esc(a.label) + ' <span class="footnote" style="margin:0">(' + esc(a.nota) + ')</span></span><span class="' + (a.valor < 0 ? 'neg' : 'pos') + '">' + brlC(a.valor) + '</span></div>'; }).join('') +
-      '</div></details>' : '';
-    var taxasBlock = '<div class="panel"><div class="ph"><h3>Taxas Shopee</h3>' + taxasConf + '</div><div class="pb">' +
-      (taxaRows.length ? grupoBlock('Taxas Shopee', gTaxas, true) + grupoBlock('Reduções / Descontos do Pedido', gDescontos, false) + envioBlock + grupoBlock('Créditos / Incentivos', gCreditos, false) + grupoBlock('Outros ajustes', gOutros, false) +
-        '<div class="fin-line total" style="margin-top:10px"><span>Total (todos os grupos)</span><b class="' + (taxasSomaC < 0 ? 'neg' : 'pos') + '">' + brlC(taxasSomaC) + '</b></div>' : '<span class="tag neutral">sem dados de taxas para este pedido</span>') +
-      auditoriaBlock +
-      (shipRow ? '<div class="footnote" style="margin-top:8px">Shipping Fee Discrepancy — frete cobrado acima do esperado (auditoria, não altera o Subtotal de Envio acima): esperado ' + brl(shipRow.esperado) + ' · real ' + brl(shipRow.real) + ' · diferença ' + brl(shipRow.real - shipRow.esperado) + '.</div>' : '') +
+      (shipRow ? '<div class="footnote" style="margin-top:8px">Shipping Fee Discrepancy — frete cobrado acima do esperado (não altera o Subtotal de Envio): esperado ' + brl(shipRow.esperado) + ' · real ' + brl(shipRow.real) + ' · diferença ' + brl(shipRow.real - shipRow.esperado) + '.</div>' : '') +
       '<div class="footnote" style="margin-top:6px">' + (mrRow ? 'Origem principal: Minha Renda (Income) · Pedido ' + esc(orderId) : ord ? 'Origem: Pedidos (aproximado — sem Minha Renda para este pedido)' : 'sem fonte') + '</div>' +
-      '</div></div>';
+      '</div></details></div></div>' : '';
+    var taxasBlock = bloco3Taxas + bloco4Envio + bloco5Ajustes + bloco6Creditos + bloco7Conciliacao + auditoriaBlock;
 
     // ---- §8 do prompt de reorganização: DADOS DA VENDA — grade compacta, um único bloco (pedido +
     // itens), sem espalhar em vários cards. Família/custo reaproveitam o vínculo SKU→família→custo já
@@ -1256,7 +1298,7 @@
       var unitPrice = it.agreedPrice != null ? it.agreedPrice : (it.subtotal != null && it.qty ? r2(it.subtotal / it.qty) : null);
       return { produto: it.productName, sku: it.sku, variacao: it.variationName, familia: c ? c.familyName : null, qty: it.qty, unitPrice: unitPrice, total: it.subtotal, custoUnit: custoUnit, custoTotal: custoTotal, linked: !!c };
     }) : [];
-    var dadosVendaBlock = '<div class="panel"><div class="ph"><h3>Dados da Venda</h3></div><div class="pb">' +
+    var dadosVendaBlock = '<div class="panel"><div class="ph"><h3>2. Produto e Venda</h3></div><div class="pb">' +
       kv('Pedido', orderId) + kv('Status Shopee', ord ? (S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus) : '—') + kv('Data de criação', ord ? dbr(ord.createdAt) : '—') + kv('Data de pagamento', ord && ord.paidAt ? dbr(ord.paidAt) : '—') + kv('BR / Rastreamento', ord ? ord.tracking : '—') + (ord && ord.isFbs ? kv('Full/FBS', 'Sim') : '') +
       (itemRows.length ? '<div class="table-wrap" style="margin-top:8px"><table class="report"><thead><tr><th>Produto</th><th>SKU</th><th>Variação</th><th>Família</th><th>Qtd</th><th>Valor unit.</th><th>Valor total</th><th>Custo unit.</th><th>Custo total</th></tr></thead><tbody>' +
         itemRows.map(function (r) { return '<tr><td class="cell-text">' + esc(r.produto || '—') + '</td><td class="mono">' + esc(r.sku || '—') + '</td><td>' + esc(r.variacao || '—') + '</td><td>' + esc(r.familia || (r.linked ? '—' : '⚠ sem vínculo')) + '</td><td>' + nn(r.qty) + '</td><td class="nowrap">' + (r.unitPrice != null ? brl(r.unitPrice) : '—') + '</td><td class="nowrap">' + (r.total != null ? brl(r.total) : '—') + '</td><td class="nowrap">' + (r.custoUnit != null ? brl(r.custoUnit) : '<span class="tag warn">sem custo</span>') + '</td><td class="nowrap">' + (r.custoTotal != null ? brl(r.custoTotal) : '—') + '</td></tr>'; }).join('') +
@@ -1350,37 +1392,38 @@
     // compensações (quando aplicável) = Lucro atual / Margem atual. Mesma fórmula do topo — nunca
     // uma segunda conta divergente.
     var lucroHeroTag = lucroProvisorio ? ' <span class="tag warn">provisório</span>' : '';
-    // §80-90 do prompt Full/FBS: cascata mais granular — mostra separadamente descontos comerciais
-    // do vendedor, taxas realmente cobradas e créditos/incentivos, com um subtotal "Pagamento
-    // líquido Shopee" intermediário, em vez de uma única linha "Taxas Shopee" misturando tudo.
-    // A soma dos 4 grupos é idêntica a taxasSomaC (nada foi recalculado, só exibido em mais linhas).
-    var pagamentoLiquidoC = receitaC != null ? receitaC + taxasSomaC : null;
+    // Cascata do Resultado do Pedido (Parte 2 da correção): parte do PAGAMENTO LIBERADO SHOPEE já
+    // líquido de taxas/ajustes/envio/descontos (mrRow.liberado) — nunca subtrai Taxa de comissão/
+    // Taxa de serviço de novo aqui (isso seria contar a mesma taxa duas vezes). Só desconta o que
+    // ainda NÃO está dentro do Pagamento Liberado: custo do produto, custo de afiliados, Taxa
+    // Acelera, ajustes POSTERIORES (Adjustment/gOutros) e devolução/perdas. A soma continua sendo
+    // exatamente resultadoC (fórmula canônica, não recalculada) — só a apresentação mudou.
     var resultadoBlock = '<div class="panel"><div class="ph"><h3>Resultado do Pedido</h3></div><div class="pb">' +
       fLine('Venda', receitaC) +
-      (gDescontos.length ? fLine('− Reduções / Descontos do Pedido', somaGrupo(gDescontos)) : '') +
-      fLine('− Taxas Shopee', somaGrupo(gTaxas)) +
-      (gEnvio.length && envio && envio.subtotalC ? fLine((envio.subtotalC < 0 ? '− ' : '+ ') + 'Subtotal de Envio', envio.subtotalC) : '') +
-      (gCreditos.length ? fLine('+ Créditos / Incentivos Shopee', somaGrupo(gCreditos)) : '') +
-      (gOutros.length ? fLine('− Outros ajustes', somaGrupo(gOutros)) : '') +
-      fLine('= Pagamento líquido Shopee (subtotal)', pagamentoLiquidoC, { total: true }) +
+      fLine('Pagamento Liberado Shopee', pagamentoLiberadoC, { total: true }) +
       fLine('− Custo do produto', custoProdC != null ? -custoProdC : null) +
       (custoAfilCents ? fLine('− Custo de afiliados (sem Minha Renda para este pedido)', -custoAfilCents) : '') +
       (acRows.length ? fLine('− Taxa Acelera', -Math.abs(acTaxaCents)) : '') +
-      (occs.length ? fLine('− Devolução/perdas (' + (devConfirmadoN === occs.length ? 'confirmado' : 'provisório') + ')', -devImpactoCents) : '') +
+      (somaGrupo(gOutros) ? fLine('± Ajustes posteriores (Adjustment)', somaGrupo(gOutros)) : '') +
+      (occs.length ? fLine('± Devolução/perdas (' + (devConfirmadoN === occs.length ? 'confirmado' : 'provisório') + ')', -devImpactoCents) : '') +
       '<div class="fin-line total"><span>Lucro atual' + lucroHeroTag + '</span><span class="' + (resultadoC != null && resultadoC < 0 ? 'neg' : 'pos') + '">' + (resultadoC != null ? brlC(resultadoC) : 'aguardando custo do produto') + '</span></div>' +
       '<div class="fin-line"><span>Margem atual</span><span>' + (margemPct != null ? pct(margemPct) : '—') + '</span></div>' +
       '</div></div>' +
       '<div class="footnote" style="padding:8px 0">Fontes usadas: Pedidos' + (mrRow ? ' · Minha Renda' : '') + (svcRows.length ? ' · Service Fee Details' : '') + (adjRows.length ? ' · Adjustment' : '') + (acRows.length ? ' · Shopee Acelera' : '') + (affRow ? ' · Afiliados' : '') + (wtx.length ? ' · Saldo da Carteira' : '') + (occs.length ? ' · Devoluções' : '') + '.</div>';
 
-    // Hierarquia única pedida pelo prompt de reorganização: Topo (4 números) → Dados da Venda →
-    // Taxas e Descontos (lista única) → Eventos do Pedido (resumido) → Resultado do Pedido.
-    panel.innerHTML = '<div class="dh"><div><b>Ficha do Pedido</b> — <span class="mono">' + esc(orderId) + '</span> <span class="tag" style="margin-left:6px">' + st.label + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
-      '<div class="kstrip" style="margin-bottom:12px">' +
+    // 7 blocos (Parte 2 da correção): 1.Resumo Financeiro (5 números) → 2.Produto e Venda →
+    // 3.Taxas Shopee Descontadas do Vendedor → 4.Envio → 5.Ajustes que Afetaram o Repasse →
+    // 6.Créditos/Compensações → 7.Conciliação do Pagamento — depois Eventos do Pedido → Resultado.
+    var heroBlock = '<div class="panel"><div class="ph"><h3>1. Resumo Financeiro</h3></div><div class="pb" style="padding-top:0">' +
+      '<div class="kstrip">' +
       '<div class="kc"><div class="kl">Valor da venda</div><div class="kv" style="font-size:18px">' + (receitaC != null ? brlC(receitaC) : '—') + '</div></div>' +
+      '<div class="kc"><div class="kl">Pagamento liberado Shopee</div><div class="kv" style="font-size:18px">' + (pagamentoLiberadoC != null ? brlC(pagamentoLiberadoC) : '—') + '</div></div>' +
       '<div class="kc"><div class="kl">Custo do produto</div><div class="kv" style="font-size:18px">' + (custoProdC != null ? brlC(custoProdC) : (custoPendente ? '<span class="tag warn">pendente</span>' : '—')) + '</div></div>' +
-      '<div class="kc"><div class="kl">Lucro liberado' + lucroHeroTag + '</div><div class="kv" style="font-size:18px;color:' + (resultadoC != null && resultadoC < 0 ? 'var(--err)' : 'var(--ok)') + '">' + (resultadoC != null ? brlC(resultadoC) : '<span class="tag warn">custo pendente</span>') + '</div></div>' +
+      '<div class="kc"><div class="kl">Lucro atual' + lucroHeroTag + '</div><div class="kv" style="font-size:18px;color:' + (resultadoC != null && resultadoC < 0 ? 'var(--err)' : 'var(--ok)') + '">' + (resultadoC != null ? brlC(resultadoC) : '<span class="tag warn">custo pendente</span>') + '</div></div>' +
       '<div class="kc"><div class="kl">Margem</div><div class="kv" style="font-size:18px">' + (margemPct != null ? pct(margemPct) : '—') + '</div></div>' +
-      '</div>' +
+      '</div></div></div>';
+    panel.innerHTML = '<div class="dh"><div><b>Ficha do Pedido</b> — <span class="mono">' + esc(orderId) + '</span> <span class="tag" style="margin-left:6px">' + st.label + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
+      heroBlock +
       dadosVendaBlock +
       taxasBlock +
       eventosBlock +
@@ -3554,6 +3597,67 @@
       var liquidoCalc = g.antec - g.taxa;
       return { data: g.data, pedidos: pedidos, resgates: g.nResgates, antec: g.antec, taxa: g.taxa, receb: g.receb, liquidoCalc: liquidoCalc, liquidoDiff: g.receb - liquidoCalc, reemb: g.reemb, pend: g.pend, aliquota: g.antec ? g.taxa / g.antec : 0 };
     });
+  }
+  // §Correção CAIXA×ACELERA — função ÚNICA e canônica do fechamento do dia do Acelera. O Caixa
+  // NUNCA reconstrói "quais pedidos são do Acelera nesse dia" nem recalcula bruto/taxa/líquido —
+  // só lê o que esta função devolve ("evita duas verdades"). Não recalcula/reagrupa nada do
+  // Acelera (aceleraByResgate/aceleraByDia continuam intocados, MAIOR DATA DAS LINHAS DO MESMO
+  // RESGATE preservada); só empacota o resultado do dia + cruza com os motores JÁ APROVADOS de
+  // Expedição (expedidoSet/caixaDayExpedicao/pendenciasConferencia), nunca reinterpretando-os.
+  function aceleraResultadoFechamento(dateKey) {
+    var resgatesDia = aceleraByResgate(acelera).filter(function (g) { return g.data === dateKey; });
+    var recsByResgate = {}; acelera.forEach(function (r) { (recsByResgate[r.resgate] = recsByResgate[r.resgate] || []).push(r); });
+    var pedidosSet = {}; var pedidoBrutoHoje = {}; var pedidoValores = {};
+    var resgates = resgatesDia.map(function (g) {
+      var linhas = recsByResgate[g.resgate] || [];
+      var pedidos = linhas.map(function (r) { return r.pedido; }).filter(function (v, i, a) { return a.indexOf(v) === i; });
+      pedidos.forEach(function (p) { pedidosSet[p] = 1; });
+      linhas.forEach(function (r) {
+        pedidoBrutoHoje[r.pedido] = (pedidoBrutoHoje[r.pedido] || 0) + r.antecipado;
+        var pv = pedidoValores[r.pedido] = pedidoValores[r.pedido] || { bruto: 0, taxa: 0, resgate: g.resgate };
+        pv.bruto += r.antecipado; pv.taxa += r.taxa; pv.liquido = pv.bruto - pv.taxa;
+      });
+      var statusCounts = {}; linhas.forEach(function (r) { var lab = acStatusLabel(r.status); statusCounts[lab] = (statusCounts[lab] || 0) + 1; });
+      return { resgate: g.resgate, n: g.n, pedidos: pedidos, bruto: g.antec, taxa: g.taxa, liquido: g.liquidoCalc, recebidoInformado: g.receb, divergente: g.divergente, aliqLabel: g.aliqLabel, statusCounts: statusCounts };
+    });
+    var pedidosAcelera = Object.keys(pedidosSet);
+    var valorBruto = resgates.reduce(function (s, r) { return s + r.bruto; }, 0);
+    var taxaAcelera = resgates.reduce(function (s, r) { return s + r.taxa; }, 0);
+    var valorLiquido = resgates.reduce(function (s, r) { return s + r.liquido; }, 0);
+    var exp = expedidoSet(); // motor já aprovado de Expedição — nunca recriado aqui
+    var acByOrder = {}; acelera.forEach(function (r) { acByOrder[r.pedido] = true; });
+    // §7/§17/§31 do complemento: dentro do MESMO resgate consolidado do dia, separa (só informativo —
+    // nunca recalcula bruto/taxa/líquido do resgate) quais pedidos foram expedidos HOJE (novos) de
+    // quais foram expedidos em dia ANTERIOR e só chegaram no Acelera hoje (recebimento de pendência
+    // anterior). Nunca cria uma segunda venda nem duplica faturamento — é só rótulo de origem.
+    var pedidosAntigosRecebidosHoje = pedidosAcelera.filter(function (p) { var info = exp[p]; return info && info.at && info.at.slice(0, 10) < dateKey; });
+    var valorAntigosRecebidosHoje = pedidosAntigosRecebidosHoje.reduce(function (s, p) { return s + (pedidoBrutoHoje[p] || 0); }, 0);
+    // Direção 1: pedidos do ACELERA neste dia sem confirmação de expedição (bipe/Full) — pergunta
+    // "quem o Acelera confirma que não sabemos ter saído?".
+    var aceleraSemConfirmacaoExpedicao = pedidosAcelera.filter(function (p) { return !exp[p]; });
+    // Direção 2: pedidos ESPERADOS para conferência de expedição neste dia (sessão operacional do
+    // dia; sem sessão, cai no fallback já usado por caixaDayExpedicao) — cruza com o Acelera (em
+    // qualquer data, pois a antecipação pode chegar depois do envio).
+    var diaExp = caixaDayExpedicao(dateKey); // motor já aprovado — nunca recriado aqui
+    var expedidosEsperados = diaExp.temSessao ? diaExp.itens.map(function (i) { return i.orderId; }) : Object.keys(exp).filter(function (oid) { var info = exp[oid]; return info && info.at && info.at.slice(0, 10) === dateKey; });
+    var expedidosEncontrados = expedidosEsperados.filter(function (p) { return !!acByOrder[p]; });
+    var expedidosNaoEncontrados = expedidosEsperados.filter(function (p) { return !acByOrder[p]; });
+    var tocados = {}; pedidosAcelera.forEach(function (p) { tocados[p] = 1; }); expedidosEsperados.forEach(function (p) { tocados[p] = 1; });
+    var pendencias = pendenciasConferencia().filter(function (i) { return ['OK', 'RESOLVIDO'].indexOf(i.situacao) < 0 && tocados[i.orderId]; }); // motor já aprovado — só filtra pelo dia
+    var divergencias = resgates.filter(function (r) { return r.divergente; }).map(function (r) { return { resgate: r.resgate, tipo: 'LIQUIDO_DIVERGENTE', motivo: 'Líquido informado pela Shopee diverge do calculado (antecipado − taxa) além da tolerância de 2 centavos.', diffC: r.recebidoInformado - r.liquido }; });
+    return {
+      dateKey: dateKey,
+      resgates: resgates, resgatesN: resgates.length,
+      pedidosAcelera: pedidosAcelera, pedidosAceleraN: pedidosAcelera.length,
+      expedidosEsperados: expedidosEsperados, expedidosEsperadosN: expedidosEsperados.length,
+      expedidosEncontrados: expedidosEncontrados, expedidosEncontradosN: expedidosEncontrados.length,
+      expedidosNaoEncontrados: expedidosNaoEncontrados,
+      aceleraSemConfirmacaoExpedicao: aceleraSemConfirmacaoExpedicao,
+      valorBruto: valorBruto, taxaAcelera: taxaAcelera, valorLiquido: valorLiquido,
+      pedidosAntigosRecebidosHoje: pedidosAntigosRecebidosHoje, valorAntigosRecebidosHoje: valorAntigosRecebidosHoje,
+      pedidoValores: pedidoValores,
+      divergencias: divergencias, pendencias: pendencias
+    };
   }
   function aceleraMetrics(recs) {
     var m = { n: recs.length, volume: 0, taxa: 0, receb: 0, reemb: 0, pend: 0, restante: 0 };
@@ -5781,13 +5885,13 @@
     var taxasCobradas = linhasTaxas.reduce(function (s, l) { return s + l.valor; }, 0);
     var creditos = linhasCreditos.reduce(function (s, l) { return s + l.valor; }, 0);
     var outros = linhasOutros.reduce(function (s, l) { return s + l.valor; }, 0);
-    var ac = caixaDayAcelera(dateKey); var acTaxa = ac.n ? -Math.abs(ac.taxa) : 0;
+    var ac = aceleraResultadoFechamento(dateKey); var acTaxa = ac.resgatesN ? -Math.abs(ac.taxaAcelera) : 0;
     var eventosPosteriores = (caixaClose[dateKey] && caixaClose[dateKey].eventosPosteriores) || [];
     var receitaLiquida = receitaBruta + descComerciais + envioTotal + taxasCobradas + creditos + outros;
     var custoCompleto = pagas.length > 0 && custoConhecidoN === pagas.length;
     var lucro = custoCompleto ? receitaLiquida - custoTotal + acTaxa : null;
     var margem = (receitaBruta && lucro != null) ? r2(lucro / receitaBruta * 100) : null;
-    return { n: pagas.length, comIncomeN: comIncomeN, receitaBruta: receitaBruta, descComerciais: descComerciais, linhasReducoes: linhasReducoes, envioTotal: envioTotal, taxasCobradas: taxasCobradas, linhasTaxas: linhasTaxas, creditos: creditos, linhasCreditos: linhasCreditos, outros: outros, linhasOutros: linhasOutros, receitaLiquida: receitaLiquida, custoTotal: custoConhecidoN ? custoTotal : null, custoConhecidoN: custoConhecidoN, custoCompleto: custoCompleto, acTaxa: acTaxa, temAcelera: !!ac.n, eventosPosteriores: eventosPosteriores, lucro: lucro, margem: margem };
+    return { n: pagas.length, comIncomeN: comIncomeN, receitaBruta: receitaBruta, descComerciais: descComerciais, linhasReducoes: linhasReducoes, envioTotal: envioTotal, taxasCobradas: taxasCobradas, linhasTaxas: linhasTaxas, creditos: creditos, linhasCreditos: linhasCreditos, outros: outros, linhasOutros: linhasOutros, receitaLiquida: receitaLiquida, custoTotal: custoConhecidoN ? custoTotal : null, custoConhecidoN: custoConhecidoN, custoCompleto: custoCompleto, acTaxa: acTaxa, temAcelera: !!ac.resgatesN, eventosPosteriores: eventosPosteriores, lucro: lucro, margem: margem };
   }
   // Conta colunas do Income com valor real ainda sem destino — lê mrRenda DIRETO (dado bruto já
   // marcado por linha durante a importação), nunca mrEngine()/mrCamposNaoClassificados() (Minha Renda).
@@ -5822,12 +5926,6 @@
     var exp = expedidoSet(); var idsHoje = Object.keys(exp).filter(function (oid) { return exp[oid].at && exp[oid].at.slice(0, 10) === dateKey; });
     return { temSessao: false, esperados: null, expedidos: idsHoje.length, faltaram: null, itens: [] };
   }
-  function caixaDayAcelera(dateKey) {
-    if (!acelera.length) return { n: 0 };
-    var dias = aceleraByDia(acelera); var d = dias.filter(function (x) { return x.data === dateKey; })[0];
-    if (!d) return { n: 0 };
-    return { n: d.resgates, antec: d.antec, taxa: d.taxa, liquido: d.liquidoCalc };
-  }
   // Pendências do dia: cruza pendenciasConferencia() (Esperados×Expedidos×Acelera, já aprovado —
   // nunca recalculado aqui) com as novas Pendências Financeiras do Pedido — um único lugar.
   function caixaDayPendencias(dateKey) {
@@ -5860,12 +5958,19 @@
   // wgetCls/walletInCoverage/WALLET_ORIGEM_CATS), só sem passar pelo filtro de período global (o
   // dia do fechamento é fixo, não deve mudar se o usuário tiver outro período selecionado alhures).
   // Não recria walletOrigemDiag — monta o mesmo raciocínio escopado a um único dia.
+  // §1/§3/§25/§26 do complemento CAIXA×CARTEIRA: "resolver" uma pendência da Carteira nunca apaga o
+  // lançamento — muda seu estado de "sem explicação" para "explicado". Uma vez que o operador
+  // classifica/resolve (internalStatus EXPLICADO ou RESOLVIDO, salvo em wsetCls/walletcls — nunca
+  // reescrito aqui), o lançamento some de Pendências e passa a aparecer em Lançamentos Conciliados
+  // (caixaDayLancamentosConciliados), preservando o histórico completo (c.history) para sempre.
+  function wCarteiraResolvido(c) { return !!c && (c.internalStatus === 'RESOLVIDO' || c.internalStatus === 'EXPLICADO'); }
   function caixaDayPendenciasCarteira(dateKey) {
     if (!wallet.length) return { total: 0, itens: [] };
     var txs = wallet.filter(function (t) { return t.origin === 'SHOPEE' && t.date && t.date.slice(0, 10) === dateKey; });
     var coverage = walletSourceCoverage(); var itens = [];
     txs.forEach(function (t) {
       var cat = wEffCat(t); var c = wgetCls(t.id) || {};
+      if (wCarteiraResolvido(c)) return; // já classificado/resolvido — vira Lançamento Conciliado, não pendência
       if (c.flagDuplicidade) { itens.push({ t: t, tipo: 'DUPLICIDADE', motivo: 'Possível duplicidade (marcada manualmente)' }); return; }
       if (c.flagDescontoIndevido) { itens.push({ t: t, tipo: 'DESCONTO_INDEVIDO', motivo: 'Possível desconto indevido (marcado manualmente)' }); return; }
       if (!WALLET_ORIGEM_CATS[cat]) return; // sem fonte de comparação — nunca vira pendência por engano
@@ -5877,6 +5982,37 @@
       itens.push({ t: t, tipo: t.amount < 0 ? 'SEM_ORIGEM' : 'CREDITO_SEM_ORIGEM', motivo: (t.amount < 0 ? 'Débito' : 'Crédito') + ' sem origem identificada (' + wcatLabel(cat) + ')' });
     });
     return { total: itens.length, itens: itens };
+  }
+  // §2/§18/§22/§24 do complemento: Lançamentos Conciliados da Carteira — tudo que JÁ foi explicado
+  // (automático: walletOrigin bateu 🟢; ou manual: operador classificou/resolveu), categorizado para
+  // nunca cair num "Outras Receitas" genérico que esconde a origem. §12: o crédito que É o espelho do
+  // líquido do Acelera do dia (mesmo pedido/resgate de hoje) NUNCA conta como "outra receita" — ele
+  // é a confirmação de que o Acelera chegou na Carteira, mostrado à parte na comparação do bloco 3.
+  function caixaCartCategoria(t, ac) {
+    var cat = wEffCat(t); var oid = wOrderId(t); var resgId = wCreditResgateId(t);
+    if (t.amount < 0) return 'DEBITO';
+    if (cat === 'ACELERA' && ac && resgId && ac.resgates.some(function (r) { return r.resgate === resgId; })) return 'ACELERA_DIA';
+    if (oid && ac && ac.pedidosAntigosRecebidosHoje && ac.pedidosAntigosRecebidosHoje.indexOf(oid) >= 0) return 'PENDENCIA_ANTERIOR';
+    if (cat === 'COMPENSACAO' || cat === 'INDENIZACAO') return 'COMPENSACAO';
+    return 'OUTRAS_RECEITAS';
+  }
+  var CAIXA_CART_CAT_LABEL = { ACELERA_DIA: 'Acelera do dia', PENDENCIA_ANTERIOR: 'Recebimento de pendência anterior', COMPENSACAO: 'Compensação / Recuperação', OUTRAS_RECEITAS: 'Outras receitas', DEBITO: 'Débito da Carteira' };
+  function caixaDayLancamentosConciliados(dateKey) {
+    if (!wallet.length) return { itens: [], porCategoria: {} };
+    var ac = aceleraResultadoFechamento(dateKey);
+    var txs = wallet.filter(function (t) { return t.origin === 'SHOPEE' && t.date && t.date.slice(0, 10) === dateKey; });
+    var itens = [];
+    txs.forEach(function (t) {
+      var cat = wEffCat(t); var c = wgetCls(t.id) || {};
+      var resolvidoManual = wCarteiraResolvido(c);
+      var o = WALLET_ORIGEM_CATS[cat] ? walletOrigin(t) : null;
+      var conciliadoAuto = o && o.confidence === 'alta' && o.tier === 'ID exato' && o.ok;
+      if (!resolvidoManual && !conciliadoAuto) return; // continua pendência (ou fora de cobertura — não é lançamento explicado)
+      itens.push({ t: t, categoria: caixaCartCategoria(t, ac), origem: o ? o.fonte : (c.catManual ? 'Classificação manual — ' + wcatLabel(c.catManual) : wcatLabel(cat)), viaClassificacaoManual: resolvidoManual, viaOrigemAutomatica: !!conciliadoAuto });
+    });
+    var porCategoria = {};
+    itens.forEach(function (it) { var k = it.categoria; var g = porCategoria[k] = porCategoria[k] || { categoria: k, label: CAIXA_CART_CAT_LABEL[k], n: 0, valor: 0, itens: [] }; g.n++; g.valor += it.t.amount; g.itens.push(it); });
+    return { itens: itens, porCategoria: porCategoria };
   }
   // Camada 1 — registra uma transferência da Carteira para o banco. Evento manual PURO: nunca toca
   // Acelera/Pedido/receita/lucro — só um log auditável de "dinheiro saiu da carteira para o banco".
@@ -5949,11 +6085,11 @@
     return { pend: pend, pendCart: pendCart, rec: rec, novoDepois: novoDepois, status: status };
   }
   function caixaCloseDay(dateKey, status, userName, justificativa) {
-    var vendas = caixaDayVendas(dateKey); var exp = caixaDayExpedicao(dateKey); var ac = caixaDayAcelera(dateKey); var pend = caixaDayPendencias(dateKey); var pendCart = caixaDayPendenciasCarteira(dateKey);
+    var vendas = caixaDayVendas(dateKey); var exp = caixaDayExpedicao(dateKey); var ac = aceleraResultadoFechamento(dateKey); var pend = caixaDayPendencias(dateKey); var pendCart = caixaDayPendenciasCarteira(dateKey);
     var rec = caixaClose[dateKey] || { id: dateKey, history: [], eventosPosteriores: [] };
     var at = new Date().toISOString();
     rec.status = status; rec.closedBy = userName || 'Operador'; rec.closedAt = at;
-    rec.snapshot = { vendasN: vendas.n, vendasValor: vendas.valor, lucroC: vendas.nLucroConhecido ? vendas.lucroC : null, expEsperados: exp.esperados, expExpedidos: exp.expedidos, acN: ac.n || 0, pendTotal: pend.total, pendCartTotal: pendCart.total };
+    rec.snapshot = { vendasN: vendas.n, vendasValor: vendas.valor, lucroC: vendas.nLucroConhecido ? vendas.lucroC : null, expEsperados: exp.esperados, expExpedidos: exp.expedidos, acN: ac.resgatesN || 0, pendTotal: pend.total, pendCartTotal: pendCart.total };
     rec.justificativa = justificativa || null;
     rec.history = (rec.history || []).concat([{ at: at, user: rec.closedBy, status: status, justificativa: justificativa || null, pendTotal: pend.total }]);
     caixaClose[dateKey] = rec; return putMany('caixafechamentos', [rec]);
@@ -5996,12 +6132,12 @@
     var dateKey = caixaDashDate || new Date().toISOString().slice(0, 10);
     var head = secHead('CAIXA · DASHBOARD', 'Como foi o negócio neste dia?', 'Consolida Pedidos, Expedição, Acelera e Pendências para o dia selecionado — só leitura dos motores já aprovados, nunca recalcula nada.');
     if (!orders.length) return head + emptyBox('Importe os Pedidos para começar.');
-    var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = caixaDayAcelera(dateKey), pend = caixaDayPendencias(dateKey);
+    var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = aceleraResultadoFechamento(dateKey), pend = caixaDayPendencias(dateKey);
     var margem = vendas.valor ? r2(vendas.lucroC / 100 / vendas.valor * 100) : null;
     var datePicker = '<div class="panel"><div class="pb" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><label class="fld" style="margin:0">Dia</label><input type="date" class="input sm" id="caixadate" value="' + esc(dateKey) + '" style="width:170px"><span class="footnote" style="margin:0">' + esc(dbr(dateKey)) + '</span><button class="btn-sm" data-caixagofech="' + esc(dateKey) + '" style="margin-left:auto">Abrir Fechamento deste dia</button></div></div>';
     var stripVendas = kstrip([{ l: 'Pedidos pagos', v: nn(vendas.n), cls: 'blue' }, { l: 'Faturamento', v: brl(vendas.valor), cls: 'blue' }, { l: 'Lucro atual', v: vendas.nLucroConhecido ? brlC(vendas.lucroC) : '—', cls: vendas.lucroC >= 0 ? 'green' : 'red', s: nn(vendas.nLucroConhecido) + ' de ' + nn(vendas.n) + ' com custo conhecido' }, { l: 'Margem', v: margem != null ? pct(margem) : '—', cls: 'blue' }]);
     var stripExp = kstrip([{ l: 'Esperados', v: exp.esperados != null ? nn(exp.esperados) : '—', cls: 'blue' }, { l: 'Expedidos', v: nn(exp.expedidos), cls: 'green' }, { l: 'Faltaram', v: exp.faltaram != null ? nn(exp.faltaram) : '—', cls: exp.faltaram ? 'amber' : 'green' }]);
-    var stripAc = kstrip([{ l: 'Resgates', v: nn(ac.n || 0), cls: 'blue' }, { l: 'Antecipado', v: ac.antec != null ? brlC(ac.antec) : '—', cls: 'blue' }, { l: 'Taxa Acelera', v: ac.taxa != null ? brlC(ac.taxa) : '—', cls: 'blue' }, { l: 'Recebido (líquido)', v: ac.liquido != null ? brlC(ac.liquido) : '—', cls: 'green' }]);
+    var stripAc = kstrip([{ l: 'Resgates', v: nn(ac.resgatesN || 0), cls: 'blue' }, { l: 'Antecipado', v: ac.resgatesN ? brlC(ac.valorBruto) : '—', cls: 'blue' }, { l: 'Taxa Acelera', v: ac.resgatesN ? brlC(ac.taxaAcelera) : '—', cls: 'blue' }, { l: 'Recebido (líquido)', v: ac.resgatesN ? brlC(ac.valorLiquido) : '—', cls: 'green' }]);
     var valorPend = pend.financeiras.reduce(function (s, f) { return s + Math.abs(f.diff); }, 0);
     var stripPend = kstrip([{ l: 'Pendências', v: nn(pend.total), cls: pend.total ? 'red' : 'green' }, { l: 'Valor financeiro envolvido', v: brlC(valorPend), cls: valorPend ? 'amber' : 'green' }]);
     var inte = caixaInteligenciaDia(dateKey);
@@ -6053,47 +6189,119 @@
     function refresh() { panel.innerHTML = body(); wire(); }
     function body() {
       var st = caixaDayStatus(dateKey); var lbl = CAIXA_LABEL[st.status];
-      var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = caixaDayAcelera(dateKey), pend = st.pend, pendCart = st.pendCart;
+      var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = aceleraResultadoFechamento(dateKey), pend = st.pend, pendCart = st.pendCart;
       var margem = vendas.valor ? r2(vendas.lucroC / 100 / vendas.valor * 100) : null;
       var custoConhecido = vendas.pedidos.filter(function (o) { return pedidoComposicaoFinanceira(o.id).custoProdC != null; }).length;
       var naoClass = caixaCamposNaoClassificadosCount();
-      // §80-99 do prompt mestre: Fechamento organizado nas 6 camadas numeradas pedidas —
-      // 1.Recebido via Acelera → 2.Pendências do Fluxo → 3.Movimentos da Carteira (créditos/débitos/
-      // pendências, TODOS visíveis — não só pendências) → 4.Transferência para Banco →
-      // 5.Resultado/DRE → 6.Pendências e Conciliação (checklist final).
+      // Fechamento organizado em 8 blocos numerados — 1.Acelera → 2.Conferência Expedição×Acelera →
+      // 3.Receitas Adicionais → 4.Movimentos da Carteira → 5.Transferências Bancárias → 6.DRE →
+      // 7.Pendências Financeiras dos Pedidos → 8.Pendências e Conciliação (checklist final). O Caixa
+      // NUNCA reconstrói o que é do Acelera nem da Carteira — só lê aceleraResultadoFechamento() e
+      // caixaDayLancamentosConciliados()/caixaDayPendenciasCarteira() (motores já aprovados).
       var mov = caixaDayMovimentosCarteira(dateKey);
-      // 1. RECEBIDO VIA ACELERA — histórico da antecipação NUNCA muda por causa de movimento
-      // posterior da Carteira (§83/§85): valor bruto/taxa/líquido continuam sendo os do Acelera.
-      var bloco1 = '<div class="panel"><div class="ph"><h3>1. Recebido via Acelera</h3></div><div class="pb">' +
-        (ac.n ? (kv('Pedidos expedidos esperados', nn(exp.esperados != null ? exp.esperados : exp.expedidos)) + kv('Resgates', nn(ac.n)) + kv('Valor bruto', brlC(ac.antec)) + kv('Taxa Acelera', brlC(ac.taxa)) + kv('Valor líquido recebido', brlC(ac.liquido))) : '<div class="footnote" style="padding:0 0 10px">Nenhum resgate do Acelera consolidado nesta data.</div>') +
-        '</div></div>';
-      // 2. PENDÊNCIAS DO FLUXO — Vendas/Expedição/Financeiro como contexto + a tabela de pendências.
-      var pendRows = pend.operacionais.slice(0, 60).map(function (i) { return '<tr><td class="mono">' + esc(i.orderId) + '</td><td class="cell-text">' + esc(i.motivo) + '</td><td><button class="btn-sm" data-caixapendop="' + esc(i.orderId) + '">Resolver</button></td></tr>'; }).join('') +
-        pend.financeiras.slice(0, 60).map(function (f) { return '<tr><td class="mono">' + esc(f.orderId) + '</td><td class="cell-text">' + esc(f.motivo) + '</td><td><button class="btn-sm" data-goped360="' + esc(f.orderId) + '">Ver pedido</button> <button class="btn-sm" data-caixapendfin="' + esc(f.orderId) + '">Resolver</button></td></tr>'; }).join('');
-      var bloco2 = '<div class="panel"><div class="ph"><h3>2. Pendências do Fluxo</h3><span class="footnote" style="margin:0">' + nn(pend.total) + ' no total</span></div><div class="pb">' +
-        kv('Pedidos pagos', nn(vendas.n)) + kv('Faturamento', brl(vendas.valor)) + kv('Lucro atual', vendas.nLucroConhecido ? brlC(vendas.lucroC) : 'aguardando custo') + kv('Margem', margem != null ? pct(margem) : '—') +
-        kv('Expedição — esperados / confirmados / faltaram', exp.temSessao ? (nn(exp.esperados) + ' / ' + nn(exp.expedidos) + ' / ' + nn(exp.faltaram)) : (nn(exp.expedidos) + ' confirmados (sem Sessão de Expedição registrada)')) +
-        kv('Taxas conferidas (Income cruzado)', (vendas.n - vendas.pendFin.length) + ' de ' + vendas.n + ' pedidos') + kv('Custos conferidos', nn(custoConhecido) + ' de ' + nn(vendas.n) + ' pedidos') + kv('Valores não classificados (total importado — não restrito a este dia)', nn(naoClass) + ' coluna(s)') +
-        '</div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Problema</th><th></th></tr></thead><tbody>' + (pendRows || '<tr><td colspan="3" class="empty">Nenhuma pendência neste dia. 🎉</td></tr>') + '</tbody></table></div></div>';
-      // 3. MOVIMENTOS DA CARTEIRA — §86-91: TODOS os créditos e débitos aparecem (não só pendências),
-      // em 3 grupos separados. Read-only sobre pedido/bip/Acelera/devolução/Income — só classifica o
-      // lançamento da Carteira via o mesmo drawer já aprovado (openWalletTx).
-      var credRows = mov.creditos.slice(0, 80).map(function (t) { var rid = wCreditResgateId(t); return '<tr class="rowlink" data-wtx="' + esc(t.id) + '"><td class="nowrap">' + new Date(t.date).toLocaleString('pt-BR') + '</td><td class="cell-text">' + esc((t.desc || t.tipo || '—').slice(0, 40)) + '</td><td class="nowrap pos">' + brl(t.amount) + '</td><td class="mono">' + esc(wOrderId(t) || '— Não identificado') + '</td><td class="mono">' + esc(rid || '—') + '</td><td>' + esc(wcatLabel(wEffCat(t))) + '</td><td>' + esc(WSTATUS[wStatus(t)]) + '</td></tr>'; }).join('');
-      var debRows = mov.debitos.slice(0, 80).map(function (t) { return '<tr class="rowlink" data-wtx="' + esc(t.id) + '"><td class="nowrap">' + new Date(t.date).toLocaleString('pt-BR') + '</td><td class="cell-text">' + esc((t.desc || t.tipo || '—').slice(0, 40)) + '</td><td class="nowrap neg">' + brl(t.amount) + '</td><td class="mono">' + esc(wOrderId(t) || '— Não identificado') + '</td><td class="cell-text">' + esc(wProvavelOrigem(t)) + '</td><td>' + esc(wcatLabel(wEffCat(t))) + '</td><td>' + esc(WSTATUS[wStatus(t)]) + '</td></tr>'; }).join('');
-      var pendCartRows = pendCart.itens.slice(0, 60).map(function (it) { return '<tr class="rowlink" data-wtx="' + esc(it.t.id) + '"><td class="mono">' + esc(wOrderId(it.t) || '— Não identificado') + '</td><td class="cell-text">' + esc(it.motivo) + '</td><td class="nowrap">' + brl(it.t.amount) + '</td><td><button class="btn-sm" data-wtx="' + esc(it.t.id) + '">Classificar / Resolver</button></td></tr>'; }).join('');
-      var bloco3 = '<div class="panel"><div class="ph"><h3>3. Movimentos da Carteira</h3><span class="footnote" style="margin:0">' + nn(mov.creditos.length) + ' crédito(s) · ' + nn(mov.debitos.length) + ' débito(s) · ' + nn(pendCart.total) + ' pendência(s)</span></div><div class="pb">' +
-        '<div style="margin:4px 0"><b>Créditos</b></div><div class="table-wrap"><table class="report"><thead><tr><th>Data/hora</th><th>Descrição</th><th>Valor</th><th>Pedido</th><th>Resgate</th><th>Classificação</th><th>Situação</th></tr></thead><tbody>' + (credRows || '<tr><td colspan="7" class="empty">Nenhum crédito neste dia.</td></tr>') + '</tbody></table></div>' +
-        '<div style="margin:12px 0 4px"><b>Débitos</b></div><div class="table-wrap"><table class="report"><thead><tr><th>Data/hora</th><th>Descrição</th><th>Valor</th><th>Pedido</th><th>Origem</th><th>Categoria</th><th>Situação</th></tr></thead><tbody>' + (debRows || '<tr><td colspan="7" class="empty">Nenhum débito neste dia.</td></tr>') + '</tbody></table></div>' +
-        '<div style="margin:12px 0 4px"><b>Pendências</b> <span class="footnote" style="margin:0">débito/crédito sem origem, duplicidade, valor divergente, ID não localizado</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Problema</th><th>Valor</th><th></th></tr></thead><tbody>' + (pendCartRows || '<tr><td colspan="4" class="empty">Nenhuma pendência da carteira neste dia. 🎉</td></tr>') + '</tbody></table></div>' +
-        '</div></div>';
-      // 4. TRANSFERÊNCIA PARA BANCO — evento manual PURO Carteira→Banco (§102-104): nunca reduz
-      // faturamento/lucro/Acelera, só um log auditável com histórico. Permite mais de uma por dia.
+      var conc = caixaDayLancamentosConciliados(dateKey); var pc = conc.porCategoria;
       var dayTransfers = bankTransfers.filter(function (t) { return t.quando && t.quando.slice(0, 10) === dateKey; });
       var totalTransferido = dayTransfers.reduce(function (s, t) { return s + t.valor; }, 0);
-      var permanencia = (ac.liquido != null && dayTransfers.length) ? r2(ac.liquido / 100 - totalTransferido) : null;
+      var somaCred = mov.creditos.reduce(function (s, t) { return s + t.amount; }, 0);
+      var somaDeb = mov.debitos.reduce(function (s, t) { return s + t.amount; }, 0);
+      var saldoAposMovimentos = r2(somaCred + somaDeb);
+      var saldoRemanescente = r2(saldoAposMovimentos - totalTransferido);
+      var outrasReceitasValor = ((pc.PENDENCIA_ANTERIOR ? pc.PENDENCIA_ANTERIOR.valor : 0) + (pc.COMPENSACAO ? pc.COMPENSACAO.valor : 0) + (pc.OUTRAS_RECEITAS ? pc.OUTRAS_RECEITAS.valor : 0));
+      function caixaCartSituacao(t) {
+        if (pendCart.itens.some(function (it) { return it.t.id === t.id; })) return '<span class="tag warn">🔴 Pendência</span>';
+        var cc = conc.itens.find(function (it) { return it.t.id === t.id; });
+        if (cc) return '<span class="tag ok">🟢 ' + esc(CAIXA_CART_CAT_LABEL[cc.categoria] || 'Conciliado') + '</span>';
+        return '<span class="tag neutral">⚪ sem comparação</span>';
+      }
+      // RESUMO FINANCEIRO DO DIA — 3 linhas de cards grandes (complemento §9-21): a leitura principal
+      // do Fechamento, antes de qualquer detalhe. Nunca soma o líquido do Acelera dentro de "Outras
+      // Receitas" (§12) — são a mesma confirmação (Acelera chegou na Carteira), mostrada à parte.
+      var resumoTop = '<div class="panel"><div class="ph"><h3>Resumo Financeiro do Dia</h3></div><div class="pb" style="padding-top:0">' +
+        kstrip([
+          { l: 'Bruto Acelera', v: ac.resgatesN ? brlC(ac.valorBruto) : '—', cls: 'blue' },
+          { l: 'Taxa Acelera', v: ac.resgatesN ? brlC(-Math.abs(ac.taxaAcelera)) : '—', cls: 'red' },
+          { l: 'Líquido Acelera', v: ac.resgatesN ? brlC(ac.valorLiquido) : '—', cls: 'green' },
+          { l: 'Outras receitas', v: brl(outrasReceitasValor), cls: outrasReceitasValor ? 'green' : 'blue' }
+        ]) +
+        '<details style="margin:-6px 0 10px"><summary style="cursor:pointer;font-size:12.5px;color:var(--muted)">Composição de Outras Receitas</summary><div class="pb" style="padding:8px 0 0">' +
+        ['PENDENCIA_ANTERIOR', 'COMPENSACAO', 'OUTRAS_RECEITAS'].map(function (k) { var g = pc[k]; return '<div class="fin-line"><span>' + esc(CAIXA_CART_CAT_LABEL[k]) + (g ? ' (' + nn(g.n) + ')' : '') + '</span><b class="pos">' + brl(g ? g.valor : 0) + '</b></div>'; }).join('') +
+        '<div class="fin-line total"><span>Total</span><b class="pos">' + brl(outrasReceitasValor) + '</b></div></div></details>' +
+        kstrip([
+          { l: 'Expedidos / bipados', v: nn(exp.expedidos), cls: 'blue' },
+          { l: 'Encontrados no Acelera', v: nn(ac.expedidosEncontradosN), cls: 'green' },
+          { l: 'Pendentes', v: nn(ac.expedidosNaoEncontrados.length), cls: ac.expedidosNaoEncontrados.length ? 'red' : 'green' },
+          { l: 'Recebidos de pendências anteriores', v: nn(ac.pedidosAntigosRecebidosHoje.length), cls: 'blue', s: brlC(ac.valorAntigosRecebidosHoje) }
+        ]) +
+        (ac.expedidosNaoEncontrados.length ? callout('warn', '🔴 ' + nn(ac.expedidosNaoEncontrados.length) + ' pedido(s) expedido(s) ainda não pago(s)', 'Valor esperado (preço do pedido, referência — não é o valor que o Acelera vai antecipar): ' + brl(ac.expedidosNaoEncontrados.reduce(function (s, oid) { var o = orders.find(function (x) { return x.id === oid; }); return s + (o ? o.totalAmount || 0 : 0); }, 0))) : '') +
+        kstrip([
+          { l: 'Créditos na Carteira', v: brl(somaCred), cls: 'green' },
+          { l: 'Débitos na Carteira', v: brl(somaDeb), cls: 'red' },
+          { l: 'Transferido para banco', v: brl(-totalTransferido), cls: totalTransferido ? 'amber' : 'blue' },
+          { l: 'Saldo remanescente', v: brl(saldoRemanescente), cls: saldoRemanescente >= 0 ? 'green' : 'red' }
+        ]) +
+        '</div></div>';
+      // 1. ACELERA — histórico da antecipação NUNCA muda por causa de movimento posterior da Carteira
+      // (§83/§85): valor bruto/taxa/líquido continuam sendo os do Acelera, resgate a resgate, ID
+      // sempre visível. "Ver pedidos do Acelera" nunca esconde a lista atrás de um total.
+      var resgateBlocks = ac.resgates.map(function (r) {
+        var statusTxt = Object.keys(r.statusCounts).map(function (k) { return k + ': ' + nn(r.statusCounts[k]); }).join(' · ');
+        var pedidosTbl = r.pedidos.map(function (p) { var info = exp[p]; return '<tr><td class="mono">' + esc(p) + '</td><td>' + (info ? ((info.isFbs ? 'Full confirmado' : 'Bipado') + (info.at ? (' em ' + dbr(info.at)) : '')) : '🔴 sem confirmação de expedição') + '</td></tr>'; }).join('');
+        return '<details class="panel" style="margin-top:8px"><summary style="cursor:pointer;padding:10px 14px;font-weight:700">Resgate ' + esc(r.resgate) + ' — ' + nn(r.n) + ' pedido(s) · líquido ' + brlC(r.liquido) + (r.divergente ? ' <span class="tag warn">líquido divergente</span>' : '') + '</summary><div class="pb">' +
+          kv('Quantidade de pedidos', nn(r.n)) + kv('Valor bruto', brlC(r.bruto)) + kv('Taxa Acelera', brlC(r.taxa)) + kv('Valor líquido', brlC(r.liquido)) + kv('Alíquota efetiva', r.aliqLabel) + kv('Status (Shopee)', statusTxt || '—') +
+          '<div class="footnote" style="margin:6px 0 2px">Ver pedidos do Acelera (' + nn(r.pedidos.length) + ')</div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Expedição</th></tr></thead><tbody>' + (pedidosTbl || '<tr><td colspan="2" class="empty">—</td></tr>') + '</tbody></table></div>' +
+          '</div></details>';
+      }).join('');
+      var bloco1 = '<div class="panel"><div class="ph"><h3>1. Acelera</h3><span class="footnote" style="margin:0">' + nn(ac.resgatesN) + ' resgate(s) · ' + nn(ac.pedidosAceleraN) + ' pedido(s) antecipado(s)</span></div><div class="pb">' +
+        (ac.resgatesN ? (kv('Resgates', nn(ac.resgatesN)) + kv('Pedidos antecipados', nn(ac.pedidosAceleraN)) + kv('Valor bruto resgatado', brlC(ac.valorBruto)) + kv('Taxa Acelera', brlC(ac.taxaAcelera)) + kv('Valor líquido do Acelera', brlC(ac.valorLiquido)) + resgateBlocks) : '<div class="footnote" style="padding:0 0 10px">Nenhum resgate do Acelera consolidado nesta data.</div>') +
+        '</div></div>';
+      // 2. CONFERÊNCIA EXPEDIÇÃO × ACELERA — cruza os dois cortes (quem deveria expedir hoje × quem
+      // o Acelera confirma hoje) sem misturar as duas coortes num único total (§Correção Parte 1).
+      var confPedidosSet = {}; ac.expedidosEsperados.forEach(function (p) { confPedidosSet[p] = 1; }); ac.pedidosAcelera.forEach(function (p) { confPedidosSet[p] = 1; });
+      var confPedidos = Object.keys(confPedidosSet);
+      var confRows = confPedidos.slice(0, 300).map(function (p) {
+        var info = exp[p]; var pv = ac.pedidoValores[p]; var noAcelera = ac.pedidosAcelera.indexOf(p) >= 0;
+        var situacao = (info && noAcelera) ? '🟢 OK' : (info && !noAcelera ? '🔴 Não localizado no Acelera' : (!info && noAcelera ? '🔴 Sem confirmação de expedição' : '—'));
+        return '<tr><td class="mono">' + esc(p) + '</td><td>' + (info ? (info.at ? dbr(info.at) : 'confirmado') : '—') + '</td><td>' + (noAcelera ? 'sim' : 'não') + '</td><td class="nowrap">' + (pv ? brlC(pv.bruto) : '—') + '</td><td class="nowrap">' + (pv ? brlC(pv.taxa) : '—') + '</td><td class="nowrap">' + (pv ? brlC(pv.liquido) : '—') + '</td><td>' + situacao + '</td></tr>';
+      }).join('');
+      var bloco2 = '<div class="panel"><div class="ph"><h3>2. Conferência Expedição × Acelera</h3></div><div class="pb">' +
+        kstrip([
+          { l: 'Expedidos esperados', v: nn(ac.expedidosEsperadosN), cls: 'blue' },
+          { l: 'Encontrados no Acelera', v: nn(ac.expedidosEncontradosN), cls: 'green' },
+          { l: 'Não localizados', v: nn(ac.expedidosNaoEncontrados.length), cls: ac.expedidosNaoEncontrados.length ? 'red' : 'green' },
+          { l: 'Acelera sem confirmação interna', v: nn(ac.aceleraSemConfirmacaoExpedicao.length), cls: ac.aceleraSemConfirmacaoExpedicao.length ? 'amber' : 'green' },
+          { l: 'Divergências de valor', v: nn(ac.divergencias.length), cls: ac.divergencias.length ? 'red' : 'green' },
+          { l: 'Pendências abertas', v: nn(ac.pendencias.length), cls: ac.pendencias.length ? 'red' : 'green' }
+        ]) +
+        '<details style="margin-top:2px"><summary style="cursor:pointer;font-weight:700;padding:8px 0">Ver conferência dos pedidos (' + nn(confPedidos.length) + ')</summary><div class="table-wrap" style="margin-top:8px"><table class="report"><thead><tr><th>Pedido</th><th>Expedição</th><th>Acelera</th><th>Bruto</th><th>Taxa</th><th>Líquido</th><th>Situação</th></tr></thead><tbody>' + (confRows || '<tr><td colspan="7" class="empty">—</td></tr>') + '</tbody></table></div></details>' +
+        '</div></div>';
+      // 3. RECEITAS ADICIONAIS — dinheiro que chegou na Carteira e NÃO é o espelho do líquido do
+      // Acelera de hoje (§6/§12/§13/§22 do complemento): pendência anterior recebida, compensação /
+      // recuperação, ou outro crédito já classificado/explicado. Nunca um "Outras Receitas" cego —
+      // cada linha carrega tipo, pedido, descrição, valor, origem.
+      var receitaRows = ['PENDENCIA_ANTERIOR', 'COMPENSACAO', 'OUTRAS_RECEITAS'].map(function (k) {
+        var g = pc[k]; if (!g) return '';
+        return g.itens.map(function (it) { return '<tr class="rowlink" data-wtx="' + esc(it.t.id) + '"><td>' + esc(CAIXA_CART_CAT_LABEL[k]) + '</td><td class="mono">' + esc(wOrderId(it.t) || '—') + '</td><td class="cell-text">' + esc((it.t.desc || it.t.tipo || '—').slice(0, 40)) + '</td><td class="nowrap pos">' + brl(it.t.amount) + '</td><td class="cell-text">' + esc(it.origem) + '</td><td><span class="tag ok">🟢 conciliado</span></td></tr>'; }).join('');
+      }).join('');
+      var bloco3 = '<div class="panel"><div class="ph"><h3>3. Receitas Adicionais</h3><span class="footnote" style="margin:0">nunca somado ao líquido do Acelera — dinheiro adicional já explicado</span></div><div class="pb">' +
+        '<div class="table-wrap"><table class="report"><thead><tr><th>Tipo</th><th>Pedido</th><th>Descrição</th><th>Valor</th><th>Origem</th><th>Situação</th></tr></thead><tbody>' + (receitaRows || '<tr><td colspan="6" class="empty">Nenhuma receita adicional conciliada neste dia.</td></tr>') + '</tbody></table></div>' +
+        '</div></div>';
+      // 4. MOVIMENTOS DA CARTEIRA — §86-91/§24 do complemento: TODOS os créditos e débitos aparecem
+      // (não só pendências); cada linha mostra Situação (🟢 Conciliado / 🔴 Pendência) — resolver
+      // NUNCA apaga a linha, só muda a Situação e some da tabela de Pendências (§1/§25/§26).
+      var credRows = mov.creditos.slice(0, 80).map(function (t) { var rid = wCreditResgateId(t); return '<tr class="rowlink" data-wtx="' + esc(t.id) + '"><td class="nowrap">' + new Date(t.date).toLocaleString('pt-BR') + '</td><td class="cell-text">' + esc((t.desc || t.tipo || '—').slice(0, 40)) + '</td><td class="nowrap pos">' + brl(t.amount) + '</td><td class="mono">' + esc(wOrderId(t) || '— Não identificado') + '</td><td class="mono">' + esc(rid || '—') + '</td><td>' + esc(wcatLabel(wEffCat(t))) + '</td><td>' + caixaCartSituacao(t) + '</td></tr>'; }).join('');
+      var debRows = mov.debitos.slice(0, 80).map(function (t) { return '<tr class="rowlink" data-wtx="' + esc(t.id) + '"><td class="nowrap">' + new Date(t.date).toLocaleString('pt-BR') + '</td><td class="cell-text">' + esc((t.desc || t.tipo || '—').slice(0, 40)) + '</td><td class="nowrap neg">' + brl(t.amount) + '</td><td class="mono">' + esc(wOrderId(t) || '— Não identificado') + '</td><td class="cell-text">' + esc(wProvavelOrigem(t)) + '</td><td>' + esc(wcatLabel(wEffCat(t))) + '</td><td>' + caixaCartSituacao(t) + '</td></tr>'; }).join('');
+      var pendCartRows = pendCart.itens.slice(0, 60).map(function (it) { return '<tr class="rowlink" data-wtx="' + esc(it.t.id) + '"><td class="mono">' + esc(wOrderId(it.t) || '— Não identificado') + '</td><td class="cell-text">' + esc(it.motivo) + '</td><td class="nowrap">' + brl(it.t.amount) + '</td><td><button class="btn-sm" data-wtx="' + esc(it.t.id) + '">Classificar / Resolver</button></td></tr>'; }).join('');
+      var bloco4 = '<div class="panel"><div class="ph"><h3>4. Movimentos da Carteira</h3><span class="footnote" style="margin:0">' + nn(mov.creditos.length) + ' crédito(s) · ' + nn(mov.debitos.length) + ' débito(s) · ' + nn(pendCart.total) + ' pendência(s)</span></div><div class="pb">' +
+        '<div style="margin:4px 0"><b>Créditos</b></div><div class="table-wrap"><table class="report"><thead><tr><th>Data/hora</th><th>Descrição</th><th>Valor</th><th>Pedido</th><th>Resgate</th><th>Classificação</th><th>Situação</th></tr></thead><tbody>' + (credRows || '<tr><td colspan="7" class="empty">Nenhum crédito neste dia.</td></tr>') + '</tbody></table></div>' +
+        '<div style="margin:12px 0 4px"><b>Débitos</b></div><div class="table-wrap"><table class="report"><thead><tr><th>Data/hora</th><th>Descrição</th><th>Valor</th><th>Pedido</th><th>Origem</th><th>Categoria</th><th>Situação</th></tr></thead><tbody>' + (debRows || '<tr><td colspan="7" class="empty">Nenhum débito neste dia.</td></tr>') + '</tbody></table></div>' +
+        '<div style="margin:12px 0 4px"><b>Pendências</b> <span class="footnote" style="margin:0">débito/crédito sem origem, duplicidade, valor divergente, ID não localizado — resolver aqui move a linha para Conciliado acima, nunca apaga</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Problema</th><th>Valor</th><th></th></tr></thead><tbody>' + (pendCartRows || '<tr><td colspan="4" class="empty">Nenhuma pendência da carteira neste dia. 🎉</td></tr>') + '</tbody></table></div>' +
+        '</div></div>';
+      // 5. TRANSFERÊNCIAS BANCÁRIAS — evento manual PURO Carteira→Banco (§102-104): nunca reduz
+      // faturamento/lucro/Acelera, só um log auditável com histórico. Permite mais de uma por dia.
+      var permanencia = (ac.valorLiquido != null && dayTransfers.length) ? r2(ac.valorLiquido / 100 - totalTransferido) : null;
       var transfRows = dayTransfers.map(function (t) { return '<div class="fin-line"><span>' + new Date(t.quando).toLocaleString('pt-BR') + (t.conta ? ' · ' + esc(t.conta) : '') + (t.observacao ? ' <span class="footnote" style="margin:0">' + esc(t.observacao) + '</span>' : '') + '</span><b>' + brl(t.valor) + '</b></div>'; }).join('');
       var bancoOptions = '<option value="">Selecione a conta…</option>' + bankAccounts.filter(function (b) { return b.ativa !== false; }).map(function (b) { return '<option value="' + esc(b.id) + '">' + esc(b.nome) + (b.banco ? ' — ' + esc(b.banco) : '') + '</option>'; }).join('');
-      var bloco4 = '<div class="panel"><div class="ph"><h3>4. Transferência para Banco</h3></div><div class="pb">' +
+      var bloco5 = '<div class="panel"><div class="ph"><h3>5. Transferências Bancárias</h3></div><div class="pb">' +
         (transfRows || '<div class="footnote" style="margin:4px 0">Nenhuma transferência registrada para este dia.</div>') +
         (dayTransfers.length ? '<div class="fin-line total"><span>Total transferido</span><b>' + brl(totalTransferido) + '</b></div>' : '') +
         (permanencia != null ? '<div class="fin-line"><span>Recebido via Acelera − Transferido ao banco</span><b>' + brl(permanencia) + '</b></div><div class="footnote" style="margin:2px 0 8px">= permanência operacional na carteira (não é lucro nem pendência — só o que ainda não saiu para o banco)</div>' : '') +
@@ -6106,10 +6314,17 @@
         (!bankAccounts.length ? '<span class="footnote" style="margin:0">Nenhuma conta cadastrada — vá em Caixa → Gerenciar bancos.</span>' : '') +
         '</div></div>' +
         '</div></div>';
-      // 5. RESULTADO / DRE — motor nativo do Caixa, nomes reais.
-      var bloco5 = caixaDreBlock(caixaDreDia(dateKey));
-      // 6. PENDÊNCIAS E CONCILIAÇÃO — checklist visual das duas famílias ANTES de fechar (§117).
-      var checklist = '<div class="panel"><div class="ph"><h3>6. Pendências e Conciliação</h3></div><div class="pb"><div class="kstrip" style="flex-wrap:wrap">' +
+      // 6. DRE — motor nativo do Caixa, nomes reais.
+      var bloco6 = caixaDreBlock(caixaDreDia(dateKey));
+      // 7. PENDÊNCIAS FINANCEIRAS DOS PEDIDOS — vendas/expedição como contexto + pendências de taxa/
+      // valor não classificado do pedido (distinto do bloco 2, que é a conferência Expedição×Acelera).
+      var pendFinRows = pend.financeiras.slice(0, 60).map(function (f) { return '<tr><td class="mono">' + esc(f.orderId) + '</td><td class="cell-text">' + esc(f.motivo) + '</td><td><button class="btn-sm" data-goped360="' + esc(f.orderId) + '">Ver pedido</button> <button class="btn-sm" data-caixapendfin="' + esc(f.orderId) + '">Resolver</button></td></tr>'; }).join('');
+      var bloco7 = '<div class="panel"><div class="ph"><h3>7. Pendências Financeiras dos Pedidos</h3><span class="footnote" style="margin:0">' + nn(pend.financeiras.length) + ' no total</span></div><div class="pb">' +
+        kv('Pedidos pagos', nn(vendas.n)) + kv('Faturamento', brl(vendas.valor)) + kv('Lucro atual', vendas.nLucroConhecido ? brlC(vendas.lucroC) : 'aguardando custo') + kv('Margem', margem != null ? pct(margem) : '—') +
+        kv('Taxas conferidas (Income cruzado)', (vendas.n - vendas.pendFin.length) + ' de ' + vendas.n + ' pedidos') + kv('Custos conferidos', nn(custoConhecido) + ' de ' + nn(vendas.n) + ' pedidos') + kv('Valores não classificados (total importado — não restrito a este dia)', nn(naoClass) + ' coluna(s)') +
+        '</div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Problema</th><th></th></tr></thead><tbody>' + (pendFinRows || '<tr><td colspan="3" class="empty">Nenhuma pendência financeira neste dia. 🎉</td></tr>') + '</tbody></table></div></div>';
+      // 8. PENDÊNCIAS E CONCILIAÇÃO — checklist visual das duas famílias ANTES de fechar (§117).
+      var checklist = '<div class="panel"><div class="ph"><h3>8. Pendências e Conciliação</h3></div><div class="pb"><div class="kstrip" style="flex-wrap:wrap">' +
         [['PEDIDOS', vendas.pendFin.length], ['EXPEDIÇÃO', pend.operacionais.length], ['ACELERA', pend.operacionais.filter(function (i) { return i.origem === 'ACELERA'; }).length], ['CARTEIRA', pendCart.total]].map(function (x) {
           return '<div class="kc"><div class="kl">' + x[0] + '</div><div class="kv" style="font-size:15px">' + (x[1] ? '🔴 ' + nn(x[1]) + ' pendência(s)' : '✅ ok') + '</div></div>';
         }).join('') + '</div></div></div>';
@@ -6121,7 +6336,7 @@
         '<button class="btn-sm" id="caixa-print" title="Abre a impressão do navegador — use \'Salvar como PDF\' para gerar o documento de auditoria">Imprimir / PDF</button>' +
         (st.rec ? '<span class="footnote" style="margin:0">último registro: ' + esc(CAIXA_LABEL[st.rec.status] ? CAIXA_LABEL[st.rec.status][0] : st.rec.status) + ' por ' + esc(st.rec.closedBy || '—') + ' em ' + new Date(st.rec.closedAt).toLocaleString('pt-BR') + '</span>' : '') +
         '</div>' + (st.rec && st.rec.eventosPosteriores && st.rec.eventosPosteriores.length ? '<div class="pb" style="padding-top:0"><div class="footnote"><b>Eventos posteriores:</b> ' + st.rec.eventosPosteriores.map(function (e) { return esc(e.orderId) + ' — ' + esc(e.descricao) + ' (' + new Date(e.at).toLocaleDateString('pt-BR') + ')'; }).join(' · ') + '</div></div>' : '') + '</div>';
-      return '<div class="dh"><div><b>FECHAMENTO — ' + esc(dbr(dateKey)) + '</b> <span class="tag ' + lbl[1] + '" style="margin-left:6px">' + lbl[0] + '</span>' + (st.status === 'REVISAO_NECESSARIA' ? ' <span class="footnote" style="margin:0">⚠ movimento posterior a este fechamento</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' + bloco1 + bloco2 + bloco3 + bloco4 + bloco5 + checklist + footer + '</div>';
+      return '<div class="dh"><div><b>FECHAMENTO — ' + esc(dbr(dateKey)) + '</b> <span class="tag ' + lbl[1] + '" style="margin-left:6px">' + lbl[0] + '</span>' + (st.status === 'REVISAO_NECESSARIA' ? ' <span class="footnote" style="margin:0">⚠ movimento posterior a este fechamento</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' + resumoTop + bloco1 + bloco2 + bloco3 + bloco4 + bloco5 + bloco6 + bloco7 + checklist + footer + '</div>';
     }
     function wire() {
       panel.querySelector('.x').onclick = function () { d.remove(); };
@@ -6190,15 +6405,18 @@
   // Débitos Carteira/Pendências/DRE/Histórico. Taxas lista nome real + pedido + valor + origem —
   // nunca um total genérico.
   function caixaExportarXlsx(dateKey) {
-    var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = caixaDayAcelera(dateKey), pend = caixaDayPendencias(dateKey), pendCart = caixaDayPendenciasCarteira(dateKey), mov = caixaDayMovimentosCarteira(dateKey);
+    var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = aceleraResultadoFechamento(dateKey), pend = caixaDayPendencias(dateKey), pendCart = caixaDayPendenciasCarteira(dateKey), mov = caixaDayMovimentosCarteira(dateKey), conc = caixaDayLancamentosConciliados(dateKey);
     var dayTransfers = bankTransfers.filter(function (t) { return t.quando && t.quando.slice(0, 10) === dateKey; });
     var totalTransferido = dayTransfers.reduce(function (s, t) { return s + t.valor; }, 0);
+    var pc = conc.porCategoria; var outrasReceitasValor = ((pc.PENDENCIA_ANTERIOR ? pc.PENDENCIA_ANTERIOR.valor : 0) + (pc.COMPENSACAO ? pc.COMPENSACAO.valor : 0) + (pc.OUTRAS_RECEITAS ? pc.OUTRAS_RECEITAS.valor : 0));
     var wb = XLSX.utils.book_new();
     var resumo = [['Fechamento de Caixa', dbr(dateKey)], [],
       ['Pedidos pagos', vendas.n], ['Faturamento (R$)', vendas.valor], ['Lucro atual (R$)', vendas.nLucroConhecido ? vendas.lucroC / 100 : ''],
       ['Esperados (Expedição)', exp.esperados != null ? exp.esperados : ''], ['Expedidos', exp.expedidos], ['Faltaram', exp.faltaram != null ? exp.faltaram : ''],
-      ['Resgates Acelera', ac.n || 0], ['Antecipado bruto (R$)', ac.antec != null ? ac.antec / 100 : ''], ['Taxa Acelera (R$)', ac.taxa != null ? ac.taxa / 100 : ''], ['Recebido líquido via Acelera (R$)', ac.liquido != null ? ac.liquido / 100 : ''],
-      ['Transferido para o banco (R$)', dayTransfers.length ? totalTransferido : ''], ['Permanência operacional na carteira (R$)', (ac.liquido != null && dayTransfers.length) ? r2(ac.liquido / 100 - totalTransferido) : ''],
+      ['Resgates Acelera', ac.resgatesN || 0], ['Pedidos antecipados', ac.pedidosAceleraN || 0], ['Antecipado bruto (R$)', ac.resgatesN ? ac.valorBruto / 100 : ''], ['Taxa Acelera (R$)', ac.resgatesN ? ac.taxaAcelera / 100 : ''], ['Recebido líquido via Acelera (R$)', ac.resgatesN ? ac.valorLiquido / 100 : ''],
+      ['Recebimentos de pendências anteriores (qtd)', ac.pedidosAntigosRecebidosHoje.length], ['Recebimentos de pendências anteriores (R$)', ac.valorAntigosRecebidosHoje / 100],
+      ['Outras receitas conciliadas (R$)', outrasReceitasValor / 100],
+      ['Transferido para o banco (R$)', dayTransfers.length ? totalTransferido : ''], ['Permanência operacional na carteira (R$)', (ac.valorLiquido != null && dayTransfers.length) ? r2(ac.valorLiquido / 100 - totalTransferido) : ''],
       ['Créditos na Carteira (qtd)', mov.creditos.length], ['Débitos na Carteira (qtd)', mov.debitos.length],
       ['Pendências do fluxo', pend.total], ['Pendências da carteira', pendCart.total]];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(resumo), 'Resumo');
@@ -6216,8 +6434,12 @@
     var expRows = [['Pedido', 'Modalidade', 'Tipo', 'Situação', 'Expedido em']];
     exp.itens.forEach(function (i) { expRows.push([i.orderId, i.modalidade, i.isFbs ? 'Full' : 'Normal', i.situacao, i.expedidoAt ? dbr(i.expedidoAt) : '']); });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(expRows), 'Expedição');
-    var acRows2 = [['Resgates', 'Antecipado (R$)', 'Taxa (R$)', 'Recebido (R$)']]; if (ac.n) acRows2.push([ac.n, ac.antec / 100, ac.taxa / 100, ac.liquido / 100]);
+    var acRows2 = [['Resgate', 'Pedidos', 'Bruto (R$)', 'Taxa (R$)', 'Líquido (R$)', 'Divergente']];
+    ac.resgates.forEach(function (r) { acRows2.push([r.resgate, r.n, r.bruto / 100, r.taxa / 100, r.liquido / 100, r.divergente ? 'sim' : 'não']); });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(acRows2), 'Acelera');
+    var receitaRows2 = [['Tipo', 'Pedido', 'Descrição', 'Valor (R$)', 'Origem']];
+    ['PENDENCIA_ANTERIOR', 'COMPENSACAO', 'OUTRAS_RECEITAS'].forEach(function (k) { var g = pc[k]; if (!g) return; g.itens.forEach(function (it) { receitaRows2.push([CAIXA_CART_CAT_LABEL[k], wOrderId(it.t) || '—', it.t.desc || it.t.tipo || '—', it.t.amount, it.origem]); }); });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(receitaRows2), 'Receitas Adicionais');
     var credRows = [['Data/hora', 'Descrição', 'Valor (R$)', 'Pedido', 'Resgate', 'Classificação', 'Situação']];
     mov.creditos.forEach(function (t) { credRows.push([new Date(t.date).toLocaleString('pt-BR'), t.desc || t.tipo || '—', t.amount, wOrderId(t) || '— Não identificado', wCreditResgateId(t) || '—', wcatLabel(wEffCat(t)), WSTATUS[wStatus(t)]]); });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(credRows), 'Créditos Carteira');
@@ -6255,12 +6477,13 @@
   // #caixa-print-doc (escondido normalmente; a folha de estilo do shell só o exibe em @media print,
   // escondendo tudo o mais) com a estrutura exata do §127, sem sidebar/topbar/filtros/botões.
   function caixaImprimirFechamento(dateKey) {
-    var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = caixaDayAcelera(dateKey), pend = caixaDayPendencias(dateKey), pendCart = caixaDayPendenciasCarteira(dateKey), mov = caixaDayMovimentosCarteira(dateKey);
+    var vendas = caixaDayVendas(dateKey), exp = caixaDayExpedicao(dateKey), ac = aceleraResultadoFechamento(dateKey), pend = caixaDayPendencias(dateKey), pendCart = caixaDayPendenciasCarteira(dateKey), mov = caixaDayMovimentosCarteira(dateKey), conc = caixaDayLancamentosConciliados(dateKey);
     var st = caixaDayStatus(dateKey); var lbl = CAIXA_LABEL[st.status];
     var margem = vendas.valor ? r2(vendas.lucroC / 100 / vendas.valor * 100) : null;
     var dayTransfers = bankTransfers.filter(function (t) { return t.quando && t.quando.slice(0, 10) === dateKey; });
     var totalTransferido = dayTransfers.reduce(function (s, t) { return s + t.valor; }, 0);
     var somaCred = mov.creditos.reduce(function (s, t) { return s + t.amount; }, 0), somaDeb = mov.debitos.reduce(function (s, t) { return s + t.amount; }, 0);
+    var pc = conc.porCategoria; var outrasReceitasValor = ((pc.PENDENCIA_ANTERIOR ? pc.PENDENCIA_ANTERIOR.valor : 0) + (pc.COMPENSACAO ? pc.COMPENSACAO.valor : 0) + (pc.OUTRAS_RECEITAS ? pc.OUTRAS_RECEITAS.valor : 0));
     var dre = caixaDreDia(dateKey);
     var prow = function (label, v, total) { return '<div class="prow' + (total ? ' ptotal' : '') + '"><span>' + esc(label) + '</span><span class="' + (typeof v === 'number' ? (v < 0 ? 'pneg' : 'ppos') : '') + '">' + (typeof v === 'number' ? brl(v) : esc(v)) + '</span></div>'; };
     var thTable = function (headers, rows) { return '<table><thead><tr>' + headers.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') + '</tr></thead><tbody>' + (rows.length ? rows.join('') : '<tr><td colspan="' + headers.length + '">—</td></tr>') + '</tbody></table>'; };
@@ -6268,9 +6491,11 @@
       '<h1>FECHAMENTO DE CAIXA — ' + esc(dbr(dateKey)) + '</h1><div class="psub">Sistema Marketplace — Líder</div>' +
       '<div class="psection"><h2>Resumo do Dia</h2>' + prow('Pedidos pagos', vendas.n) + prow('Faturamento', vendas.valor) + prow('Lucro', vendas.nLucroConhecido ? vendas.lucroC / 100 : 'aguardando custo') + prow('Margem', margem != null ? pct(margem) : '—') + '</div>' +
       '<div class="psection"><h2>Expedição</h2>' + prow('Esperados', exp.esperados != null ? exp.esperados : '—') + prow('Expedidos', exp.expedidos) + prow('Pendentes', exp.faltaram != null ? exp.faltaram : '—') + '</div>' +
-      '<div class="psection"><h2>Acelera</h2>' + prow('Bruto', ac.antec != null ? ac.antec / 100 : '—') + prow('Taxa', ac.taxa != null ? -Math.abs(ac.taxa) / 100 : '—') + prow('Líquido', ac.liquido != null ? ac.liquido / 100 : '—') + '</div>' +
+      '<div class="psection"><h2>Acelera</h2>' + prow('Resgates', ac.resgatesN) + prow('Pedidos antecipados', ac.pedidosAceleraN) + prow('Bruto', ac.resgatesN ? ac.valorBruto / 100 : '—') + prow('Taxa', ac.resgatesN ? -Math.abs(ac.taxaAcelera) / 100 : '—') + prow('Líquido', ac.resgatesN ? ac.valorLiquido / 100 : '—') + '</div>' +
+      '<div class="psection"><h2>Conferência Expedição × Acelera</h2>' + prow('Expedidos esperados', ac.expedidosEsperadosN) + prow('Encontrados no Acelera', ac.expedidosEncontradosN) + prow('Não localizados', ac.expedidosNaoEncontrados.length) + prow('Acelera sem confirmação interna', ac.aceleraSemConfirmacaoExpedicao.length) + '</div>' +
+      '<div class="psection"><h2>Receitas Adicionais</h2>' + prow('Recebimentos de pendências anteriores', ac.valorAntigosRecebidosHoje / 100) + prow('Compensações / Recuperações', (pc.COMPENSACAO ? pc.COMPENSACAO.valor : 0)) + prow('Outras receitas classificadas', (pc.OUTRAS_RECEITAS ? pc.OUTRAS_RECEITAS.valor : 0)) + prow('Total de Outras Receitas', outrasReceitasValor, true) + '</div>' +
       '<div class="psection"><h2>Pendências do Fluxo (' + nn(pend.total) + ')</h2>' + thTable(['Pedido', 'Origem', 'Motivo'], pend.operacionais.concat(pend.financeiras).slice(0, 60).map(function (i) { return '<tr><td>' + esc(i.orderId) + '</td><td>' + esc(i.origem) + '</td><td>' + esc(i.motivo) + '</td></tr>'; })) + '</div>' +
-      '<div class="psection"><h2>Carteira</h2>' + prow('Créditos (' + nn(mov.creditos.length) + ')', somaCred) + prow('Débitos (' + nn(mov.debitos.length) + ')', somaDeb) + prow('Saldo após movimentos', r2(somaCred + somaDeb)) + '</div>' +
+      '<div class="psection"><h2>Carteira</h2>' + prow('Créditos (' + nn(mov.creditos.length) + ')', somaCred) + prow('Débitos (' + nn(mov.debitos.length) + ')', somaDeb) + prow('Saldo após movimentos', r2(somaCred + somaDeb)) + prow('Transferido para o banco', -totalTransferido) + prow('Saldo remanescente', r2(somaCred + somaDeb - totalTransferido), true) + '</div>' +
       '<div class="psection"><h2>Transferências Bancárias</h2>' + thTable(['Data/hora', 'Conta', 'Valor'], dayTransfers.map(function (t) { return '<tr><td>' + new Date(t.quando).toLocaleString('pt-BR') + '</td><td>' + esc(t.conta || '—') + '</td><td>' + brl(t.valor) + '</td></tr>'; })) + (dayTransfers.length ? prow('Total transferido', totalTransferido) : '') + '</div>' +
       '<div class="psection"><h2>Pendências da Carteira (' + nn(pendCart.total) + ')</h2>' + thTable(['Pedido', 'Problema', 'Valor'], pendCart.itens.slice(0, 60).map(function (it) { return '<tr><td>' + esc(wOrderId(it.t) || '— Não identificado') + '</td><td>' + esc(it.motivo) + '</td><td>' + brl(it.t.amount) + '</td></tr>'; })) + '</div>' +
       '<div class="psection"><h2>DRE Completa</h2>' + (dre.n ? (prow('Receita Bruta', dre.receitaBruta / 100) + prow('Reduções / Descontos', dre.descComerciais / 100) + (dre.envioTotal ? prow('Subtotal de Envio', dre.envioTotal / 100) : '') + prow('Taxas Shopee', dre.taxasCobradas / 100) + (dre.creditos ? prow('Créditos / Incentivos', dre.creditos / 100) : '') + prow('Receita Líquida', dre.receitaLiquida / 100, true) + prow('Custo dos Produtos', dre.custoTotal != null ? dre.custoTotal / 100 : '—') + (dre.temAcelera ? prow('Taxa do Acelera', dre.acTaxa / 100) : '') + prow('Lucro', dre.lucro != null ? dre.lucro / 100 : '—', true) + prow('Margem', dre.margem != null ? pct(dre.margem) : '—')) : '<div class="prow">Nenhum pedido pago neste dia.</div>') + '</div>' +
