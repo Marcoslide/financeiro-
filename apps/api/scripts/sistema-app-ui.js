@@ -286,7 +286,7 @@
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id', bankaccounts: 'id', companies: 'id', operations: 'id', cpheader: 'id', cpitems: 'id', cppayments: 'id', cpattach: 'id', cpcategories: 'id', cpaccounting: 'id', cpcostcenters: 'id', cpsuppliers: 'id', cpsupplylinks: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id', bankaccounts: 'id', companies: 'id', operations: 'id', cpheader: 'id', cpitems: 'id', cppayments: 'id', cpattach: 'id', cpcategories: 'id', cpaccounting: 'id', cpcostcenters: 'id', cpsuppliers: 'id', cpsupplylinks: 'id', pricingopconfig: 'id', pricingfamilyrules: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -624,7 +624,7 @@
   function fileInput(cb) { var inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.xlsx,.xls,.csv'; inp.onchange = function () { if (inp.files[0]) cb(inp.files[0]); }; inp.click(); }
 
   // ============================================================ RENDER (roteamento)
-  function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', minharenda: 'Minha Renda', caixa: 'Caixa', contaspagar: 'Contas a Pagar', ia: 'Inteligência' }[route] || ''; }
+  function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', minharenda: 'Minha Renda', caixa: 'Caixa', contaspagar: 'Contas a Pagar', precificacao: 'Precificação', ia: 'Inteligência' }[route] || ''; }
   function render() {
     setActive();
     // Cada módulo é isolado: um erro em um deles mostra a mensagem no lugar de deixar a tela em branco
@@ -640,6 +640,7 @@
       if (route === 'minharenda') return renderMinhaRenda();
       if (route === 'caixa') return renderCaixa();
       if (route === 'contaspagar') return renderContasPagar();
+      if (route === 'precificacao') return renderPrecificacao();
       if (route === 'ia') return renderIA();
     } catch (e) { app.innerHTML = renderErrBox('Erro ao abrir esta tela: ' + esc(e && (e.message || e)) + '. Os dados estão salvos — recarregue a página.'); }
   }
@@ -7482,6 +7483,10 @@
   // movimento financeiro gerado (§4/§32), sem inventar uma tabela genérica de "financial_movements"
   // que duplicaria o que cpPayments já registra.
   var contasPagar = [], cpItemsAll = [], cpPayments = [], cpAttachments = [], cpCategories = [], cpAccounting = [], cpCostCenters = [], cpSuppliers = [], cpSupplyLinks = [];
+  // ---- Precificação & Margem: config de marketplace/impostos/fixos/risco por operação (§19-26,
+  // escopado por operationId) + regras de precificação por família (§16, GLOBAL — nunca duplica o
+  // custo, que continua vivendo só em family.currentCostAmount). ----
+  var pricingOpConfig = [], pricingFamilyRules = [];
   var cpSub = 'lista'; // lista | categorias | planocontas | centroscusto | fornecedores | dre
   var cpSel = new Set(), cpPage = 1, cpPageSize = 30;
   var cpFiltrosAbertos = false; // toggle "+ Filtros" (filtros avançados só aparecem quando expandido)
@@ -8628,6 +8633,440 @@
     w.document.write('<html><head><title>Contas a Pagar</title></head><body>' + html + '</body></html>'); w.document.close(); w.print();
   }
 
+  // ===================== PRECIFICAÇÃO & MARGEM (Fase 1: motor + Simulador + Regras & Custos +
+  // Famílias & Preços) =====================
+  // Fase 1 entrega o NÚCLEO do módulo — motor determinístico + as telas das quais tudo mais depende.
+  // Deliberadamente NÃO fazem parte desta fase (ver relatório de entrega): integração com Ficha do
+  // Pedido/DRE do Caixa (Previsto×Realizado por pedido), Visão Geral com KPIs de pedidos reais
+  // ("lucro deixado na mesa"), cenários salvos/comparação, simuladores dedicados de cupom/desconto
+  // máximo/afiliado (cobertos de forma geral pelo próprio Simulador), comparação multi-marketplace,
+  // comentário de IA. Nada disso foi prometido como concluído — ver relatório final da entrega.
+  //
+  // Princípio central (nunca violar): custo do produto continua vivendo SÓ em
+  // family.currentCostAmount (Produtos) — nunca duplicado aqui. Taxas/impostos/fixos/risco AUSENTES
+  // (nunca configurados) são status "NÃO CONFIGURADO", nunca tratados como 0% — 0% só existe quando
+  // o usuário digitou 0 explicitamente.
+  var PRICING_FEE_DEFS = [
+    { key: 'comissao', label: 'Comissão', unit: 'PCT' },
+    { key: 'servico', label: 'Taxa de serviço (Afiliados do Vendedor)', unit: 'PCT' },
+    { key: 'transacao', label: 'Taxa de Transação', unit: 'PCT' },
+    { key: 'porItem', label: 'Taxa por item vendido', unit: 'BRL' },
+    { key: 'freteprograma', label: 'Frete / Programa', unit: 'PCT' },
+    { key: 'outras', label: 'Outras taxas de marketplace', unit: 'PCT' },
+  ];
+  var PRICING_ROUND_OPTS = [['', 'Sem arredondamento'], ['90', 'Terminar em ,90'], ['99', 'Terminar em ,99'], ['M5', 'Múltiplo de R$ 5'], ['M10', 'Múltiplo de R$ 10']];
+  var PRICING_STATUS_LABEL = {
+    SAUDAVEL: ['🟢 Preço saudável', 'b-ok'], MARGEM_BAIXA: ['🟡 Margem baixa', 'b-warn'],
+    ABAIXO_MINIMO: ['🔴 Preço abaixo do mínimo', 'b-err'], PREJUIZO: ['🔴 Prejuízo', 'b-err'],
+    DESCONHECIDO: ['— Sem referência suficiente', 'b-neutral'],
+  };
+  function pricingUid() { return cpUid('PR'); }
+  // resolveIncomeOrder/resolveServiceFeeDetails: nunca comparação solta — mesmo princípio aqui:
+  // config de operação é sempre resolvida por operationId exato, nunca "a primeira que achar".
+  function pricingConfigForOperation(operationId) { return pricingOpConfig.find(function (c) { return c.operationId === (operationId || null); }) || null; }
+  function pricingFamilyRule(familyId) { return pricingFamilyRules.find(function (r) { return r.familyId === familyId; }) || null; }
+  function pricingDefaultFees() { return PRICING_FEE_DEFS.map(function (f) { return { key: f.key, label: f.label, unit: f.unit, value: null, configured: false }; }); }
+  // §13 do prompt de Precificação: preço matemático → preço comercial (,90/,99/múltiplo).
+  function pricingRoundComercial(cents, rule) {
+    if (!rule || cents == null) return cents;
+    if (rule === 'M5') return Math.ceil(cents / 500) * 500;
+    if (rule === 'M10') return Math.ceil(cents / 1000) * 1000;
+    var suf = rule === '90' ? 90 : rule === '99' ? 99 : null;
+    if (suf == null) return cents;
+    var reais = Math.floor(cents / 100);
+    var candidate = reais * 100 + suf;
+    return candidate >= cents ? candidate : (reais + 1) * 100 + suf;
+  }
+  // pricingCalculate() — MOTOR CANÔNICO ÚNICO (§59 do prompt mestre). Nunca duplicado em outro lugar
+  // do módulo: Simulador, Famílias & Preços e (nas próximas fases) Ficha/Caixa sempre chamam esta
+  // função. §62-64: componentes em R$ fixo (ex.: "Taxa por item: R$4") NUNCA são reinterpretados como
+  // percentual — entram no numerador junto com o custo, não no divisor percentual.
+  function pricingCalculate(input) {
+    var qty = input.qty || 1;
+    var costTotal = (input.costCents || 0) * qty;
+    var fees = (input.fees || []).map(function (f) { return Object.assign({}, f); });
+    var pctFeesSum = fees.filter(function (f) { return f.unit === 'PCT' && f.configured; }).reduce(function (s, f) { return s + (f.value || 0); }, 0);
+    var fixedFeesTotal = fees.filter(function (f) { return f.unit === 'BRL' && f.configured; }).reduce(function (s, f) { return s + Math.round(f.value || 0) * qty; }, 0);
+    var taxPct = input.taxPct != null ? input.taxPct : null;
+    var fixedCostPct = input.fixedCostPct != null ? input.fixedCostPct : null;
+    var riskPct = input.riskPct != null ? input.riskPct : null;
+    var minMarginPct = input.minMarginPct != null ? input.minMarginPct : null;
+    function pctSumWithMargin(marginPct) {
+      var s = pctFeesSum;
+      if (taxPct != null) s += taxPct;
+      if (fixedCostPct != null) s += fixedCostPct;
+      if (riskPct != null) s += riskPct;
+      if (marginPct != null) s += marginPct;
+      return s;
+    }
+    // §63: Preço = (Custo direto + Custos fixos em R$) ÷ Divisor percentual.
+    function priceFromDivisor(marginPct) {
+      var pct = pctSumWithMargin(marginPct);
+      var divisor = 1 - pct / 100;
+      if (divisor <= 0) return null;
+      return Math.round((costTotal + fixedFeesTotal) / divisor);
+    }
+    var sellingPrice = null;
+    if (input.mode === 'FACTOR') sellingPrice = costTotal ? Math.round(costTotal * (input.factor || 0)) : null;
+    else if (input.mode === 'MARGIN') sellingPrice = priceFromDivisor(input.targetMarginPct);
+    else sellingPrice = input.priceCents != null ? input.priceCents : null; // mode PRICE
+    var breakEvenPrice = priceFromDivisor(0);
+    var minimumPrice = minMarginPct != null ? priceFromDivisor(minMarginPct) : null;
+    var recommendedPrice = input.targetMarginPct != null ? priceFromDivisor(input.targetMarginPct) : null;
+    var factor = (sellingPrice != null && costTotal) ? r2(sellingPrice / costTotal) : null;
+    var divisorOut = (sellingPrice && costTotal) ? r2(costTotal / sellingPrice) : null;
+    var composition = [];
+    var costPct = sellingPrice ? r2(costTotal / sellingPrice * 100) : null;
+    composition.push({ key: 'custo', label: 'Custo do produto', unit: 'BRL', valueCents: costTotal, pct: costPct, configured: true });
+    fees.forEach(function (f) {
+      var amountCents = null;
+      if (f.configured) amountCents = f.unit === 'PCT' ? (sellingPrice != null ? Math.round(sellingPrice * (f.value || 0) / 100) : null) : Math.round((f.value || 0) * qty);
+      var pct = (amountCents != null && sellingPrice) ? r2(amountCents / sellingPrice * 100) : (f.unit === 'PCT' && f.configured ? f.value : null);
+      composition.push({ key: f.key, label: f.label, unit: f.unit, valueCents: amountCents, pct: f.configured ? pct : null, configured: !!f.configured });
+    });
+    function pctLine(key, label, pct) {
+      var amt = (pct != null && sellingPrice != null) ? Math.round(sellingPrice * pct / 100) : null;
+      composition.push({ key: key, label: label, unit: 'PCT', valueCents: amt, pct: pct, configured: pct != null });
+    }
+    pctLine('imposto', 'Impostos', taxPct);
+    pctLine('fixos', 'Custos fixos', fixedCostPct);
+    pctLine('risco', 'Risco / Imprevistos', riskPct);
+    var sumKnownCents = composition.reduce(function (s, c) { return s + (c.valueCents || 0); }, 0);
+    var profitAmount = sellingPrice != null ? sellingPrice - sumKnownCents : null;
+    var profitPct = (profitAmount != null && sellingPrice) ? r2(profitAmount / sellingPrice * 100) : null;
+    composition.push({ key: 'lucro', label: 'Lucro', unit: 'BRL', valueCents: profitAmount, pct: profitPct, configured: true });
+    var maxDiscount = (sellingPrice != null && minimumPrice != null) ? Math.max(0, sellingPrice - minimumPrice) : null;
+    var status = 'DESCONHECIDO';
+    if (sellingPrice != null && minimumPrice != null) {
+      if (sellingPrice < minimumPrice) status = 'ABAIXO_MINIMO';
+      else if (recommendedPrice != null && sellingPrice < recommendedPrice) status = 'MARGEM_BAIXA';
+      else status = 'SAUDAVEL';
+    } else if (profitAmount != null) status = profitAmount < 0 ? 'PREJUIZO' : 'DESCONHECIDO';
+    var notConfigured = [];
+    if (taxPct == null) notConfigured.push('imposto');
+    if (fixedCostPct == null) notConfigured.push('fixos');
+    if (riskPct == null) notConfigured.push('risco');
+    fees.forEach(function (f) { if (!f.configured) notConfigured.push(f.key); });
+    return {
+      cost: costTotal, sellingPrice: sellingPrice, factor: factor, divisor: divisorOut,
+      breakEvenPrice: breakEvenPrice, minimumPrice: minimumPrice, recommendedPrice: recommendedPrice,
+      costPct: costPct, marketplacePct: r2(pctFeesSum), taxPct: taxPct, fixedPct: fixedCostPct, riskPct: riskPct,
+      profitPct: profitPct, profitAmount: profitAmount, maxDiscount: maxDiscount, status: status,
+      composition: composition, notConfigured: notConfigured,
+    };
+  }
+  // pricingForFamily() — combina custo da família (Produtos, nunca duplicado) + regra da família +
+  // config da operação, e chama pricingCalculate(). Usado por Famílias & Preços e pelo Simulador
+  // quando uma família é selecionada.
+  function pricingForFamily(familyId, operationId, overrides) {
+    var fam = familyId ? skuFamById[familyId] : null;
+    var rule = pricingFamilyRule(familyId);
+    var opCfg = pricingConfigForOperation(operationId);
+    var input = Object.assign({
+      costCents: fam && fam.currentCostAmount != null ? Math.round(fam.currentCostAmount * 100) : 0,
+      qty: 1, mode: 'FACTOR', factor: rule && rule.factorPadrao != null ? rule.factorPadrao : 4,
+      targetMarginPct: rule ? rule.targetMarginPct : null, minMarginPct: rule ? rule.minMarginPct : null,
+      fees: opCfg ? opCfg.fees : pricingDefaultFees(),
+      taxPct: opCfg ? opCfg.taxPct : null, fixedCostPct: opCfg ? opCfg.fixedCostPct : null, riskPct: opCfg ? opCfg.riskPct : null,
+    }, overrides || {});
+    return { familyId: familyId, familyName: fam ? fam.name : null, operationId: operationId, configFound: !!opCfg, ruleFound: !!rule, input: input, result: pricingCalculate(input) };
+  }
+  function pricingSaveOpConfig(operationId, dto) {
+    var rec = pricingConfigForOperation(operationId);
+    if (!rec) { rec = { id: pricingUid(), operationId: operationId }; pricingOpConfig.push(rec); }
+    Object.assign(rec, dto, { updatedAt: new Date().toISOString() });
+    return putMany('pricingopconfig', [rec]).then(function () { return rec; });
+  }
+  function pricingSaveFamilyRule(familyId, dto) {
+    var rec = pricingFamilyRule(familyId);
+    if (!rec) { rec = { id: pricingUid(), familyId: familyId }; pricingFamilyRules.push(rec); }
+    Object.assign(rec, dto, { updatedAt: new Date().toISOString() });
+    return putMany('pricingfamilyrules', [rec]).then(function () { return rec; });
+  }
+
+  // ---- UI ----
+  var precSub = 'simulador'; // visaogeral | simulador | familias | regras | auditoria
+  var precSim = null; // estado do Simulador — inicializado no primeiro render, nunca persistido sozinho (só via "Salvar como regra")
+  function precTabsHtml() {
+    return '<div class="tabs">' + [['simulador', 'Simulador'], ['familias', 'Famílias & Preços'], ['regras', 'Regras & Custos'], ['visaogeral', 'Visão Geral'], ['auditoria', 'Auditoria']].map(function (t) { return '<div class="tab' + (precSub === t[0] ? ' active' : '') + '" data-prectab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>';
+  }
+  function precHead() { return secHead('PRECIFICAÇÃO', 'Precificação & Margem', 'Markup, fator, margem e o caminho inverso: para onde vai o seu fator? Simule antes de vender e compare com o resultado realizado.'); }
+  function renderPrecificacao() {
+    app.innerHTML = precHead() + precTabsHtml() + '<div id="precbody" style="margin-top:14px"></div>';
+    precRenderBody();
+    app.querySelectorAll('[data-prectab]').forEach(function (t) { t.onclick = function () { precSub = t.dataset.prectab; render(); }; });
+  }
+  function precRenderBody() {
+    var body = document.getElementById('precbody');
+    if (precSub === 'familias') { body.innerHTML = renderPrecFamilias(); bindPrecFamilias(); return; }
+    if (precSub === 'regras') { body.innerHTML = renderPrecRegras(); bindPrecRegras(); return; }
+    if (precSub === 'visaogeral') { body.innerHTML = renderPrecVisaoGeral(); bindPrecVisaoGeral(); return; }
+    if (precSub === 'auditoria') { body.innerHTML = renderPrecAuditoria(); return; }
+    body.innerHTML = renderPrecSimulador(); bindPrecSimulador();
+  }
+  function precFamiliesList() { return Produtos ? Produtos.getData().families.slice().sort(function (a, b) { return a.name.localeCompare(b.name); }) : []; }
+  function precOperationsList() { return operations.filter(function (o) { return o.ativa !== false; }); }
+
+  // ---- Simulador (§Parte 3, 21-22) ----
+  function precInitSim() {
+    var op = opActiveOrNull() || (precOperationsList()[0] || {}).id || null;
+    var opCfg = pricingConfigForOperation(op);
+    precSim = {
+      familyId: null, opId: op, mode: 'FACTOR', factor: 4, targetMarginPct: 30, priceCents: null, minMarginPct: null,
+      custoCents: 0, round: '',
+      fees: (opCfg ? opCfg.fees : pricingDefaultFees()).map(function (f) { return Object.assign({}, f); }),
+      taxPct: opCfg ? opCfg.taxPct : null, fixedCostPct: opCfg ? opCfg.fixedCostPct : null, riskPct: opCfg ? opCfg.riskPct : null,
+    };
+  }
+  function precSimInput() {
+    return { costCents: precSim.custoCents, qty: 1, mode: precSim.mode, factor: precSim.factor, targetMarginPct: precSim.targetMarginPct, priceCents: precSim.priceCents, minMarginPct: precSim.minMarginPct, fees: precSim.fees, taxPct: precSim.taxPct, fixedCostPct: precSim.fixedCostPct, riskPct: precSim.riskPct };
+  }
+  function renderPrecSimulador() {
+    if (!precSim) precInitSim();
+    var fams = precFamiliesList(); var ops = precOperationsList();
+    var cfg = '<div class="panel"><div class="ph"><h3>Configuração</h3></div><div class="pb">' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
+      '<div><label class="fld">Família</label><select class="select" id="prec-fam" style="width:100%"><option value="">— custo manual —</option>' + fams.map(function (f) { return '<option value="' + f.id + '"' + (precSim.familyId === f.id ? ' selected' : '') + '>' + esc(f.name) + '</option>'; }).join('') + '</select></div>' +
+      '<div><label class="fld">Custo (R$)</label><input class="input" id="prec-custo" value="' + (precSim.custoCents ? (precSim.custoCents / 100).toFixed(2).replace('.', ',') : '') + '" placeholder="0,00"></div>' +
+      '</div>' +
+      '<div style="margin-top:10px"><label class="fld">Operação / Marketplace</label><select class="select" id="prec-op" style="width:100%">' + (ops.length ? ops.map(function (o) { return '<option value="' + o.id + '"' + (precSim.opId === o.id ? ' selected' : '') + '>' + esc(o.nome) + '</option>'; }).join('') : '<option value="">— nenhuma operação cadastrada —</option>') + '</select></div>' +
+      '<div class="tabs" style="margin-top:12px">' + [['FACTOR', 'Tenho um fator'], ['MARGIN', 'Quero uma margem'], ['PRICE', 'Tenho um preço']].map(function (m) { return '<div class="tab' + (precSim.mode === m[0] ? ' active' : '') + '" data-precmode="' + m[0] + '">' + m[1] + '</div>'; }).join('') + '</div>' +
+      '<div style="margin-top:10px">' +
+      (precSim.mode === 'FACTOR' ? '<label class="fld">Fator</label><div style="display:flex;gap:8px"><input class="input" id="prec-fator" style="flex:1" value="' + (precSim.factor != null ? String(precSim.factor).replace('.', ',') : '') + '"><button class="btn-sm" id="prec-fator4">Fator 4</button></div>' : '') +
+      (precSim.mode === 'MARGIN' ? '<label class="fld">Margem de lucro desejada (%)</label><input class="input" id="prec-margemalvo" value="' + (precSim.targetMarginPct != null ? String(precSim.targetMarginPct).replace('.', ',') : '') + '">' : '') +
+      (precSim.mode === 'PRICE' ? '<label class="fld">Preço de venda (R$)</label><input class="input" id="prec-preco" value="' + (precSim.priceCents != null ? (precSim.priceCents / 100).toFixed(2).replace('.', ',') : '') + '">' : '') +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">' +
+      '<div><label class="fld">Margem mínima aceitável (%)</label><input class="input" id="prec-margemmin" value="' + (precSim.minMarginPct != null ? String(precSim.minMarginPct).replace('.', ',') : '') + '" placeholder="não configurado"></div>' +
+      '<div><label class="fld">Arredondamento comercial</label><select class="select" id="prec-round" style="width:100%">' + PRICING_ROUND_OPTS.map(function (o) { return '<option value="' + o[0] + '"' + (precSim.round === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
+      '</div>' +
+      '<h4 style="margin:16px 0 8px">Taxas de marketplace, imposto, fixos e risco</h4>' +
+      '<p class="footnote" style="margin:0 0 8px">Valores em branco = <b>não configurado</b> (nunca tratado como 0%). Vêm de Regras & Custos da operação selecionada — edite aqui só para simular um cenário (não salva automaticamente).</p>' +
+      '<div class="table-wrap"><table class="report"><thead><tr><th>Componente</th><th>Unidade</th><th>Valor</th></tr></thead><tbody>' +
+      precSim.fees.map(function (f, idx) { return '<tr><td>' + esc(f.label) + '</td><td>' + (f.unit === 'PCT' ? '%' : 'R$/un.') + '</td><td><input class="input sm prec-fee-input" data-idx="' + idx + '" style="width:110px" value="' + (f.configured ? (f.unit === 'PCT' ? String(f.value).replace('.', ',') : (f.value / 100).toFixed(2).replace('.', ',')) : '') + '" placeholder="não configurado"></td></tr>'; }).join('') +
+      '<tr><td>Impostos</td><td>%</td><td><input class="input sm" id="prec-imposto" style="width:110px" value="' + (precSim.taxPct != null ? String(precSim.taxPct).replace('.', ',') : '') + '" placeholder="não configurado"></td></tr>' +
+      '<tr><td>Custos fixos rateados</td><td>%</td><td><input class="input sm" id="prec-fixos" style="width:110px" value="' + (precSim.fixedCostPct != null ? String(precSim.fixedCostPct).replace('.', ',') : '') + '" placeholder="não configurado"></td></tr>' +
+      '<tr><td>Risco / imprevistos</td><td>%</td><td><input class="input sm" id="prec-risco" style="width:110px" value="' + (precSim.riskPct != null ? String(precSim.riskPct).replace('.', ',') : '') + '" placeholder="não configurado"></td></tr>' +
+      '</tbody></table></div>' +
+      (precSim.familyId ? '<button class="btn-sm primary" id="prec-savefamrule" style="margin-top:12px">Salvar como regra da família</button>' : '') +
+      '</div></div>';
+    return '<div class="grid2col" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start">' + cfg + '<div id="prec-result"></div></div>';
+  }
+  // "PARA ONDE VAI O FATOR?" — barra 100% empilhada, cor por natureza do componente (§6/§32).
+  var PRECIFICACAO_COLORS = { custo: '#5b6478', imposto: '#c47f00', fixos: '#7c5cff', risco: '#d13b3b', lucro: '#0f9d6b', DEFAULT_FEE: '#2b6fd6' };
+  function precColorFor(key) { return PRECIFICACAO_COLORS[key] || PRECIFICACAO_COLORS.DEFAULT_FEE; }
+  function precCompositionBar(calc) {
+    if (calc.sellingPrice == null) return '<div class="footnote">Informe um preço/fator/margem válido para ver a composição.</div>';
+    var segs = calc.composition.filter(function (c) { return c.configured && c.valueCents != null && c.valueCents > 0; });
+    var total = calc.sellingPrice || 1;
+    var bar = segs.map(function (c) { var w = Math.max(0, r2(c.valueCents / total * 100)); return '<div style="width:' + w + '%;background:' + precColorFor(c.key) + '" title="' + esc(c.label) + ': ' + pct(c.pct) + ' · ' + brlC(c.valueCents) + '"></div>'; }).join('');
+    var legend = segs.map(function (c) { return '<span class="footnote" style="margin:0;display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:' + precColorFor(c.key) + '"></span>' + esc(c.label) + ' ' + pct(c.pct) + '</span>'; }).join('');
+    return '<div style="height:22px;border-radius:8px;overflow:hidden;display:flex;border:1px solid var(--line)">' + bar + '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:8px">' + legend + '</div>';
+  }
+  function precCompositionTable(calc) {
+    var rows = calc.composition.map(function (c) {
+      return '<tr><td>' + esc(c.label) + '</td><td class="nowrap">' + (c.pct != null ? pct(c.pct) : '<span class="tag neutral">não configurado</span>') + '</td><td class="nowrap">' + (c.valueCents != null ? brlC(c.valueCents) : '—') + '</td></tr>';
+    }).join('');
+    return '<div class="table-wrap" style="margin-top:10px"><table class="report"><thead><tr><th>Componente</th><th>%</th><th>R$</th></tr></thead><tbody>' + rows + '<tr class="total"><td>Total</td><td>100%</td><td>' + brlC(calc.sellingPrice) + '</td></tr></tbody></table></div>';
+  }
+  function renderPrecResultPanel() {
+    var calc = pricingCalculate(precSimInput());
+    var st = PRICING_STATUS_LABEL[calc.status];
+    var roundedCents = (precSim.mode === 'MARGIN' && precSim.round) ? pricingRoundComercial(calc.sellingPrice, precSim.round) : null;
+    var calcRounded = roundedCents ? pricingCalculate(Object.assign({}, precSimInput(), { mode: 'PRICE', priceCents: roundedCents })) : null;
+    var html = '<div class="panel"><div class="ph"><h3>Resultado</h3><span class="badge ' + st[1] + '">' + st[0] + '</span></div><div class="pb">' +
+      '<div class="kstrip">' +
+      '<div class="kc"><div class="kl">Preço ' + (precSim.mode === 'PRICE' ? 'informado' : 'recomendado') + '</div><div class="kv" style="font-size:20px">' + (calc.sellingPrice != null ? brlC(calc.sellingPrice) : '—') + '</div></div>' +
+      '<div class="kc"><div class="kl">Fator</div><div class="kv" style="font-size:20px">' + (calc.factor != null ? calc.factor.toFixed(2).replace('.', ',') + 'x' : '—') + '</div></div>' +
+      '<div class="kc"><div class="kl">Lucro</div><div class="kv" style="font-size:20px;color:' + (calc.profitAmount != null && calc.profitAmount < 0 ? 'var(--err)' : 'var(--ok)') + '">' + (calc.profitAmount != null ? brlC(calc.profitAmount) : '—') + '</div></div>' +
+      '<div class="kc"><div class="kl">Margem</div><div class="kv" style="font-size:20px">' + (calc.profitPct != null ? pct(calc.profitPct) : '—') + '</div></div>' +
+      '</div>' +
+      (roundedCents && roundedCents !== calc.sellingPrice ? ('<div class="callout" style="margin-top:10px"><div class="cbody">Preço matemático: <b>' + brlC(calc.sellingPrice) + '</b> · Preço comercial (' + esc(PRICING_ROUND_OPTS.find(function (o) { return o[0] === precSim.round; })[1]) + '): <b>' + brlC(roundedCents) + '</b> — margem recalculada: <b>' + (calcRounded.profitPct != null ? pct(calcRounded.profitPct) : '—') + '</b></div></div>') : '') +
+      '<h4 style="margin:16px 0 8px">Para onde vai o ' + (calc.factor != null ? 'fator ' + calc.factor.toFixed(2).replace('.', ',') + 'x' : 'preço') + '?</h4>' +
+      precCompositionBar(calc) +
+      precCompositionTable(calc) +
+      (calc.divisor != null ? '<div class="fin-line" style="margin-top:10px"><span>Markup divisor <span class="footnote" style="margin:0">(1 ÷ fator)</span></span><span id="prec-divisor-val">' + calc.divisor.toFixed(4).replace('.', ',') + '</span></div>' : '') +
+      (calc.breakEvenPrice != null ? '<div class="fin-line" style="margin-top:10px"><span>Preço de equilíbrio (lucro = 0)</span><span>' + brlC(calc.breakEvenPrice) + '</span></div>' : '') +
+      (calc.minimumPrice != null ? '<div class="fin-line"><span>Preço mínimo (margem mínima)</span><span>' + brlC(calc.minimumPrice) + '</span></div>' : '') +
+      (calc.recommendedPrice != null ? '<div class="fin-line"><span>Preço recomendado (margem alvo)</span><span>' + brlC(calc.recommendedPrice) + '</span></div>' : '') +
+      (calc.maxDiscount != null && calc.sellingPrice != null ? '<div class="fin-line"><span>Desconto máximo possível</span><span>' + brlC(calc.maxDiscount) + ' (' + pct(r2(calc.maxDiscount / calc.sellingPrice * 100)) + ')</span></div>' : '') +
+      (calc.notConfigured.length ? '<div class="footnote" style="margin-top:8px">⚠ Componentes não configurados (tratados como ausentes, nunca como 0%): ' + calc.notConfigured.join(', ') + '.</div>' : '') +
+      '</div></div>';
+    document.getElementById('prec-result').innerHTML = html;
+  }
+  function bindPrecSimulador() {
+    renderPrecResultPanel();
+    var famSel = document.getElementById('prec-fam'); if (famSel) famSel.onchange = function () {
+      precSim.familyId = famSel.value || null;
+      if (precSim.familyId) { var fam = skuFamById[precSim.familyId]; precSim.custoCents = fam && fam.currentCostAmount != null ? Math.round(fam.currentCostAmount * 100) : 0; var rule = pricingFamilyRule(precSim.familyId); if (rule) { if (rule.factorPadrao != null) precSim.factor = rule.factorPadrao; if (rule.targetMarginPct != null) precSim.targetMarginPct = rule.targetMarginPct; if (rule.minMarginPct != null) precSim.minMarginPct = rule.minMarginPct; } }
+      precRenderBody();
+    };
+    var custoEl = document.getElementById('prec-custo'); if (custoEl) custoEl.oninput = function () { precSim.custoCents = Math.round((cpParseNum(custoEl.value) || 0) * 100); renderPrecResultPanel(); };
+    var opSel = document.getElementById('prec-op'); if (opSel) opSel.onchange = function () {
+      precSim.opId = opSel.value || null; var opCfg = pricingConfigForOperation(precSim.opId);
+      precSim.fees = (opCfg ? opCfg.fees : pricingDefaultFees()).map(function (f) { return Object.assign({}, f); });
+      precSim.taxPct = opCfg ? opCfg.taxPct : null; precSim.fixedCostPct = opCfg ? opCfg.fixedCostPct : null; precSim.riskPct = opCfg ? opCfg.riskPct : null;
+      precRenderBody();
+    };
+    app.querySelectorAll('[data-precmode]').forEach(function (t) { t.onclick = function () { precSim.mode = t.dataset.precmode; precRenderBody(); }; });
+    var fatorEl = document.getElementById('prec-fator'); if (fatorEl) fatorEl.oninput = function () { precSim.factor = cpParseNum(fatorEl.value); renderPrecResultPanel(); };
+    var fator4Btn = document.getElementById('prec-fator4'); if (fator4Btn) fator4Btn.onclick = function () { precSim.factor = 4; fatorEl.value = '4'; renderPrecResultPanel(); };
+    var margemEl = document.getElementById('prec-margemalvo'); if (margemEl) margemEl.oninput = function () { precSim.targetMarginPct = cpParseNum(margemEl.value); renderPrecResultPanel(); };
+    var precoEl = document.getElementById('prec-preco'); if (precoEl) precoEl.oninput = function () { var v = cpParseNum(precoEl.value); precSim.priceCents = v != null ? Math.round(v * 100) : null; renderPrecResultPanel(); };
+    var margemMinEl = document.getElementById('prec-margemmin'); if (margemMinEl) margemMinEl.oninput = function () { precSim.minMarginPct = cpParseNum(margemMinEl.value); renderPrecResultPanel(); };
+    var roundEl = document.getElementById('prec-round'); if (roundEl) roundEl.onchange = function () { precSim.round = roundEl.value; renderPrecResultPanel(); };
+    app.querySelectorAll('.prec-fee-input').forEach(function (el) {
+      el.oninput = function () {
+        var idx = parseInt(el.dataset.idx, 10); var f = precSim.fees[idx]; if (!f) return;
+        var raw = el.value.trim();
+        if (raw === '') { f.configured = false; f.value = null; } else { f.configured = true; var n = cpParseNum(raw); f.value = f.unit === 'PCT' ? n : Math.round((n || 0) * 100); }
+        renderPrecResultPanel();
+      };
+    });
+    var impostoEl = document.getElementById('prec-imposto'); if (impostoEl) impostoEl.oninput = function () { var raw = impostoEl.value.trim(); precSim.taxPct = raw === '' ? null : cpParseNum(raw); renderPrecResultPanel(); };
+    var fixosEl = document.getElementById('prec-fixos'); if (fixosEl) fixosEl.oninput = function () { var raw = fixosEl.value.trim(); precSim.fixedCostPct = raw === '' ? null : cpParseNum(raw); renderPrecResultPanel(); };
+    var riscoEl = document.getElementById('prec-risco'); if (riscoEl) riscoEl.oninput = function () { var raw = riscoEl.value.trim(); precSim.riskPct = raw === '' ? null : cpParseNum(raw); renderPrecResultPanel(); };
+    var saveFamRuleBtn = document.getElementById('prec-savefamrule'); if (saveFamRuleBtn) saveFamRuleBtn.onclick = function () {
+      if (!precSim.familyId) return;
+      var fam = skuFamById[precSim.familyId];
+      if (!confirm('Deseja definir fator ' + (precSim.factor != null ? precSim.factor.toFixed(2).replace('.', ',') + 'x' : '—') + (precSim.minMarginPct != null ? ' e margem mínima ' + precSim.minMarginPct + '%' : '') + ' como regra da família ' + (fam ? fam.name : '') + '?')) return;
+      pricingSaveFamilyRule(precSim.familyId, { factorPadrao: precSim.factor, targetMarginPct: precSim.targetMarginPct, minMarginPct: precSim.minMarginPct, roundRule: precSim.round }).then(function () { toast('Regra salva', 'Família atualizada.'); });
+    };
+  }
+
+  // ---- Regras & Custos (§Parte 5) ----
+  var precRegrasOpId = null;
+  function renderPrecRegras() {
+    var ops = precOperationsList();
+    if (!precRegrasOpId || !ops.some(function (o) { return o.id === precRegrasOpId; })) precRegrasOpId = (opActiveOrNull() && ops.some(function (o) { return o.id === opActiveOrNull(); })) ? opActiveOrNull() : (ops[0] ? ops[0].id : null);
+    if (!ops.length) return emptyBox('Nenhuma operação ativa cadastrada. Cadastre uma operação (seletor de operação, no topo) antes de configurar taxas.');
+    var cfg = pricingConfigForOperation(precRegrasOpId);
+    var fees = cfg ? cfg.fees : pricingDefaultFees();
+    var picker = '<div class="panel"><div class="pb"><div class="toolbar2" style="margin:0"><b style="font-size:12.5px;color:var(--muted)">Operação:</b><select class="select sm" id="prg-op">' + ops.map(function (o) { return '<option value="' + o.id + '"' + (precRegrasOpId === o.id ? ' selected' : '') + '>' + esc(o.nome) + (pricingConfigForOperation(o.id) ? ' ✓ configurado' : ' — não configurado') + '</option>'; }).join('') + '</select></div></div></div>';
+    var form = '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Taxas de marketplace</h3></div><div class="pb">' +
+      '<p class="footnote">Deixe em branco o que ainda não for conhecido — o sistema nunca assume 0% no lugar de "não configurado".</p>' +
+      '<div class="table-wrap"><table class="report"><thead><tr><th>Componente</th><th>Unidade</th><th>Valor</th></tr></thead><tbody>' +
+      fees.map(function (f, idx) { return '<tr><td>' + esc(f.label) + '</td><td>' + (f.unit === 'PCT' ? '%' : 'R$/un.') + '</td><td><input class="input sm prg-fee-input" data-idx="' + idx + '" style="width:130px" value="' + (f.configured ? (f.unit === 'PCT' ? String(f.value).replace('.', ',') : (f.value / 100).toFixed(2).replace('.', ',')) : '') + '" placeholder="não configurado"></td></tr>'; }).join('') +
+      '</tbody></table></div></div></div>' +
+      '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Empresa / Impostos · Custos fixos · Risco</h3></div><div class="pb">' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">' +
+      '<div><label class="fld">Imposto (%)</label><input class="input" id="prg-imposto" value="' + (cfg && cfg.taxPct != null ? String(cfg.taxPct).replace('.', ',') : '') + '" placeholder="não configurado"></div>' +
+      '<div><label class="fld">Custo fixo rateado (%)</label><input class="input" id="prg-fixos" value="' + (cfg && cfg.fixedCostPct != null ? String(cfg.fixedCostPct).replace('.', ',') : '') + '" placeholder="não configurado"></div>' +
+      '<div><label class="fld">Risco / imprevistos (%)</label><input class="input" id="prg-risco" value="' + (cfg && cfg.riskPct != null ? String(cfg.riskPct).replace('.', ',') : '') + '" placeholder="não configurado"></div>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">' +
+      '<div><label class="fld">Margem alvo padrão (%) <span class="footnote" style="margin:0">— usada quando a família não tem regra própria</span></label><input class="input" id="prg-margemalvo" value="' + (cfg && cfg.defaultTargetMarginPct != null ? String(cfg.defaultTargetMarginPct).replace('.', ',') : '') + '" placeholder="não configurado"></div>' +
+      '<div><label class="fld">Margem mínima padrão (%)</label><input class="input" id="prg-margemmin" value="' + (cfg && cfg.defaultMinMarginPct != null ? String(cfg.defaultMinMarginPct).replace('.', ',') : '') + '" placeholder="não configurado"></div>' +
+      '</div>' +
+      (cfg && cfg.updatedAt ? '<div class="footnote" style="margin-top:10px">Última atualização: ' + new Date(cfg.updatedAt).toLocaleString('pt-BR') + '</div>' : '') +
+      '<button class="btn-sm primary" id="prg-save" style="margin-top:14px">Salvar configuração desta operação</button>' +
+      '</div></div>';
+    return picker + form;
+  }
+  function bindPrecRegras() {
+    var opSel = document.getElementById('prg-op'); if (opSel) opSel.onchange = function () { precRegrasOpId = opSel.value; precRenderBody(); };
+    var fees = (pricingConfigForOperation(precRegrasOpId) || { fees: pricingDefaultFees() }).fees.map(function (f) { return Object.assign({}, f); });
+    var saveBtn = document.getElementById('prg-save'); if (!saveBtn) return;
+    saveBtn.onclick = function () {
+      app.querySelectorAll('.prg-fee-input').forEach(function (el) {
+        var idx = parseInt(el.dataset.idx, 10); var f = fees[idx]; if (!f) return;
+        var raw = el.value.trim();
+        if (raw === '') { f.configured = false; f.value = null; } else { f.configured = true; var n = cpParseNum(raw); f.value = f.unit === 'PCT' ? n : Math.round((n || 0) * 100); }
+      });
+      function pctOrNull(id) { var el = document.getElementById(id); var raw = el ? el.value.trim() : ''; return raw === '' ? null : cpParseNum(raw); }
+      pricingSaveOpConfig(precRegrasOpId, { fees: fees, taxPct: pctOrNull('prg-imposto'), fixedCostPct: pctOrNull('prg-fixos'), riskPct: pctOrNull('prg-risco'), defaultTargetMarginPct: pctOrNull('prg-margemalvo'), defaultMinMarginPct: pctOrNull('prg-margemmin') })
+        .then(function () { toast('Configuração salva', 'Regras da operação atualizadas.'); precRenderBody(); });
+    };
+  }
+
+  // ---- Famílias & Preços (§Parte 9) ----
+  var precFamExpand = null;
+  function renderPrecFamilias() {
+    var fams = precFamiliesList(); var opId = opActiveOrNull() || (precOperationsList()[0] || {}).id || null;
+    if (!fams.length) return emptyBox('Nenhuma família cadastrada em Produtos ainda.');
+    var vars = Produtos ? Produtos.getData().variations : [];
+    var rows = fams.map(function (f) {
+      var rule = pricingFamilyRule(f.id);
+      var pf = pricingForFamily(f.id, opId, rule && rule.factorPadrao != null ? { mode: 'FACTOR', factor: rule.factorPadrao } : { mode: 'FACTOR', factor: 4 });
+      var calc = pf.result; var st = PRICING_STATUS_LABEL[calc.status];
+      var skusFam = vars.filter(function (v) { return v.familyId === f.id; });
+      return '<tr class="rowlink" data-precfamrow="' + f.id + '">' +
+        '<td><b>' + esc(f.name) + '</b></td>' +
+        '<td class="nowrap">' + (f.currentCostAmount != null ? brl(f.currentCostAmount) : '<span class="badge b-warn">sem custo</span>') + '</td>' +
+        '<td class="nowrap">' + (rule && rule.factorPadrao != null ? rule.factorPadrao.toFixed(2).replace('.', ',') + 'x' : '<span class="footnote" style="margin:0">padrão 4,00x</span>') + '</td>' +
+        '<td class="nowrap">' + (calc.sellingPrice != null ? brlC(calc.sellingPrice) : '—') + '</td>' +
+        '<td class="nowrap">' + (calc.profitPct != null ? pct(calc.profitPct) : '—') + '</td>' +
+        '<td class="nowrap">' + (rule && rule.minMarginPct != null ? pct(rule.minMarginPct) : '<span class="footnote" style="margin:0">não definida</span>') + '</td>' +
+        '<td><span class="badge ' + st[1] + '">' + st[0] + '</span></td>' +
+        '<td class="footnote" style="margin:0">' + (rule && rule.updatedAt ? new Date(rule.updatedAt).toLocaleDateString('pt-BR') : '—') + '</td>' +
+        '<td>' + nn(skusFam.length) + ' SKU(s)</td>' +
+        '<td><button class="btn-sm" data-precfamedit="' + f.id + '">Editar regra</button></td></tr>' +
+        (precFamExpand === f.id ? ('<tr><td colspan="10" style="padding:0"><div style="padding:10px 14px;background:var(--bg2,#f8f9fc)"><div class="table-wrap"><table class="report"><thead><tr><th>SKU</th><th>Variação</th><th>Preço atual</th><th>Margem projetada</th></tr></thead><tbody>' +
+          (skusFam.length ? skusFam.map(function (v) {
+            var priceRef = v.closingPrice != null ? v.closingPrice : v.shopeeFullPrice;
+            var pf2 = priceRef != null ? pricingForFamily(f.id, opId, { mode: 'PRICE', priceCents: Math.round(priceRef * 100) }) : null;
+            return '<tr><td class="mono">' + esc(v.sku || '—') + '</td><td>' + esc(v.variationName || '(única)') + '</td><td class="nowrap">' + (priceRef != null ? brl(priceRef) : '—') + '</td><td class="nowrap">' + (pf2 && pf2.result.profitPct != null ? pct(pf2.result.profitPct) : '—') + '</td></tr>';
+          }).join('') : '<tr><td colspan="4"><div class="footnote">Nenhum SKU vinculado a esta família ainda.</div></td></tr>') +
+          '</tbody></table></div></div></td></tr>') : '');
+    }).join('');
+    return '<div class="panel"><div class="ph"><h3>Famílias & Preços</h3><span class="footnote" style="margin:0">' + nn(fams.length) + ' família(s) · operação de referência: ' + (opId ? esc((operations.find(function (o) { return o.id === opId; }) || {}).nome || '—') : 'nenhuma') + '</span></div>' +
+      '<div class="table-wrap"><table class="report"><thead><tr><th>Família</th><th>Custo</th><th>Fator padrão</th><th>Preço sugerido</th><th>Margem projetada</th><th>Margem mínima</th><th>Status</th><th>Última revisão</th><th>SKUs</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+  }
+  function bindPrecFamilias() {
+    app.querySelectorAll('[data-precfamrow]').forEach(function (tr) { tr.querySelector('td').onclick = function () { precFamExpand = precFamExpand === tr.dataset.precfamrow ? null : tr.dataset.precfamrow; precRenderBody(); }; });
+    app.querySelectorAll('[data-precfamedit]').forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); openPrecFamilyRuleEditor(b.dataset.precfamedit); }; });
+  }
+  function openPrecFamilyRuleEditor(familyId) {
+    var fam = skuFamById[familyId]; var rule = pricingFamilyRule(familyId) || {};
+    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70';
+    o.innerHTML = '<div class="modal" style="width:460px"><div class="mh"><h3>Regra de precificação — ' + esc(fam ? fam.name : '') + '</h3><button class="x">×</button></div><div class="mbd">' +
+      '<label class="fld">Fator padrão</label><input class="input" id="pfe-fator" value="' + (rule.factorPadrao != null ? String(rule.factorPadrao).replace('.', ',') : '') + '" placeholder="4,00">' +
+      '<label class="fld">Margem de lucro desejada (%)</label><input class="input" id="pfe-margemalvo" value="' + (rule.targetMarginPct != null ? String(rule.targetMarginPct).replace('.', ',') : '') + '">' +
+      '<label class="fld">Margem mínima aceitável (%)</label><input class="input" id="pfe-margemmin" value="' + (rule.minMarginPct != null ? String(rule.minMarginPct).replace('.', ',') : '') + '">' +
+      '<label class="fld">Arredondamento comercial</label><select class="select" id="pfe-round" style="width:100%">' + PRICING_ROUND_OPTS.map(function (o2) { return '<option value="' + o2[0] + '"' + (rule.roundRule === o2[0] ? ' selected' : '') + '>' + o2[1] + '</option>'; }).join('') + '</select>' +
+      '</div><div class="mf"><button class="btn-sm" id="pfe-x">Cancelar</button><button class="btn-sm primary" id="pfe-ok">Salvar</button></div></div>';
+    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
+    o.querySelector('.x').onclick = o.querySelector('#pfe-x').onclick = function () { o.remove(); };
+    o.querySelector('#pfe-ok').onclick = function () {
+      var dto = { factorPadrao: cpParseNum(o.querySelector('#pfe-fator').value), targetMarginPct: cpParseNum(o.querySelector('#pfe-margemalvo').value), minMarginPct: cpParseNum(o.querySelector('#pfe-margemmin').value), roundRule: o.querySelector('#pfe-round').value };
+      pricingSaveFamilyRule(familyId, dto).then(function () { o.remove(); toast('Regra salva', ''); precRenderBody(); });
+    };
+  }
+
+  // ---- Visão Geral (leve, nesta fase — sem KPIs de pedidos reais, ver relatório de entrega) ----
+  function renderPrecVisaoGeral() {
+    var fams = precFamiliesList(); var ops = precOperationsList();
+    var comCusto = fams.filter(function (f) { return f.currentCostAmount != null; }).length;
+    var comRegra = fams.filter(function (f) { return !!pricingFamilyRule(f.id); }).length;
+    var opsConfig = ops.filter(function (o) { return !!pricingConfigForOperation(o.id); }).length;
+    return '<div class="kstrip">' +
+      '<div class="kc"><div class="kl">Famílias cadastradas</div><div class="kv">' + nn(fams.length) + '</div></div>' +
+      '<div class="kc"><div class="kl">Famílias com custo</div><div class="kv">' + nn(comCusto) + '</div></div>' +
+      '<div class="kc"><div class="kl">Famílias com regra de precificação</div><div class="kv">' + nn(comRegra) + '</div></div>' +
+      '<div class="kc"><div class="kl">Operações com taxas configuradas</div><div class="kv">' + nn(opsConfig) + ' / ' + nn(ops.length) + '</div></div>' +
+      '</div>' +
+      '<div class="callout" style="margin-top:14px"><div class="cbody">Esta é a Fase 1 do módulo — o motor de cálculo, o Simulador, Regras & Custos e Famílias & Preços já estão completos. KPIs baseados em vendas reais (margem realizada, lucro deixado na mesa, previsto × realizado por pedido) e a integração com Ficha do Pedido/DRE do Caixa entram nas próximas fases — ver relatório de entrega.</div></div>';
+  }
+  function bindPrecVisaoGeral() { }
+
+  // ---- Auditoria (§Parte 18, versão desta fase) ----
+  function renderPrecAuditoria() {
+    var fams = precFamiliesList(); var ops = precOperationsList();
+    var vars = Produtos ? Produtos.getData().variations : [];
+    var famsSemCusto = fams.filter(function (f) { return f.currentCostAmount == null; });
+    var famsSemFator = fams.filter(function (f) { return !pricingFamilyRule(f.id) || pricingFamilyRule(f.id).factorPadrao == null; });
+    var skusSemFamilia = vars.filter(function (v) { return !v.familyId; });
+    var opsSemTaxas = ops.filter(function (o) { return !pricingConfigForOperation(o.id); });
+    function block(title, list, renderItem, emptyMsg) {
+      return '<div class="panel" style="margin-top:14px"><div class="ph"><h3>' + esc(title) + '</h3><span class="footnote" style="margin:0">' + nn(list.length) + '</span></div><div class="pb">' + (list.length ? list.map(renderItem).join('') : '<span class="tag ok">' + esc(emptyMsg) + '</span>') + '</div></div>';
+    }
+    return block('Famílias sem custo cadastrado', famsSemCusto, function (f) { return '<div class="fin-line"><span>' + esc(f.name) + '</span><span class="tag warn">sem custo</span></div>'; }, 'Todas as famílias têm custo cadastrado.') +
+      block('Famílias sem fator/regra de precificação', famsSemFator, function (f) { return '<div class="fin-line"><span>' + esc(f.name) + '</span><span class="tag warn">sem regra</span></div>'; }, 'Todas as famílias têm regra de precificação.') +
+      block('SKUs sem família (não é possível precificar)', skusSemFamilia, function (v) { return '<div class="fin-line"><span class="mono">' + esc(v.sku || '—') + '</span><span class="footnote" style="margin:0">' + esc(v.variationName || '') + '</span></div>'; }, 'Todos os SKUs têm família vinculada.') +
+      block('Operações sem taxas configuradas', opsSemTaxas, function (o) { return '<div class="fin-line"><span>' + esc(o.nome) + '</span><span class="tag warn">não configurado</span></div>'; }, 'Todas as operações ativas têm taxas configuradas.');
+  }
+
   // ---------- boot ----------
   document.querySelectorAll('#nav a').forEach(function (a) { a.onclick = function () { route = a.dataset.route; render(); }; });
   var dateInputs = document.getElementById('dateinputs');
@@ -8638,14 +9077,14 @@
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; pricingOpConfig = []; pricingFamilyRules = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
   var opSelBtn = document.getElementById('op-selector'); if (opSelBtn) opSelBtn.onclick = function () { openOperationSelector(); };
 
   // Abre o banco; se falhar (corrompido/bloqueado/privado), ativa o modo em memória e SEGUE —
   // o sistema sempre carrega e Produtos sempre abre (só não salva). Nunca dead-end / tela branca.
   openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers'), getAll('bankaccounts'), getAll('companies'), getAll('operations'), getAll('cpheader'), getAll('cpitems'), getAll('cppayments'), getAll('cpattach'), getAll('cpcategories'), getAll('cpaccounting'), getAll('cpcostcenters'), getAll('cpsuppliers'), getAll('cpsupplylinks')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers'), getAll('bankaccounts'), getAll('companies'), getAll('operations'), getAll('cpheader'), getAll('cpitems'), getAll('cppayments'), getAll('cpattach'), getAll('cpcategories'), getAll('cpaccounting'), getAll('cpcostcenters'), getAll('cpsuppliers'), getAll('cpsupplylinks'), getAll('pricingopconfig'), getAll('pricingfamilyrules')]);
   }).then(function (r) {
     orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
     wallet = r[5] || [];
@@ -8669,6 +9108,7 @@
     companies = r[24] || []; operations = r[25] || [];
     contasPagar = r[26] || []; cpItemsAll = r[27] || []; cpPayments = r[28] || []; cpAttachments = r[29] || [];
     cpCategories = r[30] || []; cpAccounting = r[31] || []; cpCostCenters = r[32] || []; cpSuppliers = r[33] || []; cpSupplyLinks = r[34] || [];
+    pricingOpConfig = r[35] || []; pricingFamilyRules = r[36] || [];
     var activeSetting = settings.filter(function (x) { return x.id === 'activeOperationId'; })[0];
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
     plans = (r[4] || []).map(function (p) { if (PLAN_MIGR[p.status]) p.status = PLAN_MIGR[p.status]; if (p.scopeSkus == null && p.relatedSkus) p.scopeSkus = p.relatedSkus; if (p.indicatorKind == null) p.indicatorKind = 'liquido'; return p; });
@@ -8688,6 +9128,7 @@
         affConv = byOp(affConv); affRpa = byOp(affRpa); affVb = byOp(affVb);
         mrRenda = byOp(mrRenda); mrShip = byOp(mrShip); mrAdj = byOp(mrAdj); mrSvc = byOp(mrSvc);
         contasPagar = byOp(contasPagar);
+        pricingOpConfig = byOp(pricingOpConfig);
       }
       if (lastImportStamp == null && batches.length) { var last = batches.map(function (b) { return b.createdAt; }).sort().pop(); lastImportStamp = last || null; }
       if (occ.length) putMany('occ', occ);
