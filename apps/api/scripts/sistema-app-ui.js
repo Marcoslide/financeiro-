@@ -1412,6 +1412,28 @@
     var statusFinanceiro = mrRow ? (pendencia ? 'DIVERGENCIA' : 'CONFIRMADO') : 'PROVISORIO';
     return { orderId: orderId, temIncome: !!mrRow, mrRow: mrRow, incomeResolve: incomeResolve, statusFinanceiro: statusFinanceiro, ord: ord, svcRows: svcRows, svcResolve: svcResolve, serviceFee: serviceFee, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gEnvio: gEnvio, gOutros: gOutros, envio: envio, auditoriaFonte: auditoriaFonte, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), envioC: somaGrupo(gEnvio), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, taxasSomaSemAjusteC: taxasSomaSemAjusteC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia };
   }
+  // pedidoResultadoFinal(orderId) — CANÔNICA (extraída de openPedidoFicha360 pro módulo de
+  // Precificação poder consumir o mesmo "REALIZADO" que a Ficha mostra, sem duplicar cálculo).
+  // Camada em cima de pedidoComposicaoFinanceira(): soma o que ainda falta pra chegar no lucro
+  // FINAL do pedido — custo de afiliados (só quando Minha Renda não cobre o pedido, senão já está
+  // dentro de taxasSomaC), Taxa Acelera e devolução/perdas. Mesma fórmula usada pela Ficha do
+  // Pedido — nunca uma segunda conta divergente.
+  function pedidoResultadoFinal(orderId) {
+    var comp = pedidoComposicaoFinanceira(orderId);
+    var mrRow = comp.mrRow, receitaC = comp.receitaC, custoProdC = comp.custoProdC, taxasSomaC = comp.taxasSomaC;
+    var acRows = acelera.filter(function (r) { return r.pedido === orderId; });
+    var affEng = affEngine(); var affRow = affEng.orderMap[orderId];
+    var occs = occ.filter(function (x) { return !x.isDemo && x.orderId === orderId; });
+    var custoAfilCents = (!mrRow && affRow) ? Math.round((affRow.comAff + affRow.svcFee) / 100) : 0;
+    var acTaxaCents = acRows.length ? acRows.reduce(function (s, r) { return s + r.taxa; }, 0) : 0;
+    var devImpactoCents = occs.length ? Math.round(occs.reduce(function (s, x) { return s + occResultadoDevolucao(x).perda; }, 0) * 100) : 0;
+    var devConfirmadoN = occs.filter(function (x) { return occResultadoDevolucao(x).status === 'confirmado'; }).length;
+    var resultadoFinalC = null;
+    if (receitaC != null && custoProdC != null) resultadoFinalC = receitaC + taxasSomaC - custoProdC - custoAfilCents - acTaxaCents - devImpactoCents;
+    var margemFinalPct = (resultadoFinalC != null && receitaC) ? r2(resultadoFinalC / receitaC * 100) : null;
+    var lucroProvisorio = resultadoFinalC != null && (!mrRow || (occs.length > 0 && devConfirmadoN < occs.length));
+    return { comp: comp, acRows: acRows, affRow: affRow, occs: occs, custoAfilCents: custoAfilCents, acTaxaCents: acTaxaCents, devImpactoCents: devImpactoCents, devConfirmadoN: devConfirmadoN, resultadoFinalC: resultadoFinalC, margemFinalPct: margemFinalPct, lucroProvisorio: lucroProvisorio };
+  }
   // auditOrderProductCost(orderId) — teste canônico de custo (prompt "Correção do custo + taxas"): prova,
   // item a item de um pedido real, exatamente onde a resolução SKU→variação→família→custo quebra.
   // Nunca recalcula nada por conta própria — só expõe o resultado já produzido por normalizeSkuKey(),
@@ -1449,13 +1471,12 @@
     // Fonte única (§ correção de arquitetura): a composição financeira vem de
     // pedidoComposicaoFinanceira() — dona de Pedidos, sem chamar mrEngine()/mrPeriodEngine(). A
     // Ficha só formata em HTML o que essa função já calculou; nunca recalcula por conta própria.
-    var comp = pedidoComposicaoFinanceira(orderId);
-    var ord = comp.ord, mrRow = comp.mrRow, svcRows = comp.svcRows;
+    // pedidoResultadoFinal() é a mesma função canônica que o módulo de Precificação usa para o
+    // "REALIZADO" (pricingActualForOrder) — nunca duas contas divergentes pro mesmo pedido.
+    var pr = pedidoResultadoFinal(orderId);
+    var comp = pr.comp, ord = comp.ord, mrRow = comp.mrRow, svcRows = comp.svcRows, acRows = pr.acRows, affRow = pr.affRow, occs = pr.occs;
     var shipRow = mrShip.find(function (s) { return s.id === orderId; });
-    var acRows = acelera.filter(function (r) { return r.pedido === orderId; });
-    var affEng = affEngine(); var affRow = affEng.orderMap[orderId];
     var wtx = wallet.filter(function (t) { return t.orderId === orderId; });
-    var occs = occ.filter(function (x) { return !x.isDemo && x.orderId === orderId; });
     var bip = shipBip[orderId];
     var st = pedidoConciliacaoStatus(orderId);
 
@@ -1564,6 +1585,39 @@
       '</div></details></div></div>' : '';
     var taxasBlock = bloco3Taxas + bloco4Envio + bloco5Ajustes + bloco6Creditos + bloco7Conciliacao + auditoriaBlock;
 
+    // ---- PRECIFICAÇÃO (bloco compacto, Parte 10 do prompt de Precificação & Margem) — nunca
+    // recalcula: só formata o que pricingForOrder/pricingActualForOrder/pricingCompareOrder (motor
+    // canônico do módulo Precificação, que por sua vez reaproveita pedidoComposicaoFinanceira() e
+    // pedidoResultadoFinal() — nunca uma segunda conta) já produziram. Só aparece quando o pedido tem
+    // pelo menos uma família resolvida (senão não há o que comparar).
+    var precOpId = (ord && ord.operationId) || opActiveOrNull() || null;
+    var precCmp = ord ? pricingCompareOrder(precOpId, orderId) : { found: false };
+    var PREC_STATUS_LABEL = { SAUDAVEL: ['🟢 Dentro da precificação', 'b-ok'], MARGEM_BAIXA: ['🟡 Abaixo do fator recomendado', 'b-warn'], ABAIXO_MINIMO: ['🔴 Abaixo da margem mínima', 'b-err'], DESCONHECIDO: ['— sem referência suficiente', 'b-neutral'] };
+    var precificacaoBlock = '';
+    if (precCmp.found && precCmp.proj.familyId) {
+      var pj = precCmp.proj, rl = precCmp.real;
+      var precStatus = (pj.recCalc.minimumPrice != null && pj.precoVendidoC != null) ? (pj.precoVendidoC < pj.recCalc.minimumPrice ? 'ABAIXO_MINIMO' : (pj.recommendedPrice != null && pj.precoVendidoC < pj.recommendedPrice ? 'MARGEM_BAIXA' : 'SAUDAVEL')) : 'DESCONHECIDO';
+      var pst = PREC_STATUS_LABEL[precStatus];
+      precificacaoBlock = '<div class="panel"><div class="ph"><h3>Precificação</h3><span class="badge ' + pst[1] + '">' + pst[0] + '</span></div><div class="pb">' +
+        '<div class="kstrip">' +
+        '<div class="kc"><div class="kl">Família</div><div class="kv" style="font-size:15px">' + esc(pj.familyName || 'sem família') + (pj.multiplasFamilias ? ' <span class="footnote" style="margin:0">(+outras)</span>' : '') + '</div></div>' +
+        '<div class="kc"><div class="kl">Preço recomendado</div><div class="kv" style="font-size:15px">' + (pj.recommendedPrice != null ? brlC(pj.recommendedPrice) : '—') + '</div></div>' +
+        '<div class="kc"><div class="kl">Preço vendido</div><div class="kv" style="font-size:15px">' + (pj.precoVendidoC != null ? brlC(pj.precoVendidoC) : '—') + '</div></div>' +
+        '<div class="kc"><div class="kl">Fator recomendado</div><div class="kv" style="font-size:15px">' + (pj.factorRecomendado != null ? pj.factorRecomendado.toFixed(2).replace('.', ',') + 'x' : '—') + '</div></div>' +
+        '<div class="kc"><div class="kl">Fator da venda</div><div class="kv" style="font-size:15px">' + (pj.factorVenda != null ? pj.factorVenda.toFixed(2).replace('.', ',') + 'x' : '—') + '</div></div>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">' +
+        '<div><h4 style="margin:0 0 6px">Previsto</h4>' +
+        (pj.projCalc ? ('<div class="fin-line"><span>Margem projetada (no preço vendido)</span><span>' + pct(pj.projCalc.profitPct) + '</span></div><div class="fin-line"><span>Margem alvo da família</span><span>' + (pj.targetMarginPct != null ? pct(pj.targetMarginPct) : 'não definida') + '</span></div>') : '<div class="footnote">Sem taxas configuradas nesta operação (Precificação › Regras & Custos) — não é possível projetar.</div>') +
+        '</div>' +
+        '<div><h4 style="margin:0 0 6px">Realizado</h4>' +
+        '<div class="fin-line"><span>Margem atual' + (rl.lucroProvisorio ? ' <span class="tag warn" style="font-size:9px">provisório</span>' : '') + '</span><span>' + (rl.margemFinalPct != null ? pct(rl.margemFinalPct) : '—') + '</span></div>' +
+        '</div></div>' +
+        (precCmp.causas.length ? ('<h4 style="margin:14px 0 6px">Diagnóstico do desvio (' + pct(precCmp.desvioPp) + ')</h4>' + precCmp.causas.map(function (c) { return '<div class="fin-line"><span>' + esc(c.label) + '</span><span class="' + (c.pp < 0 ? 'neg' : 'pos') + '">' + (c.pp > 0 ? '+' : '') + pct(c.pp) + '</span></div>'; }).join('')) : '') +
+        '<div style="margin-top:10px"><button class="btn-sm" data-goprec="' + esc(pj.familyId) + '">Ver no Simulador de Precificação</button></div>' +
+        '</div></div>';
+    }
+
     // ---- §8 do prompt de reorganização: DADOS DA VENDA — grade compacta, um único bloco (pedido +
     // itens), sem espalhar em vários cards. Família/custo reaproveitam o vínculo SKU→família→custo já
     // feito em Produtos — nunca recalculado aqui. ----
@@ -1598,26 +1652,10 @@
     // dados/funções (acRows, affRow, wtx, occs, bip, aceleraConciliacaoPedido etc.) continuam
     // existindo e alimentando o Resultado do Pedido logo abaixo — só a seção de UI foi removida.
 
-    // ---- Resultado final ----
-    // Evita dupla contagem: quando Minha Renda já cobre o pedido, o campo "Afiliados" da própria
-    // Renda já está dentro de taxasSomaC — não soma de novo do relatório de Afiliados.
-    var custoAfilCents = (!mrRow && affRow) ? Math.round((affRow.comAff + affRow.svcFee) / 100) : 0;
-    var acTaxaCents = acRows.length ? acRows.reduce(function (s, r) { return s + r.taxa; }, 0) : 0; // já em cents
-    // Usa o resultado CONFIRMADO da baixa quando existir (custo real − reaproveitável), senão o
-    // provisório — occResultadoDevolucao() cai para occEffectiveLoss() automaticamente.
-    var devImpactoCents = occs.length ? Math.round(occs.reduce(function (s, x) { return s + occResultadoDevolucao(x).perda; }, 0) * 100) : 0;
-    var devConfirmadoN = occs.filter(function (x) { return occResultadoDevolucao(x).status === 'confirmado'; }).length;
-    // Correção (prompt Full/FBS §80-90 — "nunca duplicar contagem"): os ajustes de mrAdj (Adjustment)
-    // já entram em taxaRows/taxasSomaC (grupo Taxas cobradas ou Créditos, conforme o sinal) desde
-    // a construção da lista acima — somar adjTotalC de novo aqui contava a mesma compensação DUAS
-    // vezes no lucro. taxasSomaC já é a soma completa; não soma-se nada além dela.
-    var resultadoC = null;
-    if (receitaC != null && custoProdC != null) { resultadoC = receitaC + taxasSomaC - custoProdC - custoAfilCents - acTaxaCents - devImpactoCents; }
-    var margemPct = (resultadoC != null && receitaC) ? r2(resultadoC / receitaC * 100) : null;
-    // §7 do prompt de reorganização: "Lucro provisório" sempre que algum componente do resultado
-    // ainda depende de estimativa (sem Minha Renda cruzada, ou devolução ainda não confirmada pela
-    // baixa) — nunca inventa um número final quando a base ainda pode mudar.
-    var lucroProvisorio = resultadoC != null && (!mrRow || (occs.length > 0 && devConfirmadoN < occs.length));
+    // ---- Resultado final — vem de pedidoResultadoFinal() (canônica), calculado uma única vez lá em
+    // cima; aqui só desempacota pra manter os nomes curtos usados no resto da função. ----
+    var custoAfilCents = pr.custoAfilCents, acTaxaCents = pr.acTaxaCents, devImpactoCents = pr.devImpactoCents, devConfirmadoN = pr.devConfirmadoN;
+    var resultadoC = pr.resultadoFinalC, margemPct = pr.margemFinalPct, lucroProvisorio = pr.lucroProvisorio;
 
     // ---- §45-47 (herdado de fase anterior): Devolução REABRE o resultado do pedido — nunca apaga o
     // histórico original. resultadoAntes = resultadoC + devImpactoCents (o mesmo valor já somado no
@@ -1673,6 +1711,7 @@
       heroBlock +
       dadosVendaBlock +
       taxasBlock +
+      precificacaoBlock +
       devReaberturaBlock +
       resultadoBlock +
       (ord ? '<button class="btn-sm" data-goped="' + esc(orderId) + '">Ver na lista de Pedidos</button>' : '') +
@@ -1683,6 +1722,7 @@
     var ga = panel.querySelector('[data-acped360]'); if (ga) ga.onclick = function () { d.remove(); route = 'acelera'; aceleraSub = 'antecipacoes'; render(); setTimeout(function () { openAceleraPedido(orderId); }, 60); };
     var gf = panel.querySelector('[data-affped360]'); if (gf) gf.onclick = function () { d.remove(); route = 'afiliados'; affSub = 'pedidos'; render(); setTimeout(function () { openAffPedido(orderId); }, 60); };
     panel.querySelectorAll('[data-wtx]').forEach(function (b) { b.onclick = function () { d.remove(); route = 'carteira'; walletSub = 'mov'; render(); setTimeout(function () { openWalletTx(b.dataset.wtx); }, 60); }; });
+    var gprec = panel.querySelector('[data-goprec]'); if (gprec) gprec.onclick = function () { var famId = gprec.dataset.goprec; d.remove(); route = 'precificacao'; precSub = 'simulador'; if (!precSim) precInitSim(); precSim.familyId = famId; var fam = skuFamById[famId]; if (fam && fam.currentCostAmount != null) precSim.custoCents = Math.round(fam.currentCostAmount * 100); var rule = pricingFamilyRule(famId); if (rule) { if (rule.factorPadrao != null) precSim.factor = rule.factorPadrao; if (rule.targetMarginPct != null) precSim.targetMarginPct = rule.targetMarginPct; if (rule.minMarginPct != null) precSim.minMarginPct = rule.minMarginPct; } render(); };
   }
 
   // ---------- PÓS-VENDA ----------
@@ -6269,6 +6309,11 @@
     // — senão a DRE dobraria o valor (pai + filhos). mapSvcChildren só existe pra explicar/detalhar.
     var mapSvcChildren = { svc_affiliate: 0, svc_transaction: 0, svc_per_item: 0 };
     function soma(map, rows) { rows.forEach(function (r) { map[r.label] = (map[r.label] || 0) + r.valor; }); }
+    // Precificação (§44-47 do prompt Precificação & Margem): margem PROJETADA (taxas configuradas no
+    // preço realmente vendido, via pricingCompareOrder — nunca recalculada aqui) vs REALIZADA
+    // (resultado real do pedido, mesmo pedidoResultadoFinal() da Ficha) — só entram pedidos com
+    // família resolvida (sem família não há o que comparar). Ponderada pela receita, não média simples.
+    var precReceitaC = 0, precLucroProjC = 0, precLucroRealC = 0, precComFamiliaN = 0, pedidosAbaixoRecomendado = [];
     pagas.forEach(function (o) {
       var c = pedidoComposicaoFinanceira(o.id);
       receitaBruta += (c.receitaC || 0);
@@ -6277,7 +6322,16 @@
       if (c.envio) envioTotal += c.envio.subtotalC;
       if (c.custoProdC != null) { custoTotal += c.custoProdC; custoConhecidoN++; }
       if (c.temIncome) comIncomeN++;
+      var cmp = pricingCompareOrder((o.operationId || opActiveOrNull() || null), o.id);
+      if (cmp.found && cmp.proj.familyId && cmp.proj.projCalc && cmp.proj.precoVendidoC && cmp.real.margemFinalPct != null) {
+        precComFamiliaN++; precReceitaC += cmp.proj.precoVendidoC;
+        precLucroProjC += cmp.proj.projCalc.profitAmount || 0; precLucroRealC += cmp.real.resultadoFinalC || 0;
+        if (cmp.proj.recommendedPrice != null && cmp.proj.precoVendidoC < cmp.proj.recommendedPrice) pedidosAbaixoRecomendado.push({ orderId: o.id, impactoC: cmp.proj.recommendedPrice - cmp.proj.precoVendidoC });
+      }
     });
+    var margemProjetadaDia = precReceitaC ? r2(precLucroProjC / precReceitaC * 100) : null;
+    var margemRealizadaDia = precReceitaC ? r2(precLucroRealC / precReceitaC * 100) : null;
+    var impactoAbaixoRecomendadoC = pedidosAbaixoRecomendado.reduce(function (s, p) { return s + p.impactoC; }, 0);
     var toLines = function (map) { return Object.keys(map).map(function (k) { return { label: k, valor: map[k] }; }).filter(function (l) { return l.valor; }).sort(function (a, b) { return a.valor - b.valor; }); };
     var linhasReducoes = toLines(mapReducoes), linhasTaxas = toLines(mapTaxas), linhasCreditos = toLines(mapCreditos), linhasOutros = toLines(mapOutros);
     var linhasSvcChildren = Object.keys(mapSvcChildren).map(function (k) { return { key: k, label: SVC_CHILD_LABEL[k], valor: mapSvcChildren[k] }; });
@@ -6291,7 +6345,7 @@
     var custoCompleto = pagas.length > 0 && custoConhecidoN === pagas.length;
     var lucro = custoCompleto ? receitaLiquida - custoTotal + acTaxa : null;
     var margem = (receitaBruta && lucro != null) ? r2(lucro / receitaBruta * 100) : null;
-    return { n: pagas.length, comIncomeN: comIncomeN, comSvcDetailsN: comSvcDetailsN, receitaBruta: receitaBruta, descComerciais: descComerciais, linhasReducoes: linhasReducoes, envioTotal: envioTotal, taxasCobradas: taxasCobradas, linhasTaxas: linhasTaxas, linhasSvcChildren: linhasSvcChildren, creditos: creditos, linhasCreditos: linhasCreditos, outros: outros, linhasOutros: linhasOutros, receitaLiquida: receitaLiquida, custoTotal: custoConhecidoN ? custoTotal : null, custoConhecidoN: custoConhecidoN, custoCompleto: custoCompleto, acTaxa: acTaxa, temAcelera: !!ac.resgatesN, eventosPosteriores: eventosPosteriores, lucro: lucro, margem: margem };
+    return { n: pagas.length, comIncomeN: comIncomeN, comSvcDetailsN: comSvcDetailsN, receitaBruta: receitaBruta, descComerciais: descComerciais, linhasReducoes: linhasReducoes, envioTotal: envioTotal, taxasCobradas: taxasCobradas, linhasTaxas: linhasTaxas, linhasSvcChildren: linhasSvcChildren, creditos: creditos, linhasCreditos: linhasCreditos, outros: outros, linhasOutros: linhasOutros, receitaLiquida: receitaLiquida, custoTotal: custoConhecidoN ? custoTotal : null, custoConhecidoN: custoConhecidoN, custoCompleto: custoCompleto, acTaxa: acTaxa, temAcelera: !!ac.resgatesN, eventosPosteriores: eventosPosteriores, lucro: lucro, margem: margem, precComFamiliaN: precComFamiliaN, margemProjetadaDia: margemProjetadaDia, margemRealizadaDia: margemRealizadaDia, pedidosAbaixoRecomendado: pedidosAbaixoRecomendado, impactoAbaixoRecomendadoC: impactoAbaixoRecomendadoC };
   }
   // Conta colunas do Income com valor real ainda sem destino — lê mrRenda DIRETO (dado bruto já
   // marcado por linha durante a importação), nunca mrEngine()/mrCamposNaoClassificados() (Minha Renda).
@@ -6332,6 +6386,21 @@
     panel.querySelector('.x').onclick = function () { d.remove(); };
     panel.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { d.remove(); openPedidoFicha360(b.dataset.goped360); }; });
   }
+  // Drill dos pedidos vendidos abaixo do preço recomendado (§47) — reaproveita exatamente a lista já
+  // calculada por caixaDreDia() (dre.pedidosAbaixoRecomendado), nunca recalcula.
+  function caixaPrecAbaixoRecomendadoOpen(dateKey) {
+    var dre = caixaDreDia(dateKey);
+    var rows = dre.pedidosAbaixoRecomendado.map(function (p) { return '<tr class="rowlink" data-goped360="' + esc(p.orderId) + '"><td class="mono">' + esc(p.orderId) + '</td><td class="nowrap neg">' + brlC(p.impactoC) + '</td></tr>'; }).join('');
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '520px'; panel.style.maxWidth = '96vw'; panel.style.zIndex = '65';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    panel.innerHTML = '<div class="dh"><div><b>Pedidos vendidos abaixo do preço recomendado</b></div><button class="x">&times;</button></div><div class="dbd">' +
+      '<div class="footnote" style="margin-bottom:8px">' + nn(dre.pedidosAbaixoRecomendado.length) + ' pedido(s) de ' + nn(dre.precComFamiliaN) + ' com precificação em ' + esc(dbr(dateKey)) + '.</div>' +
+      '<div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Impacto estimado no lucro</th></tr></thead><tbody>' + (rows || '<tr><td colspan="2" class="empty">Nenhum.</td></tr>') + '</tbody></table></div>' +
+      '<div class="fin-line total" style="margin-top:8px"><span>Impacto total</span><b class="neg">' + brlC(dre.impactoAbaixoRecomendadoC) + '</b></div>' +
+      '</div>';
+    panel.querySelector('.x').onclick = function () { d.remove(); };
+    panel.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { d.remove(); openPedidoFicha360(b.dataset.goped360); }; });
+  }
   function caixaDreBlock(dre, dateKey) {
     var line = function (label, v, opts) { opts = opts || {}; return '<div class="fin-line' + (opts.total ? ' total' : '') + '"><span>' + (opts.op ? '<b>' + opts.op + '</b> ' : '') + esc(label) + (opts.note ? ' <span class="footnote" style="margin:0">' + esc(opts.note) + '</span>' : '') + '</span><b class="' + (v == null ? '' : v < 0 ? 'neg' : v > 0 ? 'pos' : '') + '">' + (v == null ? 'não disponível' : brlC(v)) + '</b></div>'; };
     var subLine = function (label, v) { return '<div class="fin-line rowlink" style="padding-left:14px;font-size:13px" data-dredrill="' + esc(label) + '"><span>↳ ' + esc(label) + '</span><span class="' + (v < 0 ? 'neg' : 'pos') + '">' + brlC(v) + '</span></div>'; };
@@ -6361,7 +6430,15 @@
       (dre.eventosPosteriores.length ? '<div class="footnote" style="margin:4px 0">Eventos Posteriores: ' + nn(dre.eventosPosteriores.length) + ' registrado(s) neste dia (ver Fechamento).</div>' : '') +
       line('Lucro', dre.lucro, { total: true, op: '=' }) +
       '<div class="fin-line"><span>Margem sobre a Receita Bruta</span><b class="' + (dre.margem == null ? '' : dre.margem >= 0 ? 'pos' : 'neg') + '">' + (dre.margem == null ? '—' : pct(dre.margem)) + '</b></div>';
-    return '<div class="panel"><div class="ph"><h3>DRE do dia</h3><span class="footnote" style="margin:0">motor nativo do Caixa — não depende de Minha Renda · ' + nn(dre.comIncomeN) + ' de ' + nn(dre.n) + ' pedidos com Income cruzado · ' + nn(dre.comSvcDetailsN) + ' de ' + nn(dre.n) + ' com Service Fee Details</span></div><div class="pb" style="padding-top:0">' + body + '</div></div>';
+    // Precificação (§46-47 do prompt Precificação & Margem): só aparece quando pelo menos 1 pedido do
+    // dia tem família resolvida com regra/config — nunca inventa números sem base.
+    var precBlock = dre.precComFamiliaN ? ('<div class="panel" style="margin-top:14px"><div class="ph"><h3>Precificação do dia</h3><span class="footnote" style="margin:0">' + nn(dre.precComFamiliaN) + ' de ' + nn(dre.n) + ' pedidos com família/regra de precificação</span></div><div class="pb">' +
+      '<div class="fin-line"><span>Margem projetada das vendas <span class="footnote" style="margin:0">(taxas configuradas, preço realmente vendido)</span></span><b>' + (dre.margemProjetadaDia != null ? pct(dre.margemProjetadaDia) : '—') + '</b></div>' +
+      '<div class="fin-line"><span>Margem realizada</span><b class="' + (dre.margemRealizadaDia != null && dre.margemRealizadaDia < dre.margemProjetadaDia ? 'neg' : 'pos') + '">' + (dre.margemRealizadaDia != null ? pct(dre.margemRealizadaDia) : '—') + '</b></div>' +
+      (dre.margemProjetadaDia != null && dre.margemRealizadaDia != null ? '<div class="fin-line"><span>Desvio</span><b class="' + (dre.margemRealizadaDia - dre.margemProjetadaDia < 0 ? 'neg' : 'pos') + '">' + (dre.margemRealizadaDia - dre.margemProjetadaDia >= 0 ? '+' : '') + pct(r2(dre.margemRealizadaDia - dre.margemProjetadaDia)) + '</b></div>' : '') +
+      (dre.pedidosAbaixoRecomendado.length ? '<div class="fin-line rowlink" data-precabaixorec="' + esc(dateKey) + '"><span>Pedidos vendidos abaixo do preço recomendado</span><b>' + nn(dre.pedidosAbaixoRecomendado.length) + ' · impacto estimado ' + brlC(dre.impactoAbaixoRecomendadoC) + '</b></div>' : '<div class="footnote">Nenhum pedido vendido abaixo do preço recomendado neste dia.</div>') +
+      '</div></div>') : '';
+    return '<div class="panel"><div class="ph"><h3>DRE do dia</h3><span class="footnote" style="margin:0">motor nativo do Caixa — não depende de Minha Renda · ' + nn(dre.comIncomeN) + ' de ' + nn(dre.n) + ' pedidos com Income cruzado · ' + nn(dre.comSvcDetailsN) + ' de ' + nn(dre.n) + ' com Service Fee Details</span></div><div class="pb" style="padding-top:0">' + body + '</div></div>' + precBlock;
   }
   function caixaDayExpedicao(dateKey) {
     var sess = expSessions.find(function (s) { return s.dataOperacional === dateKey; });
@@ -7267,6 +7344,7 @@
       panel.querySelectorAll('[data-wtx]').forEach(function (b) { b.onclick = function () { openWalletTx(b.dataset.wtx, function () { refresh(); render(); }); }; });
       panel.querySelectorAll('[data-dredrill]').forEach(function (b) { b.onclick = function () { caixaDreDrillOpen(dateKey, b.dataset.dredrill); }; });
       panel.querySelectorAll('[data-dredrillchild]').forEach(function (b) { b.onclick = function () { var parts = b.dataset.dredrillchild.split('|'); caixaDreDrillOpen(dateKey, parts[0], parts[1]); }; });
+      var precAbaixoBtn = panel.querySelector('[data-precabaixorec]'); if (precAbaixoBtn) precAbaixoBtn.onclick = function () { caixaPrecAbaixoRecomendadoOpen(dateKey); };
     }
     refresh();
   }
@@ -8771,6 +8849,77 @@
     }, overrides || {});
     return { familyId: familyId, familyName: fam ? fam.name : null, operationId: operationId, configFound: !!opCfg, ruleFound: !!rule, input: input, result: pricingCalculate(input) };
   }
+  // pricingForOrder() — PROJETADO de um pedido real: parte do custo/receita já resolvidos por
+  // pedidoComposicaoFinanceira() (nunca recalculado aqui) + a família DOMINANTE do pedido (maior
+  // participação na receita — cada item usa a família da própria variação, nunca uma família única
+  // por anúncio, §18) + a regra dessa família + as taxas CONFIGURADAS da operação (nunca as reais do
+  // Income — isso é o que faz o resultado ser "projeção", não "realizado").
+  function pricingForOrder(operationId, orderId) {
+    var comp = pedidoComposicaoFinanceira(orderId);
+    var ord = comp.ord;
+    if (!ord) return { found: false, orderId: orderId, operationId: operationId };
+    var custoProdC = comp.custoProdC, custoPendente = comp.custoPendente, precoVendidoC = comp.receitaC;
+    var byFam = {};
+    ord.items.forEach(function (it) {
+      var r = it.sku ? resolveSkuCost(it.sku) : { found: false };
+      var key = (r.found && r.familyId) ? r.familyId : '__sem_familia__';
+      byFam[key] = (byFam[key] || 0) + (it.subtotal || 0);
+    });
+    var famKeys = Object.keys(byFam).sort(function (a, b) { return byFam[b] - byFam[a]; });
+    var familyId = (famKeys.length && famKeys[0] !== '__sem_familia__') ? famKeys[0] : null;
+    var multiplasFamilias = famKeys.filter(function (k) { return k !== '__sem_familia__'; }).length > 1;
+    var rule = familyId ? pricingFamilyRule(familyId) : null;
+    var opCfg = pricingConfigForOperation(operationId);
+    var targetMarginPct = rule && rule.targetMarginPct != null ? rule.targetMarginPct : (opCfg ? opCfg.defaultTargetMarginPct : null);
+    var minMarginPct = rule && rule.minMarginPct != null ? rule.minMarginPct : (opCfg ? opCfg.defaultMinMarginPct : null);
+    var baseInput = { costCents: custoProdC || 0, qty: 1, fees: opCfg ? opCfg.fees : pricingDefaultFees(), taxPct: opCfg ? opCfg.taxPct : null, fixedCostPct: opCfg ? opCfg.fixedCostPct : null, riskPct: opCfg ? opCfg.riskPct : null, minMarginPct: minMarginPct };
+    var recCalc = pricingCalculate(Object.assign({}, baseInput, { mode: 'MARGIN', targetMarginPct: targetMarginPct }));
+    var projCalc = (precoVendidoC != null && custoProdC != null) ? pricingCalculate(Object.assign({}, baseInput, { mode: 'PRICE', priceCents: precoVendidoC })) : null;
+    return {
+      found: true, orderId: orderId, operationId: operationId, familyId: familyId, familyName: familyId ? (skuFamById[familyId] || {}).name : null,
+      multiplasFamilias: multiplasFamilias, custoPendente: custoPendente, custoProdC: custoProdC, precoVendidoC: precoVendidoC,
+      targetMarginPct: targetMarginPct, minMarginPct: minMarginPct, recCalc: recCalc, projCalc: projCalc,
+      recommendedPrice: recCalc.sellingPrice, factorRecomendado: recCalc.factor,
+      factorVenda: (precoVendidoC != null && custoProdC) ? r2(precoVendidoC / custoProdC) : null,
+      ruleFound: !!rule, configFound: !!opCfg,
+    };
+  }
+  // pricingActualForOrder() — REALIZADO: nunca recalcula, só expõe pedidoResultadoFinal() (a mesma
+  // função que a Ficha do Pedido usa) no formato do módulo de Precificação.
+  function pricingActualForOrder(operationId, orderId) {
+    var pr = pedidoResultadoFinal(orderId);
+    var comp = pr.comp;
+    return { found: !!comp.ord, orderId: orderId, operationId: operationId, resultadoFinalC: pr.resultadoFinalC, margemFinalPct: pr.margemFinalPct, receitaC: comp.receitaC, custoProdC: comp.custoProdC, taxasSomaC: comp.taxasSomaC, acTaxaCents: pr.acTaxaCents, devImpactoCents: pr.devImpactoCents, custoAfilCents: pr.custoAfilCents, temAcelera: pr.acRows.length > 0, temDevolucao: pr.occs.length > 0, lucroProvisorio: pr.lucroProvisorio, serviceFee: comp.serviceFee, mrRow: comp.mrRow };
+  }
+  // pricingCompareOrder() — Diagnóstico do desvio (§42 do prompt): decomposição determinística
+  // (NUNCA LLM) do gap entre margem projetada e margem real, sempre somando exatamente ao total —
+  // o último componente ("Taxas Shopee — demais componentes") é sempre o resto, nunca inventado.
+  function pricingCompareOrder(operationId, orderId) {
+    var proj = pricingForOrder(operationId, orderId);
+    if (!proj.found) return { found: false, orderId: orderId };
+    var real = pricingActualForOrder(operationId, orderId);
+    var precoVendidoC = proj.precoVendidoC || real.receitaC;
+    var out = { found: true, orderId: orderId, operationId: operationId, proj: proj, real: real, causas: [], desvioPp: null, margemProjetadaPct: proj.targetMarginPct, margemRealPct: real.margemFinalPct };
+    if (proj.targetMarginPct == null || real.margemFinalPct == null || !precoVendidoC || !proj.projCalc) return out;
+    var precoPp = r2(proj.projCalc.profitPct - proj.targetMarginPct);
+    var afilConfiguradoC = (proj.projCalc.composition.find(function (c) { return c.key === 'servico'; }) || {}).valueCents || 0;
+    var afilRealC = real.serviceFee && real.serviceFee.children.length ? Math.abs((real.serviceFee.children.find(function (c) { return c.key === 'svc_affiliate'; }) || {}).valor || 0) : 0;
+    var afiliadosPp = r2((afilConfiguradoC - afilRealC) / precoVendidoC * 100);
+    var aceleraPp = real.temAcelera ? r2(-Math.abs(real.acTaxaCents) / precoVendidoC * 100) : 0;
+    var devolucaoPp = real.temDevolucao ? r2(-real.devImpactoCents / precoVendidoC * 100) : 0;
+    var custoAfilPp = real.custoAfilCents ? r2(-real.custoAfilCents / precoVendidoC * 100) : 0;
+    var gapAposPreco = r2(real.margemFinalPct - proj.projCalc.profitPct);
+    var taxasRestantesPp = r2(gapAposPreco - (afiliadosPp + aceleraPp + devolucaoPp + custoAfilPp));
+    function push(label, pp) { if (Math.abs(pp) > 0.05) out.causas.push({ label: label, pp: pp }); }
+    push('Taxas Shopee — demais componentes ' + (taxasRestantesPp < 0 ? 'acima' : 'abaixo') + ' da projeção', taxasRestantesPp);
+    push('Afiliados ' + (afiliadosPp < 0 ? 'acima' : 'abaixo') + ' da projeção', afiliadosPp);
+    push('Preço vendido ' + (precoPp < 0 ? 'abaixo' : 'acima') + ' do recomendado', precoPp);
+    push('Taxa Acelera', aceleraPp);
+    push('Devolução / perdas', devolucaoPp);
+    push('Custo de afiliados (sem Income para este pedido)', custoAfilPp);
+    out.desvioPp = r2(real.margemFinalPct - proj.targetMarginPct);
+    return out;
+  }
   function pricingSaveOpConfig(operationId, dto) {
     var rec = pricingConfigForOperation(operationId);
     if (!rec) { rec = { id: pricingUid(), operationId: operationId }; pricingOpConfig.push(rec); }
@@ -9035,20 +9184,79 @@
   }
 
   // ---- Visão Geral (leve, nesta fase — sem KPIs de pedidos reais, ver relatório de entrega) ----
+  // Agrega vendas reais do período (reaproveita periodRange() — o MESMO seletor global de período de
+  // todo o sistema, nunca duplicado — e pricingCompareOrder(), nunca um cálculo novo) pra alimentar os
+  // KPIs da Visão Geral (§28-31 do prompt Precificação & Margem).
+  function precVisaoGeralAgregado() {
+    var range = periodRange();
+    var from = range.from ? range.from.toISOString().slice(0, 10) : null;
+    var to = range.to ? range.to.toISOString().slice(0, 10) : null;
+    var pagos = orders.filter(function (o) { if (!o.paidAt) return false; var d = o.paidAt.slice(0, 10); if (from && d < from) return false; if (to && d > to) return false; return true; });
+    var receitaC = 0, lucroProjC = 0, lucroRealC = 0, fatorSum = 0, fatorN = 0, faturamentoSaudavelC = 0, faturamentoCriticoC = 0, lucroDeixadoC = 0, pedidosComPrec = 0, pedidosAbaixoRecN = 0;
+    pagos.forEach(function (o) {
+      var cmp = pricingCompareOrder((o.operationId || opActiveOrNull() || null), o.id);
+      if (!cmp.found || !cmp.proj.familyId || !cmp.proj.projCalc || !cmp.proj.precoVendidoC || cmp.real.margemFinalPct == null) return;
+      pedidosComPrec++; receitaC += cmp.proj.precoVendidoC;
+      lucroProjC += cmp.proj.projCalc.profitAmount || 0; lucroRealC += cmp.real.resultadoFinalC || 0;
+      if (cmp.proj.factorVenda != null) { fatorSum += cmp.proj.factorVenda; fatorN++; }
+      var abaixoMin = cmp.proj.recCalc.minimumPrice != null && cmp.proj.precoVendidoC < cmp.proj.recCalc.minimumPrice;
+      if (abaixoMin) faturamentoCriticoC += cmp.proj.precoVendidoC; else faturamentoSaudavelC += cmp.proj.precoVendidoC;
+      if (cmp.proj.recommendedPrice != null && cmp.proj.precoVendidoC < cmp.proj.recommendedPrice) {
+        pedidosAbaixoRecN++;
+        // Lucro deixado na mesa (§29): diferença de LUCRO entre vender no preço recomendado e no
+        // preço realmente vendido, ambos com as MESMAS taxas configuradas (nunca confunde diferença
+        // de faturamento com diferença de lucro).
+        lucroDeixadoC += (cmp.proj.recCalc.profitAmount || 0) - (cmp.proj.projCalc.profitAmount || 0);
+      }
+    });
+    return {
+      pagosN: pagos.length, pedidosComPrec: pedidosComPrec, receitaC: receitaC,
+      margemProjetadaPct: receitaC ? r2(lucroProjC / receitaC * 100) : null, margemRealizadaPct: receitaC ? r2(lucroRealC / receitaC * 100) : null,
+      fatorMedio: fatorN ? r2(fatorSum / fatorN) : null, faturamentoSaudavelC: faturamentoSaudavelC, faturamentoCriticoC: faturamentoCriticoC,
+      lucroDeixadoC: lucroDeixadoC, pedidosAbaixoRecN: pedidosAbaixoRecN,
+    };
+  }
   function renderPrecVisaoGeral() {
-    var fams = precFamiliesList(); var ops = precOperationsList();
+    var fams = precFamiliesList(); var ops = precOperationsList(); var opId = opActiveOrNull() || (ops[0] || {}).id || null;
     var comCusto = fams.filter(function (f) { return f.currentCostAmount != null; }).length;
     var comRegra = fams.filter(function (f) { return !!pricingFamilyRule(f.id); }).length;
     var opsConfig = ops.filter(function (o) { return !!pricingConfigForOperation(o.id); }).length;
-    return '<div class="kstrip">' +
+    var ag = precVisaoGeralAgregado();
+    // Produtos críticos (§30): famílias cuja precificação padrão (fator padrão ou 4x) cai em
+    // MARGEM_BAIXA/ABAIXO_MINIMO/PREJUÍZO — reaproveita pricingForFamily(), mesma função da aba
+    // Famílias & Preços, nunca um cálculo paralelo.
+    var criticas = fams.map(function (f) {
+      var rule = pricingFamilyRule(f.id);
+      var pf = pricingForFamily(f.id, opId, rule && rule.factorPadrao != null ? { mode: 'FACTOR', factor: rule.factorPadrao } : { mode: 'FACTOR', factor: 4 });
+      var status = pf.result.minimumPrice != null && pf.result.sellingPrice != null ? (pf.result.sellingPrice < pf.result.minimumPrice ? 'ABAIXO_MINIMO' : (pf.result.sellingPrice < pf.result.recommendedPrice ? 'MARGEM_BAIXA' : 'SAUDAVEL')) : (pf.result.profitAmount != null && pf.result.profitAmount < 0 ? 'PREJUIZO' : 'DESCONHECIDO');
+      return { f: f, pf: pf, status: status };
+    }).filter(function (x) { return x.status === 'ABAIXO_MINIMO' || x.status === 'MARGEM_BAIXA' || x.status === 'PREJUIZO'; });
+    var tabelaCriticas = criticas.length ? ('<div class="panel" style="margin-top:14px"><div class="ph"><h3>Produtos críticos</h3><span class="footnote" style="margin:0">' + nn(criticas.length) + ' família(s) abaixo da margem mínima ou sem margem</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Família</th><th>Custo</th><th>Fator</th><th>Preço sugerido</th><th>Margem projetada</th><th>Status</th></tr></thead><tbody>' +
+      criticas.map(function (x) { var st = PRICING_STATUS_LABEL[x.status]; return '<tr><td>' + esc(x.f.name) + '</td><td class="nowrap">' + (x.f.currentCostAmount != null ? brl(x.f.currentCostAmount) : '—') + '</td><td class="nowrap">' + (x.pf.result.factor != null ? x.pf.result.factor.toFixed(2).replace('.', ',') + 'x' : '—') + '</td><td class="nowrap">' + (x.pf.result.sellingPrice != null ? brlC(x.pf.result.sellingPrice) : '—') + '</td><td class="nowrap">' + (x.pf.result.profitPct != null ? pct(x.pf.result.profitPct) : '—') + '</td><td><span class="badge ' + st[1] + '">' + st[0] + '</span></td></tr>'; }).join('') +
+      '</tbody></table></div></div>') : '<div class="callout" style="margin-top:14px"><div class="cbody">Nenhum produto crítico identificado nas famílias com fator/margem configurados.</div></div>';
+    return devPeriodBarAsCp() +
+      '<div class="kstrip">' +
+      '<div class="kc"><div class="kl">Margem média projetada</div><div class="kv">' + (ag.margemProjetadaPct != null ? pct(ag.margemProjetadaPct) : '—') + '</div></div>' +
+      '<div class="kc"><div class="kl">Margem média realizada</div><div class="kv">' + (ag.margemRealizadaPct != null ? pct(ag.margemRealizadaPct) : '—') + '</div></div>' +
+      '<div class="kc"><div class="kl">Fator médio das vendas</div><div class="kv">' + (ag.fatorMedio != null ? ag.fatorMedio.toFixed(2).replace('.', ',') + 'x' : '—') + '</div></div>' +
+      '<div class="kc"><div class="kl">Lucro deixado na mesa</div><div class="kv">' + (ag.lucroDeixadoC ? brlC(ag.lucroDeixadoC) : brl(0)) + '</div></div>' +
+      '</div>' +
+      '<div class="kstrip" style="margin-top:10px">' +
+      '<div class="kc"><div class="kl">Faturamento com preço saudável</div><div class="kv">' + brlC(ag.faturamentoSaudavelC) + '</div></div>' +
+      '<div class="kc"><div class="kl">Faturamento com preço crítico</div><div class="kv">' + brlC(ag.faturamentoCriticoC) + '</div></div>' +
+      '<div class="kc"><div class="kl">Pedidos abaixo do preço recomendado</div><div class="kv">' + nn(ag.pedidosAbaixoRecN) + '</div></div>' +
+      '<div class="kc"><div class="kl">Pedidos pagos com precificação</div><div class="kv">' + nn(ag.pedidosComPrec) + ' / ' + nn(ag.pagosN) + '</div></div>' +
+      '</div>' +
+      '<div class="footnote" style="margin-top:8px">Só entram na agregação pedidos cuja família tem custo e a operação tem taxas configuradas — nunca estima o que não tem base.</div>' +
+      tabelaCriticas +
+      '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Cadastro</h3></div><div class="pb"><div class="kstrip">' +
       '<div class="kc"><div class="kl">Famílias cadastradas</div><div class="kv">' + nn(fams.length) + '</div></div>' +
       '<div class="kc"><div class="kl">Famílias com custo</div><div class="kv">' + nn(comCusto) + '</div></div>' +
       '<div class="kc"><div class="kl">Famílias com regra de precificação</div><div class="kv">' + nn(comRegra) + '</div></div>' +
       '<div class="kc"><div class="kl">Operações com taxas configuradas</div><div class="kv">' + nn(opsConfig) + ' / ' + nn(ops.length) + '</div></div>' +
-      '</div>' +
-      '<div class="callout" style="margin-top:14px"><div class="cbody">Esta é a Fase 1 do módulo — o motor de cálculo, o Simulador, Regras & Custos e Famílias & Preços já estão completos. KPIs baseados em vendas reais (margem realizada, lucro deixado na mesa, previsto × realizado por pedido) e a integração com Ficha do Pedido/DRE do Caixa entram nas próximas fases — ver relatório de entrega.</div></div>';
+      '</div></div></div>';
   }
-  function bindPrecVisaoGeral() { }
+  function bindPrecVisaoGeral() { bindDevPeriodBar(); }
 
   // ---- Auditoria (§Parte 18, versão desta fase) ----
   function renderPrecAuditoria() {
