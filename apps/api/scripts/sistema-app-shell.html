@@ -156,11 +156,11 @@
   .rhead h3.rtitle{margin:4px 0 2px;font-size:22px;font-weight:800;color:var(--ink);border:none;padding:0}
   .rhead .rsub{color:var(--muted);font-size:13.5px;margin:0;max-width:760px}
   .rhead .rule{height:3px;background:linear-gradient(90deg,#e0662a,#e0662a 120px,var(--line) 120px);border-radius:2px;margin-top:10px}
-  .kstrip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:var(--shadow);overflow:hidden;margin-bottom:16px}
-  .kstrip .kc{padding:16px 18px;border-right:1px solid var(--line)}
+  .kstrip{display:grid;grid-template-columns:repeat(auto-fit,minmax(225px,1fr));gap:0;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:var(--shadow);overflow:hidden;margin-bottom:16px}
+  .kstrip .kc{padding:16px 18px;border-right:1px solid var(--line);min-width:0}
   .kstrip .kc:last-child{border-right:none}
   .kstrip .kc .kl{font-size:11px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--muted)}
-  .kstrip .kc .kv{font-size:26px;font-weight:800;margin-top:6px;line-height:1.05}
+  .kstrip .kc .kv{font-size:26px;font-weight:800;margin-top:6px;line-height:1.05;overflow-wrap:break-word}
   .kstrip .kc .ks{font-size:11.5px;color:var(--muted);margin-top:4px}
   .kstrip .kc.red .kv{color:var(--err)}.kstrip .kc.amber .kv{color:var(--warn)}.kstrip .kc.green .kv{color:var(--ok)}.kstrip .kc.blue .kv{color:var(--brand-2)}.kstrip .kc.orange .kv{color:#e0662a}
   @media(max-width:720px){.kstrip .kc{border-right:none;border-bottom:1px solid var(--line)}}
