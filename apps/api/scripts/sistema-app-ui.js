@@ -7532,6 +7532,7 @@
   var contasPagar = [], cpItemsAll = [], cpPayments = [], cpAttachments = [], cpCategories = [], cpAccounting = [], cpCostCenters = [], cpSuppliers = [], cpSupplyLinks = [];
   var cpSub = 'lista'; // lista | categorias | planocontas | centroscusto | fornecedores | dre
   var cpSel = new Set(), cpPage = 1, cpPageSize = 30;
+  var cpFiltrosAbertos = false; // toggle "+ Filtros" (filtros avançados só aparecem quando expandido)
   var cpF = { situacao: '', categoryId: '', paymentMethod: '', financialAccountId: '', costCenterId: '', accountingAccountId: '', supplierId: '', valorMin: null, valorMax: null, docNumber: '', search: '', dateBasis: 'vencimento', sort: 'vencimento', dir: 'asc' };
   var CP_SITUACOES = [['', 'Todas'], ['ABERTA', 'Em aberto'], ['ATRASADA', 'Atrasadas'], ['EMITIDA', 'Emitidas'], ['PAGA', 'Pagas'], ['PARCIAL', 'Parcialmente pagas'], ['CANCELADA', 'Canceladas']];
   var CP_STATUS_LABEL = { ABERTA: ['Em aberto', 'b-info'], ATRASADA: ['Atrasada', 'b-err'], PARCIAL: ['Parcialmente paga', 'b-warn'], PAGA: ['Paga', 'b-ok'], CANCELADA: ['Cancelada', 'b-neutral'] };
@@ -7899,24 +7900,40 @@
       return devPeriodBarAsCp() + emptyBox('Nenhuma conta a pagar lançada ainda. Clique em "+ Incluir conta" para começar.') + '<div style="margin-top:12px"><button class="btn-sm primary" id="cp-new">+ Incluir conta</button></div>';
     }
     var all = cpFilteredList();
-    var totalGeral = contasPagar.filter(function (h) { return !h.canceledAt; }).reduce(function (s, h) { return s + h.valor; }, 0);
-    var selValor = all.filter(function (h) { return cpSel.has(h.id); }).reduce(function (s, h) { return s + h.valor; }, 0);
     var pageList = all.slice((cpPage - 1) * cpPageSize, cpPage * cpPageSize);
     var basisOpts = [['emissao', 'Emissão'], ['competencia', 'Competência'], ['vencimento', 'Vencimento'], ['pagamento', 'Pagamento']];
-    var filtros = '<div class="panel"><div class="pb">' + devPeriodBarAsCp() +
-      '<div class="toolbar2" style="margin-top:0"><input class="input" id="cp-search" style="flex:2;min-width:260px" placeholder="Pesquisar por fornecedor, documento, histórico, categoria, insumo ou observação" value="' + esc(cpF.search) + '">' +
-      '<select class="select sm" id="cp-basis">' + basisOpts.map(function (o) { return '<option value="' + o[0] + '"' + (cpF.dateBasis === o[0] ? ' selected' : '') + '>Data: ' + o[1] + '</option>'; }).join('') + '</select>' +
+
+    // ---- cabeçalho enxuto: título + resumo (respeita os filtros atuais) + ações ----
+    var header = '<div class="page-head"><div><h2 style="margin:0;font-size:20px">Contas a Pagar</h2>' +
+      '<p style="margin:4px 0 0;color:var(--muted);font-size:13px">' + nn(all.length) + ' conta(s) · ' + brl(all.reduce(function (s, h) { return s + h.valor; }, 0)) + '</p></div>' +
+      '<div style="display:flex;gap:8px;position:relative">' +
+      '<button class="btn-sm" id="cp-cfg-btn">Configurações ▾</button>' +
+      '<button class="btn-sm primary" id="cp-new">+ Incluir conta</button>' +
+      '</div></div>';
+
+    // ---- filtros: linha principal sempre visível + linha secundária atrás de "+ Filtros" ----
+    var filtrosPrincipal = devPeriodBarAsCp() +
+      '<div class="toolbar2" style="margin-top:0">' +
+      '<input class="input" id="cp-search" style="flex:2;min-width:240px" placeholder="Buscar contas — fornecedor, documento, histórico, categoria, insumo…" value="' + esc(cpF.search) + '">' +
       '<select class="select sm" id="cp-situacao">' + CP_SITUACOES.map(function (o) { return '<option value="' + o[0] + '"' + (cpF.situacao === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>' +
+      '<select class="select sm" id="cp-basis">' + basisOpts.map(function (o) { return '<option value="' + o[0] + '"' + (cpF.dateBasis === o[0] ? ' selected' : '') + '>Data: ' + o[1] + '</option>'; }).join('') + '</select>' +
       '<select class="select sm" id="cp-cat">' + cpCategoryOptions(cpF.categoryId, false) + '</select>' +
-      '<select class="select sm" id="cp-forma"><option value="">Toda forma de pagamento</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '"' + (cpF.paymentMethod === f ? ' selected' : '') + '>' + esc(f) + '</option>'; }).join('') + '</select>' +
       '<select class="select sm" id="cp-conta">' + cpFinAccountOptions(cpF.financialAccountId) + '</select>' +
-      '<select class="select sm" id="cp-cc">' + '<option value="">Todo centro de custo</option>' + cpCostCenters.map(function (c) { return '<option value="' + c.id + '"' + (cpF.costCenterId === c.id ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('') + '</select>' +
+      '<button class="btn-sm' + (cpFiltrosAbertos ? ' primary' : '') + '" id="cp-filtros-toggle">' + (cpFiltrosAbertos ? '− Menos filtros' : '+ Filtros') + '</button>' +
+      '<div style="flex:1"></div>' +
+      '<button class="btn-sm" id="cp-limpar">Limpar filtros</button>' +
+      '</div>';
+    var filtrosAvancados = !cpFiltrosAbertos ? '' : ('<div class="toolbar2" style="margin-top:8px;padding-top:10px;border-top:1px solid var(--line)">' +
       '<select class="select sm" id="cp-ctacontabil">' + '<option value="">Toda conta contábil</option>' + cpAccounting.map(function (a) { return '<option value="' + a.id + '"' + (cpF.accountingAccountId === a.id ? ' selected' : '') + '>' + esc(cpAccountingLabel(a.id)) + '</option>'; }).join('') + '</select>' +
+      '<select class="select sm" id="cp-cc">' + '<option value="">Todo centro de custo</option>' + cpCostCenters.map(function (c) { return '<option value="' + c.id + '"' + (cpF.costCenterId === c.id ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('') + '</select>' +
       '<select class="select sm" id="cp-fornecedor">' + cpSupplierOptions(cpF.supplierId) + '</select>' +
+      '<select class="select sm" id="cp-forma"><option value="">Toda forma de pagamento</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '"' + (cpF.paymentMethod === f ? ' selected' : '') + '>' + esc(f) + '</option>'; }).join('') + '</select>' +
+      '<input class="input sm" id="cp-doc" placeholder="Nº documento" style="width:140px" value="' + esc(cpF.docNumber) + '">' +
       '<input class="input sm" id="cp-vmin" placeholder="Valor mín." style="width:110px" value="' + (cpF.valorMin != null ? cpF.valorMin : '') + '">' +
       '<input class="input sm" id="cp-vmax" placeholder="Valor máx." style="width:110px" value="' + (cpF.valorMax != null ? cpF.valorMax : '') + '">' +
-      '<input class="input sm" id="cp-doc" placeholder="Nº documento" style="width:140px" value="' + esc(cpF.docNumber) + '">' +
-      '<button class="btn-sm primary" id="cp-filtrar">Filtrar</button><button class="btn-sm" id="cp-limpar">Limpar filtros</button></div></div></div>';
+      '<button class="btn-sm primary" id="cp-filtrar">Filtrar</button>' +
+      '</div>');
+    var filtros = '<div class="panel"><div class="pb">' + filtrosPrincipal + filtrosAvancados + '</div></div>';
 
     var rows = pageList.map(function (h) {
       var lbl = CP_STATUS_LABEL[cpStatusDerivado(h)]; var saldo = cpSaldo(h);
@@ -7933,57 +7950,53 @@
         '<td><span class="badge ' + lbl[1] + '">' + lbl[0] + '</span></td>' +
         '<td style="position:relative"><button class="btn-sm" data-cpmenu="' + h.id + '">⋯</button></td></tr>';
     }).join('');
-    var table = '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Contas a pagar</h3><span class="footnote" style="margin:0">' + nn(all.length) + ' conta(s) · ' + brl(all.reduce(function (s, h) { return s + h.valor; }, 0)) + '</span></div>' +
+    // ---- tabela: ocupa 100% da largura útil — sem coluna lateral (§8-10) ----
+    var table = '<div class="panel" style="margin-top:14px">' +
       (cpSel.size ? cpBulkBar(all) : '') +
-      '<div class="table-wrap"><table class="report"><thead><tr><th><input type="checkbox" id="cp-chk-all"></th>' +
+      '<div class="table-wrap"><table class="report"><thead><tr><th><input type="checkbox" id="cp-chk-all" title="Selecionar todos os resultados filtrados"></th>' +
       ['fornecedor:Fornecedor', ':Histórico', ':Categoria', ':Conta contábil', ':Forma de pagamento', ':Conta financeira', 'emissao:Emissão', 'competencia:Competência', 'vencimento:Vencimento', 'valor:Valor', ':Valor pago', ':Saldo', 'situacao:Situação', ':'].map(function (c) {
         var parts = c.split(':'); var key = parts[0], lbl = parts[1];
         return '<th' + (key ? ' class="rowlink" data-cpsort="' + key + '"' : '') + '>' + esc(lbl) + (key && cpF.sort === key ? (cpF.dir === 'asc' ? ' ▲' : ' ▼') : '') + '</th>';
       }).join('') + '</tr></thead><tbody>' + (rows || '<tr><td colspan="14"><div class="empty" style="border:none"><p>Nenhuma conta encontrada com estes filtros.</p></div></td></tr>') + '</tbody></table></div>' +
       cpPagerHtml(all.length) + '</div>';
 
-    var painel = '<div class="panel"><div class="pb">' +
-      '<h4 style="margin:0 0 8px">Informações</h4>' +
-      '<div class="cx-kv"><span class="cxl">Quantidade de contas</span><span class="cxv">' + nn(contasPagar.filter(function (h) { return !h.canceledAt; }).length) + '</span></div>' +
-      '<div class="cx-kv"><span class="cxl">Valor total</span><span class="cxv">' + brl(totalGeral) + '</span></div>' +
-      (cpSel.size ? ('<div class="cx-kv"><span class="cxl">Selecionadas</span><span class="cxv">' + nn(cpSel.size) + '</span></div><div class="cx-kv"><span class="cxl">Valor selecionado</span><span class="cxv">' + brl(selValor) + '</span></div>') : '') +
-      '<h4 style="margin:16px 0 8px">Ferramentas de apoio</h4>' +
-      '<div style="display:flex;flex-direction:column;gap:6px">' +
-      '<button class="btn-sm" id="cp-gerenciar-cat">Gerenciar categorias</button>' +
-      '<button class="btn-sm" id="cp-gerenciar-plano">Plano de contas</button>' +
-      '<button class="btn-sm" id="cp-gerenciar-cc">Centros de custo</button>' +
-      '<button class="btn-sm" id="cp-gerenciar-forn">Gerenciar fornecedores</button>' +
-      '</div></div></div>';
-
-    return '<div class="page-head"><div></div><button class="btn-sm primary" id="cp-new">+ Incluir conta</button></div>' + filtros + '<div class="split" style="margin-top:14px;align-items:start">' + table + painel + '</div>';
+    return header + filtros + table;
   }
   function devPeriodBarAsCp() { return devPeriodBar(); } // reaproveita o MESMO seletor global de período (§ nunca duplicar filtro) — só renomeado pra ficar claro que é usado aqui também
   function cpPagerHtml(total) {
     var pages = Math.max(1, Math.ceil(total / cpPageSize)); if (pages <= 1) return '';
     return '<div class="toolbar2" style="justify-content:flex-end"><span class="footnote" style="margin:0">Página ' + cpPage + ' de ' + pages + '</span><button class="btn-sm" id="cp-prev"' + (cpPage <= 1 ? ' disabled' : '') + '>‹</button><button class="btn-sm" id="cp-next"' + (cpPage >= pages ? ' disabled' : '') + '>›</button></div>';
   }
+  // Barra de ações em massa — só aparece com seleção ativa, acima da tabela (§5, §16).
   function cpBulkBar(all) {
-    return '<div class="toolbar2" style="background:#eef4ff;border-radius:8px;padding:8px 10px;margin:0 0 10px">' +
-      '<b style="font-size:12.5px">' + nn(cpSel.size) + ' selecionada(s)</b>' +
-      '<button class="btn-sm" id="cp-bx-baixa">Baixar selecionados</button>' +
+    var selValor = all.filter(function (h) { return cpSel.has(h.id); }).reduce(function (s, h) { return s + h.valor; }, 0);
+    return '<div class="bulkbar" style="position:static;box-shadow:none;margin:0 0 12px;border-radius:10px">' +
+      '<b>' + nn(cpSel.size) + ' lançamento(s) selecionado(s)</b>' +
+      '<span class="footnote" style="margin:0;color:rgba(255,255,255,.75)">' + brl(selValor) + '</span>' +
+      '<div style="flex:1"></div>' +
+      '<button class="btn-sm" id="cp-bx-baixa">Dar baixa</button>' +
       '<button class="btn-sm" id="cp-bx-cat">Alterar categoria</button>' +
       '<button class="btn-sm" id="cp-bx-cta">Alterar conta contábil</button>' +
       '<button class="btn-sm" id="cp-bx-cc">Alterar centro de custo</button>' +
       '<button class="btn-sm" id="cp-bx-fin">Alterar conta financeira</button>' +
       '<button class="btn-sm" id="cp-bx-export">Exportar</button>' +
-      '<button class="btn-sm" id="cp-bx-print">Imprimir agrupado por fornecedor</button>' +
+      '<button class="btn-sm" id="cp-bx-print">Imprimir agrupado</button>' +
+      '<button class="btn-sm" id="cp-bx-del" style="background:var(--err);border-color:var(--err);color:#fff">Excluir selecionados</button>' +
+      '<button class="btn-sm" id="cp-bx-clear">Limpar seleção</button>' +
       '</div>';
   }
   function bindCpLista() {
     var btnNew = document.getElementById('cp-new'); if (btnNew) btnNew.onclick = function () { openCpEditor(null); };
     bindDevPeriodBar();
     var s = document.getElementById('cp-search'); if (s) s.oninput = cpDebounce(function () { cpF.search = s.value; cpPage = 1; cpRenderBody(); }, 220);
-    var mapSel = { 'cp-basis': 'dateBasis', 'cp-situacao': 'situacao', 'cp-cat': 'categoryId', 'cp-forma': 'paymentMethod', 'cp-cc': 'costCenterId', 'cp-ctacontabil': 'accountingAccountId', 'cp-fornecedor': 'supplierId' };
-    Object.keys(mapSel).forEach(function (elId) { var el = document.getElementById(elId); if (el) el.onchange = function () { cpF[mapSel[elId]] = el.value; }; });
-    var contaSel = document.getElementById('cp-conta'); if (contaSel) contaSel.onchange = function () { cpF.financialAccountId = contaSel.value === '__none' ? '__none' : contaSel.value; };
+    // filtros principais (situação/data-base/categoria/conta financeira) aplicam na hora — sem precisar de botão "Filtrar".
+    var instantSel = { 'cp-situacao': 'situacao', 'cp-basis': 'dateBasis', 'cp-cat': 'categoryId', 'cp-ctacontabil': 'accountingAccountId', 'cp-cc': 'costCenterId', 'cp-fornecedor': 'supplierId', 'cp-forma': 'paymentMethod' };
+    Object.keys(instantSel).forEach(function (elId) { var el = document.getElementById(elId); if (el) el.onchange = function () { cpF[instantSel[elId]] = el.value; cpPage = 1; cpRenderBody(); }; });
+    var contaSel = document.getElementById('cp-conta'); if (contaSel) contaSel.onchange = function () { cpF.financialAccountId = contaSel.value === '__none' ? '__none' : contaSel.value; cpPage = 1; cpRenderBody(); };
     var vmin = document.getElementById('cp-vmin'), vmax = document.getElementById('cp-vmax'), doc = document.getElementById('cp-doc');
     var applyFilters = function () { if (vmin) cpF.valorMin = cpParseNum(vmin.value); if (vmax) cpF.valorMax = cpParseNum(vmax.value); if (doc) cpF.docNumber = doc.value; cpPage = 1; cpRenderBody(); };
     var f = document.getElementById('cp-filtrar'); if (f) f.onclick = applyFilters;
+    var toggle = document.getElementById('cp-filtros-toggle'); if (toggle) toggle.onclick = function () { cpFiltrosAbertos = !cpFiltrosAbertos; cpRenderBody(); };
     var lim = document.getElementById('cp-limpar'); if (lim) lim.onclick = function () { cpF = { situacao: '', categoryId: '', paymentMethod: '', financialAccountId: '', costCenterId: '', accountingAccountId: '', supplierId: '', valorMin: null, valorMax: null, docNumber: '', search: '', dateBasis: 'vencimento', sort: 'vencimento', dir: 'asc' }; cpPage = 1; cpRenderBody(); };
     app.querySelectorAll('[data-cpsort]').forEach(function (th) { th.onclick = function () { var k = th.dataset.cpsort; if (cpF.sort === k) cpF.dir = cpF.dir === 'asc' ? 'desc' : 'asc'; else { cpF.sort = k; cpF.dir = 'asc'; } cpRenderBody(); }; });
     app.querySelectorAll('[data-cpopen]').forEach(function (el) { el.onclick = function () { openCpEditor(el.dataset.cpopen); }; });
@@ -7992,12 +8005,12 @@
     var prev = document.getElementById('cp-prev'); if (prev) prev.onclick = function () { cpPage--; cpRenderBody(); };
     var next = document.getElementById('cp-next'); if (next) next.onclick = function () { cpPage++; cpRenderBody(); };
     app.querySelectorAll('[data-cpmenu]').forEach(function (b) { b.onclick = function (e) { e.stopPropagation(); openCpRowMenu(b, b.dataset.cpmenu); }; });
-    var gc = document.getElementById('cp-gerenciar-cat'); if (gc) gc.onclick = function () { cpSub = 'categorias'; render(); };
-    var gp = document.getElementById('cp-gerenciar-plano'); if (gp) gp.onclick = function () { cpSub = 'planocontas'; render(); };
-    var gcc = document.getElementById('cp-gerenciar-cc'); if (gcc) gcc.onclick = function () { cpSub = 'centroscusto'; render(); };
-    var gf = document.getElementById('cp-gerenciar-forn'); if (gf) gf.onclick = function () { cpSub = 'fornecedores'; render(); };
-    // ---- ações em massa (§8) ----
+    // ---- "Configurações ▾": cadastros de apoio, sem ocupar espaço permanente da tela (§14) ----
+    var cfgBtn = document.getElementById('cp-cfg-btn'); if (cfgBtn) cfgBtn.onclick = function (e) { e.stopPropagation(); openCpConfigMenu(cfgBtn); };
+    // ---- ações em massa (§4-7, §16) ----
     var bxBaixa = document.getElementById('cp-bx-baixa'); if (bxBaixa) bxBaixa.onclick = function () { var ids = Array.from(cpSel); openCpBaixaEmMassa(ids); };
+    var bxClear = document.getElementById('cp-bx-clear'); if (bxClear) bxClear.onclick = function () { cpSel.clear(); cpRenderBody(); };
+    var bxDel = document.getElementById('cp-bx-del'); if (bxDel) bxDel.onclick = function () { cpBulkExcluirSelecionados(); };
     function bulkField(btnId, field, optionsFn) {
       var b = document.getElementById(btnId); if (!b) return;
       b.onclick = function () {
@@ -8013,6 +8026,69 @@
     bulkField('cp-bx-fin', 'financialAccountId', function () { return cpFinAccountOptions(null); });
     var bxExport = document.getElementById('cp-bx-export'); if (bxExport) bxExport.onclick = function () { cpExportXlsx(cpFilteredList().filter(function (h) { return cpSel.has(h.id); })); };
     var bxPrint = document.getElementById('cp-bx-print'); if (bxPrint) bxPrint.onclick = function () { cpPrintAgrupadoPorFornecedor(cpFilteredList().filter(function (h) { return cpSel.has(h.id); })); };
+  }
+  // Menu "Configurações ▾" do cabeçalho — mesmo padrão visual do menu de ações da linha (openCpRowMenu),
+  // só que ancorado no botão do topo. Nunca ocupa espaço permanente da tela (§14).
+  function openCpConfigMenu(anchor) {
+    document.querySelectorAll('.cp-dropdown').forEach(function (d) { d.remove(); });
+    var rect = anchor.getBoundingClientRect();
+    var menuW = 210, menuH = 176;
+    var top = Math.min(rect.bottom + 4, window.innerHeight - menuH - 8); if (top < 8) top = 8;
+    var left = Math.min(rect.right - menuW, window.innerWidth - menuW - 8); if (left < 8) left = 8;
+    var d = document.createElement('div'); d.className = 'cp-dropdown'; d.style.cssText = 'position:fixed;z-index:400;top:' + top + 'px;left:' + left + 'px;width:' + menuW + 'px;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:6px;';
+    var opts = [['Gerenciar categorias', 'categorias'], ['Plano de contas', 'planocontas'], ['Centros de custo', 'centroscusto'], ['Gerenciar fornecedores', 'fornecedores']];
+    d.innerHTML = opts.map(function (o) { return '<div class="cp-mi" data-cfgtab="' + o[1] + '" style="padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px">' + o[0] + '</div>'; }).join('');
+    document.body.appendChild(d);
+    d.querySelectorAll('.cp-mi').forEach(function (mi) { mi.onmouseenter = function () { mi.style.background = 'var(--bg2,#f2f4f8)'; }; mi.onmouseleave = function () { mi.style.background = ''; }; mi.onclick = function () { d.remove(); cpSub = mi.dataset.cfgtab; cpPage = 1; render(); }; });
+    setTimeout(function () { document.addEventListener('click', closeIt); }, 0);
+    function closeIt(e) { if (!d.contains(e.target)) { d.remove(); document.removeEventListener('click', closeIt); } }
+  }
+  // Exclusão em massa (§4-7, §23): nunca por índice/posição — sempre pelo ID persistente do lançamento
+  // (`h.id`), extraído do resultado JÁ FILTRADO (nunca de algo fora do filtro atual). Se algum
+  // selecionado pertencer a uma recorrência/parcelamento, pergunta o escopo antes de excluir — nunca
+  // expande a seleção do usuário para a série inteira silenciosamente.
+  function cpBulkExcluirSelecionados() {
+    var selected = cpFilteredList().filter(function (h) { return cpSel.has(h.id); });
+    if (!selected.length) return;
+    var comSerie = selected.filter(function (h) { return !!h.recurrenceGroupId; });
+    function confirmarExclusao(finalList) {
+      var total = finalList.reduce(function (s, h) { return s + h.valor; }, 0);
+      var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70';
+      o.innerHTML = '<div class="modal" style="width:440px"><div class="mh"><h3>Excluir ' + finalList.length + ' lançamento(s)?</h3><button class="x">×</button></div><div class="mbd">' +
+        '<div class="cx-kv"><span class="cxl">Valor total selecionado</span><span class="cxv"><b>' + brl(total) + '</b></span></div>' +
+        '<p class="footnote" style="margin-top:10px">Esta ação excluirá os lançamentos selecionados do Contas a Pagar. Lançamentos com pagamento vinculado não podem ser excluídos (cancele-os em vez disso) e serão ignorados nesta operação.</p>' +
+        '</div><div class="mf"><button class="btn-sm" id="cpbd-x">Cancelar</button><button class="btn-sm" id="cpbd-ok" style="background:var(--err);border-color:var(--err);color:#fff">Excluir ' + finalList.length + ' lançamento(s)</button></div></div>';
+      o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
+      o.querySelector('.x').onclick = o.querySelector('#cpbd-x').onclick = function () { o.remove(); };
+      o.querySelector('#cpbd-ok').onclick = function () {
+        Promise.all(finalList.map(function (h) { return cpDeleteHeader(h.id).then(function () { return true; }).catch(function () { return false; }); })).then(function (results) {
+          o.remove();
+          var ok = results.filter(Boolean).length, fail = results.length - ok;
+          cpSel.clear();
+          toast(ok + ' lançamento(s) excluído(s)', fail ? (fail + ' não puderam ser excluídos por já terem pagamento vinculado.') : '', fail > 0 && ok === 0);
+          cpPage = 1; cpRenderBody();
+        });
+      };
+    }
+    if (!comSerie.length) { confirmarExclusao(selected); return; }
+    var o2 = document.createElement('div'); o2.className = 'overlay'; o2.style.zIndex = '70';
+    o2.innerHTML = '<div class="modal" style="width:460px"><div class="mh"><h3>Lançamentos de recorrência/parcelamento</h3><button class="x">×</button></div><div class="mbd">' +
+      '<p>' + comSerie.length + ' de ' + selected.length + ' lançamento(s) selecionado(s) fazem parte de uma recorrência ou parcelamento. O que deseja excluir?</p>' +
+      '<label class="fld" style="display:block;margin-top:12px;font-weight:400"><input type="radio" name="cpdelscope" value="only" checked> Somente os lançamentos selecionados</label>' +
+      '<label class="fld" style="display:block;margin-top:6px;font-weight:400"><input type="radio" name="cpdelscope" value="series"> Toda a recorrência (todas as parcelas dessas séries)</label>' +
+      '</div><div class="mf"><button class="btn-sm" id="cpsc-x">Cancelar</button><button class="btn-sm primary" id="cpsc-ok">Continuar</button></div></div>';
+    o2.onclick = function (e) { if (e.target === o2) o2.remove(); }; document.body.appendChild(o2);
+    o2.querySelector('.x').onclick = o2.querySelector('#cpsc-x').onclick = function () { o2.remove(); };
+    o2.querySelector('#cpsc-ok').onclick = function () {
+      var scope = (o2.querySelector('input[name="cpdelscope"]:checked') || {}).value; o2.remove();
+      var finalList = selected;
+      if (scope === 'series') {
+        var groupIds = {}; comSerie.forEach(function (h) { groupIds[h.recurrenceGroupId] = true; });
+        var extra = contasPagar.filter(function (h) { return h.recurrenceGroupId && groupIds[h.recurrenceGroupId] && !cpSel.has(h.id); });
+        finalList = selected.concat(extra);
+      }
+      confirmarExclusao(finalList);
+    };
   }
   // Modal genérico simples de "selecione um valor e confirme" — reaproveitado pelas ações em massa.
   function cpSimpleOverlay(title, bodyHtml, onOk) {
@@ -8102,6 +8178,35 @@
     function valorCalculado() { return cpValorOriginal(items, cpParseNum(fieldVal('cp-frete')) || draft.freteValor || 0, cpParseNum(fieldVal('cp-outras')) || draft.outrasDespesasValor || 0); }
     function fieldVal(id) { var el = panel.querySelector('#' + id); return el ? el.value : null; }
 
+    // ---- edição de itens/valores SEM re-render do formulário (correção da raiz da perda de foco) ----
+    // `body()`/`refresh()` fazem panel.innerHTML = ... e recriam TODOS os nós do DOM — inclusive o
+    // <input> que o usuário está digitando. Enquanto o usuário edita Item/Insumo, Quantidade, Preço
+    // unitário, Frete, Outras despesas ou o Valor da conta, NUNCA chamamos refresh(): atualizamos só
+    // o estado (`items`/`draft`) e os pedaços de texto que dependem dele, via DOM direto.
+    function summaryData() {
+      var subtotalItens = itemsTotal();
+      var frete = draft.freteValor || 0, outras = draft.outrasDespesasValor || 0;
+      var valorCalc = cpValorOriginal(items, frete, outras);
+      var divergencia = draft.valorManualOverride && draft.valorManual != null ? r2(draft.valorManual - valorCalc) : 0;
+      var valorFinal = draft.valorManualOverride ? (draft.valorManual != null ? draft.valorManual : valorCalc) : valorCalc;
+      return { subtotalItens: subtotalItens, frete: frete, outras: outras, valorCalc: valorCalc, divergencia: divergencia, valorFinal: valorFinal };
+    }
+    function updateSummaryDom() {
+      var s = summaryData();
+      var elSub = panel.querySelector('#cp-sum-subtotal'); if (elSub) elSub.textContent = brl(s.subtotalItens);
+      var elFrete = panel.querySelector('#cp-sum-frete'); if (elFrete) elFrete.textContent = brl(s.frete);
+      var elOutras = panel.querySelector('#cp-sum-outras'); if (elOutras) elOutras.textContent = brl(s.outras);
+      var elTot = panel.querySelector('#cp-sum-total'); if (elTot) elTot.innerHTML = '<b>' + brl(s.valorFinal) + '</b>';
+      var elDiv = panel.querySelector('#cp-sum-divergencia'); if (elDiv) elDiv.innerHTML = Math.abs(s.divergencia) > 0.005 ? callout('warn', '', '⚠️ Divergência de ' + brl(Math.abs(s.divergencia)) + ' entre os itens e o valor informado da conta.') : '';
+      var valorEl = panel.querySelector('#cp-valor');
+      if (valorEl && document.activeElement !== valorEl && !draft.valorManualOverride) valorEl.value = s.valorFinal != null ? s.valorFinal.toFixed(2).replace('.', ',') : '';
+    }
+    function recomputeItemTotal(it) { if (!it.totalManualOverride) it.total = r2((it.quantity || 0) * (it.unitPrice || 0)); }
+    function updateItemRowDom(idx, it) {
+      var cell = panel.querySelector('.cp-it-total-cell[data-idx="' + idx + '"]');
+      if (cell) cell.innerHTML = brl(it.total || 0) + (it.totalManualOverride ? ' <span class="footnote" style="margin:0">(ajustado)</span>' : '');
+    }
+
     // refresh() é "burro" de propósito — só remonta o HTML a partir do estado atual de `draft`/
     // `items`. Cada handler que pode disparar um refresh() é responsável por sincronizar ANTES
     // (collectDraftFromForm()/readItemsFromForm()) — nunca dentro do próprio refresh(), senão um
@@ -8116,7 +8221,7 @@
           '<td><input class="input sm cp-it-qty" data-idx="' + idx + '" style="width:80px" value="' + (it.quantity != null ? it.quantity : '') + '"></td>' +
           '<td><select class="select sm cp-it-un" data-idx="' + idx + '">' + CP_UNIDADES.map(function (u) { return '<option value="' + u + '"' + (it.unit === u ? ' selected' : '') + '>' + u + '</option>'; }).join('') + '</select></td>' +
           '<td><input class="input sm cp-it-preco" data-idx="' + idx + '" style="width:100px" value="' + (it.unitPrice != null ? it.unitPrice : '') + '"></td>' +
-          '<td class="nowrap">' + brl(it.total || 0) + (it.totalManualOverride ? ' <span class="footnote" style="margin:0">(ajustado)</span>' : '') + '</td>' +
+          '<td class="nowrap cp-it-total-cell" data-idx="' + idx + '">' + brl(it.total || 0) + (it.totalManualOverride ? ' <span class="footnote" style="margin:0">(ajustado)</span>' : '') + '</td>' +
           '<td><select class="select sm cp-it-cat" data-idx="' + idx + '"><option value="">(herda da conta)</option>' + cpCategoryOptions(it.categoryId, false).replace('<option value="">Todas as categorias</option>', '') + '</select></td>' +
           '<td><select class="select sm cp-it-cta" data-idx="' + idx + '"><option value="">(herda da categoria)</option>' + cpAccountingOptions(it.accountingAccountId) + '</select></td>' +
           '<td><button class="btn-sm" data-itdup="' + idx + '" title="Duplicar item">⧉</button><button class="btn-sm" data-itdel="' + idx + '" title="Excluir item">✕</button></td></tr>';
@@ -8146,11 +8251,11 @@
         '<button class="btn-sm" id="cp-item-add" style="margin-top:8px">+ Adicionar item</button>') +
         (locked && items.length ? '<div class="table-wrap"><table class="report"><thead><tr><th>Item / Insumo</th><th>Qtd</th><th>Un.</th><th>Preço unit.</th><th>Total</th></tr></thead><tbody>' + items.map(function (it) { return '<tr><td>' + esc(it.description || '') + '</td><td>' + (it.quantity || 0) + '</td><td>' + esc(it.unit || '') + '</td><td>' + brl(it.unitPrice || 0) + '</td><td>' + brl(it.total || 0) + '</td></tr>'; }).join('') + '</tbody></table></div>' : '') +
         '<div class="cx-section" style="margin-top:14px"><h4>Resumo da compra</h4>' +
-        '<div class="cx-kv"><span class="cxl">Produtos/insumos</span><span class="cxv">' + brl(subtotalItens) + '</span></div>' +
-        '<div class="cx-kv"><span class="cxl">Frete</span><span class="cxv">' + brl(frete) + '</span></div>' +
-        '<div class="cx-kv"><span class="cxl">Outras despesas</span><span class="cxv">' + brl(outras) + '</span></div>' +
-        '<div class="cx-kv" style="border-top:1px solid var(--line);padding-top:6px;margin-top:6px"><span class="cxl"><b>Valor total</b></span><span class="cxv"><b>' + brl(valorFinal) + '</b></span></div>' +
-        (Math.abs(divergencia) > 0.005 ? callout('warn', '', '⚠️ Divergência de ' + brl(Math.abs(divergencia)) + ' entre os itens e o valor informado da conta.') : '') +
+        '<div class="cx-kv"><span class="cxl">Produtos/insumos</span><span class="cxv" id="cp-sum-subtotal">' + brl(subtotalItens) + '</span></div>' +
+        '<div class="cx-kv"><span class="cxl">Frete</span><span class="cxv" id="cp-sum-frete">' + brl(frete) + '</span></div>' +
+        '<div class="cx-kv"><span class="cxl">Outras despesas</span><span class="cxv" id="cp-sum-outras">' + brl(outras) + '</span></div>' +
+        '<div class="cx-kv" style="border-top:1px solid var(--line);padding-top:6px;margin-top:6px"><span class="cxl"><b>Valor total</b></span><span class="cxv" id="cp-sum-total"><b>' + brl(valorFinal) + '</b></span></div>' +
+        '<div id="cp-sum-divergencia">' + (Math.abs(divergencia) > 0.005 ? callout('warn', '', '⚠️ Divergência de ' + brl(Math.abs(divergencia)) + ' entre os itens e o valor informado da conta.') : '') + '</div>' +
         '</div></div>';
 
       var tabsBar = '<div class="tabs" style="margin:0 16px">' + [['pagamento', 'Pagamento'], ['ocorrencia', 'Ocorrência'], ['anexos', 'Anexos' + (atts.length ? ' (' + atts.length + ')' : '')]].map(function (t) { return '<div class="tab' + (cpEdTab === t[0] ? ' active' : '') + '" data-cpedtab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>';
@@ -8280,9 +8385,15 @@
       var fSel = panel.querySelector('#cp-fornecedor-sel'); if (fSel) fSel.onchange = function () { collectDraftFromForm(); draft.supplierId = fSel.value || null; refresh(); };
       var fNovo = panel.querySelector('#cp-fornecedor-novo'); if (fNovo) fNovo.onclick = function () { openCpSupplierQuickCreate(null, function (sup) { collectDraftFromForm(); draft.supplierId = sup.id; refresh(); }); };
       panel.querySelectorAll('[data-cpedtab]').forEach(function (t) { t.onclick = function () { collectDraftFromForm(); cpEdTab = t.dataset.cpedtab; refresh(); }; });
-      var freteEl = panel.querySelector('#cp-frete'); if (freteEl) freteEl.oninput = cpDebounce(function () { collectDraftFromForm(); refresh(); }, 300);
-      var outrasEl = panel.querySelector('#cp-outras'); if (outrasEl) outrasEl.oninput = cpDebounce(function () { collectDraftFromForm(); refresh(); }, 300);
-      var valorEl = panel.querySelector('#cp-valor'); if (valorEl) valorEl.oninput = cpDebounce(function () { collectDraftFromForm(); refresh(); }, 400);
+      // Frete/Outras/Valor: atualização direta (sem debounce, sem refresh()) — o input nunca é
+      // recriado enquanto o usuário digita; só os textos derivados no "Resumo da compra" mudam.
+      var freteEl = panel.querySelector('#cp-frete'); if (freteEl) freteEl.oninput = function () { draft.freteValor = cpParseNum(freteEl.value) || 0; updateSummaryDom(); };
+      var outrasEl = panel.querySelector('#cp-outras'); if (outrasEl) outrasEl.oninput = function () { draft.outrasDespesasValor = cpParseNum(outrasEl.value) || 0; updateSummaryDom(); };
+      var valorEl = panel.querySelector('#cp-valor'); if (valorEl) valorEl.oninput = function () {
+        var valorInput = cpParseNum(valorEl.value); var calc = cpValorOriginal(items, draft.freteValor, draft.outrasDespesasValor);
+        draft.valorManualOverride = valorInput != null && Math.abs(valorInput - calc) > 0.005; draft.valorManual = valorInput;
+        updateSummaryDom();
+      };
       var catTopo = panel.querySelector('#cp-categoria'); if (catTopo) catTopo.onchange = function () {
         if (catTopo.value === '__new') { openCpCategoryQuickCreate(function (cat) { collectDraftFromForm(); draft.categoryId = cat.id; refresh(); }); return; }
         collectDraftFromForm(); draft.categoryId = catTopo.value || null; refresh();
@@ -8292,18 +8403,33 @@
         if (extra) extra.style.display = occType.value === 'UNICA' ? 'none' : 'grid';
         if (interval) interval.style.display = occType.value === 'PARCELADA' ? 'block' : 'none';
       };
-      // ---- itens: navegação por teclado (§51) — Descrição → Qtd → Unidade → Preço; Enter na última coluna cria nova linha ----
+      // ---- itens: edição SEM re-render (correção da raiz da perda de foco) — cada tecla atualiza
+      // só `items[idx]` + o total da própria linha (célula) + o resumo da compra; o <input> em si
+      // nunca é tocado, então o navegador preserva foco/cursor/seleção/TAB naturalmente. Navegação
+      // por teclado (§51): Descrição → Qtd → Unidade → Preço; Enter na última coluna cria nova linha.
       panel.querySelectorAll('.cp-it-desc,.cp-it-qty,.cp-it-un,.cp-it-preco').forEach(function (el) {
-        el.oninput = cpDebounce(function () { collectDraftFromForm(); readItemsFromForm(); refresh(); focusItemAfterRefresh(el); }, 250);
-        el.onkeydown = function (e) { if (e.key === 'Enter' && el.classList.contains('cp-it-preco')) { collectDraftFromForm(); readItemsFromForm(); addItemRow(); } };
+        el.oninput = function () {
+          var idx = parseInt(el.dataset.idx, 10); var it = items[idx]; if (!it) return;
+          if (el.classList.contains('cp-it-desc')) it.description = el.value;
+          else if (el.classList.contains('cp-it-qty')) it.quantity = cpParseNum(el.value);
+          else if (el.classList.contains('cp-it-un')) it.unit = el.value;
+          else if (el.classList.contains('cp-it-preco')) it.unitPrice = cpParseNum(el.value);
+          recomputeItemTotal(it);
+          updateItemRowDom(idx, it);
+          updateSummaryDom();
+        };
+        el.onkeydown = function (e) { if (e.key === 'Enter' && el.classList.contains('cp-it-preco')) { addItemRow(); } };
       });
-      panel.querySelectorAll('.cp-it-cat,.cp-it-cta').forEach(function (el) { el.onchange = function () { collectDraftFromForm(); readItemsFromForm(); refresh(); }; });
-      var lastFocus = null;
-      function focusItemAfterRefresh() { /* refresh já recria o DOM — o browser mantém o foco pelo TAB natural; nada a fazer aqui além de já ter salvo o valor acima */ }
-      function addItemRow() { items.push({ id: cpUid('CPI'), description: '', quantity: 1, unit: 'UN', unitPrice: 0, total: 0, categoryId: null, accountingAccountId: null }); refresh(); setTimeout(function () { var rows = panel.querySelectorAll('.cp-it-desc'); var last = rows[rows.length - 1]; if (last) last.focus(); }, 0); }
-      var addBtn = panel.querySelector('#cp-item-add'); if (addBtn) addBtn.onclick = function () { collectDraftFromForm(); readItemsFromForm(); addItemRow(); };
-      panel.querySelectorAll('[data-itdel]').forEach(function (b) { b.onclick = function () { collectDraftFromForm(); readItemsFromForm(); items.splice(parseInt(b.dataset.itdel, 10), 1); refresh(); }; });
-      panel.querySelectorAll('[data-itdup]').forEach(function (b) { b.onclick = function () { collectDraftFromForm(); readItemsFromForm(); var src = items[parseInt(b.dataset.itdup, 10)]; items.splice(parseInt(b.dataset.itdup, 10) + 1, 0, Object.assign({}, src, { id: cpUid('CPI') })); refresh(); }; });
+      panel.querySelectorAll('.cp-it-cat,.cp-it-cta').forEach(function (el) {
+        el.onchange = function () {
+          var idx = parseInt(el.dataset.idx, 10); var it = items[idx]; if (!it) return;
+          if (el.classList.contains('cp-it-cat')) it.categoryId = el.value || null; else it.accountingAccountId = el.value || null;
+        };
+      });
+      function addItemRow() { collectDraftFromForm(); items.push({ id: cpUid('CPI'), description: '', quantity: 1, unit: 'UN', unitPrice: 0, total: 0, categoryId: null, accountingAccountId: null }); refresh(); setTimeout(function () { var rows = panel.querySelectorAll('.cp-it-desc'); var last = rows[rows.length - 1]; if (last) last.focus(); }, 0); }
+      var addBtn = panel.querySelector('#cp-item-add'); if (addBtn) addBtn.onclick = function () { addItemRow(); };
+      panel.querySelectorAll('[data-itdel]').forEach(function (b) { b.onclick = function () { collectDraftFromForm(); items.splice(parseInt(b.dataset.itdel, 10), 1); refresh(); }; });
+      panel.querySelectorAll('[data-itdup]').forEach(function (b) { b.onclick = function () { collectDraftFromForm(); var src = items[parseInt(b.dataset.itdup, 10)]; items.splice(parseInt(b.dataset.itdup, 10) + 1, 0, Object.assign({}, src, { id: cpUid('CPI') })); refresh(); }; });
       // ---- anexos (§23, §28-30) ----
       var dz = panel.querySelector('#cp-dz'), fi = panel.querySelector('#cp-file');
       if (dz) {
