@@ -1450,7 +1450,6 @@
     // Ficha só formata em HTML o que essa função já calculou; nunca recalcula por conta própria.
     var comp = pedidoComposicaoFinanceira(orderId);
     var ord = comp.ord, mrRow = comp.mrRow, svcRows = comp.svcRows;
-    var mrByOrderFicha = {}; if (mrRow) mrByOrderFicha[orderId] = mrRow;
     var shipRow = mrShip.find(function (s) { return s.id === orderId; });
     var acRows = acelera.filter(function (r) { return r.pedido === orderId; });
     var affEng = affEngine(); var affRow = affEng.orderMap[orderId];
@@ -1591,58 +1590,12 @@
       (itemRows.some(function (r) { return !r.linked; }) ? '<div class="footnote" style="margin-top:6px">⚠ Custo parcialmente pendente — pelo menos um item deste pedido não tem custo cadastrado (passe o mouse sobre o item para ver o motivo).</div>' : '') +
       '</div></div>';
 
-    // ---- §14 do prompt de reorganização: EVENTOS DO PEDIDO — Expedição/Acelera/Carteira/Devolução
-    // resumidos num único painel (não 4 cards separados). Devolução só aparece se existir ocorrência;
-    // sem ocorrência, uma linha só: "Nenhuma devolução registrada" — nunca um bloco grande vazio.
-    // §65-66/§54/§59 do prompt "Correção Financeira": linha de Conciliação do Income — nunca "aproximado"
-    // tratado como definitivo. Usa comp.statusFinanceiro/incomeResolve, já resolvidos por
-    // resolveIncomeOrder() (mesma função canônica usada em toda a composição — não recalcula nada aqui).
-    var eventoLinhas = '';
-    var incomeStatusTxt = INCOME_STATUS_TXT[comp.incomeResolve.status] || comp.incomeResolve.status;
-    if (comp.incomeResolve.status === 'NOT_IN_INCOME' && mrSummary && mrSummary.importedAt) incomeStatusTxt += ' — último Income importado em ' + new Date(mrSummary.importedAt).toLocaleString('pt-BR');
-    eventoLinhas += kv('Income', incomeStatusTxt);
-    eventoLinhas += kv('Situação financeira', STATUS_FIN_TXT[comp.statusFinanceiro] || comp.statusFinanceiro);
-    if (ord) {
-      var stN = ord.normalizedStatus;
-      var naoAplica = stN === 'NAO_PAGO' || stN === 'CANCELADO';
-      var divergenciaExp = !naoAplica && !bip && (stN === 'ENVIADO' || stN === 'CONCLUIDO');
-      var situacaoExp = naoAplica ? 'Não se aplica — status Shopee: ' + (S.pedidos.labels[stN] || stN)
-        : bip ? '🟢 Expedido — bipe confirmado'
-        : divergenciaExp ? '🔴 Divergência — status Shopee já indica envio, mas sem bipe registrado'
-        : '🟡 Aguardando expedição (A Enviar)';
-      eventoLinhas += kv('Expedição', situacaoExp + (bip ? ' · bipado em ' + new Date(bip.bipedAt).toLocaleString('pt-BR') : ''));
-    }
-    if (acRows.length) {
-      var acAntec = acRows.reduce(function (s, r) { return s + r.antecipado; }, 0), acTaxa = acRows.reduce(function (s, r) { return s + r.taxa; }, 0), acReceb = acRows.reduce(function (s, r) { return s + r.recebido; }, 0);
-      var resgatesIds = Array.from(new Set(acRows.map(function (r) { return r.resgate; })));
-      var acAudit = aceleraConciliacaoPedido(orderId, mrByOrderFicha);
-      eventoLinhas += kv('Acelera', 'resgate ' + esc(resgatesIds.join(', ')) + ' · bruto ' + brlC(acAntec) + ' · taxa ' + brlC(-Math.abs(acTaxa)) + ' · recebido ' + brlC(acReceb) + ' · ' + esc(acAudit.status.label)) + '<button class="btn-sm" style="margin:2px 0 8px" data-acped360="' + esc(orderId) + '">Abrir no Acelera</button>';
-    } else {
-      eventoLinhas += kv('Acelera', 'não encontrado — pedido não antecipado, ou relatório ainda não cobre este pedido');
-    }
-    if (affRow && !mrRow) {
-      eventoLinhas += kv('Afiliados', esc(affRow.affUser) + ' · comissão ' + brlU(-Math.abs(affRow.comAff)) + ' · taxa de serviço ' + brlU(-Math.abs(affRow.svcFee))) + '<button class="btn-sm" style="margin:2px 0 8px" data-affped360="' + esc(orderId) + '">Abrir em Afiliados</button>';
-    } else if (affRow) {
-      eventoLinhas += kv('Afiliados', esc(affRow.affUser) + ' — já incluído em "Afiliado (Minha Renda)" na lista de Taxas e Descontos acima');
-    }
-    var wSum = 0, wRows = '';
-    if (wtx.length) {
-      wSum = wtx.reduce(function (s, t) { return s + t.amount; }, 0);
-      var wConc = wtx.filter(function (t) { var o = WALLET_ORIGEM_CATS[wEffCat(t)] ? walletOrigin(t) : null; return o && o.confidence === 'alta' && o.ok; }).length;
-      var wDiverg = wtx.filter(function (t) { var o = WALLET_ORIGEM_CATS[wEffCat(t)] ? walletOrigin(t) : null; return o && o.confidence === 'alta' && !o.ok; }).length;
-      eventoLinhas += kv('Carteira', nn(wtx.length) + ' movimentação(ões) · líquido ' + brl(wSum) + (wConc ? ' · ' + nn(wConc) + ' conciliada(s)' : '') + (wDiverg ? ' · ' + nn(wDiverg) + ' com diferença' : ''));
-      wRows = wtx.slice().sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); }).map(function (t) { return '<tr class="rowlink" data-wtx="' + esc(t.id) + '"><td class="nowrap">' + dbr(t.date) + '</td><td>' + esc(wcatLabel(wEffCat(t))) + '</td><td class="nowrap">' + brl(t.amount) + '</td></tr>'; }).join('');
-    } else {
-      eventoLinhas += kv('Carteira', 'nenhuma movimentação localizada');
-    }
-    if (occs.length) {
-      eventoLinhas += occs.map(function (x) { var r = occResultadoDevolucao(x); return kv('Devolução', statusLabel(x.status) + ' · ' + (x.reason || 'motivo não informado') + ' · resultado ' + brl(r.perda) + ' (' + (r.status === 'confirmado' ? 'confirmado' : 'provisório') + ')') + '<button class="btn-sm" style="margin:2px 0 8px" data-godev360="' + esc(x.id) + '">Abrir devolução</button>'; }).join('');
-    } else {
-      eventoLinhas += kv('Devolução', 'Nenhuma devolução registrada');
-    }
-    var eventosBlock = '<div class="panel"><div class="ph"><h3>Eventos do Pedido</h3></div><div class="pb">' + eventoLinhas +
-      (wRows ? '<details style="margin-top:6px"><summary style="cursor:pointer;font-weight:600">Ver movimentações da Carteira (' + nn(wtx.length) + ')</summary><div class="table-wrap" style="margin-top:8px"><table class="report"><thead><tr><th>Data</th><th>Categoria</th><th>Valor</th></tr></thead><tbody>' + wRows + '</tbody></table></div></details>' : '') +
-      '</div></div>';
+    // PROMPT "Ficha do Pedido — remover Eventos + Taxa de Serviço": o bloco "Eventos do Pedido"
+    // (Income/Expedição/Acelera/Afiliados/Carteira/Devolução resumidos aqui) foi retirado da
+    // interface da ficha por instrução explícita — essas informações continuam disponíveis nos
+    // módulos próprios (Carteira, Shopee Acelera, Afiliados, Devolução). Nada foi apagado: os
+    // dados/funções (acRows, affRow, wtx, occs, bip, aceleraConciliacaoPedido etc.) continuam
+    // existindo e alimentando o Resultado do Pedido logo abaixo — só a seção de UI foi removida.
 
     // ---- Resultado final ----
     // Evita dupla contagem: quando Minha Renda já cobre o pedido, o campo "Afiliados" da própria
@@ -1719,7 +1672,6 @@
       heroBlock +
       dadosVendaBlock +
       taxasBlock +
-      eventosBlock +
       devReaberturaBlock +
       resultadoBlock +
       (ord ? '<button class="btn-sm" data-goped="' + esc(orderId) + '">Ver na lista de Pedidos</button>' : '') +
