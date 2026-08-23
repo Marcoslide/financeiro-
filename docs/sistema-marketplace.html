@@ -12796,7 +12796,7 @@ buffer/index.js:
     var opCfg = pricingConfigForOperation(op);
     precSim = {
       familyId: null, opId: op, mode: 'FACTOR', factor: 4, targetMarginPct: 30, priceCents: null, minMarginPct: null,
-      custoCents: 0, round: '',
+      custoCents: 0, round: '', cupomPct: null,
       fees: (opCfg ? opCfg.fees : pricingDefaultFees()).map(function (f) { return Object.assign({}, f); }),
       taxPct: opCfg ? opCfg.taxPct : null, fixedCostPct: opCfg ? opCfg.fixedCostPct : null, riskPct: opCfg ? opCfg.riskPct : null,
     };
@@ -12823,6 +12823,7 @@ buffer/index.js:
       '<div><label class="fld">Margem mínima aceitável (%)</label><input class="input" id="prec-margemmin" value="' + (precSim.minMarginPct != null ? String(precSim.minMarginPct).replace('.', ',') : '') + '" placeholder="não configurado"></div>' +
       '<div><label class="fld">Arredondamento comercial</label><select class="select" id="prec-round" style="width:100%">' + PRICING_ROUND_OPTS.map(function (o) { return '<option value="' + o[0] + '"' + (precSim.round === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
       '</div>' +
+      '<div style="margin-top:10px"><label class="fld">Cupom / desconto promocional sobre o preço (%) <span class="footnote" style="margin:0">— simula sem alterar o preço acima</span></label><input class="input" id="prec-cupom" value="' + (precSim.cupomPct != null ? String(precSim.cupomPct).replace('.', ',') : '') + '" placeholder="0"></div>' +
       '<h4 style="margin:16px 0 8px">Taxas de marketplace, imposto, fixos e risco</h4>' +
       '<p class="footnote" style="margin:0 0 8px">Valores em branco = <b>não configurado</b> (nunca tratado como 0%). Vêm de Regras & Custos da operação selecionada — edite aqui só para simular um cenário (não salva automaticamente).</p>' +
       '<div class="table-wrap"><table class="report"><thead><tr><th>Componente</th><th>Unidade</th><th>Valor</th></tr></thead><tbody>' +
@@ -12851,7 +12852,70 @@ buffer/index.js:
     var rows = calc.composition.map(function (c) {
       return '<tr><td>' + esc(c.label) + '</td><td class="nowrap">' + (c.pct != null ? pct(c.pct) : '<span class="tag neutral">não configurado</span>') + '</td><td class="nowrap">' + (c.valueCents != null ? brlC(c.valueCents) : '—') + '</td></tr>';
     }).join('');
-    return '<div class="table-wrap" style="margin-top:10px"><table class="report"><thead><tr><th>Componente</th><th>%</th><th>R$</th></tr></thead><tbody>' + rows + '<tr class="total"><td>Total</td><td>100%</td><td>' + brlC(calc.sellingPrice) + '</td></tr></tbody></table></div>';
+    return '<div class="table-wrap" style="margin-top:10px"><table class="report" id="prec-composition-table"><thead><tr><th>Componente</th><th>%</th><th>R$</th></tr></thead><tbody>' + rows + '<tr class="total"><td>Total</td><td>100%</td><td>' + brlC(calc.sellingPrice) + '</td></tr></tbody></table></div>';
+  }
+  // ---- Comparar cenários (§Parte 22, 70) — Atual / Fator 4 / Meta de margem, mesmos custo/taxas. ----
+  function precCenarios() {
+    var base = precSimInput();
+    var atual = pricingCalculate(base);
+    var fator4 = pricingCalculate(Object.assign({}, base, { mode: 'FACTOR', factor: 4 }));
+    var meta = precSim.targetMarginPct != null ? pricingCalculate(Object.assign({}, base, { mode: 'MARGIN', targetMarginPct: precSim.targetMarginPct })) : null;
+    return [{ label: 'Atual', calc: atual }, { label: 'Fator 4', calc: fator4 }, { label: 'Meta de margem' + (precSim.targetMarginPct != null ? ' (' + precSim.targetMarginPct + '%)' : ''), calc: meta }].filter(function (c) { return c.calc; });
+  }
+  function precCenariosTable() {
+    var cenarios = precCenarios();
+    if (cenarios.length < 2) return '';
+    var rowDef = [
+      ['Preço', function (c) { return c.sellingPrice != null ? brlC(c.sellingPrice) : '—'; }],
+      ['Fator', function (c) { return c.factor != null ? c.factor.toFixed(2).replace('.', ',') + 'x' : '—'; }],
+      ['Lucro', function (c) { return c.profitAmount != null ? brlC(c.profitAmount) : '—'; }],
+      ['Margem', function (c) { return c.profitPct != null ? pct(c.profitPct) : '—'; }],
+      ['Desconto possível', function (c) { return c.maxDiscount != null ? brlC(c.maxDiscount) : '—'; }],
+    ];
+    var header = '<th></th>' + cenarios.map(function (c) { return '<th>' + esc(c.label) + '</th>'; }).join('');
+    var rows = rowDef.map(function (r) { return '<tr><td>' + r[0] + '</td>' + cenarios.map(function (c) { return '<td class="nowrap">' + r[1](c.calc) + '</td>'; }).join('') + '</tr>'; }).join('');
+    return '<h4 style="margin:16px 0 8px">Comparar cenários</h4><div class="table-wrap"><table class="report"><thead><tr>' + header + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  }
+  // ---- Fator × Margem (§34) — encontrar visualmente o fator ideal. ----
+  function precFatorMargemTable() {
+    var base = precSimInput();
+    if (!base.costCents) return '';
+    var fatores = [2, 2.5, 3, 3.5, 4, 4.5, 5];
+    var rows = fatores.map(function (f) { return { fator: f, calc: pricingCalculate(Object.assign({}, base, { mode: 'FACTOR', factor: f })) }; });
+    var vals = rows.map(function (r) { return r.calc.profitPct; }).filter(function (v) { return v != null; });
+    var maxAbs = vals.length ? Math.max.apply(null, vals.map(Math.abs).concat([1])) : 1;
+    var body = rows.map(function (r) {
+      var p = r.calc.profitPct;
+      var w = p != null ? Math.max(2, Math.min(100, Math.abs(p) / maxAbs * 100)) : 0;
+      var isCurrent = precSim.mode === 'FACTOR' && Math.abs((precSim.factor || 0) - r.fator) < 0.01;
+      return '<div style="display:flex;align-items:center;gap:10px;padding:3px 0' + (isCurrent ? ';font-weight:700' : '') + '"><span style="width:44px">' + r.fator.toFixed(1).replace('.', ',') + 'x</span><span style="flex:1;height:8px;border-radius:4px;background:var(--line);overflow:hidden"><span style="display:block;height:100%;width:' + w + '%;background:' + (p != null && p < 0 ? 'var(--err)' : 'var(--ok)') + '"></span></span><span class="nowrap" style="width:60px;text-align:right">' + (p != null ? pct(p) : '—') + '</span></div>';
+    }).join('');
+    return '<h4 style="margin:16px 0 8px">Fator × Margem</h4><div class="footnote" style="margin-bottom:6px">Margem resultante em cada fator, com o custo e as taxas de agora — ajuda a achar visualmente o fator ideal.</div>' + body;
+  }
+  // ---- "E SE?" (§35-36) — sensibilidade da Taxa de serviço (Afiliados), mantendo a margem alvo. ----
+  function precSensibilidadeAfiliado() {
+    if (precSim.targetMarginPct == null) return '';
+    var idx = -1; precSim.fees.forEach(function (f, i) { if (f.key === 'servico') idx = i; });
+    if (idx < 0) return '';
+    var base = precSimInput();
+    var niveis = [0, 5, 10, 15];
+    var rows = niveis.map(function (v) {
+      var fees2 = base.fees.map(function (f, i) { return i === idx ? Object.assign({}, f, { configured: true, value: v }) : f; });
+      return { v: v, calc: pricingCalculate(Object.assign({}, base, { mode: 'MARGIN', targetMarginPct: precSim.targetMarginPct, fees: fees2 })) };
+    });
+    var body = rows.map(function (r) { return '<tr><td>' + r.v + '%</td><td class="nowrap">' + (r.calc.sellingPrice != null ? brlC(r.calc.sellingPrice) : '—') + '</td><td class="nowrap">' + (r.calc.factor != null ? r.calc.factor.toFixed(2).replace('.', ',') + 'x' : '—') + '</td><td class="nowrap">' + (r.calc.profitAmount != null ? brlC(r.calc.profitAmount) : '—') + '</td><td class="nowrap">' + (r.calc.profitPct != null ? pct(r.calc.profitPct) : '—') + '</td></tr>'; }).join('');
+    return '<h4 style="margin:16px 0 8px">E se a Taxa de serviço (Afiliados) mudar?</h4><div class="footnote" style="margin-bottom:6px">Mantendo a margem alvo de ' + pct(precSim.targetMarginPct) + ', quanto precisa vender em cada cenário.</div><div class="table-wrap"><table class="report"><thead><tr><th>Afiliados</th><th>Preço necessário</th><th>Fator</th><th>Lucro</th><th>Margem</th></tr></thead><tbody>' + body + '</tbody></table></div>';
+  }
+  // ---- Simulador de cupom/desconto (§54) — não altera o preço do simulador, só projeta. ----
+  function precCupomPreview(calc) {
+    if (precSim.cupomPct == null || !calc.sellingPrice) return '';
+    var precoComCupomC = Math.round(calc.sellingPrice * (1 - precSim.cupomPct / 100));
+    var calcCupom = pricingCalculate(Object.assign({}, precSimInput(), { mode: 'PRICE', priceCents: precoComCupomC }));
+    var st = PRICING_STATUS_LABEL[calcCupom.status];
+    return '<h4 style="margin:16px 0 8px">Com cupom de ' + pct(precSim.cupomPct) + '</h4>' +
+      '<div class="fin-line"><span>Preço líquido</span><span>' + brlC(precoComCupomC) + '</span></div>' +
+      '<div class="fin-line"><span>Margem</span><span class="' + (calcCupom.profitPct != null && calcCupom.profitPct < 0 ? 'neg' : 'pos') + '">' + (calcCupom.profitPct != null ? pct(calcCupom.profitPct) : '—') + '</span></div>' +
+      '<div class="fin-line"><span>Status</span><span class="badge ' + st[1] + '">' + st[0] + '</span></div>';
   }
   function renderPrecResultPanel() {
     var calc = pricingCalculate(precSimInput());
@@ -12875,6 +12939,10 @@ buffer/index.js:
       (calc.recommendedPrice != null ? '<div class="fin-line"><span>Preço recomendado (margem alvo)</span><span>' + brlC(calc.recommendedPrice) + '</span></div>' : '') +
       (calc.maxDiscount != null && calc.sellingPrice != null ? '<div class="fin-line"><span>Desconto máximo possível</span><span>' + brlC(calc.maxDiscount) + ' (' + pct(r2(calc.maxDiscount / calc.sellingPrice * 100)) + ')</span></div>' : '') +
       (calc.notConfigured.length ? '<div class="footnote" style="margin-top:8px">⚠ Componentes não configurados (tratados como ausentes, nunca como 0%): ' + calc.notConfigured.join(', ') + '.</div>' : '') +
+      precCenariosTable() +
+      precFatorMargemTable() +
+      precSensibilidadeAfiliado() +
+      precCupomPreview(calc) +
       '</div></div>';
     document.getElementById('prec-result').innerHTML = html;
   }
@@ -12899,6 +12967,7 @@ buffer/index.js:
     var precoEl = document.getElementById('prec-preco'); if (precoEl) precoEl.oninput = function () { var v = cpParseNum(precoEl.value); precSim.priceCents = v != null ? Math.round(v * 100) : null; renderPrecResultPanel(); };
     var margemMinEl = document.getElementById('prec-margemmin'); if (margemMinEl) margemMinEl.oninput = function () { precSim.minMarginPct = cpParseNum(margemMinEl.value); renderPrecResultPanel(); };
     var roundEl = document.getElementById('prec-round'); if (roundEl) roundEl.onchange = function () { precSim.round = roundEl.value; renderPrecResultPanel(); };
+    var cupomEl = document.getElementById('prec-cupom'); if (cupomEl) cupomEl.oninput = function () { var raw = cupomEl.value.trim(); precSim.cupomPct = raw === '' ? null : cpParseNum(raw); renderPrecResultPanel(); };
     app.querySelectorAll('.prec-fee-input').forEach(function (el) {
       el.oninput = function () {
         var idx = parseInt(el.dataset.idx, 10); var f = precSim.fees[idx]; if (!f) return;
