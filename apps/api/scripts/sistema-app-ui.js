@@ -5894,7 +5894,10 @@
 
   // ---------- componentes de "relatório" (dashboards visuais) ----------
   function secHead(eyebrow, title, sub) { return '<div class="rhead"><div class="eyebrow">' + esc(eyebrow) + '</div><h3 class="rtitle">' + esc(title) + '</h3>' + (sub ? '<p class="rsub">' + esc(sub) + '</p>' : '') + '<div class="rule"></div></div>'; }
-  function kstrip(items) { return '<div class="kstrip">' + items.map(function (k) { return '<div class="kc ' + (k.cls || '') + (k.drill ? ' rowlink' : '') + '"' + (k.drill ? ' data-mrdrill="' + esc(k.drill) + '" data-mrdrilllabel="' + esc(k.drillLabel || k.l) + '"' : '') + '><div class="kl">' + esc(k.l) + '</div><div class="kv">' + k.v + '</div>' + (k.s ? '<div class="ks">' + esc(k.s) + '</div>' : '') + '</div>'; }).join('') + '</div>'; }
+  // k.sHtml (opt-in, nunca por padrão): quando true, k.s já vem como HTML de confiança (gerado pelo
+  // próprio app, ex.: fmtDelta() — nunca dado importado de planilha) e não passa por esc(), senão as
+  // tags apareciam cruas na tela (ex.: "<span class="footnote">..." visível no card de Faturamento).
+  function kstrip(items) { return '<div class="kstrip">' + items.map(function (k) { return '<div class="kc ' + (k.cls || '') + (k.drill ? ' rowlink' : '') + '"' + (k.drill ? ' data-mrdrill="' + esc(k.drill) + '" data-mrdrilllabel="' + esc(k.drillLabel || k.l) + '"' : '') + '><div class="kl">' + esc(k.l) + '</div><div class="kv">' + k.v + '</div>' + (k.s ? '<div class="ks">' + (k.sHtml ? k.s : esc(k.s)) + '</div>' : '') + '</div>'; }).join('') + '</div>'; }
   function callout(kind, title, bodyHtml) { return '<div class="callout ' + (kind || '') + '"><div class="ct">' + esc(title) + '</div><div class="cbody">' + bodyHtml + '</div></div>'; }
   function chartCard(title, legendHtml, svg) { return '<div class="chartcard"><div class="cch"><h4>' + esc(title) + '</h4>' + (legendHtml ? '<div class="cleg">' + legendHtml + '</div>' : '') + '</div><div style="overflow-x:auto">' + svg + '</div></div>'; }
   // Gráfico combinado barras + linha (barras = eixo esq., linha = eixo dir.). rows: [{label,bar,line}].
@@ -7031,9 +7034,9 @@
     // ---- KPIs (§49-51): 3 linhas, no máximo 12 KPIs úteis — nunca empilhar cards demais.
     var margemTxt = eng.margem != null ? pct(eng.margem) : (eng.diasSemCustoCompleto ? '—' : '—');
     var row1 = kstrip([
-      { l: 'Faturamento', v: brl(eng.totFat), cls: 'blue', s: cmp ? fmtDelta(cmp.deltaFat) + ' vs período anterior' : undefined },
+      { l: 'Faturamento', v: brl(eng.totFat), cls: 'blue', s: cmp ? fmtDelta(cmp.deltaFat) + ' vs período anterior' : undefined, sHtml: !!cmp },
       { l: 'Receita Líquida', v: brlC(eng.totFat * 100 + eng.totTaxas), cls: 'blue' },
-      { l: 'Lucro', v: eng.diasSemCustoCompleto === 0 ? brlC(eng.totLucro) : brlC(eng.totLucro) + ' (parcial)', cls: eng.totLucro >= 0 ? 'green' : 'red', s: eng.diasSemCustoCompleto ? nn(eng.diasSemCustoCompleto) + ' dia(s) com custo pendente, não somados' : (cmp ? fmtDelta(cmp.deltaLucro) + ' vs período anterior' : undefined) },
+      { l: 'Lucro', v: eng.diasSemCustoCompleto === 0 ? brlC(eng.totLucro) : brlC(eng.totLucro) + ' (parcial)', cls: eng.totLucro >= 0 ? 'green' : 'red', s: eng.diasSemCustoCompleto ? nn(eng.diasSemCustoCompleto) + ' dia(s) com custo pendente, não somados' : (cmp ? fmtDelta(cmp.deltaLucro) + ' vs período anterior' : undefined), sHtml: !eng.diasSemCustoCompleto && !!cmp },
       { l: 'Margem', v: margemTxt, cls: 'blue', s: cmp && cmp.deltaMargemPP != null ? (cmp.deltaMargemPP >= 0 ? '+' : '') + r2(cmp.deltaMargemPP) + ' p.p. vs período anterior' : (eng.diasSemCustoCompleto ? 'custo incompleto em ' + nn(eng.diasSemCustoCompleto) + ' dia(s)' : undefined) },
     ]);
     var row2 = kstrip([
