@@ -1423,7 +1423,7 @@
     // ainda não cobre este pedido, ou o cruzamento apontou um caso que precisa de auditoria — motivo em
     // incomeResolve.status: NOT_IN_INCOME/WRONG_OPERATION/DUPLICATE_ORDER_ROWS/INVALID_ORDER_ID).
     var statusFinanceiro = mrRow ? (pendencia ? 'DIVERGENCIA' : 'CONFIRMADO') : 'PROVISORIO';
-    return { orderId: orderId, temIncome: !!mrRow, mrRow: mrRow, incomeResolve: incomeResolve, statusFinanceiro: statusFinanceiro, ord: ord, svcRows: svcRows, svcResolve: svcResolve, serviceFee: serviceFee, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gEnvio: gEnvio, gOutros: gOutros, envio: envio, auditoriaFonte: auditoriaFonte, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), envioC: somaGrupo(gEnvio), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, taxasSomaSemAjusteC: taxasSomaSemAjusteC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia };
+    return { orderId: orderId, operationId: opIdOrd, temIncome: !!mrRow, mrRow: mrRow, incomeResolve: incomeResolve, statusFinanceiro: statusFinanceiro, ord: ord, svcRows: svcRows, svcResolve: svcResolve, serviceFee: serviceFee, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gEnvio: gEnvio, gOutros: gOutros, envio: envio, auditoriaFonte: auditoriaFonte, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), envioC: somaGrupo(gEnvio), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, taxasSomaSemAjusteC: taxasSomaSemAjusteC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia };
   }
   // pedidoResultadoFinal(orderId) — CANÔNICA (extraída de openPedidoFicha360 pro módulo de
   // Precificação poder consumir o mesmo "REALIZADO" que a Ficha mostra, sem duplicar cálculo).
@@ -1592,12 +1592,33 @@
       '<div class="fin-line total"><span>= Pagamento Liberado Shopee</span><b>' + brlC(pagamentoLiberadoC) + '</b></div>' +
       '<div style="margin-top:4px">' + taxasConf + '</div>' +
       '</div></div>' : '<div class="panel"><div class="ph"><h3>7. Conciliação do Pagamento</h3></div><div class="pb"><span class="tag warn">🟡 Composição preliminar — aguardando Income</span><div class="footnote" style="margin-top:6px">' + (comp.incomeResolve.status === 'NOT_IN_INCOME' ? 'Este pedido ainda não aparece no relatório Income importado.' : INCOME_STATUS_TXT[comp.incomeResolve.status] || '') + '</div></div></div>';
-    var auditoriaBlock = (auditoriaFonte.length || shipRow) ? '<div class="panel"><div class="ph"><h3>Auditoria Técnica</h3></div><div class="pb">' +
-      '<details><summary style="cursor:pointer;font-weight:600">Ver campos brutos, origem e valores não contabilizados</summary><div style="margin-top:6px">' +
+    // Diagnóstico de cruzamento Income (PROMPT "Correção definitiva — Pedidos deve buscar as taxas
+    // na base Income de Minha Renda" §16): equivalente visível a auditIncomeForOrder(operationId,
+    // orderId) — nunca recalcula nada, só expõe o que resolveIncomeOrder()/resolveServiceFeeDetails()
+    // já resolveram (comp.incomeResolve/comp.svcResolve), para o usuário conferir com o próprio olho,
+    // no próprio pedido, se a base Income persistida (mrRenda/mrSvc) realmente tem ou não esse ID —
+    // sem depender de eu ter acesso ao arquivo Income que ele importou ao vivo.
+    var svcR = comp.svcResolve;
+    var diagIncomeBlock = '<details style="margin-top:' + (auditoriaFonte.length || shipRow ? '10px' : '0') + '"><summary style="cursor:pointer;font-weight:600">Diagnóstico de cruzamento com o Income</summary><div style="margin-top:6px">' +
+      '<div class="fin-line"><span>Operação usada no cruzamento</span><span class="mono">' + esc(comp.operationId || '(nenhuma operação ativa)') + '</span></div>' +
+      '<div class="fin-line"><span>ID do pedido normalizado</span><span class="mono">' + esc(normalizeOrderId(orderId) || '—') + '</span></div>' +
+      '<div class="fin-line"><span>Income / Order</span><span class="tag ' + (comp.incomeResolve.status === 'FOUND' ? 'ok' : 'warn') + '">' + (comp.incomeResolve.status === 'FOUND' ? 'FOUND' : 'NOT_FOUND — ' + (INCOME_STATUS_TXT[comp.incomeResolve.status] || comp.incomeResolve.status)) + '</span></div>' +
+      '<div class="fin-line"><span>Income / Service Fee Details</span><span class="tag ' + (svcR.found ? 'ok' : 'warn') + '">' + (svcR.found ? 'FOUND · ' + nn(svcR.rows.length) + ' linha(s)' : 'NOT_FOUND') + '</span></div>' +
+      (mrRow ? '<div class="fin-line"><span>Taxa de comissão líquida (Income/Order)</span><b>' + brlC(mrRow.comissao) + '</b></div>' : '') +
+      (mrRow ? '<div class="fin-line"><span>Taxa de serviço líquida — pai (Income/Order)</span><b>' + brlC(mrRow.servico) + '</b></div>' : '') +
+      (svcR.found ? '<div class="fin-line" style="padding-left:14px"><span>↳ Afiliados do Vendedor (Service Fee Details)</span><span>' + brlC(svcR.totals.afiliadosVendedor) + '</span></div>' : '') +
+      (svcR.found ? '<div class="fin-line" style="padding-left:14px"><span>↳ Taxa de Transação (Service Fee Details)</span><span>' + brlC(svcR.totals.transacao) + '</span></div>' : '') +
+      (svcR.found ? '<div class="fin-line" style="padding-left:14px"><span>↳ Taxa por item vendido (Service Fee Details)</span><span>' + brlC(svcR.totals.porItem) + '</span></div>' : '') +
+      '<div class="footnote" style="margin-top:6px">Lê direto de mrRenda/mrSvc (persistidos no boot, independentes de filtro/aba de Minha Renda) — se aparecer NOT_FOUND aqui, esse pedido realmente não está no arquivo Income importado; procure o mesmo ID direto na planilha (aba Renda, coluna ID do pedido) para confirmar.</div>' +
+      '</div></details>';
+    var auditoriaBlock = '<div class="panel"><div class="ph"><h3>Auditoria Técnica</h3></div><div class="pb">' +
+      (auditoriaFonte.length || shipRow ? '<details><summary style="cursor:pointer;font-weight:600">Ver campos brutos, origem e valores não contabilizados</summary><div style="margin-top:6px">' +
       auditoriaFonte.map(function (a) { return '<div class="fin-line"><span>' + esc(a.label) + ' <span class="footnote" style="margin:0">(' + esc(a.nota) + ')</span></span><span class="' + (a.valor < 0 ? 'neg' : 'pos') + '">' + brlC(a.valor) + '</span></div>'; }).join('') +
       (shipRow ? '<div class="footnote" style="margin-top:8px">Shipping Fee Discrepancy — frete cobrado acima do esperado (não altera o Subtotal de Envio): esperado ' + brl(shipRow.esperado) + ' · real ' + brl(shipRow.real) + ' · diferença ' + brl(shipRow.real - shipRow.esperado) + '.</div>' : '') +
       '<div class="footnote" style="margin-top:6px">' + (mrRow ? 'Origem principal: Minha Renda (Income) · Pedido ' + esc(orderId) : ord ? 'Origem: Pedidos (aproximado — sem Minha Renda para este pedido)' : 'sem fonte') + '</div>' +
-      '</div></details></div></div>' : '';
+      '</div></details>' : '') +
+      diagIncomeBlock +
+      '</div></div>';
     var taxasBlock = bloco3Taxas + bloco4Envio + bloco5Ajustes + bloco6Creditos + bloco7Conciliacao + auditoriaBlock;
 
     // ---- PRECIFICAÇÃO (bloco compacto, Parte 10 do prompt de Precificação & Margem) — nunca
