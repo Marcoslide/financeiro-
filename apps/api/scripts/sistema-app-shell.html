@@ -160,7 +160,10 @@
   .kstrip .kc{padding:16px 18px;border-right:1px solid var(--line);min-width:0}
   .kstrip .kc:last-child{border-right:none}
   .kstrip .kc .kl{font-size:11px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--muted)}
-  .kstrip .kc .kv{font-size:26px;font-weight:800;margin-top:6px;line-height:1.05;overflow-wrap:break-word}
+  /* prompt "Refazer a tela Caixa" §14/§19: valor nunca pode quebrar no meio do número. clamp() encolhe
+     a fonte sozinha quando o card fica estreito, em vez de contar só com overflow-wrap (que só age
+     como último recurso, quando mesmo no tamanho mínimo o valor ainda não coube). */
+  .kstrip .kc .kv{font-size:clamp(17px,1.6vw,26px);font-weight:800;margin-top:6px;line-height:1.15;overflow-wrap:break-word;white-space:normal}
   .kstrip .kc .ks{font-size:11.5px;color:var(--muted);margin-top:4px}
   .kstrip .kc.red .kv{color:var(--err)}.kstrip .kc.amber .kv{color:var(--warn)}.kstrip .kc.green .kv{color:var(--ok)}.kstrip .kc.blue .kv{color:var(--brand-2)}.kstrip .kc.orange .kv{color:#e0662a}
   @media(max-width:720px){.kstrip .kc{border-right:none;border-bottom:1px solid var(--line)}}
@@ -197,6 +200,9 @@
   details.cx-collapse[open]>summary::after{content:'▾'}
   details.cx-collapse>.pb{padding:10px 14px}
   .cx-footer{position:sticky;bottom:0;background:var(--panel);border-top:1px solid var(--line);padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+  /* prompt "Refazer a tela Caixa": fluxo do dinheiro em sequência única, sem cards soltos — seta
+     puramente visual entre passos, nunca layout fixo que possa estourar a tela. */
+  .cx-flow-arrow{text-align:center;color:var(--muted);font-size:15px;padding:2px 0;line-height:1}
   .callout{border-radius:12px;padding:14px 16px 15px;margin-bottom:16px;border-left:4px solid var(--info);background:var(--info-bg)}
   .callout .ct{font-weight:800;font-size:13.5px;margin-bottom:5px;color:#1b4c99}
   .callout .cbody{font-size:13px;line-height:1.5;color:var(--ink)}
