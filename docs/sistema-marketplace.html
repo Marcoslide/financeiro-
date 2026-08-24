@@ -11047,6 +11047,10 @@ buffer/index.js:
       var custoConhecido = vendas.pedidos.filter(function (o) { return pedidoComposicaoFinanceira(o.id).custoProdC != null; }).length;
       var naoClass = caixaCamposNaoClassificadosCount();
       var fluxo = caixaFluxoDia(dateKey); var ac = fluxo.ac, movPost = fluxo.movPost, transf = fluxo.transf;
+      // PROMPT MESTRE "Reestruturação definitiva do Caixa" — DRE precisa ser calculada aqui em cima
+      // (não mais só perto do rodapé) porque os 3 primeiros campos do novo resumo (Valor da Venda /
+      // Taxas / Líquido a Receber) vêm dela — mesma função caixaDreDia(), nunca um segundo cálculo.
+      var dre = caixaDreDia(dateKey);
       var conc = caixaDayLancamentosConciliados(dateKey);
       var saldoCart = caixaDaySaldoCarteira(dateKey);
       var pcat = movPost.porCategoria;
@@ -11068,45 +11072,56 @@ buffer/index.js:
         '<div style="display:flex;gap:6px;align-items:center;white-space:nowrap"><button class="btn-sm" id="caixa-xlsx" title="Exportar planilha">Exportar</button><button class="btn-sm" id="caixa-print" title="Imprimir / gerar PDF">Imprimir</button><button class="x">&times;</button></div>' +
         '</div><div class="cx-sub">' + esc(opLbl) + '</div></div>';
 
-      // ---- RESUMO ----
-      var diferencaOk = Math.abs(fluxo.diferenca) <= 1;
-      var resumo = '<div class="dbd" style="padding-top:14px">' +
-        kstrip([
-          { l: 'Entrou', v: brl(fluxo.entrou), cls: 'blue' },
-          { l: 'Descontos', v: fluxo.descontos ? brl(-fluxo.descontos) : brl(0), cls: fluxo.descontos ? 'red' : '' },
-          { l: 'Transferido ao banco', v: brl(fluxo.transferido), cls: 'blue' },
-          { l: 'Diferença', v: diferencaOk ? '✓ Conferido' : brl(fluxo.diferenca), cls: diferencaOk ? 'green' : (Math.abs(fluxo.diferenca) > 50 ? 'red' : 'amber') }
-        ]);
-
-      // ---- FLUXO DO DINHEIRO ----
-      var flowSteps = [
-        { l: 'Entrou', v: brl(fluxo.entrou), cls: 'neu' },
-        { l: 'Descontos', v: fluxo.descontos ? '−' + brl(fluxo.descontos) : brl(0), cls: fluxo.descontos ? 'neg' : '' },
-        { l: 'Disponível', v: brl(fluxo.disponivel), cls: 'neu' },
-        { l: 'Banco', v: brl(fluxo.transferido), cls: 'neu' },
-        { l: 'Diferença', v: diferencaOk ? 'R$ 0,00' : brl(fluxo.diferenca), cls: diferencaOk ? 'pos' : 'neg' }
-      ];
-      var flow = '<div class="cx-section"><h4>Fluxo do dinheiro</h4><div class="cx-flow">' + flowSteps.map(function (s) { return '<div class="cx-flow-step ' + s.cls + '"><div class="cxl">' + esc(s.l) + '</div><div class="cxv">' + s.v + '</div></div>'; }).join('') + '</div></div>';
       function h4sub(v) { return v ? ' <span class="cx-h4-sub">' + v + '</span>' : ''; }
 
-      // ---- ORIGEM DO DINHEIRO — Acelera aparece UMA VEZ (resumo), nunca repete os 4 totais dentro
-      // do resgate expandido (§10-15/§49 do prompt "Refazer layout"); expandir um resgate mostra só
-      // os pedidos que ainda não tinham sido mostrados.
+      // ==== PROMPT MESTRE "Reestruturação definitiva do Caixa" — NOVO RESUMO DE 9 CAMPOS ====
+      // §1-3/§35-37: a tela principal do Fechamento passa a mostrar SOMENTE estes 9 números, em 3
+      // grupos (Venda/Recebimento/Carteira) — nunca dezenas de blocos soltos. Cada número que tem
+      // composição real vira um <details> (clicar expande — nunca escondido atrás de outro clique
+      // extra, nunca reaberto por padrão). Nenhum valor é recalculado aqui: tudo já vinha de
+      // caixaDreDia()/aceleraResultadoFechamento()/caixaFluxoDia() — só a apresentação mudou.
+      var valorVendaC = dre.receitaBruta;
+      var taxasC = dre.taxasCobradas; // já negativo (soma de comp.gTaxas de cada pedido pago)
+      var liquidoReceberC = valorVendaC + taxasC;
+      var valorAntecipadoC = ac.valorBruto;
+      var taxaAceleraC = ac.resgatesN ? -Math.abs(ac.taxaAcelera) : 0;
+      var liquidoCarteiraC = ac.resgatesN ? ac.valorLiquido : 0;
+
+      // ---- linha 1 (VENDA): Valor da Venda ----
+      var vendaSub = dre.n ? nn(dre.n) + ' pedido(s) pago(s)' : 'nenhum pedido pago neste dia';
+      var cxValorVenda = '<div class="cx-kv"><span class="cxl">Valor da Venda</span><span class="cxv">' + brlC(valorVendaC) + '</span></div><div class="footnote" style="margin:-2px 0 8px">' + vendaSub + '</div>';
+
+      // ---- linha 2 (VENDA): Taxas / Comissões — mesma composição pai/filhos do bloco 3 da Ficha do
+      // Pedido e da DRE completa (dre.linhasTaxas/dre.linhasSvcChildren) — nunca recalculada aqui.
+      var taxasChildrenHtml = dre.linhasSvcChildren.length ? dre.linhasSvcChildren.map(function (c) { return '<div class="fin-line" style="padding-left:26px;font-size:12.5px"><span>↳ ' + esc(c.label) + '</span><span class="' + (c.valor < 0 ? 'neg' : 'pos') + '">' + brlC(c.valor) + '</span></div>'; }).join('') : '';
+      var taxasLinhasHtml = dre.linhasTaxas.length ? dre.linhasTaxas.map(function (l) {
+        var isServico = dre.linhasSvcChildren.length && SVC_REAL_LABELS[l.label];
+        return '<div class="fin-line"><span>' + esc(l.label) + '</span><span class="' + (l.valor < 0 ? 'neg' : 'pos') + '">' + brlC(l.valor) + '</span></div>' + (isServico ? taxasChildrenHtml : '');
+      }).join('') : '<div class="footnote">Nenhuma taxa cobrada neste dia.</div>';
+      var cxTaxas = taxasC ? ('<details class="cx-collapse"><summary class="cx-kv"><span class="cxl">Descontos / Taxas / Comissões</span><span class="cxv neg">' + brlC(taxasC) + '</span></summary><div class="pb">' + taxasLinhasHtml + '</div></details>')
+        : '<div class="cx-kv"><span class="cxl">Descontos / Taxas / Comissões</span><span class="cxv">' + brlC(0) + '</span></div>';
+
+      // ---- linha 3 (VENDA): Valor Líquido a Receber ----
+      var cxLiquidoReceber = '<div class="cx-kv" style="border-top:1px solid var(--line);margin-top:2px;padding-top:8px"><span class="cxl" style="font-weight:700">Valor Líquido a Receber</span><span class="cxv" style="font-weight:700">' + brlC(liquidoReceberC) + '</span></div>';
+
+      // ---- linhas 4-5 (RECEBIMENTO): Valor Antecipado + Taxa de Antecipação — mesmos resgates já
+      // usados no bloco antigo "Origem do dinheiro" (§48-49 do prompt "Refazer layout" — Acelera
+      // aparece uma vez, expandir um resgate mostra só os pedidos que o formam).
       var resgateRows = ac.resgates.map(function (r) { return '<tr class="rowlink" data-goresgate="' + esc(r.resgate) + '"><td class="mono">' + esc(r.resgate) + '</td><td>' + nn(r.n) + '</td><td class="nowrap">' + brlC(r.bruto) + '</td><td class="nowrap neg">' + brlC(-Math.abs(r.taxa)) + '</td><td class="nowrap pos">' + brlC(r.liquido) + '</td></tr>'; }).join('');
       var resgateDetails = ac.resgates.map(function (r) {
         var pedidosTbl = r.pedidos.map(function (p) { var info = exp[p]; var pv = ac.pedidoValores[p]; return '<tr><td class="mono">' + esc(p) + '</td><td class="nowrap">' + (pv ? brlC(pv.bruto) : '—') + '</td><td class="nowrap neg">' + (pv ? brlC(-Math.abs(pv.taxa)) : '—') + '</td><td class="nowrap pos">' + (pv ? brlC(pv.liquido) : '—') + '</td><td>' + (info ? ((info.isFbs ? '🟢 Full confirmado' : '🟢 Bipado') + (info.at ? ' em ' + dbr(info.at) : '')) : '🔴 sem confirmação de expedição') + '</td></tr>'; }).join('');
         return '<details class="cx-collapse" id="rg-' + esc(r.resgate) + '"><summary>Resgate ' + esc(r.resgate) + ' — ' + nn(r.n) + ' pedido(s)</summary><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Bruto</th><th>Taxa</th><th>Líquido</th><th>Expedição</th></tr></thead><tbody>' + pedidosTbl + '</tbody></table></div></div></details>';
       }).join('');
-      var creditRows = movPost.todos.filter(function (t) { return t.amount > 0 && caixaMovCategoria(t, ac) !== 'TRANSFERENCIAS_BANCARIAS'; }).map(movRow).join('');
-      var origem = '<div class="cx-section"><h4>Origem do dinheiro' + h4sub(brl(fluxo.entrou) + ' recebido') + '</h4>' +
-        '<div class="cx-kv"><span class="cxl">Shopee Acelera</span><span class="cxv">' + (ac.resgatesN ? brlC(ac.valorLiquido) + ' recebido' : '—') + '</span></div>' +
-        (ac.resgatesN ? ('<div class="footnote" style="margin:-2px 0 6px">' + nn(ac.resgatesN) + ' resgate(s) · ' + nn(ac.pedidosAceleraN) + ' pedido(s) · bruto ' + brlC(ac.valorBruto) + ' · taxa ' + brlC(-Math.abs(ac.taxaAcelera)) + '</div>') : '<div class="footnote" style="margin:-2px 0 6px">Nenhum resgate do Acelera consolidado nesta data.</div>') +
-        (ac.resgatesN ? ('<details class="cx-collapse"><summary>Ver resgates (' + nn(ac.resgatesN) + ')</summary><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>ID Resgate</th><th>Pedidos</th><th>Bruto</th><th>Taxa</th><th>Recebido</th></tr></thead><tbody>' + resgateRows + '</tbody></table></div>' + resgateDetails + '</div></details>') : '') +
-        (fluxo.outrosCreditos ? ('<div class="cx-kv" style="margin-top:10px"><span class="cxl">Outros créditos</span><span class="cxv pos">+' + brl(fluxo.outrosCreditos) + '</span></div>' +
-          '<details class="cx-collapse"><summary>Ver créditos</summary><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Pedido</th><th>Descrição</th><th>Valor</th><th>Situação</th></tr></thead><tbody>' + creditRows + '</tbody></table></div></div></details>') : '') +
-        '</div>';
+      var antecipadoSub = ac.resgatesN ? (nn(ac.resgatesN) + ' resgate(s) · ' + nn(ac.pedidosAceleraN) + ' pedido(s) antecipado(s)') : 'Nenhum resgate do Acelera consolidado nesta data.';
+      var cxAntecipado = ac.resgatesN ? ('<details class="cx-collapse"><summary class="cx-kv"><span class="cxl">Valor Antecipado <span class="footnote" style="margin:0">(Shopee Acelera — não é receita nova, antecipa um recebível existente)</span></span><span class="cxv">' + brlC(valorAntecipadoC) + '</span></summary><div class="pb"><div class="footnote" style="margin-bottom:6px">' + antecipadoSub + '</div><div class="table-wrap"><table class="report"><thead><tr><th>ID Resgate</th><th>Pedidos</th><th>Bruto</th><th>Taxa</th><th>Recebido</th></tr></thead><tbody>' + resgateRows + '</tbody></table></div>' + resgateDetails + '</div></details>')
+        : ('<div class="cx-kv"><span class="cxl">Valor Antecipado</span><span class="cxv">' + brlC(0) + '</span></div><div class="footnote" style="margin:-2px 0 8px">' + antecipadoSub + '</div>');
+      var cxTaxaAcelera = '<div class="cx-kv"><span class="cxl">Taxa de Antecipação</span><span class="cxv' + (taxaAceleraC ? ' neg' : '') + '">' + brlC(taxaAceleraC) + '</span></div>';
 
-      // ---- DESCONTOS E AJUSTES ----
+      // ---- linha 6 (RECEBIMENTO): Líquido Recebido na Carteira ----
+      var cxLiquidoCarteira = '<div class="cx-kv" style="border-top:1px solid var(--line);margin-top:2px;padding-top:8px"><span class="cxl" style="font-weight:700">Líquido Recebido na Carteira</span><span class="cxv" style="font-weight:700">' + brlC(liquidoCarteiraC) + '</span></div>';
+
+      // ---- linha 7 (CARTEIRA): Descontos da Carteira — agrupado por categoria (§30-33 do prompt
+      // "Refazer layout"), cada movimento classificável individualmente (openWalletTx, já existente).
       var DESC_ORDER = ['DEVOLUCOES_REEMBOLSOS', 'AJUSTES_ACELERA', 'AJUSTES_SHOPEE', 'OUTROS_DEBITOS', 'NAO_IDENTIFICADOS'];
       var descGroups = DESC_ORDER.map(function (k) {
         var g = pcat[k]; if (!g || !g.itens.length) return null;
@@ -11115,27 +11130,39 @@ buffer/index.js:
         var soma = neg.reduce(function (s, t) { return s + t.amount; }, 0);
         return { k: k, label: CAIXA_MOV_CAT_LABEL[k], n: neg.length, valor: soma, rows: neg.map(movRow).join('') };
       }).filter(Boolean);
-      var descontosBlock = '<div class="cx-section"><h4>Descontos e ajustes' + h4sub(fluxo.descontos ? brl(-fluxo.descontos) : null) + '</h4>' +
-        (descGroups.length ? (descGroups.map(function (g) {
-          return '<div class="cx-kv"><span class="cxl">' + esc(g.label) + '</span><span class="cxv neg">' + brl(g.valor) + '</span></div>';
-        }).join('') + '<details class="cx-collapse"><summary>Ver movimentos (' + nn(descGroups.reduce(function (s, g) { return s + g.n; }, 0)) + ')</summary><div class="pb">' + descGroups.map(function (g) { return '<div class="footnote" style="margin:8px 0 2px"><b>' + esc(g.label) + '</b></div><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Pedido</th><th>Descrição</th><th>Valor</th><th>Situação</th></tr></thead><tbody>' + g.rows + '</tbody></table></div>'; }).join('') + '</div></details>')
-          : '<div class="footnote">Nenhum desconto identificado neste dia.</div>') +
-        '</div>';
+      var descontosSub = descGroups.length ? (nn(descGroups.reduce(function (s, g) { return s + g.n; }, 0)) + ' lançamento(s) classificado(s) em ' + nn(descGroups.length) + ' categoria(s)') : '';
+      var cxDescontosCarteira = fluxo.descontos ? ('<details class="cx-collapse"><summary class="cx-kv"><span class="cxl">Descontos da Carteira</span><span class="cxv neg">' + brl(-fluxo.descontos) + '</span></summary><div class="pb">' + (descontosSub ? '<div class="footnote" style="margin-bottom:6px">' + descontosSub + '</div>' : '') + descGroups.map(function (g) {
+        return '<div class="cx-kv"><span class="cxl">' + esc(g.label) + '</span><span class="cxv neg">' + brl(g.valor) + '</span></div>';
+      }).join('') + '<div class="table-wrap" style="margin-top:6px"><table class="report"><thead><tr><th>Data</th><th>Pedido</th><th>Descrição original Shopee</th><th>Valor</th><th>Categoria</th></tr></thead><tbody>' + descGroups.map(function (g) { return g.rows; }).join('') + '</tbody></table></div></div></details>')
+        : ('<div class="cx-kv"><span class="cxl">Descontos da Carteira</span><span class="cxv">' + brl(0) + '</span></div><div class="footnote" style="margin:-2px 0 8px">Nenhum desconto identificado neste dia.</div>');
 
-      // ---- TRANSFERÊNCIA PARA BANCO — seção ÚNICA (§16-25/§50-52 do prompt "Refazer layout"): nunca
-      // mais duplicada dentro de Descontos, nunca soma "automático + manual" exposta como conceito —
-      // só o total. Lançamento manual é exceção, escondido atrás de um botão.
+      // ---- linha 8 (CARTEIRA): Outros Créditos da Carteira ----
+      var creditRows = movPost.todos.filter(function (t) { return t.amount > 0 && caixaMovCategoria(t, ac) !== 'TRANSFERENCIAS_BANCARIAS'; }).map(movRow).join('');
+      var cxOutrosCreditos = fluxo.outrosCreditos ? ('<details class="cx-collapse"><summary class="cx-kv"><span class="cxl">Outros Créditos da Carteira <span class="footnote" style="margin:0">(não são o crédito do Acelera já reconhecido acima)</span></span><span class="cxv pos">+' + brl(fluxo.outrosCreditos) + '</span></summary><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Pedido</th><th>Descrição</th><th>Valor</th><th>Situação</th></tr></thead><tbody>' + creditRows + '</tbody></table></div></div></details>')
+        : ('<div class="cx-kv"><span class="cxl">Outros Créditos da Carteira</span><span class="cxv">' + brl(0) + '</span></div>');
+
+      // ---- linha 9 (CARTEIRA): Transferido para Banco — nunca expõe "automático + manual" no
+      // indicador principal (§16-25/§50-52 do prompt "Refazer layout"); Pix→Banco é transferência
+      // entre contas, nunca despesa/taxa (§9 do prompt mestre desta rodada).
       var transfAutoRows2 = transf.autoTxs.map(function (t) { return '<div class="cx-kv"><span class="cxl">' + dbr(t.date) + ' — ' + esc((t.desc || t.tipo || '').slice(0, 40)) + ' <span class="cx-badge">Carteira Shopee</span></span><span class="cxv">' + brl(Math.abs(t.amount)) + '</span></div>'; }).join('');
       var transfManualRows2 = transf.manualComDuplicidade.map(function (x) { var t = x.t; return '<div class="cx-kv"><span class="cxl">' + new Date(t.quando).toLocaleString('pt-BR') + (t.conta ? ' — ' + esc(t.conta) : '') + ' <span class="cx-badge">Lançamento manual</span>' + (x.possivelDuplicado ? ' <span class="tag warn">⚠ possível duplicidade</span>' : '') + '</span><span class="cxv">' + brl(t.valor) + '</span></div>'; }).join('');
-      var transferBlock = '<div class="cx-section"><h4>Transferência para banco' + h4sub(brl(transf.total)) + '</h4>' +
-        '<div class="cx-kv"><span class="cxl" style="font-weight:700">Total transferido</span><span class="cxv" style="font-size:16px">' + brl(transf.total) + '</span></div>' +
-        (transfAutoRows2 || transfManualRows2 ? ('<details class="cx-collapse" open><summary>Ver detalhes</summary><div class="pb">' + (transfAutoRows2 || '') + (transfManualRows2 || '') + '</div></details>') : '<div class="footnote">Nenhuma transferência localizada na Carteira para este dia.</div>') +
-        '<div style="margin-top:8px"><button class="btn-sm" id="bt-abrir-manual">+ Adicionar transferência não encontrada</button></div>' +
+      var contasDestinoUnicas = Array.from(new Set(transf.manual.map(function (t) { return t.conta; }).filter(Boolean)));
+      var transferSub = contasDestinoUnicas.length === 1 ? ('Conta: ' + contasDestinoUnicas[0]) : '';
+      var cxTransferido = (transfAutoRows2 || transfManualRows2) ? ('<details class="cx-collapse"><summary class="cx-kv"><span class="cxl">Transferido para Banco</span><span class="cxv">' + brl(transf.total) + '</span></summary><div class="pb">' + (transferSub ? '<div class="footnote" style="margin-bottom:6px">' + esc(transferSub) + '</div>' : '') + transfAutoRows2 + transfManualRows2 + '<div style="margin-top:8px"><button class="btn-sm" id="bt-abrir-manual">+ Adicionar transferência não encontrada</button></div></div></details>')
+        : ('<div class="cx-kv"><span class="cxl">Transferido para Banco</span><span class="cxv">' + brl(0) + '</span></div><div class="footnote" style="margin:-2px 0 8px">Nenhuma transferência localizada na Carteira para este dia.</div><div style="margin:-2px 0 8px"><button class="btn-sm" id="bt-abrir-manual">+ Adicionar transferência não encontrada</button></div>');
+
+      // "Diferença" (§REGRA DE ACEITE FINAL: a tela principal só pode ter os 9 campos, salvo DRE e
+      // Conferências) não vira um 10º campo aqui — continua só no rodapé fixo (footer, mais abaixo),
+      // onde já existia e já é o que trava/libera o botão "Fechar dia" (podeFechar), sem duplicar.
+      var resumo9 = '<div class="dbd" style="padding-top:14px">' +
+        '<div class="cx-section"><h4>Venda</h4>' + cxValorVenda + cxTaxas + cxLiquidoReceber + '</div>' +
+        '<div class="cx-section"><h4>Recebimento</h4>' + cxAntecipado + cxTaxaAcelera + cxLiquidoCarteira + '</div>' +
+        '<div class="cx-section"><h4>Carteira</h4>' + cxDescontosCarteira + cxOutrosCreditos + cxTransferido + '</div>' +
         '</div>';
 
       // ---- DRE DO DIA (resumida — §31-32 do prompt "Refazer layout": nunca abre o detalhamento
-      // inteiro por padrão; usa exatamente os mesmos números do bloco "Ver DRE completa"). ----
-      var dre = caixaDreDia(dateKey);
+      // inteiro por padrão; usa exatamente os mesmos números do bloco "Ver DRE completa"). dre já foi
+      // calculada no topo da função (reaproveitada pelo novo resumo de 9 campos). ----
       var dreResumo = '<div class="cx-section"><h4>DRE do dia' + h4sub(dre.n ? (dre.lucro != null ? brlC(dre.lucro) : 'aguardando custo') : null) + '</h4>' +
         (dre.n ? (
           '<div class="cx-kv"><span class="cxl">Receita bruta</span><span class="cxv">' + brlC(dre.receitaBruta) + '</span></div>' +
@@ -11184,7 +11211,7 @@ buffer/index.js:
         '<button class="btn-sm' + (podeFechar ? ' primary' : '') + '"' + (podeFechar ? '' : ' disabled title="Só é possível Fechar sem pendências — use Fechar com ressalva"') + ' id="caixa-close">Fechar dia</button>' +
         '</div></div>';
 
-      return header + resumo + flow + origem + descontosBlock + transferBlock + dreResumo + conferencias + '</div>' + footer;
+      return header + resumo9 + dreResumo + conferencias + '</div>' + footer;
     }
     function wire() {
       panel.querySelector('.x').onclick = function () { d.remove(); };
