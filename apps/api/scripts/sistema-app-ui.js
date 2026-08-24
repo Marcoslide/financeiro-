@@ -6430,10 +6430,20 @@
     // (resultado real do pedido, mesmo pedidoResultadoFinal() da Ficha) — só entram pedidos com
     // família resolvida (sem família não há o que comparar). Ponderada pela receita, não média simples.
     var precReceitaC = 0, precLucroProjC = 0, precLucroRealC = 0, precComFamiliaN = 0, pedidosAbaixoRecomendado = [];
+    // PROMPT DEFINITIVO "Refazer o Caixa": "Taxas Shopee" do FLUXO PRINCIPAL do Caixa precisa ser a
+    // MESMA soma que a Ficha do Pedido mostra em "TOTAL DESCONTADO DA LOJA" (resolveSellerCharges) —
+    // nunca um segundo motor (§13/§83/§84). mapTaxasLoja é ESSA soma (lista fixa de encargos da
+    // loja); mapTaxas/linhasTaxas (gTaxas, abaixo, inalterados) continuam alimentando só a DRE
+    // COMPLETA detalhada (que preserva Subtotal de Envio como linha própria — frete do parceiro
+    // logístico é custo real e não pode desaparecer do Lucro/Receita Líquida da DRE completa).
+    var mapTaxasLoja = {};
     pagas.forEach(function (o) {
       var c = pedidoComposicaoFinanceira(o.id);
       receitaBruta += (c.receitaC || 0);
       soma(mapReducoes, c.gDescontos); soma(mapTaxas, c.gTaxas); soma(mapCreditos, c.gCreditos); soma(mapOutros, c.gOutros);
+      var sc = resolveSellerCharges(o.id);
+      if (sc.found) { sc.items.forEach(function (it) { if (it.valor) mapTaxasLoja[it.label] = (mapTaxasLoja[it.label] || 0) + it.valor; }); }
+      else { soma(mapTaxasLoja, c.gTaxas); }
       if (c.serviceFee && c.serviceFee.children.length) { comSvcDetailsN++; c.serviceFee.children.forEach(function (ch) { mapSvcChildren[ch.key] = (mapSvcChildren[ch.key] || 0) + ch.valor; }); }
       if (c.envio) envioTotal += c.envio.subtotalC;
       if (c.custoProdC != null) { custoTotal += c.custoProdC; custoConhecidoN++; }
@@ -6450,9 +6460,11 @@
     var impactoAbaixoRecomendadoC = pedidosAbaixoRecomendado.reduce(function (s, p) { return s + p.impactoC; }, 0);
     var toLines = function (map) { return Object.keys(map).map(function (k) { return { label: k, valor: map[k] }; }).filter(function (l) { return l.valor; }).sort(function (a, b) { return a.valor - b.valor; }); };
     var linhasReducoes = toLines(mapReducoes), linhasTaxas = toLines(mapTaxas), linhasCreditos = toLines(mapCreditos), linhasOutros = toLines(mapOutros);
+    var linhasTaxasLoja = toLines(mapTaxasLoja);
     var linhasSvcChildren = Object.keys(mapSvcChildren).map(function (k) { return { key: k, label: SVC_CHILD_LABEL[k], valor: mapSvcChildren[k] }; });
     var descComerciais = linhasReducoes.reduce(function (s, l) { return s + l.valor; }, 0);
     var taxasCobradas = linhasTaxas.reduce(function (s, l) { return s + l.valor; }, 0);
+    var taxasLojaC = linhasTaxasLoja.reduce(function (s, l) { return s + l.valor; }, 0);
     var creditos = linhasCreditos.reduce(function (s, l) { return s + l.valor; }, 0);
     var outros = linhasOutros.reduce(function (s, l) { return s + l.valor; }, 0);
     var ac = aceleraResultadoFechamento(dateKey); var acTaxa = ac.resgatesN ? -Math.abs(ac.taxaAcelera) : 0;
@@ -6461,7 +6473,7 @@
     var custoCompleto = pagas.length > 0 && custoConhecidoN === pagas.length;
     var lucro = custoCompleto ? receitaLiquida - custoTotal + acTaxa : null;
     var margem = (receitaBruta && lucro != null) ? r2(lucro / receitaBruta * 100) : null;
-    return { n: pagas.length, comIncomeN: comIncomeN, comSvcDetailsN: comSvcDetailsN, receitaBruta: receitaBruta, descComerciais: descComerciais, linhasReducoes: linhasReducoes, envioTotal: envioTotal, taxasCobradas: taxasCobradas, linhasTaxas: linhasTaxas, linhasSvcChildren: linhasSvcChildren, creditos: creditos, linhasCreditos: linhasCreditos, outros: outros, linhasOutros: linhasOutros, receitaLiquida: receitaLiquida, custoTotal: custoConhecidoN ? custoTotal : null, custoConhecidoN: custoConhecidoN, custoCompleto: custoCompleto, acTaxa: acTaxa, temAcelera: !!ac.resgatesN, eventosPosteriores: eventosPosteriores, lucro: lucro, margem: margem, precComFamiliaN: precComFamiliaN, margemProjetadaDia: margemProjetadaDia, margemRealizadaDia: margemRealizadaDia, pedidosAbaixoRecomendado: pedidosAbaixoRecomendado, impactoAbaixoRecomendadoC: impactoAbaixoRecomendadoC };
+    return { n: pagas.length, comIncomeN: comIncomeN, comSvcDetailsN: comSvcDetailsN, receitaBruta: receitaBruta, descComerciais: descComerciais, linhasReducoes: linhasReducoes, envioTotal: envioTotal, taxasCobradas: taxasCobradas, linhasTaxas: linhasTaxas, taxasLojaC: taxasLojaC, linhasTaxasLoja: linhasTaxasLoja, linhasSvcChildren: linhasSvcChildren, creditos: creditos, linhasCreditos: linhasCreditos, outros: outros, linhasOutros: linhasOutros, receitaLiquida: receitaLiquida, custoTotal: custoConhecidoN ? custoTotal : null, custoConhecidoN: custoConhecidoN, custoCompleto: custoCompleto, acTaxa: acTaxa, temAcelera: !!ac.resgatesN, eventosPosteriores: eventosPosteriores, lucro: lucro, margem: margem, precComFamiliaN: precComFamiliaN, margemProjetadaDia: margemProjetadaDia, margemRealizadaDia: margemRealizadaDia, pedidosAbaixoRecomendado: pedidosAbaixoRecomendado, impactoAbaixoRecomendadoC: impactoAbaixoRecomendadoC };
   }
   // Conta colunas do Income com valor real ainda sem destino — lê mrRenda DIRETO (dado bruto já
   // marcado por linha durante a importação), nunca mrEngine()/mrCamposNaoClassificados() (Minha Renda).
@@ -6488,6 +6500,14 @@
       } else {
         var r = comp.taxaRows.find(function (x) { return x.label === label; });
         if (r) { rows.push({ orderId: o.id, valor: r.valor }); soma += r.valor; }
+        else {
+          // Campos exclusivos de resolveSellerCharges (envio reverso, devolução do vendedor, voucher,
+          // coin cashback, reembolso) não existem em comp.taxaRows — mesma fonte da linha da DRE
+          // (mapTaxasLoja em caixaDreDia), nunca um cálculo novo.
+          var sc = resolveSellerCharges(o.id);
+          var it = sc.found && sc.items.find(function (x) { return x.label === label; });
+          if (it && it.valor) { rows.push({ orderId: o.id, valor: it.valor }); soma += it.valor; }
+        }
       }
     });
     var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '520px'; panel.style.maxWidth = '96vw'; panel.style.zIndex = '65';
@@ -6998,25 +7018,43 @@
         valor: r2(liquidoC / 100), competencia: dateKey, vencimento: dateKey, financialAccountId: recebAcc ? recebAcc.id : null, referencia: o.id,
         __autoBaixa: jaLiquidado ? { valorRecebido: r2(liquidoC / 100), financialAccountId: walletAcc ? walletAcc.id : null, date: dateKey } : null,
       });
-      comp.gTaxas.forEach(function (row) {
-        if (!row.valor) return;
-        if (row.fieldKey === 'servico') {
-          // CRÍTICO (Fase 5): quando existem FILHOS reais (Afiliados/Transação/Por item — Income ou
-          // Service Fee Details), registra só eles — nunca o pai de novo, senão o total dobraria. Mas
-          // quando NÃO há filhos (ex.: "aproximado — sem Income cruzado", sourceTotal ESTIMATED,
-          // children:[]), não existe o que decompor — registrar SÓ o pai é o que evita perder a
-          // despesa inteira (bug real pego em teste: pedidos sem Income cruzado ficavam de fora do
-          // Contas a Pagar porque o pai era descartado e não havia filho pra substituí-lo).
-          if (row.children && row.children.length) {
-            row.children.forEach(function (c) { if (c.valor) apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', c.key.toUpperCase(), c.label + ' — Pedido ' + o.id, c.valor, recebAcc ? recebAcc.id : null)); });
-          } else {
-            apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', 'TOTAL', row.label + ' — Pedido ' + o.id, row.valor, recebAcc ? recebAcc.id : null));
+      // PROMPT DEFINITIVO "Refazer o Caixa" §13/§29/§46: Contas a Pagar precisa nascer da MESMA lista
+      // fixa de encargos da loja que a Ficha mostra em "TOTAL DESCONTADO DA LOJA" — não só das 6 taxas
+      // de gTaxas. resolveSellerCharges() já resolve pai×filhos da Taxa de Serviço sem duplicar; cada
+      // item nonzero vira uma linha de AP, já baixada automaticamente (Fase 5) como "retido pela
+      // Shopee". Sem Income cruzado (sellerCharges.found=false), cai no fallback antigo (gTaxas), que
+      // é exatamente o que já existia pra esse cenário — nenhum comportamento aprovado é removido.
+      var sellerCharges = resolveSellerCharges(o.id);
+      if (sellerCharges.found) {
+        sellerCharges.items.forEach(function (it) {
+          if (!it.valor) return;
+          if (it.key === 'servico') {
+            var sf = sellerCharges.serviceFee;
+            if (sf.children && sf.children.length) {
+              sf.children.forEach(function (c) { if (c.valor) apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', c.key.toUpperCase(), c.label + ' — Pedido ' + o.id, c.valor, recebAcc ? recebAcc.id : null)); });
+            } else {
+              apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', 'TOTAL', it.label + ' — Pedido ' + o.id, it.valor, recebAcc ? recebAcc.id : null));
+            }
+            return;
           }
-          return;
-        }
-        var cat = row.fieldKey === 'comissao' ? 'COMMISSION' : row.fieldKey.toUpperCase();
-        apPlan.push(apRow(opId, o.id, 'INCOME', cat, row.label + ' — Pedido ' + o.id, row.valor, recebAcc ? recebAcc.id : null));
-      });
+          var cat = it.key === 'comissao' ? 'COMMISSION' : it.key.toUpperCase();
+          apPlan.push(apRow(opId, o.id, 'INCOME', cat, it.label + ' — Pedido ' + o.id, it.valor, recebAcc ? recebAcc.id : null));
+        });
+      } else {
+        comp.gTaxas.forEach(function (row) {
+          if (!row.valor) return;
+          if (row.fieldKey === 'servico') {
+            if (row.children && row.children.length) {
+              row.children.forEach(function (c) { if (c.valor) apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', c.key.toUpperCase(), c.label + ' — Pedido ' + o.id, c.valor, recebAcc ? recebAcc.id : null)); });
+            } else {
+              apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', 'TOTAL', row.label + ' — Pedido ' + o.id, row.valor, recebAcc ? recebAcc.id : null));
+            }
+            return;
+          }
+          var cat = row.fieldKey === 'comissao' ? 'COMMISSION' : row.fieldKey.toUpperCase();
+          apPlan.push(apRow(opId, o.id, 'INCOME', cat, row.label + ' — Pedido ' + o.id, row.valor, recebAcc ? recebAcc.id : null));
+        });
+      }
     });
     // ---- Fase 5c — Taxa de Antecipação do Acelera (descontada no resgate, saída = Carteira Shopee) ----
     if (ac.resgatesN && ac.taxaAcelera) {
@@ -7440,7 +7478,11 @@
     // simples (Comissão/Taxa de Serviço/Líquido Shopee/Recebido na Carteira/Transferido ao Banco/
     // Diferença), sempre a partir de dre/ac/fluxo (caixaDreDia/aceleraResultadoFechamento/caixaFluxoDia).
     var valorVendaC = dre.receitaBruta;
-    var taxasC = dre.taxasCobradas; // já negativo — soma de comp.gTaxas de cada pedido pago (Comissão + Taxa de Serviço + demais taxas reais)
+    // PROMPT DEFINITIVO "Refazer o Caixa" §13/§83/§84: "Taxas Shopee" do fluxo principal é a MESMA
+    // soma que a Ficha do Pedido mostra em "TOTAL DESCONTADO DA LOJA" (resolveSellerCharges, via
+    // dre.taxasLojaC em caixaDreDia) — nunca dre.taxasCobradas (gTaxas, mais estreito, usado só na
+    // DRE completa detalhada abaixo, que continua com Subtotal de Envio como linha própria).
+    var taxasC = dre.taxasLojaC;
     var liquidoReceberC = valorVendaC + taxasC;
     var valorAntecipadoC = ac.valorBruto;
     var taxaAceleraC = ac.resgatesN ? -Math.abs(ac.taxaAcelera) : 0;
@@ -7451,7 +7493,7 @@
     var diferencaOk = Math.abs(fluxo.diferenca) <= 0.01;
     var kpis = kstrip([
       { l: 'Valor da Venda', v: brlC(valorVendaC) },
-      { l: 'Descontos Shopee', v: brlC(taxasC), cls: taxasC ? 'red' : '' },
+      { l: 'Taxas Shopee', v: brlC(taxasC), cls: taxasC ? 'red' : '' },
       { l: 'Líquido Shopee', v: brlC(liquidoReceberC) },
       { l: 'Recebido na Carteira', v: brlC(liquidoCarteiraC), cls: liquidoCarteiraC ? 'green' : '' },
       { l: 'Transferido ao Banco', v: brl(fluxo.transferido), cls: 'blue' },
@@ -7467,10 +7509,10 @@
     // Comissão/Taxa de Serviço aparecem DIRETO (sem precisar clicar) — só os FILHOS reais da Taxa de
     // Serviço (Afiliados do Vendedor/Taxa de Transação/Taxa por item vendido) ficam atrás de "Ver
     // composição", porque só eles têm uma composição a mostrar; explicam o pai, nunca somam de novo.
-    var descontosLinhas = dre.linhasTaxas.length ? dre.linhasTaxas.map(function (l) {
+    var descontosLinhas = dre.linhasTaxasLoja.length ? dre.linhasTaxasLoja.map(function (l) {
       var isServico = dre.linhasSvcChildren.length && SVC_REAL_LABELS[l.label];
       var composicao = isServico ? ('<details class="cx-collapse" style="margin:2px 0 8px"><summary style="font-size:12px;padding:6px 12px">Ver composição</summary><div class="pb">' + dre.linhasSvcChildren.map(function (c) { return '<div class="fin-line" style="font-size:12.5px"><span>' + esc(c.label) + '</span><span class="' + (c.valor < 0 ? 'neg' : 'pos') + '">' + brlC(c.valor) + '</span></div>'; }).join('') + '</div></details>') : '';
-      return '<div class="cx-kv"><span class="cxl">' + esc(l.label) + '</span><span class="cxv ' + (l.valor < 0 ? 'neg' : l.valor > 0 ? 'pos' : '') + '">' + brlC(l.valor) + '</span></div>' + composicao;
+      return '<div class="cx-kv rowlink" data-dredrill="' + esc(l.label) + '" title="Ver pedidos"><span class="cxl">' + esc(l.label) + '</span><span class="cxv ' + (l.valor < 0 ? 'neg' : l.valor > 0 ? 'pos' : '') + '">' + brlC(l.valor) + '</span></div>' + composicao;
     }).join('') : '<div class="footnote" style="margin:2px 0 8px">Nenhuma taxa cobrada neste dia.</div>';
 
     // Ver resgate — mesmos resgates do Acelera já usados antes (aceleraResultadoFechamento), só atrás
@@ -7486,7 +7528,7 @@
       '<div class="cx-kv" style="font-size:15px;font-weight:800"><span class="cxl">Valor da Venda</span><span class="cxv">' + brlC(valorVendaC) + '</span></div>' +
       '<div class="footnote" style="margin:-2px 0 6px">' + vendaSub + '</div>' +
       arrow() +
-      '<div class="cx-kv" style="font-weight:700"><span class="cxl">Descontos Shopee</span><span class="cxv neg">' + brlC(taxasC) + '</span></div>' +
+      '<div class="cx-kv" style="font-weight:700"><span class="cxl">Taxas Shopee</span><span class="cxv neg">' + brlC(taxasC) + '</span></div>' +
       '<div class="pb" style="padding:4px 0 0 8px">' + descontosLinhas + '</div>' +
       arrow() +
       '<div class="cx-kv" style="font-size:15px;font-weight:800"><span class="cxl">Líquido Shopee</span><span class="cxv">' + brlC(liquidoReceberC) + '</span></div>' +
