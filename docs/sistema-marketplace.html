@@ -263,6 +263,7 @@
       <a data-route="caixa"><span class="ic">🧾</span>Caixa</a>
       <div class="nav-group">Financeiro</div>
       <a data-route="contaspagar"><span class="ic">📄</span>Contas a Pagar</a>
+      <a data-route="contasreceber"><span class="ic">💵</span>Contas a Receber</a>
       <div class="nav-group">Inteligência</div>
       <a data-route="ia"><span class="ic">✦</span>Inteligência</a>
     </nav>
@@ -4120,7 +4121,7 @@ buffer/index.js:
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id', bankaccounts: 'id', companies: 'id', operations: 'id', cpheader: 'id', cpitems: 'id', cppayments: 'id', cpattach: 'id', cpcategories: 'id', cpaccounting: 'id', cpcostcenters: 'id', cpsuppliers: 'id', cpsupplylinks: 'id', pricingopconfig: 'id', pricingfamilyrules: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id', bankaccounts: 'id', companies: 'id', operations: 'id', cpheader: 'id', cpitems: 'id', cppayments: 'id', cpattach: 'id', cpcategories: 'id', cpaccounting: 'id', cpcostcenters: 'id', cpsuppliers: 'id', cpsupplylinks: 'id', pricingopconfig: 'id', pricingfamilyrules: 'id', financialaccounts: 'id', financialevents: 'id', crheader: 'id', crreceipts: 'id', financialtransfers: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -4458,7 +4459,7 @@ buffer/index.js:
   function fileInput(cb) { var inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.xlsx,.xls,.csv'; inp.onchange = function () { if (inp.files[0]) cb(inp.files[0]); }; inp.click(); }
 
   // ============================================================ RENDER (roteamento)
-  function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', minharenda: 'Minha Renda', caixa: 'Caixa', contaspagar: 'Contas a Pagar', precificacao: 'Precificação', ia: 'Inteligência' }[route] || ''; }
+  function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', minharenda: 'Minha Renda', caixa: 'Caixa', contaspagar: 'Contas a Pagar', contasreceber: 'Contas a Receber', precificacao: 'Precificação', ia: 'Inteligência' }[route] || ''; }
   function render() {
     setActive();
     // Cada módulo é isolado: um erro em um deles mostra a mensagem no lugar de deixar a tela em branco
@@ -4474,6 +4475,7 @@ buffer/index.js:
       if (route === 'minharenda') return renderMinhaRenda();
       if (route === 'caixa') return renderCaixa();
       if (route === 'contaspagar') return renderContasPagar();
+      if (route === 'contasreceber') return renderContasReceber();
       if (route === 'precificacao') return renderPrecificacao();
       if (route === 'ia') return renderIA();
     } catch (e) { app.innerHTML = renderErrBox('Erro ao abrir esta tela: ' + esc(e && (e.message || e)) + '. Os dados estão salvos — recarregue a página.'); }
@@ -10717,6 +10719,129 @@ buffer/index.js:
     var status = !closed ? 'ABERTO' : (novoDepois ? 'REVISAO_NECESSARIA' : rec.status);
     return { pend: pend, pendCart: pendCart, rec: rec, novoDepois: novoDepois, status: status };
   }
+  // ============================================================ INTEGRAÇÃO FINANCEIRA DO FECHAMENTO
+  // Fases 5-8 do "PROMPT MESTRE — REESTRUTURAÇÃO DEFINITIVA DO CAIXA...": ao fechar o dia, gera/
+  // atualiza — de forma IDEMPOTENTE, sempre por sourceEventKey — os recebíveis (Contas a Receber), as
+  // despesas já retidas/pagas pela Shopee (Contas a Pagar) e as transferências para o banco
+  // (financialTransfer). Reaproveita 100% dos motores canônicos já aprovados desta sessão
+  // (pedidoComposicaoFinanceira, aceleraResultadoFechamento, caixaDayMovimentosPosteriores/
+  // caixaMovCategoria, caixaDayTransferenciasBancarias) — nunca recalcula nada em paralelo. Chamar de
+  // novo para o MESMO dia só ATUALIZA os mesmos registros (nunca duplica) — é o que garante
+  // fechar→reabrir→fechar sem duplicidade (teste obrigatório da Fase 17).
+  //
+  // Montagem do PLANO é pura (não persiste nada) — usada tanto pelo preview "Resumo da integração
+  // financeira" (Fase 13) quanto pela aplicação real no fechamento (Fase 8): o plano é idêntico nos
+  // dois casos, nunca duas contas diferentes pro mesmo dia.
+  function caixaMontarIntegracaoFinanceira(dateKey) {
+    var vendas = caixaDayVendas(dateKey);
+    var ac = aceleraResultadoFechamento(dateKey);
+    var movPost = caixaDayMovimentosPosteriores(dateKey);
+    var transf = caixaDayTransferenciasBancarias(dateKey);
+    var arPlan = [], apPlan = [], transferPlan = [], naoClassificados = [];
+    function opCompanyId(opId) { var op = operations.find(function (o) { return o.id === opId; }); return op ? op.companyId : null; }
+    function apRow(opId, orderId, source, cat, label, valorC, contaId) {
+      // cpUpsertBySourceKey grava os campos direto (não passa por cpValorOriginal) — por isso `valor`
+      // já vai pronto aqui; valorManualOverride só documenta a origem (nunca recalculado por item).
+      return { sourceEventKey: feKey(opId, source, cat, orderId || dateKey), operationId: opId, companyId: opCompanyId(opId), orderId: orderId || null, historico: label, valor: r2(Math.abs(valorC) / 100), valorManualOverride: true, emissao: dateKey, competencia: dateKey, vencimento: dateKey, origin: 'FECHAMENTO_CAIXA', financialAccountId: contaId || null };
+    }
+    // ---- Fase 5/6 — por pedido pago do dia: recebível (AR) + despesas já retidas pela Shopee (AP) ----
+    vendas.pedidos.forEach(function (o) {
+      var comp = pedidoComposicaoFinanceira(o.id);
+      if (comp.receitaC == null) return;
+      var opId = comp.operationId; if (!opId) return;
+      var walletAcc = faWalletForOperation(opId), recebAcc = faReceivableForOperation(opId);
+      var liquidoC = comp.receitaC + comp.taxasSomaC;
+      var jaLiquidado = !!comp.mrRow; // Income confirma que a Shopee já processou/liberou este pedido
+      arPlan.push({
+        sourceEventKey: feKey(opId, 'SHOPEE_RECEIVABLE', 'ORDER', o.id), operationId: opId, companyId: opCompanyId(opId),
+        orderId: o.id, descricao: 'Pedido ' + o.id + ' — valor líquido a receber', pagador: 'Shopee', origin: 'SHOPEE_PEDIDO',
+        valor: r2(liquidoC / 100), competencia: dateKey, vencimento: dateKey, financialAccountId: recebAcc ? recebAcc.id : null, referencia: o.id,
+        __autoBaixa: jaLiquidado ? { valorRecebido: r2(liquidoC / 100), financialAccountId: walletAcc ? walletAcc.id : null, date: dateKey } : null,
+      });
+      comp.gTaxas.forEach(function (row) {
+        if (!row.valor) return;
+        if (row.fieldKey === 'servico') {
+          // CRÍTICO (Fase 5): quando existem FILHOS reais (Afiliados/Transação/Por item — Income ou
+          // Service Fee Details), registra só eles — nunca o pai de novo, senão o total dobraria. Mas
+          // quando NÃO há filhos (ex.: "aproximado — sem Income cruzado", sourceTotal ESTIMATED,
+          // children:[]), não existe o que decompor — registrar SÓ o pai é o que evita perder a
+          // despesa inteira (bug real pego em teste: pedidos sem Income cruzado ficavam de fora do
+          // Contas a Pagar porque o pai era descartado e não havia filho pra substituí-lo).
+          if (row.children && row.children.length) {
+            row.children.forEach(function (c) { if (c.valor) apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', c.key.toUpperCase(), c.label + ' — Pedido ' + o.id, c.valor, recebAcc ? recebAcc.id : null)); });
+          } else {
+            apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', 'TOTAL', row.label + ' — Pedido ' + o.id, row.valor, recebAcc ? recebAcc.id : null));
+          }
+          return;
+        }
+        var cat = row.fieldKey === 'comissao' ? 'COMMISSION' : row.fieldKey.toUpperCase();
+        apPlan.push(apRow(opId, o.id, 'INCOME', cat, row.label + ' — Pedido ' + o.id, row.valor, recebAcc ? recebAcc.id : null));
+      });
+    });
+    // ---- Fase 5c — Taxa de Antecipação do Acelera (descontada no resgate, saída = Carteira Shopee) ----
+    if (ac.resgatesN && ac.taxaAcelera) {
+      var opIdAc = opActiveOrNull();
+      // ac.taxaAcelera já vem em CENTAVOS (mesma convenção de aceleraResultadoFechamento usada em
+      // todo o Caixa — ver taxaAceleraC/§linha 7376) — apRow() espera valorC em centavos e converte
+      // pra reais internamente; multiplicar por 100 aqui duplicaria a conversão (bug real pego em
+      // teste: gerava R$38.015,00 de "taxa" onde o correto era R$380,15).
+      if (opIdAc) { var walletAc = faWalletForOperation(opIdAc); apPlan.push(apRow(opIdAc, null, 'ACELERA', 'FEE', 'Taxa de Antecipação — Shopee Acelera (' + dbr(dateKey) + ')', Math.abs(ac.taxaAcelera), walletAc ? walletAc.id : null)); }
+    }
+    // ---- Fase 5d/6 — movimentos da Carteira já CLASSIFICADOS (nunca NAO_IDENTIFICADOS — não inventa
+    // categoria): débito vira despesa paga (AP), crédito vira recebível já liquidado na Carteira (AR) ----
+    movPost.todos.forEach(function (t) {
+      var k = caixaMovCategoria(t, ac); if (!k || k === 'TRANSFERENCIAS_BANCARIAS') return;
+      var opId = t.operationId || opActiveOrNull(); if (!opId) return;
+      var walletAcc = faWalletForOperation(opId);
+      var label = (t.desc || t.tipo || CAIXA_MOV_CAT_LABEL[k]) + ' — Carteira (' + dbr(t.date) + ')';
+      if (t.amount < 0) {
+        apPlan.push(apRow(opId, wOrderId(t), 'WALLET', k, label, Math.abs(t.amount) * 100, walletAcc ? walletAcc.id : null));
+      } else {
+        arPlan.push({ sourceEventKey: feKey(opId, 'WALLET', k, t.id), operationId: opId, companyId: opCompanyId(opId), orderId: wOrderId(t) || null, descricao: label, pagador: 'Shopee', origin: 'SHOPEE_CARTEIRA', valor: r2(t.amount), competencia: t.date ? t.date.slice(0, 10) : dateKey, vencimento: t.date ? t.date.slice(0, 10) : dateKey, financialAccountId: walletAcc ? walletAcc.id : null, referencia: t.id, __autoBaixa: { valorRecebido: r2(t.amount), financialAccountId: walletAcc ? walletAcc.id : null, date: dateKey } });
+      }
+    });
+    var movTodosDoDia = caixaDayMovimentosCarteira(dateKey); var movTodos = movTodosDoDia.creditos.concat(movTodosDoDia.debitos);
+    movTodos.forEach(function (t) { var k = caixaMovCategoria(t, ac); if (!k || k === 'NAO_IDENTIFICADOS') naoClassificados.push(t); });
+    // ---- Fase 7 — transferências Carteira→Banco: evento PURO (zero despesa/zero receita) ----
+    var opIdT = opActiveOrNull();
+    if (opIdT) {
+      var walletT = faWalletForOperation(opIdT);
+      transf.autoTxs.forEach(function (t) { transferPlan.push({ sourceEventKey: feKey(opIdT, 'TRANSFER', 'WALLET_AUTO', t.id), operationId: opIdT, companyId: opCompanyId(opIdT), fromAccountId: walletT ? walletT.id : null, toAccountId: null, valor: r2(Math.abs(t.amount)), date: t.date ? t.date.slice(0, 10) : dateKey, source: 'WALLET_AUTO', sourceId: t.id, status: 'CONCLUIDO' }); });
+      transf.manual.forEach(function (bt) { transferPlan.push({ sourceEventKey: feKey(opIdT, 'TRANSFER', 'BANK_MANUAL', bt.id), operationId: opIdT, companyId: opCompanyId(opIdT), fromAccountId: walletT ? walletT.id : null, toAccountId: bt.contaId || null, valor: r2(bt.valor), date: bt.quando ? bt.quando.slice(0, 10) : dateKey, source: 'BANK_MANUAL', sourceId: bt.id, status: 'CONCLUIDO' }); });
+    }
+    return { ar: arPlan, ap: apPlan, transfers: transferPlan, naoClassificados: { n: naoClassificados.length, valor: r2(naoClassificados.reduce(function (s, t) { return s + Math.abs(t.amount); }, 0)) } };
+  }
+  // Aplica o plano de forma idempotente — reaproveita cpUpsertBySourceKey/crUpsertBySourceKey/
+  // cpRegistrarBaixa/crRegistrarBaixa (motores já aprovados de Contas a Pagar/Receber, sem duplicar
+  // lógica), só grava financialtransfers/financialevents em lote no final.
+  function caixaAplicarIntegracaoFinanceira(dateKey) {
+    var plano = caixaMontarIntegracaoFinanceira(dateKey);
+    var seedOps = {}; plano.ar.concat(plano.ap).forEach(function (r) { if (r.operationId) seedOps[r.operationId] = 1; });
+    return Promise.all(Object.keys(seedOps).map(function (opId) { return faSeedForOperation(opId); })).then(function () {
+      var pendingAR = [], pendingAP = [], pendingFE = [], pendingFT = [], baixaPromises = [];
+      plano.ar.forEach(function (rec) {
+        var autoBaixa = rec.__autoBaixa; var clean = Object.assign({}, rec); delete clean.__autoBaixa;
+        var full = crUpsertBySourceKey(pendingAR, clean);
+        if (autoBaixa && !crReceiptsForHeader(full.id).some(function (p) { return !p.estornado; })) baixaPromises.push(crRegistrarBaixa(full.id, Object.assign({ auto: true }, autoBaixa)));
+        fePut(pendingFE, { sourceEventKey: rec.sourceEventKey, operationId: rec.operationId, companyId: rec.companyId, type: 'RECEIVABLE', category: rec.origin, orderId: rec.orderId, amountC: Math.round(rec.valor * 100), competenceDate: rec.competencia, settlementDate: autoBaixa ? dateKey : null, source: 'CAIXA_FECHAMENTO', sourceId: dateKey, debitAccountId: null, creditAccountId: rec.financialAccountId, status: autoBaixa ? 'LIQUIDADO' : 'PENDENTE', accountsReceivableId: full.id });
+      });
+      plano.ap.forEach(function (rec) {
+        var full = cpUpsertBySourceKey(pendingAP, rec);
+        if (!cpPaymentsForHeader(full.id).some(function (p) { return !p.estornado; })) baixaPromises.push(cpRegistrarBaixa(full.id, { valorPago: full.valor, date: dateKey, financialAccountId: full.financialAccountId, observacao: 'Retido/pago pela Shopee — gerado automaticamente pelo fechamento de caixa.' }));
+        fePut(pendingFE, { sourceEventKey: rec.sourceEventKey, operationId: rec.operationId, companyId: rec.companyId, type: 'PAYABLE', category: rec.historico, orderId: rec.orderId, amountC: Math.round(full.valor * 100), competenceDate: rec.competencia, settlementDate: dateKey, source: 'CAIXA_FECHAMENTO', sourceId: dateKey, debitAccountId: rec.financialAccountId, creditAccountId: null, status: 'PAGO', accountsPayableId: full.id });
+      });
+      plano.transfers.forEach(function (rec) {
+        var idx = financialTransfers.findIndex(function (x) { return x.sourceEventKey === rec.sourceEventKey; });
+        var full;
+        if (idx >= 0) { full = financialTransfers[idx]; Object.keys(rec).forEach(function (k) { full[k] = rec[k]; }); } else { full = Object.assign({ id: faUid().replace('FA-', 'FT-') }, rec, { createdAt: new Date().toISOString() }); financialTransfers.push(full); }
+        pendingFT.push(full);
+        fePut(pendingFE, { sourceEventKey: rec.sourceEventKey, operationId: rec.operationId, companyId: rec.companyId, type: 'TRANSFER', category: rec.source, amountC: Math.round(rec.valor * 100), competenceDate: rec.date, settlementDate: rec.date, source: 'CAIXA_FECHAMENTO', sourceId: dateKey, debitAccountId: rec.fromAccountId, creditAccountId: rec.toAccountId, status: 'CONCLUIDO', transferId: full.id });
+      });
+      return Promise.all(baixaPromises).then(function () {
+        return Promise.all([pendingAR.length ? putMany('crheader', pendingAR) : null, pendingAP.length ? putMany('cpheader', pendingAP) : null, pendingFT.length ? putMany('financialtransfers', pendingFT) : null, pendingFE.length ? putMany('financialevents', pendingFE) : null].filter(Boolean));
+      });
+    }).then(function () { return plano; });
+  }
   function caixaCloseDay(dateKey, status, userName, justificativa) {
     var vendas = caixaDayVendas(dateKey); var exp = caixaDayExpedicao(dateKey); var ac = aceleraResultadoFechamento(dateKey); var pend = caixaDayPendencias(dateKey); var pendCart = caixaDayPendenciasCarteira(dateKey);
     var rec = caixaClose[dateKey] || { id: dateKey, history: [], eventosPosteriores: [] };
@@ -10725,7 +10850,10 @@ buffer/index.js:
     rec.snapshot = { vendasN: vendas.n, vendasValor: vendas.valor, lucroC: vendas.nLucroConhecido ? vendas.lucroC : null, expEsperados: exp.esperados, expExpedidos: exp.expedidos, acN: ac.resgatesN || 0, pendTotal: pend.total, pendCartTotal: pendCart.total };
     rec.justificativa = justificativa || null;
     rec.history = (rec.history || []).concat([{ at: at, user: rec.closedBy, status: status, justificativa: justificativa || null, pendTotal: pend.total }]);
-    caixaClose[dateKey] = rec; return putMany('caixafechamentos', [rec]);
+    caixaClose[dateKey] = rec;
+    // Fase 8: a integração financeira (AR/AP/transferências) roda SEMPRE que o dia é fechado (normal
+    // ou com ressalva) — idempotente, nunca duplica ao rodar de novo pro mesmo dia.
+    return caixaAplicarIntegracaoFinanceira(dateKey).then(function () { return putMany('caixafechamentos', [rec]); });
   }
   // §21: evento posterior — nunca reabre nem reescreve o snapshot do fechamento original; só
   // acrescenta uma anotação vinculada à data ORIGINAL do pedido, nunca à data do evento.
@@ -11123,17 +11251,24 @@ buffer/index.js:
       // ---- linha 7 (CARTEIRA): Descontos da Carteira — agrupado por categoria (§30-33 do prompt
       // "Refazer layout"), cada movimento classificável individualmente (openWalletTx, já existente).
       var DESC_ORDER = ['DEVOLUCOES_REEMBOLSOS', 'AJUSTES_ACELERA', 'AJUSTES_SHOPEE', 'OUTROS_DEBITOS', 'NAO_IDENTIFICADOS'];
+      // Fase 12 do prompt "Reestruturação do Caixa" ("MELHORIA OBRIGATÓRIA"): ao expandir, mostra
+      // CADA MOVIMENTO (não só o total por categoria) com Data/Pedido/Descrição original Shopee/
+      // Valor/Categoria/Status/Ação — cada um reclassificável sem sair do Caixa (reaproveita
+      // openWalletTx, já ligado a [data-wtx] no wire() deste drawer, com refresh+render imediatos).
+      function descMovRow(t, catLabel) {
+        return '<tr class="rowlink" data-wtx="' + esc(t.id) + '"><td class="nowrap">' + dbr(t.date) + '</td><td class="mono">' + esc(wOrderId(t) || '— não identificado') + '</td><td class="cell-text">' + esc((t.desc || t.tipo || '—').slice(0, 60)) + '</td><td class="nowrap neg">' + brl(t.amount) + '</td><td>' + esc(catLabel) + '</td><td>' + caixaCartSituacao(t) + '</td><td class="nowrap"><button class="btn-sm" data-wtx="' + esc(t.id) + '">Reclassificar</button></td></tr>';
+      }
       var descGroups = DESC_ORDER.map(function (k) {
         var g = pcat[k]; if (!g || !g.itens.length) return null;
         var neg = g.itens.filter(function (t) { return t.amount < 0; });
         if (!neg.length) return null;
         var soma = neg.reduce(function (s, t) { return s + t.amount; }, 0);
-        return { k: k, label: CAIXA_MOV_CAT_LABEL[k], n: neg.length, valor: soma, rows: neg.map(movRow).join('') };
+        return { k: k, label: CAIXA_MOV_CAT_LABEL[k], n: neg.length, valor: soma, rows: neg.map(function (t) { return descMovRow(t, CAIXA_MOV_CAT_LABEL[k]); }).join('') };
       }).filter(Boolean);
-      var descontosSub = descGroups.length ? (nn(descGroups.reduce(function (s, g) { return s + g.n; }, 0)) + ' lançamento(s) classificado(s) em ' + nn(descGroups.length) + ' categoria(s)') : '';
+      var descontosSub = descGroups.length ? (nn(descGroups.reduce(function (s, g) { return s + g.n; }, 0)) + ' lançamento(s) classificado(s) em ' + nn(descGroups.length) + ' categoria(s) — clique em qualquer linha para reclassificar') : '';
       var cxDescontosCarteira = fluxo.descontos ? ('<details class="cx-collapse"><summary class="cx-kv"><span class="cxl">Descontos da Carteira</span><span class="cxv neg">' + brl(-fluxo.descontos) + '</span></summary><div class="pb">' + (descontosSub ? '<div class="footnote" style="margin-bottom:6px">' + descontosSub + '</div>' : '') + descGroups.map(function (g) {
         return '<div class="cx-kv"><span class="cxl">' + esc(g.label) + '</span><span class="cxv neg">' + brl(g.valor) + '</span></div>';
-      }).join('') + '<div class="table-wrap" style="margin-top:6px"><table class="report"><thead><tr><th>Data</th><th>Pedido</th><th>Descrição original Shopee</th><th>Valor</th><th>Categoria</th></tr></thead><tbody>' + descGroups.map(function (g) { return g.rows; }).join('') + '</tbody></table></div></div></details>')
+      }).join('') + '<div class="table-wrap" style="margin-top:6px"><table class="report"><thead><tr><th>Data</th><th>Pedido</th><th>Descrição original Shopee</th><th>Valor</th><th>Categoria</th><th>Status</th><th>Ação</th></tr></thead><tbody>' + descGroups.map(function (g) { return g.rows; }).join('') + '</tbody></table></div></div></details>')
         : ('<div class="cx-kv"><span class="cxl">Descontos da Carteira</span><span class="cxv">' + brl(0) + '</span></div><div class="footnote" style="margin:-2px 0 8px">Nenhum desconto identificado neste dia.</div>');
 
       // ---- linha 8 (CARTEIRA): Outros Créditos da Carteira ----
@@ -11199,8 +11334,38 @@ buffer/index.js:
         fLine('− Transferências bancárias', -Math.round(saldoCart.transferenciasBancarias * 100)) +
         '<div class="fin-line total"><span>= Saldo final calculado</span><b>' + (saldoCart.saldoFinalCalculado != null ? brl(saldoCart.saldoFinalCalculado) : 'sem saldo inicial conhecido') + '</b></div>' +
         (saldoCart.saldoFinalInformado != null ? ('<div class="fin-line"><span>Saldo final informado (Carteira)</span><span>' + brl(saldoCart.saldoFinalInformado) + '</span></div>') : '') +
+        rastreabilidadeFinHtml() +
         '</div></details>';
+      // Fase 14: rastreabilidade financeira — cada evento canônico gerado para este dia, com o
+      // sourceEventKey (a chave que garante fechar de novo sem duplicar) e os IDs relacionados
+      // (Contas a Receber/Contas a Pagar/Transferência, contas de origem/destino).
+      function rastreabilidadeFinHtml() {
+        var evs = financialEvents.filter(function (e) { return e.sourceId === dateKey && e.source === 'CAIXA_FECHAMENTO'; });
+        if (!evs.length) return '';
+        var rows = evs.map(function (e) {
+          var relId = e.accountsReceivableId || e.accountsPayableId || e.transferId || '—';
+          var relTipo = e.accountsReceivableId ? 'Contas a Receber' : e.accountsPayableId ? 'Contas a Pagar' : e.transferId ? 'Transferência' : '—';
+          return '<tr><td class="mono cell-text" style="font-size:11px">' + esc(e.sourceEventKey) + '</td><td>' + esc(e.type || '—') + '</td><td>' + esc(e.orderId || '—') + '</td><td>' + esc(relTipo) + '</td><td class="mono">' + esc(relId) + '</td><td>' + esc(faLabel(e.debitAccountId) || '—') + '</td><td>' + esc(faLabel(e.creditAccountId) || '—') + '</td><td>' + esc(e.status || '—') + '</td></tr>';
+        }).join('');
+        return '<div class="footnote" style="margin:10px 0 4px"><b>Rastreabilidade financeira</b> — ' + nn(evs.length) + ' evento(s) canônico(s) gerado(s) neste fechamento</div><div class="table-wrap"><table class="report"><thead><tr><th>sourceEventKey</th><th>Tipo</th><th>Pedido</th><th>Registro relacionado</th><th>ID</th><th>Conta origem</th><th>Conta destino</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+      }
       var conferencias = '<div class="cx-section"><h4>Conferências' + h4sub((pend.total + pendCart.total) ? nn(pend.total + pendCart.total) + ' pendência(s)' : '✓ tudo identificado') + '</h4>' + pedidosDetails + expedicaoDetails + pendenciasDetails + auditoriaDetails + '</div>';
+
+      // ---- Fase 13: "Resumo da integração financeira" — o que será gerado/atualizado em Contas a
+      // Receber/Contas a Pagar/Transferências ao fechar (ou reabrir e fechar de novo) este dia. Usa o
+      // MESMO plano puro que a aplicação real usa (caixaMontarIntegracaoFinanceira) — nunca uma conta
+      // de prévia divergente do que realmente será gravado.
+      var planoFin = caixaMontarIntegracaoFinanceira(dateKey);
+      var arTotal = planoFin.ar.reduce(function (s, r) { return s + r.valor; }, 0);
+      var apTotal = planoFin.ap.reduce(function (s, r) { return s + r.valor; }, 0);
+      var trTotal = planoFin.transfers.reduce(function (s, r) { return s + r.valor; }, 0);
+      var integracaoResumo = '<div class="cx-section"><details class="cx-collapse" open><summary class="cx-kv"><span>Resumo da integração financeira <span class="footnote" style="margin:0">(gerado/atualizado ao fechar — idempotente)</span></span><span></span></summary><div class="pb">' +
+        kstrip([
+          { l: 'Contas a Receber', v: nn(planoFin.ar.length) + ' · ' + brl(arTotal) },
+          { l: 'Contas a Pagar', v: nn(planoFin.ap.length) + ' · ' + brl(apTotal) },
+          { l: 'Transferências', v: nn(planoFin.transfers.length) + ' · ' + brl(trTotal) },
+          { l: 'Não classificados (Carteira)', v: nn(planoFin.naoClassificados.n) + ' · ' + brl(planoFin.naoClassificados.valor), cls: planoFin.naoClassificados.n ? 'amber' : '' },
+        ]) + '</div></details></div>';
 
       // ---- FECHAMENTO (rodapé fixo) ----
       var podeFechar = pend.total === 0 && pendCart.total === 0;
@@ -11211,7 +11376,7 @@ buffer/index.js:
         '<button class="btn-sm' + (podeFechar ? ' primary' : '') + '"' + (podeFechar ? '' : ' disabled title="Só é possível Fechar sem pendências — use Fechar com ressalva"') + ' id="caixa-close">Fechar dia</button>' +
         '</div></div>';
 
-      return header + resumo9 + dreResumo + conferencias + '</div>' + footer;
+      return header + resumo9 + dreResumo + conferencias + integracaoResumo + '</div>' + footer;
     }
     function wire() {
       panel.querySelector('.x').onclick = function () { d.remove(); };
@@ -11453,6 +11618,88 @@ buffer/index.js:
   }
 
 
+  // ============================================================ CONTAS FINANCEIRAS + EVENTO FINANCEIRO
+  // "PROMPT MESTRE — REESTRUTURAÇÃO DEFINITIVA DO CAIXA + CONTAS A RECEBER..." — camada canônica
+  // multi-CNPJ/multi-operação. Cada operação (loja) tem contas financeiras PRÓPRIAS: "Carteira Shopee"
+  // (saldo dentro do marketplace, antes do Pix cair no banco) e "Recebíveis Shopee" (valor já vendido,
+  // ainda não creditado na carteira). NUNCA confundidas entre operações diferentes — sempre
+  // companyId+operationId. Contas BANCÁRIAS continuam vivendo em bankAccounts (§100-101, já aprovado
+  // e travado) — financialAccounts NÃO duplica isso; financialAccountsForSelector() apenas MESCLA os
+  // dois catálogos para exibição/seleção unificada, sem criar um segundo cadastro de bancos.
+  var financialAccounts = [];
+  var FA_TYPE_LABEL = { MARKETPLACE_RECEIVABLE: 'Recebíveis Shopee', MARKETPLACE_WALLET: 'Carteira Shopee', BANK: 'Banco', CASH: 'Caixa', OTHER: 'Outra' };
+  function faUid() { return 'FA-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8); }
+  function faSave(rec) {
+    var id = rec.id || faUid(); var now = new Date().toISOString();
+    var full = { id: id, companyId: rec.companyId || null, operationId: rec.operationId || null, type: rec.type, name: rec.name, institution: rec.institution || '', active: rec.active !== false, createdAt: rec.createdAt || now, updatedAt: now };
+    financialAccounts = [full].concat(financialAccounts.filter(function (a) { return a.id !== id; }));
+    return putMany('financialaccounts', [full]).then(function () { return full; });
+  }
+  // Cria — uma única vez por operação, de forma idempotente — as contas "Carteira Shopee" e
+  // "Recebíveis Shopee". Nunca duplica se a operação já tem as contas (roda a cada fechamento/boot
+  // sem custo: só grava quando realmente falta algo).
+  function faSeedForOperation(opId) {
+    if (!opId) return Promise.resolve([]);
+    var op = operations.find(function (o) { return o.id === opId; }); var compId = op ? op.companyId : null;
+    var existing = financialAccounts.filter(function (a) { return a.operationId === opId; });
+    var toCreate = [];
+    if (!existing.some(function (a) { return a.type === 'MARKETPLACE_WALLET'; })) toCreate.push({ type: 'MARKETPLACE_WALLET', name: 'Carteira Shopee', institution: 'Shopee' });
+    if (!existing.some(function (a) { return a.type === 'MARKETPLACE_RECEIVABLE'; })) toCreate.push({ type: 'MARKETPLACE_RECEIVABLE', name: 'Recebíveis Shopee', institution: 'Shopee' });
+    if (!toCreate.length) return Promise.resolve(existing);
+    var now = new Date().toISOString();
+    var full = toCreate.map(function (t) { return { id: faUid(), companyId: compId, operationId: opId, type: t.type, name: t.name, institution: t.institution, active: true, createdAt: now, updatedAt: now }; });
+    financialAccounts = financialAccounts.concat(full);
+    return putMany('financialaccounts', full).then(function () { return financialAccounts.filter(function (a) { return a.operationId === opId; }); });
+  }
+  function faGetById(id) { return financialAccounts.find(function (a) { return a.id === id; }) || null; }
+  function faWalletForOperation(opId) { return financialAccounts.find(function (a) { return a.operationId === opId && a.type === 'MARKETPLACE_WALLET'; }) || null; }
+  function faReceivableForOperation(opId) { return financialAccounts.find(function (a) { return a.operationId === opId && a.type === 'MARKETPLACE_RECEIVABLE'; }) || null; }
+  // Seletor unificado: contas financeiras da operação ativa (Carteira/Recebíveis Shopee) + contas
+  // bancárias já cadastradas (bankAccounts) — mescla os dois catálogos sem duplicar nenhum dos dois.
+  function financialAccountsForSelector(opId) {
+    var fas = financialAccounts.filter(function (a) { return a.active !== false && (!a.operationId || a.operationId === opId); });
+    var banks = bankAccountsForActiveCompany().filter(function (b) { return b.ativa !== false; }).map(function (b) { return { id: b.id, type: 'BANK', name: b.nome + (b.banco ? ' — ' + b.banco : ''), __bank: true }; });
+    return fas.map(function (a) { return { id: a.id, type: a.type, name: a.name, __bank: false }; }).concat(banks);
+  }
+  function faLabel(id) {
+    if (!id) return null;
+    var a = faGetById(id); if (a) return a.name;
+    var bl = bankAccountLabel(id); if (bl) return bl;
+    return null;
+  }
+
+  // financialEvent: registro canônico de UM evento econômico (venda, taxa, antecipação, movimento de
+  // carteira classificado, etc.). REGRA DE OURO: um evento econômico existe UMA vez — upsert
+  // determinístico por sourceEventKey (ex.: "operationId|INCOME|COMMISSION|orderId"), nunca insert
+  // cego. Isso é o que garante fechar→reabrir→fechar de novo sem duplicar nada.
+  var financialEvents = [];
+  function feUid() { return 'FE-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8); }
+  function feKey(operationId, source, category, refId) { return [operationId || '', source, category, refId || ''].join('|'); }
+  // Upsert em memória por sourceEventKey. pendingList acumula o registro criado/alterado para
+  // persistência em lote (um único putMany) no final da rotina que chamou — nunca grava um a um.
+  function fePut(pendingList, rec) {
+    var key = rec.sourceEventKey; var now = new Date().toISOString();
+    var idx = financialEvents.findIndex(function (e) { return e.sourceEventKey === key; });
+    var full;
+    if (idx >= 0) {
+      full = financialEvents[idx];
+      Object.keys(rec).forEach(function (k) { if (k !== 'id' && k !== 'createdAt') full[k] = rec[k]; });
+      full.updatedAt = now;
+    } else {
+      full = Object.assign({ id: feUid(), createdAt: now }, rec, { updatedAt: now });
+      financialEvents.push(full);
+    }
+    if (pendingList) pendingList.push(full);
+    return full;
+  }
+  function feGetByKey(key) { return financialEvents.find(function (e) { return e.sourceEventKey === key; }) || null; }
+
+  // Contas a Receber (crheader) + baixas (crreceipts) — Fase 4. Transferências financeiras puras
+  // (financialtransfers) — Fase 7. Declarados aqui (junto do resto da camada canônica) mesmo antes de
+  // suas telas/engine completas, para que o boot já leia/grave os stores desde já.
+  var contasReceber = [], crReceipts = [];
+  var financialTransfers = [];
+
   // ============================================================ CONTAS A PAGAR
   // Módulo novo, dentro de Financeiro — prompt "IMPLEMENTAR MÓDULO CONTAS A PAGAR", inspirado no
   // Bling. Domínio PRÓPRIO (despesas administrativas da empresa) — nunca toca no motor do Caixa/
@@ -11475,7 +11722,7 @@ buffer/index.js:
   var CP_UNIDADES = ['UN', 'MT', 'M²', 'M³', 'KG', 'G', 'L', 'ML', 'CX', 'PCT', 'ROLO', 'PAR', 'OUTRO'];
   var CP_FORMAS_PGTO = ['Pix', 'Boleto', 'Transferência', 'Dinheiro', 'Cartão', 'Débito automático', 'Outros'];
   var CP_OCORRENCIAS = [['UNICA', 'Única'], ['PARCELADA', 'Parcelada'], ['SEMANAL', 'Semanal'], ['QUINZENAL', 'Quinzenal'], ['MENSAL', 'Mensal'], ['BIMESTRAL', 'Bimestral'], ['TRIMESTRAL', 'Trimestral'], ['SEMESTRAL', 'Semestral'], ['ANUAL', 'Anual']];
-  var CP_ORIGEM_LABEL = { MANUAL: 'Manual', XML_NFE: 'XML NF-e', PDF: 'PDF/DANFE', IMPORTACAO: 'Importação', RECORRENCIA: 'Recorrência' };
+  var CP_ORIGEM_LABEL = { MANUAL: 'Manual', XML_NFE: 'XML NF-e', PDF: 'PDF/DANFE', IMPORTACAO: 'Importação', RECORRENCIA: 'Recorrência', FECHAMENTO_CAIXA: 'Gerado pelo Fechamento de Caixa' };
 
   // ---- helpers locais (não há uuid/normalize/parseNum/debounce globais neste arquivo — cada módulo
   // redeclara os seus, mesmo padrão de makeProdutos) ----
@@ -11494,7 +11741,11 @@ buffer/index.js:
   function cpCategoryPathLabel(id) { var c = cpCategories.find(function (x) { return x.id === id; }); if (!c) return '—'; var p = c.parentId ? cpCategories.find(function (x) { return x.id === c.parentId; }) : null; return (p ? p.name + ' › ' : '') + c.name; }
   function cpAccountingLabel(id) { var a = cpAccounting.find(function (x) { return x.id === id; }); return a ? (a.code ? a.code + ' — ' + a.name : a.name) : '—'; }
   function cpCostCenterLabel(id) { var c = cpCostCenters.find(function (x) { return x.id === id; }); return c ? c.name : '—'; }
-  function cpFinAccountLabel(id) { if (!id) return '— sem conta financeira —'; return bankAccountLabel(id) || '—'; }
+  // Fase 5 do prompt "Reestruturação do Caixa": despesas retidas pela Shopee (Comissão, Taxa de
+  // Serviço, Taxa Acelera, débitos classificados da Carteira) saem de contas financeiras NOVAS
+  // (Recebíveis Shopee / Carteira Shopee), não de um banco — faLabel() resolve as duas famílias sem
+  // duplicar cadastro (financialAccounts + bankAccounts, mesma mescla de financialAccountsForSelector).
+  function cpFinAccountLabel(id) { if (!id) return '— sem conta financeira —'; return faLabel(id) || '—'; }
   // Uma categoria pode ter conta contábil/centro de custo padrão — herdado quando o campo específico
   // não é informado (§16/§19/§20 do prompt: categoria ≠ conta financeira ≠ conta contábil).
   function cpCategoryDefaults(categoryId) { var c = cpCategories.find(function (x) { return x.id === categoryId; }); return { accountingAccountId: (c && c.accountingAccountId) || null, costCenterId: (c && c.costCenterId) || null, dreGroup: (c && c.dreGroup) || null }; }
@@ -11616,6 +11867,27 @@ buffer/index.js:
     cpPushHistory(h, 'BAIXA', 'Pagamento de ' + brl(full.valorPago) + (full.financialAccountId ? ' pela conta ' + cpFinAccountLabel(full.financialAccountId) : '') + (full.juros || full.multa || full.desconto ? ' (juros ' + brl(full.juros) + ', multa ' + brl(full.multa) + ', desconto ' + brl(full.desconto) + ')' : '') + '.');
     h.updatedAt = now;
     return Promise.all([putMany('cppayments', [full]), putMany('cpheader', [h])]).then(function () { return full; });
+  }
+  // Upsert canônico por sourceEventKey (Fase 5 — geração automática de Contas a Pagar no Fechar
+  // Caixa). Mesma REGRA DE OURO da Contas a Receber: chamar de novo pro MESMO pedido/dia só
+  // ATUALIZA o mesmo título (nunca duplica) — é o que garante fechar→reabrir→fechar sem duplicidade.
+  function cpUpsertBySourceKey(pendingList, rec) {
+    var key = rec.sourceEventKey;
+    var idx = key ? contasPagar.findIndex(function (h) { return h.sourceEventKey === key; }) : -1;
+    var now = new Date().toISOString();
+    var full;
+    if (idx >= 0) {
+      full = contasPagar[idx];
+      Object.keys(rec).forEach(function (k) { if (k !== 'id' && k !== 'createdAt' && k !== 'history') full[k] = rec[k]; });
+      full.updatedAt = now;
+      cpPushHistory(full, 'ATUALIZACAO_AUTOMATICA', 'Atualizado pelo fechamento de caixa.');
+    } else {
+      full = Object.assign({ id: cpUid('CP'), createdAt: now, history: [] }, rec, { updatedAt: now });
+      cpPushHistory(full, 'CRIACAO_AUTOMATICA', 'Gerado automaticamente pelo fechamento de caixa.');
+      contasPagar.push(full);
+    }
+    if (pendingList) pendingList.push(full);
+    return full;
   }
   function cpEstornarBaixa(paymentId) {
     var p = cpPayments.find(function (x) { return x.id === paymentId; }); if (!p) return Promise.reject(new Error('Pagamento não encontrado.'));
@@ -11814,8 +12086,8 @@ buffer/index.js:
 
   // ---- UI: listagem principal (§3-9) ----
   function cpFinAccountOptions(selectedId) {
-    var accs = bankAccountsForActiveCompany();
-    return '<option value="">Todas as contas financeiras</option><option value="__none">Sem conta financeira</option>' + accs.map(function (a) { return '<option value="' + a.id + '"' + (selectedId === a.id ? ' selected' : '') + '>' + esc(a.nome) + '</option>'; }).join('');
+    var accs = financialAccountsForSelector(opActiveOrNull());
+    return '<option value="">Todas as contas financeiras</option><option value="__none">Sem conta financeira</option>' + accs.map(function (a) { return '<option value="' + a.id + '"' + (selectedId === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>'; }).join('');
   }
   function cpCategoryOptions(selectedId, includeNew) {
     var roots = cpCategories.filter(function (c) { return !c.parentId; });
@@ -11875,9 +12147,10 @@ buffer/index.js:
       var lbl = CP_STATUS_LABEL[cpStatusDerivado(h)]; var saldo = cpSaldo(h);
       return '<tr' + (cpSel.has(h.id) ? ' style="background:#eef4ff"' : '') + '>' +
         '<td><input type="checkbox" class="cp-chk" data-id="' + h.id + '"' + (cpSel.has(h.id) ? ' checked' : '') + '></td>' +
-        '<td class="rowlink" data-cpopen="' + h.id + '"><b>' + esc(cpSupplierLabel(h.supplierId)) + '</b>' + (h.installmentsTotal > 1 ? ' <span class="footnote" style="margin:0">' + h.installmentIndex + '/' + h.installmentsTotal + '</span>' : '') + '</td>' +
+        '<td class="rowlink" data-cpopen="' + h.id + '"><b>' + esc(h.supplierId ? cpSupplierLabel(h.supplierId) : (h.origin === 'FECHAMENTO_CAIXA' ? 'Shopee' : '—')) + '</b>' + (h.installmentsTotal > 1 ? ' <span class="footnote" style="margin:0">' + h.installmentIndex + '/' + h.installmentsTotal + '</span>' : '') + '</td>' +
         '<td class="cell-text">' + esc((h.historico || '').slice(0, 50)) + '</td>' +
         '<td>' + esc(cpCategoryPathLabel(h.categoryId)) + '</td>' +
+        '<td>' + esc(h.orderId || '—') + '</td>' +
         '<td>' + esc(cpAccountingLabel(h.accountingAccountId)) + '</td>' +
         '<td>' + esc(h.paymentMethod || '—') + '</td>' +
         '<td>' + esc(cpFinAccountLabel(h.financialAccountId)) + '</td>' +
@@ -11886,14 +12159,16 @@ buffer/index.js:
         '<td><span class="badge ' + lbl[1] + '">' + lbl[0] + '</span></td>' +
         '<td style="position:relative"><button class="btn-sm" data-cpmenu="' + h.id + '">⋯</button></td></tr>';
     }).join('');
-    // ---- tabela: ocupa 100% da largura útil — sem coluna lateral (§8-10) ----
+    // ---- tabela: ocupa 100% da largura útil — sem coluna lateral (§8-10). Coluna "Pedido" (Fase 11
+    // do prompt "Reestruturação do Caixa") — referência do pedido Shopee quando a conta nasceu do
+    // fechamento automático; "—" para lançamentos manuais/outros fornecedores. ----
     var table = '<div class="panel" style="margin-top:14px">' +
       (cpSel.size ? cpBulkBar(all) : '') +
       '<div class="table-wrap"><table class="report"><thead><tr><th><input type="checkbox" id="cp-chk-all" title="Selecionar todos os resultados filtrados"></th>' +
-      ['fornecedor:Fornecedor', ':Histórico', ':Categoria', ':Conta contábil', ':Forma de pagamento', ':Conta financeira', 'emissao:Emissão', 'competencia:Competência', 'vencimento:Vencimento', 'valor:Valor', ':Valor pago', ':Saldo', 'situacao:Situação', ':'].map(function (c) {
+      ['fornecedor:Fornecedor/Origem', ':Histórico', ':Categoria', ':Pedido', ':Conta contábil', ':Forma de pagamento', ':Conta financeira', 'emissao:Emissão', 'competencia:Competência', 'vencimento:Vencimento', 'valor:Valor', ':Valor pago', ':Saldo', 'situacao:Situação', ':'].map(function (c) {
         var parts = c.split(':'); var key = parts[0], lbl = parts[1];
         return '<th' + (key ? ' class="rowlink" data-cpsort="' + key + '"' : '') + '>' + esc(lbl) + (key && cpF.sort === key ? (cpF.dir === 'asc' ? ' ▲' : ' ▼') : '') + '</th>';
-      }).join('') + '</tr></thead><tbody>' + (rows || '<tr><td colspan="14"><div class="empty" style="border:none"><p>Nenhuma conta encontrada com estes filtros.</p></div></td></tr>') + '</tbody></table></div>' +
+      }).join('') + '</tr></thead><tbody>' + (rows || '<tr><td colspan="15"><div class="empty" style="border:none"><p>Nenhuma conta encontrada com estes filtros.</p></div></td></tr>') + '</tbody></table></div>' +
       cpPagerHtml(all.length) + '</div>';
 
     return header + filtros + table;
@@ -12596,8 +12871,8 @@ buffer/index.js:
   // ---- exportação / impressão (§8) ----
   function cpExportXlsx(list) {
     if (!list.length) { toast('Nada para exportar', 'Selecione ao menos uma conta.', true); return; }
-    var rows = [['Fornecedor', 'Histórico', 'Categoria', 'Conta contábil', 'Forma de pagamento', 'Conta financeira', 'Emissão', 'Competência', 'Vencimento', 'Valor', 'Valor pago', 'Saldo', 'Situação']];
-    list.forEach(function (h) { rows.push([cpSupplierLabel(h.supplierId), h.historico || '', cpCategoryPathLabel(h.categoryId), cpAccountingLabel(h.accountingAccountId), h.paymentMethod || '', cpFinAccountLabel(h.financialAccountId), h.emissao || '', h.competencia || '', h.vencimento || '', h.valor, cpValorPagoTotal(h), cpSaldo(h), CP_STATUS_LABEL[cpStatusDerivado(h)][0]]); });
+    var rows = [['Fornecedor/Origem', 'Histórico', 'Categoria', 'Pedido', 'Conta contábil', 'Forma de pagamento', 'Conta financeira', 'Emissão', 'Competência', 'Vencimento', 'Valor', 'Valor pago', 'Saldo', 'Situação']];
+    list.forEach(function (h) { rows.push([h.supplierId ? cpSupplierLabel(h.supplierId) : (h.origin === 'FECHAMENTO_CAIXA' ? 'Shopee' : '—'), h.historico || '', cpCategoryPathLabel(h.categoryId), h.orderId || '', cpAccountingLabel(h.accountingAccountId), h.paymentMethod || '', cpFinAccountLabel(h.financialAccountId), h.emissao || '', h.competencia || '', h.vencimento || '', h.valor, cpValorPagoTotal(h), cpSaldo(h), CP_STATUS_LABEL[cpStatusDerivado(h)][0]]); });
     var ws = XLSX.utils.aoa_to_sheet(rows); var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Contas a Pagar');
     XLSX.writeFile(wb, 'contas-a-pagar-' + cpToday() + '.xlsx');
   }
@@ -12610,6 +12885,287 @@ buffer/index.js:
     }).join('');
     var w = window.open('', '_blank'); if (!w) { toast('Bloqueado pelo navegador', 'Permita pop-ups para imprimir.', true); return; }
     w.document.write('<html><head><title>Contas a Pagar</title></head><body>' + html + '</body></html>'); w.document.close(); w.print();
+  }
+
+  // ============================================================ CONTAS A RECEBER
+  // "PROMPT MESTRE — REESTRUTURAÇÃO DEFINITIVA..." Fase 4/6/10. Nova aba dentro do MESMO grupo
+  // "Financeiro" que já abriga Contas a Pagar (nunca um menu principal novo). Domínio: quem deve,
+  // quanto, quando vence, quanto já foi recebido, onde (conta financeira) e o saldo. O "Valor Líquido
+  // a Receber" de cada pedido pago da Shopee alimenta esta tela automaticamente (origem SHOPEE_PEDIDO,
+  // dedupe por sourceEventKey — REGRA DE OURO, nunca duplica); lançamentos manuais também são
+  // suportados (origem MANUAL). Um recebível é liquidado quando o dinheiro é creditado na CARTEIRA
+  // SHOPEE — nunca quando o Pix chega ao banco (isso é a Transferência, Fase 7, evento à parte).
+  var crSub = 'lista'; // lista | shopee
+  var crPage = 1, crPageSize = 30;
+  var crF = { situacao: '', financialAccountId: '', search: '', dateBasis: 'vencimento', sort: 'vencimento', dir: 'asc' };
+  var CR_STATUS_LABEL = { EM_ABERTO: ['Em aberto', 'b-info'], VENCIDO: ['Vencido', 'b-err'], PARCIAL: ['Parcialmente recebido', 'b-warn'], RECEBIDO: ['Recebido', 'b-ok'], CANCELADO: ['Cancelado', 'b-neutral'], EM_CONCILIACAO: ['Em conciliação', 'b-warn'] };
+  var CR_SITUACOES = [['', 'Todas'], ['EM_ABERTO', 'Em aberto'], ['VENCIDO', 'Vencidas'], ['PARCIAL', 'Parcialmente recebidas'], ['RECEBIDO', 'Recebidas'], ['EM_CONCILIACAO', 'Em conciliação'], ['CANCELADO', 'Canceladas']];
+  var CR_ORIGIN_LABEL = { MANUAL: 'Manual', SHOPEE_PEDIDO: 'Shopee — Pedido' };
+  function crUid(prefix) { return (prefix || 'CR') + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8); }
+  function crPushHistory(h, action, detail) { h.history = h.history || []; h.history.unshift({ at: new Date().toISOString(), user: 'Operador', action: action, detail: detail || null }); }
+  function crReceiptsForHeader(id) { return crReceipts.filter(function (p) { return p.accountsReceivableId === id; }); }
+  function crRecebidoTotal(h) { return r2(crReceiptsForHeader(h.id).filter(function (p) { return !p.estornado; }).reduce(function (s, p) { return s + (p.valorRecebido || 0); }, 0)); }
+  // O que efetivamente amortiza o título é o valor recebido MENOS o desconto concedido MAIS o
+  // acréscimo cobrado (mesma lógica de cpAmortizado, espelhada para o lado do recebimento).
+  function crAmortizado(p) { return r2((p.valorRecebido || 0) - (p.desconto || 0) + (p.acrescimo || 0)); }
+  function crSaldo(h) { var pagos = crReceiptsForHeader(h.id).filter(function (p) { return !p.estornado; }); var amort = pagos.reduce(function (s, p) { return s + crAmortizado(p); }, 0); return r2(h.valor - amort); }
+  // Status é sempre DERIVADO — nunca um campo editável manualmente (mesmo padrão de cpStatusDerivado).
+  function crStatusDerivado(h) {
+    if (h.canceledAt) return 'CANCELADO';
+    var saldo = crSaldo(h);
+    if (saldo <= 0.005) return 'RECEBIDO';
+    if (h.emConciliacao) return 'EM_CONCILIACAO';
+    if (crRecebidoTotal(h) > 0.005) return 'PARCIAL';
+    if (h.vencimento && h.vencimento < cpToday()) return 'VENCIDO';
+    return 'EM_ABERTO';
+  }
+  function crFinAccountLabel(id) { if (!id) return '— sem conta financeira —'; return faLabel(id) || '—'; }
+  function crFinAccountOptions(selectedId, opId) {
+    var accs = financialAccountsForSelector(opId || opActiveOrNull());
+    return '<option value="">Todas as contas financeiras</option><option value="__none">Sem conta financeira</option>' + accs.map(function (a) { return '<option value="' + a.id + '"' + (selectedId === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>'; }).join('');
+  }
+  // ---- CRUD manual (Fase 4: Descrição/Pagador/Categoria/Valor/Competência/Vencimento/Empresa/
+  // Operação/Conta prevista/Referência/Observação) ----
+  function crHeaderSave(draft) {
+    var isNew = !draft.id;
+    var id = draft.id || crUid('CR'); var now = new Date().toISOString();
+    var op = opActive(); var comp = op ? opCompany(op) : null;
+    var existing = contasReceber.find(function (h) { return h.id === id; });
+    var full = Object.assign({}, existing, draft, {
+      id: id, operationId: (existing && existing.operationId) || draft.operationId || opActiveOrNull(),
+      companyId: (existing && existing.companyId) || draft.companyId || (comp ? comp.id : null),
+      valor: r2(draft.valor), createdAt: (existing && existing.createdAt) || now, updatedAt: now,
+      history: existing ? existing.history : [],
+      origin: draft.origin || (existing && existing.origin) || 'MANUAL',
+    });
+    crPushHistory(full, isNew ? 'CRIACAO' : 'EDICAO', isNew ? 'Conta a receber criada.' : 'Conta a receber editada.');
+    contasReceber = [full].concat(contasReceber.filter(function (h) { return h.id !== id; }));
+    return putMany('crheader', [full]).then(function () { return full; });
+  }
+  // ---- Upsert canônico por sourceEventKey (Fase 5/6/8 — geração automática no Fechar Caixa). REGRA
+  // DE OURO: um recebível de pedido existe UMA vez — chama de novo em cada fechamento só ATUALIZA o
+  // mesmo registro (nunca insere de novo), o que garante fechar→reabrir→fechar sem duplicidade.
+  function crUpsertBySourceKey(pendingList, rec) {
+    var key = rec.sourceEventKey;
+    var idx = key ? contasReceber.findIndex(function (h) { return h.sourceEventKey === key; }) : -1;
+    var now = new Date().toISOString();
+    var full;
+    if (idx >= 0) {
+      full = contasReceber[idx];
+      Object.keys(rec).forEach(function (k) { if (k !== 'id' && k !== 'createdAt' && k !== 'history') full[k] = rec[k]; });
+      full.updatedAt = now;
+      crPushHistory(full, 'ATUALIZACAO_AUTOMATICA', 'Atualizado pelo fechamento de caixa.');
+    } else {
+      full = Object.assign({ id: crUid('CR'), createdAt: now, history: [] }, rec, { updatedAt: now });
+      crPushHistory(full, 'CRIACAO_AUTOMATICA', 'Gerado automaticamente pelo fechamento de caixa.');
+      contasReceber.push(full);
+    }
+    if (pendingList) pendingList.push(full);
+    return full;
+  }
+  function crRegistrarBaixa(headerId, dto) {
+    var h = contasReceber.find(function (x) { return x.id === headerId; }); if (!h) return Promise.reject(new Error('Conta a receber não encontrada.'));
+    var id = crUid('REC'); var now = new Date().toISOString();
+    var full = { id: id, accountsReceivableId: headerId, date: dto.date || cpToday(), financialAccountId: dto.financialAccountId || null, valorRecebido: r2(dto.valorRecebido || 0), desconto: r2(dto.desconto || 0), acrescimo: r2(dto.acrescimo || 0), observacao: dto.observacao || null, estornado: false, auto: !!dto.auto, createdAt: now };
+    crReceipts = [full].concat(crReceipts);
+    crPushHistory(h, 'RECEBIMENTO', 'Recebido ' + brl(full.valorRecebido) + (full.financialAccountId ? ' na conta ' + crFinAccountLabel(full.financialAccountId) : '') + '.');
+    h.updatedAt = now;
+    return Promise.all([putMany('crreceipts', [full]), putMany('crheader', [h])]).then(function () { return full; });
+  }
+  function crEstornarBaixa(receiptId) {
+    var p = crReceipts.find(function (x) { return x.id === receiptId; }); if (!p) return Promise.reject(new Error('Recebimento não encontrado.'));
+    var h = contasReceber.find(function (x) { return x.id === p.accountsReceivableId; });
+    p.estornado = true; p.estornadoAt = new Date().toISOString();
+    if (h) { crPushHistory(h, 'ESTORNO', 'Recebimento de ' + brl(p.valorRecebido) + ' em ' + dbr(p.date) + ' estornado.'); h.updatedAt = p.estornadoAt; }
+    return Promise.all([putMany('crreceipts', [p])].concat(h ? [putMany('crheader', [h])] : []));
+  }
+  function crCancelHeader(id, reason) {
+    var h = contasReceber.find(function (x) { return x.id === id; }); if (!h) return Promise.reject(new Error('Conta a receber não encontrada.'));
+    var recs = crReceiptsForHeader(id).filter(function (p) { return !p.estornado; });
+    if (recs.length) return Promise.reject(new Error('Esta conta possui ' + recs.length + ' recebimento(s) registrado(s). Estorne antes de cancelar.'));
+    h.canceledAt = new Date().toISOString(); h.canceledReason = reason || null; h.updatedAt = h.canceledAt;
+    crPushHistory(h, 'CANCELAMENTO', reason || 'Conta a receber cancelada.');
+    return putMany('crheader', [h]);
+  }
+  function crFilteredList() {
+    var list = contasReceber.slice();
+    var op = opActiveOrNull(); if (op) list = list.filter(function (h) { return !h.operationId || h.operationId === op; });
+    var basis = crF.dateBasis;
+    var range = periodRange(); var from = range.from ? range.from.toISOString().slice(0, 10) : null; var to = range.to ? range.to.toISOString().slice(0, 10) : null;
+    list = list.filter(function (h) { var d = h[basis]; if (!d) return periodSel.value === 'all'; if (from && d < from) return false; if (to && d > to) return false; return true; });
+    if (crF.situacao) list = list.filter(function (h) { return crStatusDerivado(h) === crF.situacao; });
+    if (crF.financialAccountId === '__none') list = list.filter(function (h) { return !h.financialAccountId; });
+    else if (crF.financialAccountId) list = list.filter(function (h) { return h.financialAccountId === crF.financialAccountId; });
+    if (crF.search) { var q = cpNorm(crF.search); list = list.filter(function (h) { return cpNorm(h.descricao || '').indexOf(q) >= 0 || cpNorm(h.pagador || '').indexOf(q) >= 0 || cpNorm(h.referencia || '').indexOf(q) >= 0 || cpNorm(h.orderId || '').indexOf(q) >= 0; }); }
+    list.sort(function (a, b) { var k = crF.sort; var av = a[k] || '', bv = b[k] || ''; var c = av < bv ? -1 : av > bv ? 1 : 0; return crF.dir === 'asc' ? c : -c; });
+    return list;
+  }
+  function renderContasReceber() {
+    app.innerHTML = secHead('FINANCEIRO', 'Contas a Receber', 'Quem deve, quanto, quando vence e onde entra — inclui o valor líquido a receber de cada pedido pago da Shopee (gerado automaticamente no fechamento) e lançamentos manuais.') +
+      '<div class="subtabs">' + [['lista', 'Lista'], ['shopee', 'Shopee por dia']].map(function (t) { return '<div class="subtab' + (crSub === t[0] ? ' active' : '') + '" data-crtab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>' +
+      '<div id="crbody" style="margin-top:14px"></div>';
+    crRenderBody();
+    app.querySelectorAll('[data-crtab]').forEach(function (t) { t.onclick = function () { crSub = t.dataset.crtab; crPage = 1; render(); }; });
+  }
+  function crRenderBody() {
+    var body = document.getElementById('crbody');
+    if (crSub === 'shopee') { body.innerHTML = renderCrShopeeDia(); bindCrShopeeDia(); return; }
+    body.innerHTML = renderCrLista(); bindCrLista();
+  }
+  function crKpis(list) {
+    var hoje = cpToday();
+    var aReceber = list.filter(function (h) { var s = crStatusDerivado(h); return s === 'EM_ABERTO' || s === 'VENCIDO' || s === 'PARCIAL'; }).reduce(function (s, h) { return s + crSaldo(h); }, 0);
+    var vencido = list.filter(function (h) { return crStatusDerivado(h) === 'VENCIDO'; }).reduce(function (s, h) { return s + crSaldo(h); }, 0);
+    var recebidoPeriodo = 0, recebidoHoje = 0;
+    list.forEach(function (h) { crReceiptsForHeader(h.id).filter(function (p) { return !p.estornado; }).forEach(function (p) { recebidoPeriodo += p.valorRecebido; if (p.date === hoje) recebidoHoje += p.valorRecebido; }); });
+    return { aReceber: r2(aReceber), vencido: r2(vencido), recebidoPeriodo: r2(recebidoPeriodo), recebidoHoje: r2(recebidoHoje) };
+  }
+  function renderCrLista() {
+    if (!contasReceber.length && !crF.search && !crF.situacao) {
+      return devPeriodBarAsCp() + emptyBox('Nenhuma conta a receber ainda. Ela nasce automaticamente do fechamento de caixa (pedidos Shopee) ou pode ser lançada manualmente.') + '<div style="margin-top:12px"><button class="btn-sm primary" id="cr-new">+ Nova conta a receber</button></div>';
+    }
+    var all = crFilteredList();
+    var pageList = all.slice((crPage - 1) * crPageSize, crPage * crPageSize);
+    var kpis = crKpis(all);
+    var kpiHtml = kstrip([
+      { l: 'A receber', v: brl(kpis.aReceber) },
+      { l: 'Vencido', v: brl(kpis.vencido) },
+      { l: 'Recebido no período', v: brl(kpis.recebidoPeriodo) },
+      { l: 'Recebido hoje', v: brl(kpis.recebidoHoje) },
+    ]);
+    var header = '<div class="page-head"><div><h2 style="margin:0;font-size:20px">Contas a Receber</h2>' +
+      '<p style="margin:4px 0 0;color:var(--muted);font-size:13px">' + nn(all.length) + ' conta(s) · saldo ' + brl(all.reduce(function (s, h) { return s + crSaldo(h); }, 0)) + '</p></div>' +
+      '<div style="display:flex;gap:8px"><button class="btn-sm primary" id="cr-new">+ Nova conta a receber</button></div></div>';
+    var basisOpts = [['competencia', 'Competência'], ['vencimento', 'Vencimento']];
+    var filtros = '<div class="panel"><div class="pb">' + devPeriodBarAsCp() +
+      '<div class="toolbar2" style="margin-top:0">' +
+      '<input class="input" id="cr-search" style="flex:2;min-width:240px" placeholder="Buscar — descrição, pagador, pedido, referência…" value="' + esc(crF.search) + '">' +
+      '<select class="select sm" id="cr-situacao">' + CR_SITUACOES.map(function (o) { return '<option value="' + o[0] + '"' + (crF.situacao === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>' +
+      '<select class="select sm" id="cr-basis">' + basisOpts.map(function (o) { return '<option value="' + o[0] + '"' + (crF.dateBasis === o[0] ? ' selected' : '') + '>Data: ' + o[1] + '</option>'; }).join('') + '</select>' +
+      '<select class="select sm" id="cr-conta">' + crFinAccountOptions(crF.financialAccountId) + '</select>' +
+      '<div style="flex:1"></div><button class="btn-sm" id="cr-limpar">Limpar filtros</button>' +
+      '</div></div></div>';
+    var rows = pageList.map(function (h) {
+      var lbl = CR_STATUS_LABEL[crStatusDerivado(h)]; var saldo = crSaldo(h);
+      return '<tr>' +
+        '<td class="nowrap">' + dbr(h.vencimento) + '</td>' +
+        '<td class="rowlink cell-text" data-cropen="' + h.id + '"><b>' + esc((h.descricao || '').slice(0, 60)) + '</b></td>' +
+        '<td>' + esc(h.pagador || '—') + '</td>' +
+        '<td>' + esc(CR_ORIGIN_LABEL[h.origin] || h.origin || '—') + '</td>' +
+        '<td>' + esc(h.orderId || h.referencia || '—') + '</td>' +
+        '<td class="nowrap">' + brl(h.valor) + '</td><td class="nowrap">' + brl(crRecebidoTotal(h)) + '</td><td class="nowrap">' + brl(saldo) + '</td>' +
+        '<td><span class="badge ' + lbl[1] + '">' + lbl[0] + '</span></td>' +
+        '<td>' + esc(crFinAccountLabel(h.financialAccountId)) + '</td>' +
+        '<td><button class="btn-sm" data-cropen="' + h.id + '">Abrir</button></td></tr>';
+    }).join('');
+    var table = '<div class="panel" style="margin-top:14px"><div class="table-wrap"><table class="report"><thead><tr>' +
+      ['vencimento:Vencimento', ':Descrição', ':Pagador', ':Origem', ':Pedido / Referência', 'valor:Valor', ':Recebido', ':Saldo', ':Status', ':Conta', ':'].map(function (c) {
+        var parts = c.split(':'); var key = parts[0], lbl = parts[1];
+        return '<th' + (key ? ' class="rowlink" data-crsort="' + key + '"' : '') + '>' + esc(lbl) + (key && crF.sort === key ? (crF.dir === 'asc' ? ' ▲' : ' ▼') : '') + '</th>';
+      }).join('') + '</tr></thead><tbody>' + (rows || '<tr><td colspan="11"><div class="empty" style="border:none"><p>Nenhuma conta encontrada com estes filtros.</p></div></td></tr>') + '</tbody></table></div>' +
+      crPagerHtml(all.length) + '</div>';
+    return header + kpiHtml + filtros + table;
+  }
+  function crPagerHtml(total) {
+    var pages = Math.max(1, Math.ceil(total / crPageSize)); if (pages <= 1) return '';
+    return '<div class="toolbar2" style="justify-content:flex-end"><span class="footnote" style="margin:0">Página ' + crPage + ' de ' + pages + '</span><button class="btn-sm" id="cr-prev"' + (crPage <= 1 ? ' disabled' : '') + '>‹</button><button class="btn-sm" id="cr-next"' + (crPage >= pages ? ' disabled' : '') + '>›</button></div>';
+  }
+  function bindCrLista() {
+    var btnNew = document.getElementById('cr-new'); if (btnNew) btnNew.onclick = function () { openCrEditor(null); };
+    bindDevPeriodBar();
+    var s = document.getElementById('cr-search'); if (s) s.oninput = cpDebounce(function () { crF.search = s.value; crPage = 1; crRenderBody(); }, 220);
+    var instantSel = { 'cr-situacao': 'situacao', 'cr-basis': 'dateBasis' };
+    Object.keys(instantSel).forEach(function (elId) { var el = document.getElementById(elId); if (el) el.onchange = function () { crF[instantSel[elId]] = el.value; crPage = 1; crRenderBody(); }; });
+    var contaSel = document.getElementById('cr-conta'); if (contaSel) contaSel.onchange = function () { crF.financialAccountId = contaSel.value === '__none' ? '__none' : contaSel.value; crPage = 1; crRenderBody(); };
+    var lim = document.getElementById('cr-limpar'); if (lim) lim.onclick = function () { crF = { situacao: '', financialAccountId: '', search: '', dateBasis: 'vencimento', sort: 'vencimento', dir: 'asc' }; crPage = 1; crRenderBody(); };
+    app.querySelectorAll('[data-crsort]').forEach(function (th) { th.onclick = function () { var k = th.dataset.crsort; if (crF.sort === k) crF.dir = crF.dir === 'asc' ? 'desc' : 'asc'; else { crF.sort = k; crF.dir = 'asc'; } crRenderBody(); }; });
+    app.querySelectorAll('[data-cropen]').forEach(function (el) { el.onclick = function () { openCrEditor(el.dataset.cropen); }; });
+    var prev = document.getElementById('cr-prev'); if (prev) prev.onclick = function () { crPage--; crRenderBody(); };
+    var next = document.getElementById('cr-next'); if (next) next.onclick = function () { crPage++; crRenderBody(); };
+  }
+  // ---- Aba "Shopee por dia" — agrupamento visual (Fase 10) dos recebíveis nascidos de pedido, com
+  // drill por pedido mostrando Pedido/Venda/Taxas/Líquido a receber/Data/Acelera/Recebido/Saldo ----
+  function renderCrShopeeDia() {
+    var list = contasReceber.filter(function (h) { return h.origin === 'SHOPEE_PEDIDO'; });
+    var op = opActiveOrNull(); if (op) list = list.filter(function (h) { return !h.operationId || h.operationId === op; });
+    if (!list.length) return emptyBox('Nenhum recebível de pedido Shopee gerado ainda. Ele é criado automaticamente ao fechar o Caixa de um dia com pedidos pagos.');
+    var byDia = {};
+    list.forEach(function (h) { var k = h.competencia || '—'; (byDia[k] = byDia[k] || []).push(h); });
+    var dias = Object.keys(byDia).sort().reverse();
+    var rows = dias.map(function (k) {
+      var items = byDia[k]; var valor = items.reduce(function (s, h) { return s + h.valor; }, 0); var saldo = items.reduce(function (s, h) { return s + crSaldo(h); }, 0);
+      return '<div class="panel" style="margin-bottom:10px"><div class="pb"><details class="cx-collapse"><summary class="cx-kv"><span>' + dbr(k) + ' — ' + nn(items.length) + ' pedido(s)</span><b>' + brl(valor) + ' <span class="footnote" style="margin:0">(saldo ' + brl(saldo) + ')</span></b></summary>' +
+        '<div class="table-wrap" style="margin-top:8px"><table class="report"><thead><tr><th>Pedido</th><th>Valor líquido a receber</th><th>Recebido</th><th>Saldo</th><th>Status</th><th></th></tr></thead><tbody>' +
+        items.map(function (h) { var lbl = CR_STATUS_LABEL[crStatusDerivado(h)]; return '<tr><td class="rowlink" data-cropen="' + h.id + '">' + esc(h.orderId || '—') + '</td><td class="nowrap">' + brl(h.valor) + '</td><td class="nowrap">' + brl(crRecebidoTotal(h)) + '</td><td class="nowrap">' + brl(crSaldo(h)) + '</td><td><span class="badge ' + lbl[1] + '">' + lbl[0] + '</span></td><td><button class="btn-sm" data-cropen="' + h.id + '">Abrir</button></td></tr>'; }).join('') +
+        '</tbody></table></div></details></div></div>';
+    }).join('');
+    return rows;
+  }
+  function bindCrShopeeDia() { app.querySelectorAll('[data-cropen]').forEach(function (el) { el.onclick = function () { openCrEditor(el.dataset.cropen); }; }); }
+  // ---- editor/drawer: criação manual + baixa parcial + cancelar + histórico ----
+  function openCrEditor(id) {
+    var h = id ? contasReceber.find(function (x) { return x.id === id; }) : null;
+    var isNew = !h;
+    var draft = h ? Object.assign({}, h) : { descricao: '', pagador: '', categoria: '', valor: 0, competencia: cpToday(), vencimento: cpToday(), financialAccountId: '', referencia: '', observacao: '' };
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '560px'; panel.style.maxWidth = '96vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    function draw() {
+      var recibos = h ? crReceiptsForHeader(h.id).filter(function (p) { return !p.estornado; }) : [];
+      var saldo = h ? crSaldo(h) : 0;
+      var statusLbl = h ? CR_STATUS_LABEL[crStatusDerivado(h)] : null;
+      var readOnlyOrigin = h && h.origin === 'SHOPEE_PEDIDO';
+      panel.innerHTML = '<div class="dh"><div><b>' + (isNew ? 'Nova conta a receber' : 'Conta a receber') + '</b>' + (statusLbl ? ' <span class="badge ' + statusLbl[1] + '" style="margin-left:8px">' + statusLbl[0] + '</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' +
+        (readOnlyOrigin ? '<div class="footnote" style="margin-bottom:8px">Gerado automaticamente pelo fechamento de caixa (Pedido ' + esc(h.orderId || '') + '). Descrição, valor e vencimento não são editáveis manualmente — só o recebimento.</div>' : '') +
+        '<label class="fld">Descrição *</label><input class="input" id="cr-descricao" style="width:100%" value="' + esc(draft.descricao || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '>' +
+        '<label class="fld">Pagador</label><input class="input" id="cr-pagador" style="width:100%" value="' + esc(draft.pagador || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '>' +
+        '<label class="fld">Categoria</label><input class="input" id="cr-categoria" style="width:100%" value="' + esc(draft.categoria || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '>' +
+        '<div style="display:flex;gap:8px"><div style="flex:1"><label class="fld">Valor *</label><input class="input" id="cr-valor" style="width:100%" value="' + (draft.valor || 0) + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div>' +
+        '<div style="flex:1"><label class="fld">Competência</label><input type="date" class="input" id="cr-competencia" style="width:100%" value="' + (draft.competencia || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div>' +
+        '<div style="flex:1"><label class="fld">Vencimento</label><input type="date" class="input" id="cr-vencimento" style="width:100%" value="' + (draft.vencimento || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div></div>' +
+        '<label class="fld">Conta prevista</label><select class="select" id="cr-conta-fin" style="width:100%">' + crFinAccountOptions(draft.financialAccountId).replace('Todas as contas financeiras', '— escolher —') + '</select>' +
+        '<label class="fld">Referência</label><input class="input" id="cr-referencia" style="width:100%" value="' + esc(draft.referencia || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '>' +
+        '<label class="fld">Observação</label><input class="input" id="cr-obs" style="width:100%" value="' + esc(draft.observacao || '') + '">' +
+        (!isNew ? ('<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)"><div class="prow"><span>Recebido</span><b>' + brl(crRecebidoTotal(h)) + '</b></div><div class="prow"><span>Saldo</span><b>' + brl(saldo) + '</b></div></div>') : '') +
+        (!isNew && recibos.length ? ('<div style="margin-top:10px"><b class="footnote">Recebimentos</b>' + recibos.map(function (p) { return '<div class="prow"><span>' + dbr(p.date) + ' — ' + esc(crFinAccountLabel(p.financialAccountId)) + (p.auto ? ' <span class="footnote" style="margin:0">(automático)</span>' : '') + '</span><span>' + brl(p.valorRecebido) + ' <button class="btn-sm" data-crestorno="' + p.id + '" style="margin-left:6px">Estornar</button></span></div>'; }).join('') + '</div>') : '') +
+        '<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">' +
+        '<button class="btn-sm primary" id="cr-salvar">Salvar</button>' +
+        (!isNew && saldo > 0.005 && !h.canceledAt ? '<button class="btn-sm" id="cr-baixa">Registrar recebimento</button>' : '') +
+        (!isNew && !h.canceledAt && !recibos.length ? '<button class="btn-sm" id="cr-cancelar" style="background:var(--err);border-color:var(--err);color:#fff">Cancelar conta</button>' : '') +
+        '</div><div id="cr-err"></div></div>';
+      panel.querySelector('.x').onclick = function () { d.remove(); };
+      panel.querySelector('#cr-salvar').onclick = function () {
+        var desc = panel.querySelector('#cr-descricao').value.trim(); var valor = cpParseNum(panel.querySelector('#cr-valor').value);
+        if (!desc) { panel.querySelector('#cr-err').innerHTML = '<div class="form-err">Informe a descrição.</div>'; return; }
+        if (valor == null || valor <= 0) { panel.querySelector('#cr-err').innerHTML = '<div class="form-err">Informe um valor válido.</div>'; return; }
+        var toSave = Object.assign({}, draft, {
+          id: h ? h.id : null, descricao: desc, pagador: panel.querySelector('#cr-pagador').value.trim(), categoria: panel.querySelector('#cr-categoria').value.trim(),
+          valor: valor, competencia: panel.querySelector('#cr-competencia').value || null, vencimento: panel.querySelector('#cr-vencimento').value || null,
+          financialAccountId: panel.querySelector('#cr-conta-fin').value || null, referencia: panel.querySelector('#cr-referencia').value.trim(), observacao: panel.querySelector('#cr-obs').value.trim(),
+        });
+        crHeaderSave(toSave).then(function (full) { h = full; isNew = false; toast('Conta a receber salva', desc); d.remove(); crRenderBody(); });
+      };
+      var baixaBtn = panel.querySelector('#cr-baixa'); if (baixaBtn) baixaBtn.onclick = function () { openCrBaixaModal(h, function () { draw(); crRenderBody(); }); };
+      var cancelBtn = panel.querySelector('#cr-cancelar'); if (cancelBtn) cancelBtn.onclick = function () { if (!confirm('Cancelar esta conta a receber?')) return; crCancelHeader(h.id).then(function () { toast('Conta cancelada', ''); draw(); crRenderBody(); }); };
+      panel.querySelectorAll('[data-crestorno]').forEach(function (b) { b.onclick = function () { if (!confirm('Estornar este recebimento?')) return; crEstornarBaixa(b.dataset.crestorno).then(function () { toast('Recebimento estornado', ''); draw(); crRenderBody(); }); }; });
+    }
+    draw();
+  }
+  function openCrBaixaModal(h, onDone) {
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '440px'; panel.style.maxWidth = '96vw';
+    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
+    var saldo = crSaldo(h);
+    panel.innerHTML = '<div class="dh"><div><b>Registrar recebimento</b></div><button class="x">&times;</button></div><div class="dbd">' +
+      '<label class="fld">Valor recebido</label><input class="input" id="crb-valor" style="width:100%" value="' + saldo + '">' +
+      '<label class="fld">Data</label><input type="date" class="input" id="crb-data" style="width:100%" value="' + cpToday() + '">' +
+      '<label class="fld">Conta financeira</label><select class="select" id="crb-conta" style="width:100%">' + crFinAccountOptions(h.financialAccountId).replace('Todas as contas financeiras', '— escolher —') + '</select>' +
+      '<label class="fld">Observação</label><input class="input" id="crb-obs" style="width:100%">' +
+      '<div style="margin-top:12px"><button class="btn-sm primary" id="crb-salvar">Confirmar recebimento</button></div><div id="crb-err"></div></div>';
+    panel.querySelector('.x').onclick = function () { d.remove(); };
+    panel.querySelector('#crb-salvar').onclick = function () {
+      var valorRecebido = cpParseNum(panel.querySelector('#crb-valor').value);
+      if (valorRecebido == null || valorRecebido <= 0) { panel.querySelector('#crb-err').innerHTML = '<div class="form-err">Informe um valor válido.</div>'; return; }
+      crRegistrarBaixa(h.id, { valorRecebido: valorRecebido, date: panel.querySelector('#crb-data').value, financialAccountId: panel.querySelector('#crb-conta').value, observacao: panel.querySelector('#crb-obs').value.trim() }).then(function () { toast('Recebimento registrado', brl(valorRecebido)); d.remove(); if (onDone) onDone(); });
+    };
   }
 
   // ===================== PRECIFICAÇÃO & MARGEM (Fase 1: motor + Simulador + Regras & Custos +
@@ -13255,14 +13811,14 @@ buffer/index.js:
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; pricingOpConfig = []; pricingFamilyRules = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; pricingOpConfig = []; pricingFamilyRules = []; financialAccounts = []; financialEvents = []; contasReceber = []; crReceipts = []; financialTransfers = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
   var opSelBtn = document.getElementById('op-selector'); if (opSelBtn) opSelBtn.onclick = function () { openOperationSelector(); };
 
   // Abre o banco; se falhar (corrompido/bloqueado/privado), ativa o modo em memória e SEGUE —
   // o sistema sempre carrega e Produtos sempre abre (só não salva). Nunca dead-end / tela branca.
   openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers'), getAll('bankaccounts'), getAll('companies'), getAll('operations'), getAll('cpheader'), getAll('cpitems'), getAll('cppayments'), getAll('cpattach'), getAll('cpcategories'), getAll('cpaccounting'), getAll('cpcostcenters'), getAll('cpsuppliers'), getAll('cpsupplylinks'), getAll('pricingopconfig'), getAll('pricingfamilyrules')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers'), getAll('bankaccounts'), getAll('companies'), getAll('operations'), getAll('cpheader'), getAll('cpitems'), getAll('cppayments'), getAll('cpattach'), getAll('cpcategories'), getAll('cpaccounting'), getAll('cpcostcenters'), getAll('cpsuppliers'), getAll('cpsupplylinks'), getAll('pricingopconfig'), getAll('pricingfamilyrules'), getAll('financialaccounts'), getAll('financialevents'), getAll('crheader'), getAll('crreceipts'), getAll('financialtransfers')]);
   }).then(function (r) {
     orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
     wallet = r[5] || [];
@@ -13287,6 +13843,7 @@ buffer/index.js:
     contasPagar = r[26] || []; cpItemsAll = r[27] || []; cpPayments = r[28] || []; cpAttachments = r[29] || [];
     cpCategories = r[30] || []; cpAccounting = r[31] || []; cpCostCenters = r[32] || []; cpSuppliers = r[33] || []; cpSupplyLinks = r[34] || [];
     pricingOpConfig = r[35] || []; pricingFamilyRules = r[36] || [];
+    financialAccounts = r[37] || []; financialEvents = r[38] || []; contasReceber = r[39] || []; crReceipts = r[40] || []; financialTransfers = r[41] || [];
     var activeSetting = settings.filter(function (x) { return x.id === 'activeOperationId'; })[0];
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
     plans = (r[4] || []).map(function (p) { if (PLAN_MIGR[p.status]) p.status = PLAN_MIGR[p.status]; if (p.scopeSkus == null && p.relatedSkus) p.scopeSkus = p.relatedSkus; if (p.indicatorKind == null) p.indicatorKind = 'liquido'; return p; });
@@ -13307,12 +13864,20 @@ buffer/index.js:
         mrRenda = byOp(mrRenda); mrShip = byOp(mrShip); mrAdj = byOp(mrAdj); mrSvc = byOp(mrSvc);
         contasPagar = byOp(contasPagar);
         pricingOpConfig = byOp(pricingOpConfig);
+        financialAccounts = byOp(financialAccounts); financialEvents = byOp(financialEvents);
+        contasReceber = byOp(contasReceber); financialTransfers = byOp(financialTransfers);
       }
       if (lastImportStamp == null && batches.length) { var last = batches.map(function (b) { return b.createdAt; }).sort().pop(); lastImportStamp = last || null; }
       if (occ.length) putMany('occ', occ);
       occ = occ.concat(DEMO_CASES()); // injeta demo apenas em memória (§10-11), depois de persistir os reais
       rebuildSkuCost();
       opUpdateSelectorLabel();
+      // Fase 2 — garante Carteira Shopee/Recebíveis Shopee para a operação ativa (idempotente:
+      // faSeedForOperation só grava o que ainda não existe). Só roda com uma operação concreta ativa
+      // (nunca em "Todas as Operações" — os arrays aqui não estão filtrados por operationId nesse modo,
+      // então não há uma operação única para atribuir a conta nova). Roda em background, não atrasa o
+      // primeiro render.
+      if (activeOperationId !== OP_ALL) faSeedForOperation(activeOperationId).catch(function () { });
       render();
     });
   }).catch(function (e) { app.innerHTML = '<div class="form-err" style="max-width:640px;margin:24px auto"><b>Não foi possível abrir o banco de dados local.</b><br>' + esc(e.message || e) + '<div style="margin-top:12px"><button class="btn-sm primary" onclick="location.reload()">Recarregar</button></div></div>'; });
