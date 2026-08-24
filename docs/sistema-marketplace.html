@@ -3871,7 +3871,9 @@ buffer/index.js:
   // "status da pendência + quem mudou + quando", nunca recriamos um segundo mecanismo para a mesma coisa.
   var walletClose = {};       // Fase 3 (§35-38): fechamento de caixa diário, por data (YYYY-MM-DD) — nunca apagado na reimportação
   var walletSub = 'visao';    // sub-aba da Carteira: visao | mov | ajustes | pendencias | fechamento
-  var caixaSub = 'dashboard'; // sub-aba do Caixa: dashboard | fechamento | historico
+  // PROMPT "Refazer o Caixa" §11/§12/§14: clicar em CAIXA precisa cair DIRETO no Fechamento (fluxo
+  // do dinheiro) — nunca num dashboard antigo escondendo o que foi pedido atrás de mais um clique.
+  var caixaSub = 'fechamento'; // sub-aba do Caixa: fechamento | dashboard | historico
   var caixaFechamentoDate = null; // dia selecionado na aba "Fechamento do Dia" — tela cheia, nunca drawer (prompt "Refazer a tela Caixa")
   // Caixa (§1-28 do prompt de arquitetura): dateKey('YYYY-MM-DD') -> registro de fechamento.
   // Mesmo ciclo de vida já aprovado em walletClose — ABERTO/FECHADO/FECHADO_COM_RESSALVA/
@@ -10464,36 +10466,50 @@ buffer/index.js:
   // drill-down de um FILHO específico da Taxa de Serviço (Afiliados/Transação/Por item) — soma pelos
   // mesmos comp.serviceFee.children já calculados por pedidoComposicaoFinanceira(), nunca um cálculo
   // novo. Sem childKey, comportamento idêntico ao anterior (drill de uma linha-pai qualquer).
+  // PROMPT "Refazer o Caixa" §11/§56: cada pedido do drill-down de uma taxa precisa mostrar Natureza/
+  // Categoria/Status e permitir [Classificar]/[Alterar] — resolvendo o MESMO título de Contas a Pagar
+  // que caixaMontarIntegracaoFinanceira gera para esse pedido (mesma sourceEventKey), nunca um
+  // segundo cadastro: editar aqui É editar em Contas a Pagar (openCpEditor).
   function caixaDreDrillOpen(dateKey, label, childKey) {
     var vendas = caixaDayVendas(dateKey);
     var rows = []; var soma = 0;
     vendas.pedidos.forEach(function (o) {
       var comp = pedidoComposicaoFinanceira(o.id);
+      var opId = comp.operationId; if (!opId) return;
       if (childKey) {
         var ch = comp.serviceFee && comp.serviceFee.children.find(function (c) { return c.key === childKey; });
-        if (ch && ch.valor) { rows.push({ orderId: o.id, valor: ch.valor }); soma += ch.valor; }
+        if (ch && ch.valor) rows.push({ orderId: o.id, valor: ch.valor, key: feKey(opId, 'SERVICE_FEE', childKey.toUpperCase(), o.id) });
       } else {
         var r = comp.taxaRows.find(function (x) { return x.label === label; });
-        if (r) { rows.push({ orderId: o.id, valor: r.valor }); soma += r.valor; }
-        else {
+        if (r) {
+          var source = r.fieldKey === 'servico' ? 'SERVICE_FEE' : 'INCOME';
+          var cat = r.fieldKey === 'servico' ? 'TOTAL' : (r.fieldKey === 'comissao' ? 'COMMISSION' : r.fieldKey.toUpperCase());
+          rows.push({ orderId: o.id, valor: r.valor, key: feKey(opId, source, cat, o.id) });
+        } else {
           // Campos exclusivos de resolveSellerCharges (envio reverso, devolução do vendedor, voucher,
           // coin cashback, reembolso) não existem em comp.taxaRows — mesma fonte da linha da DRE
           // (mapTaxasLoja em caixaDreDia), nunca um cálculo novo.
           var sc = resolveSellerCharges(o.id);
           var it = sc.found && sc.items.find(function (x) { return x.label === label; });
-          if (it && it.valor) { rows.push({ orderId: o.id, valor: it.valor }); soma += it.valor; }
+          if (it && it.valor) { var catIt = it.key === 'comissao' ? 'COMMISSION' : it.key.toUpperCase(); rows.push({ orderId: o.id, valor: it.valor, key: feKey(opId, 'INCOME', catIt, o.id) }); }
         }
       }
     });
-    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '520px'; panel.style.maxWidth = '96vw'; panel.style.zIndex = '65';
+    rows.forEach(function (r) { soma += r.valor; r.cp = contasPagar.find(function (h) { return h.sourceEventKey === r.key; }); });
+    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '640px'; panel.style.maxWidth = '96vw'; panel.style.zIndex = '65';
     d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
-    var tbl = rows.map(function (r) { return '<tr class="rowlink" data-goped360="' + esc(r.orderId) + '"><td class="mono">' + esc(r.orderId) + '</td><td class="nowrap ' + (r.valor < 0 ? 'neg' : 'pos') + '">' + brlC(r.valor) + '</td></tr>'; }).join('');
+    var tbl = rows.map(function (r) {
+      var statusTag = r.cp ? (cpPaymentsForHeader(r.cp.id).some(function (p) { return !p.estornado; }) ? '<span class="tag ok">Pago</span>' : '<span class="tag warn">Em aberto</span>') : '<span class="footnote" style="margin:0">— (fecha o dia p/ gerar)</span>';
+      var catTxt = r.cp && r.cp.categoryId ? esc(cpCategoryLabel(r.cp.categoryId)) : '<span class="footnote" style="margin:0">—</span>';
+      return '<tr><td class="mono rowlink" data-goped360="' + esc(r.orderId) + '">' + esc(r.orderId) + '</td><td>Despesa</td><td>' + catTxt + '</td><td>' + statusTag + '</td><td class="nowrap ' + (r.valor < 0 ? 'neg' : 'pos') + '">' + brlC(r.valor) + '</td><td>' + (r.cp ? '<button class="btn-sm" data-cpedit="' + esc(r.cp.id) + '">Alterar</button>' : '<span class="footnote" style="margin:0">—</span>') + '</td></tr>';
+    }).join('');
     var titulo = childKey ? (SVC_CHILD_LABEL[childKey] || childKey) : label;
     panel.innerHTML = '<div class="dh"><div><b>' + esc(titulo) + '</b>' + (childKey ? '<span class="footnote" style="margin:4px 0 0">componente de ' + esc(label) + '</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' +
-      '<div class="footnote" style="margin-bottom:8px">' + nn(rows.length) + ' pedido(s) de ' + nn(vendas.n) + ' compõem esta linha da DRE de ' + esc(dbr(dateKey)) + '.</div>' +
-      '<div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Valor</th></tr></thead><tbody>' + (tbl || '<tr><td colspan="2" class="empty">Nenhum pedido com este componente neste dia.</td></tr>') + '</tbody></table></div>' +
+      '<div class="footnote" style="margin-bottom:8px">' + nn(rows.length) + ' pedido(s) de ' + nn(vendas.n) + ' compõem esta linha da DRE de ' + esc(dbr(dateKey)) + '. Natureza/Status vêm do título de Contas a Pagar gerado por este pedido — "Alterar" edita o mesmo título (categoria/status), nunca um cadastro paralelo.</div>' +
+      '<div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Natureza</th><th>Categoria</th><th>Status</th><th>Valor</th><th>Ação</th></tr></thead><tbody>' + (tbl || '<tr><td colspan="6" class="empty">Nenhum pedido com este componente neste dia.</td></tr>') + '</tbody></table></div>' +
       '<div class="fin-line total" style="margin-top:8px"><span>Soma dos pedidos</span><b>' + brlC(soma) + '</b></div>' +
       '</div>';
+    panel.querySelectorAll('[data-cpedit]').forEach(function (b) { b.onclick = function () { d.remove(); openCpEditor(b.dataset.cpedit); }; });
     panel.querySelector('.x').onclick = function () { d.remove(); };
     panel.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { d.remove(); openPedidoFicha360(b.dataset.goped360); }; });
   }
@@ -11858,7 +11874,7 @@ buffer/index.js:
   function renderCaixa() {
     // §87: sem subaba própria "Pendências da Carteira" — os créditos/débitos/pendências da Carteira
     // vivem dentro do Fechamento do Dia (bloco "3. Movimentos da Carteira").
-    app.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0">' + [['dashboard', 'Dashboard'], ['fechamento', 'Fechamento do Dia'], ['historico', 'Histórico']].map(function (t) { return '<div class="subtab' + (caixaSub === t[0] ? ' active' : '') + '" data-caixasub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm" id="caixa-bancos">Gerenciar bancos</button></div><div id="caixabody" style="margin-top:14px"></div>';
+    app.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0">' + [['fechamento', 'Fechamento'], ['dashboard', 'Visão Geral'], ['historico', 'Histórico']].map(function (t) { return '<div class="subtab' + (caixaSub === t[0] ? ' active' : '') + '" data-caixasub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm" id="caixa-bancos">Gerenciar bancos</button></div><div id="caixabody" style="margin-top:14px"></div>';
     var body = document.getElementById('caixabody');
     body.innerHTML = caixaSub === 'fechamento' ? caixaFechamentoView() : caixaSub === 'historico' ? caixaHistoricoView() : caixaDashboardView();
     app.querySelectorAll('[data-caixasub]').forEach(function (t) { t.onclick = function () { caixaSub = t.dataset.caixasub; render(); }; });
