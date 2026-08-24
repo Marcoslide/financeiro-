@@ -5114,6 +5114,12 @@ buffer/index.js:
       { key: 'svc_transaction', label: 'Taxa de Transação', valor: svcT.transacao, source: 'SERVICE_FEE_DETAILS' },
       { key: 'svc_per_item', label: 'Taxa por item vendido', valor: svcT.porItem, source: 'SERVICE_FEE_DETAILS' },
     ] : [];
+    // PROMPT "Ajuste pontual da Ficha" §12/§15: testado contra os 1.519 pedidos reais com Service
+    // Fee Details do Income — Afiliados+Transação+Por item já fecham com Taxa de serviço líquida em
+    // 1.519/1.519 casos (0 centavo de diferença). "Ajuste por participação em ação comercial"
+    // (mrRow.ajusteAcaoComercial) NÃO faz parte desta soma — incluí-lo quebrava os 1.519 casos que
+    // hoje fecham exatos (confirmado empiricamente antes de decidir; nunca força o fechamento
+    // somando algo que não pertence à composição real). Continua disponível só na Auditoria Técnica.
     var childrenTotal = svcResolve.totalComponentes;
     if (mrRow) {
       var difference = svcResolve.found ? (mrRow.servico - childrenTotal) : null;
@@ -5165,6 +5171,15 @@ buffer/index.js:
     // — perde os filhos reais e cai numa estimativa que nem usa o dado real disponível).
     var serviceFee = buildServiceFeeComposition(mrRow, svcResolve, ord);
     var svcExtra = { children: serviceFee.children, childrenTotal: serviceFee.childrenTotal, difference: serviceFee.difference, reconciliationStatus: serviceFee.reconciliationStatus, sourceTotal: serviceFee.sourceTotal };
+    // PROMPT "Ajuste pontual da Ficha" §10/§17/§29: Taxa de comissão líquida é uma taxa PAI
+    // independente — precisa aparecer ANTES da Taxa de Serviço na Ficha (nunca depois, nunca como
+    // filha). Por isso addTaxa('Taxa de comissão líquida', ...) roda primeiro; o resto do bloco
+    // `if(mrRow)` (transação/afiliado/reduções/créditos/envio) continua exatamente igual, só
+    // dividido em duas partes pela ordem de inserção — nenhum campo foi removido ou recalculado.
+    if (mrRow) {
+      var comSubs = (mrRow.comissaoBruta != null && mrRow.comissaoBruta !== 0 && mrRow.comissaoBruta !== mrRow.comissao) ? [['Taxa de comissão bruta (referência)', mrRow.comissaoBruta]] : [];
+      addTaxa('Taxa de comissão líquida', mrRow.comissao, comSubs, 'Income / Renda', 'comissao');
+    }
     if (serviceFee.sourceTotal === 'INCOME_ORDER') {
       addTaxa('Taxa de serviço líquida', serviceFee.total, [], serviceFee.children.length ? 'Income / Service Fee Details' : 'Income / Renda', 'servico', svcExtra);
     } else if (serviceFee.sourceTotal === 'SERVICE_FEE_DETAILS_ONLY') {
@@ -5174,8 +5189,6 @@ buffer/index.js:
     }
     if (mrRow) {
       // TAXAS SHOPEE — nomes reais do Income, só o que é efetivamente débito do vendedor (§51-53).
-      var comSubs = (mrRow.comissaoBruta != null && mrRow.comissaoBruta !== 0 && mrRow.comissaoBruta !== mrRow.comissao) ? [['Taxa de comissão bruta (referência)', mrRow.comissaoBruta]] : [];
-      addTaxa('Taxa de comissão líquida', mrRow.comissao, comSubs, 'Income / Renda', 'comissao');
       if (mrRow.servicoBruta != null && mrRow.servicoBruta !== 0 && mrRow.servicoBruta !== mrRow.servico) { /* bruto de referência — só na Auditoria (auditoriaFonte), nunca somado aqui */ }
       addTaxa('Taxa de transação', mrRow.transacao, [], 'Income / Renda', 'transacao');
       addTaxa('Taxa de comissão Afiliados do Vendedor', mrRow.afiliado, [], 'Income / Renda', 'afiliado');
@@ -5370,16 +5383,18 @@ buffer/index.js:
     var somaGrupo = comp.somaGrupo;
     // Linhas com valor zero nunca renderizam (nem aqui, nem nas sub-tabelas) — a soma do grupo usa
     // sempre o grupo ORIGINAL (somaGrupo(g)), idêntica à do grupo filtrado (zero não muda soma).
-    var grupoBlock = function (titulo, g, sempreMostra) {
+    var grupoBlock = function (titulo, g, sempreMostra, subtotalLabel) {
       var gf = g.filter(function (r) { return r.valor; });
       if (!gf.length && !sempreMostra) return '';
       var soma = somaGrupo(g);
       return (gf.length ? gf.map(taxaLine).join('') : '<span class="tag neutral">nenhum lançamento deste tipo neste pedido</span>') +
-        (gf.length > 1 ? '<div class="fin-line" style="margin-top:2px"><span>Subtotal — ' + esc(titulo.toLowerCase()) + '</span><b class="' + (soma < 0 ? 'neg' : soma > 0 ? 'pos' : '') + '">' + brlC(soma) + '</b></div>' : '');
+        (gf.length > 1 ? '<div class="fin-line" style="margin-top:2px"><span>' + esc(subtotalLabel || ('Subtotal — ' + titulo.toLowerCase())) + '</span><b class="' + (soma < 0 ? 'neg' : soma > 0 ? 'pos' : '') + '">' + brlC(soma) + '</b></div>' : '');
     };
     // 3. TAXAS SHOPEE DESCONTADAS DO VENDEDOR — só taxas reais, nomes reais, zero nunca aparece.
+    // PROMPT "Ajuste pontual da Ficha" §22: "TOTAL TAXAS SHOPEE" no lugar do genérico "Subtotal —
+    // taxas shopee" (só nesta seção — os outros grupos/blocos continuam com o rótulo padrão).
     var bloco3Taxas = '<div class="panel"><div class="ph"><h3>3. Taxas Shopee Descontadas do Vendedor</h3></div><div class="pb">' +
-      (gTaxas.length ? grupoBlock('Taxas Shopee', gTaxas, true) : '<span class="tag neutral">sem taxas cobradas neste pedido</span>') +
+      (gTaxas.length ? grupoBlock('Taxas Shopee', gTaxas, true, 'TOTAL TAXAS SHOPEE') : '<span class="tag neutral">sem taxas cobradas neste pedido</span>') +
       '</div></div>';
     // 4. ENVIO (§27-39): só aparece quando o impacto líquido é diferente de zero.
     var bloco4Envio = '';
@@ -5505,41 +5520,42 @@ buffer/index.js:
         '</div></div>';
     }
 
-    // ---- §6-7/§15 do prompt de reorganização: TOPO com os 4 números juntos (Venda/Custo/Lucro
-    // liberado/Margem) + §15 RESULTADO DO PEDIDO em cascata no final, na ordem pedida: Venda − taxas
-    // Shopee − custo produto − taxa Acelera (quando aplicável) − devolução (quando aplicável) +
-    // compensações (quando aplicável) = Lucro atual / Margem atual. Mesma fórmula do topo — nunca
-    // uma segunda conta divergente.
-    var lucroHeroTag = lucroProvisorio ? ' <span class="tag warn">provisório</span>' : '';
-    // Cascata do Resultado do Pedido (Parte 2 da correção): parte do PAGAMENTO LIBERADO SHOPEE já
-    // líquido de taxas/ajustes/envio/descontos (mrRow.liberado) — nunca subtrai Taxa de comissão/
-    // Taxa de serviço de novo aqui (isso seria contar a mesma taxa duas vezes). Só desconta o que
-    // ainda NÃO está dentro do Pagamento Liberado: custo do produto, custo de afiliados, Taxa
-    // Acelera, ajustes POSTERIORES (Adjustment/gOutros) e devolução/perdas. A soma continua sendo
-    // exatamente resultadoC (fórmula canônica, não recalculada) — só a apresentação mudou.
+    // ---- PROMPT "Ajuste pontual da Ficha — Taxas Shopee + Cabeçalho + Resultado Final" ----
+    // §1-7/§24-28: cabeçalho e Resultado do Pedido passam a usar a MESMA fórmula simples e o MESMO
+    // motor (nunca dois cálculos divergentes — cabecalho.taxas === resultado.taxas === TOTAL TAXAS
+    // SHOPEE do bloco 3, todos lendo comp.gTaxas): TAXAS = soma das taxas-PAI Shopee (comissão +
+    // serviço, já com seus componentes internos apenas explicando, nunca somados de novo — §16) →
+    // PAGAMENTO PREVISTO = VENDA + TAXAS → LUCRO ATUAL = PAGAMENTO PREVISTO − CUSTO DO PRODUTO.
+    // §26: deliberadamente NÃO entra Acelera/impostos/risco/custos fixos/devolução/afiliados nesta
+    // conta — isso continua existindo em pedidoResultadoFinal() (usado pela Precificação e pelo
+    // bloco "Devolução reabriu o resultado deste pedido", ambos fora do escopo desta alteração).
+    var taxasShopeeC = somaGrupo(gTaxas);
+    var pagamentoPrevistoC = receitaC != null ? receitaC + taxasShopeeC : null;
+    var lucroAtualSimplesC = (pagamentoPrevistoC != null && custoProdC != null) ? (pagamentoPrevistoC - custoProdC) : null;
+    var margemAtualSimplesPct = (lucroAtualSimplesC != null && receitaC) ? r2(lucroAtualSimplesC / receitaC * 100) : null;
+
+    // RESULTADO DO PEDIDO (§24-27): só os 5 campos pedidos — Venda/Taxas Shopee/Custo do
+    // produto/Lucro atual/Margem atual — mesma fórmula e mesmas variáveis do cabeçalho acima.
     var resultadoBlock = '<div class="panel"><div class="ph"><h3>Resultado do Pedido</h3></div><div class="pb">' +
       fLine('Venda', receitaC) +
-      fLine('Pagamento Liberado Shopee', pagamentoLiberadoC, { total: true }) +
-      fLine('− Custo do produto', custoProdC != null ? -custoProdC : null) +
-      (custoAfilCents ? fLine('− Custo de afiliados (sem Minha Renda para este pedido)', -custoAfilCents) : '') +
-      (acRows.length ? fLine('− Taxa Acelera', -Math.abs(acTaxaCents)) : '') +
-      (somaGrupo(gOutros) ? fLine('± Ajustes posteriores (Adjustment)', somaGrupo(gOutros)) : '') +
-      (occs.length ? fLine('± Devolução/perdas (' + (devConfirmadoN === occs.length ? 'confirmado' : 'provisório') + ')', -devImpactoCents) : '') +
-      '<div class="fin-line total"><span>Lucro atual' + lucroHeroTag + '</span><span class="' + (resultadoC != null && resultadoC < 0 ? 'neg' : 'pos') + '">' + (resultadoC != null ? brlC(resultadoC) : 'aguardando custo do produto') + '</span></div>' +
-      '<div class="fin-line"><span>Margem atual</span><span>' + (margemPct != null ? pct(margemPct) : '—') + '</span></div>' +
+      fLine('Taxas Shopee', taxasShopeeC) +
+      fLine('Custo do produto', custoProdC != null ? -custoProdC : null) +
+      '<div class="fin-line total"><span>Lucro atual</span><span class="' + (lucroAtualSimplesC != null && lucroAtualSimplesC < 0 ? 'neg' : 'pos') + '">' + (lucroAtualSimplesC != null ? brlC(lucroAtualSimplesC) : 'aguardando custo do produto') + '</span></div>' +
+      '<div class="fin-line"><span>Margem atual</span><span>' + (margemAtualSimplesPct != null ? pct(margemAtualSimplesPct) : '—') + '</span></div>' +
       '</div></div>' +
       '<div class="footnote" style="padding:8px 0">Fontes usadas: Pedidos' + (mrRow ? ' · Minha Renda' : '') + (svcRows.length ? ' · Service Fee Details' : '') + (adjRows.length ? ' · Adjustment' : '') + (acRows.length ? ' · Shopee Acelera' : '') + (affRow ? ' · Afiliados' : '') + (wtx.length ? ' · Saldo da Carteira' : '') + (occs.length ? ' · Devoluções' : '') + '.</div>';
 
     // 7 blocos (Parte 2 da correção): 1.Resumo Financeiro (5 números) → 2.Produto e Venda →
     // 3.Taxas Shopee Descontadas do Vendedor → 4.Envio → 5.Ajustes que Afetaram o Repasse →
     // 6.Créditos/Compensações → 7.Conciliação do Pagamento — depois Eventos do Pedido → Resultado.
+    // Cabeçalho (§1-7): Valor da venda | Taxas | Pagamento previsto | Custo do produto | Lucro atual.
     var heroBlock = '<div class="panel"><div class="ph"><h3>1. Resumo Financeiro</h3></div><div class="pb" style="padding-top:0">' +
       '<div class="kstrip">' +
       '<div class="kc"><div class="kl">Valor da venda</div><div class="kv" style="font-size:18px">' + (receitaC != null ? brlC(receitaC) : '—') + '</div></div>' +
-      '<div class="kc"><div class="kl">' + (mrRow ? 'Pagamento liberado Shopee' : 'Pagamento previsto <span class="tag warn" style="font-size:9px">provisório</span>') + '</div><div class="kv" style="font-size:18px">' + (pagamentoLiberadoC != null ? brlC(pagamentoLiberadoC) : '—') + '</div></div>' +
-      '<div class="kc"><div class="kl">Custo do produto</div><div class="kv" style="font-size:18px">' + (custoProdC != null ? brlC(custoProdC) : (custoPendente ? '<span class="tag warn">pendente</span>' : '—')) + '</div></div>' +
-      '<div class="kc"><div class="kl">Lucro atual' + lucroHeroTag + '</div><div class="kv" style="font-size:18px;color:' + (resultadoC != null && resultadoC < 0 ? 'var(--err)' : 'var(--ok)') + '">' + (resultadoC != null ? brlC(resultadoC) : '<span class="tag warn">custo pendente</span>') + '</div></div>' +
-      '<div class="kc"><div class="kl">Margem</div><div class="kv" style="font-size:18px">' + (margemPct != null ? pct(margemPct) : '—') + '</div></div>' +
+      '<div class="kc"><div class="kl">Taxas</div><div class="kv" style="font-size:18px">' + (receitaC != null ? brlC(taxasShopeeC) : '—') + '</div></div>' +
+      '<div class="kc"><div class="kl">Pagamento previsto</div><div class="kv" style="font-size:18px">' + (pagamentoPrevistoC != null ? brlC(pagamentoPrevistoC) : '—') + '</div></div>' +
+      '<div class="kc"><div class="kl">Custo do produto</div><div class="kv" style="font-size:18px">' + (custoProdC != null ? brlC(-custoProdC) : (custoPendente ? '<span class="tag warn">pendente</span>' : '—')) + '</div></div>' +
+      '<div class="kc"><div class="kl">Lucro atual</div><div class="kv" style="font-size:18px;color:' + (lucroAtualSimplesC != null && lucroAtualSimplesC < 0 ? 'var(--err)' : 'var(--ok)') + '">' + (lucroAtualSimplesC != null ? brlC(lucroAtualSimplesC) : '<span class="tag warn">custo pendente</span>') + '</div></div>' +
       '</div></div></div>';
     panel.innerHTML = '<div class="dh"><div><b>Ficha do Pedido</b> — <span class="mono">' + esc(orderId) + '</span> <span class="tag" style="margin-left:6px">' + st.label + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
       heroBlock +
