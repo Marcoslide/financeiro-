@@ -5268,6 +5268,54 @@ buffer/index.js:
     var statusFinanceiro = mrRow ? (pendencia ? 'DIVERGENCIA' : 'CONFIRMADO') : 'PROVISORIO';
     return { orderId: orderId, operationId: opIdOrd, temIncome: !!mrRow, mrRow: mrRow, incomeResolve: incomeResolve, statusFinanceiro: statusFinanceiro, ord: ord, svcRows: svcRows, svcResolve: svcResolve, serviceFee: serviceFee, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gEnvio: gEnvio, gOutros: gOutros, envio: envio, auditoriaFonte: auditoriaFonte, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), envioC: somaGrupo(gEnvio), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, taxasSomaSemAjusteC: taxasSomaSemAjusteC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia };
   }
+  // resolveSellerCharges(orderId) — PROMPT DEFINITIVO "FICHA DO PEDIDO — TAXAS SHOPEE + CUSTOS DA
+  // LOJA + CABEÇALHO + RESULTADO": lista ÚNICA, FIXA e EXAUSTIVA de tudo que a Shopee efetivamente
+  // descontou da LOJA (nunca do comprador, nunca bancado pela Shopee) — fonte DELIBERADAMENTE
+  // independente de pedidoComposicaoFinanceira()/taxaRows/gTaxas (que continuam intactos e seguem
+  // alimentando os blocos 4-7 da Ficha, a DRE e o Caixa, sem nenhuma alteração aqui — "NÃO CRIAR
+  // TRÊS MOTORES: uma única composição financeira, três representações visuais" só vale DENTRO
+  // deste novo escopo — cabeçalho, seção 3 e Resultado do Pedido leem exatamente este resultado).
+  // Cada campo aparece SEMPRE, mesmo em R$ 0,00 quando o pedido genuinamente não teve aquela
+  // cobrança — nunca escondido, nunca inventado quando o dado simplesmente não existe (nesse caso
+  // found=false e a Ficha mantém o estado provisório "aguardando Income" já existente).
+  // Regra do financiador (quem suportou o valor): SELLER = conta aqui; SHOPEE e COMPRADOR = nunca
+  // contam — por isso PIX, Cupom genérico, frete pago pelo comprador, desconto de frete da Shopee,
+  // incentivo/subsídio Shopee ficam de fora por definição (continuam só nos blocos 5/6 já existentes).
+  // "Taxa de comissão Afiliados do Vendedor" (mrRow.afiliado, campo Renda de nível pedido) é
+  // DIFERENTE dos filhos de Service Fee Details (svc_affiliate, componente da Taxa de Serviço) —
+  // os dois nunca se substituem nem se somam entre si; ambos contam, cada um na sua própria linha.
+  function resolveSellerCharges(orderId) {
+    var ord = orders.find(function (x) { return x.id === orderId; });
+    var opId = (ord && ord.operationId) || opActiveOrNull() || null;
+    var incomeResolve = resolveIncomeOrder(opId, orderId);
+    var mrRow = incomeResolve.status === 'FOUND' ? incomeResolve.row : null;
+    var svcResolve = resolveServiceFeeDetails(opId, orderId);
+    var serviceFee = buildServiceFeeComposition(mrRow, svcResolve, ord);
+    if (!mrRow) {
+      // Sem Income cruzado para este pedido: os campos exclusivos do Income (voucher/cashback/
+      // devolução/recarga/envio reverso) nunca são inventados — a Ficha mantém o estado provisório
+      // já existente (bloco3Taxas cai no ramo `else` abaixo, igual a antes desta mudança).
+      return { found: false, mrRow: null, serviceFee: serviceFee, items: [], totalC: null };
+    }
+    function item(key, label, valor) { return { key: key, label: label, valor: valor || 0 }; }
+    var items = [
+      item('comissao', 'Taxa de comissão líquida', mrRow.comissao),
+      item('servico', 'Taxa de serviço líquida', serviceFee.total),
+      item('transacao', 'Taxa de transação', mrRow.transacao),
+      item('afiliado', 'Taxa de comissão Afiliados do Vendedor', mrRow.afiliado),
+      item('taxaDevolucaoFacil', 'Taxa de Devolução Fácil Shopee', mrRow.taxaDevolucaoFacil),
+      item('taxaRecargaAutomatica', 'Taxa da Recarga Automática', mrRow.taxaRecargaAutomatica),
+      item('envioReverso', 'Taxa de envio reverso', mrRow.envioReverso),
+      item('taxaDevolucaoVendedor', 'Taxa de devolução do vendedor', mrRow.taxaDevolucaoVendedor),
+      item('voucherSeller', 'Voucher subsidiado pelo Seller', mrRow.voucherSeller),
+      item('voucherCompartilhado', 'Voucher compartilhado — parcela Seller', mrRow.voucherCompartilhado),
+      item('coinCashbackSeller', 'Coin Cashback subsidiado pelo Seller', mrRow.coinCashbackSeller),
+      item('coinCashbackCompartilhado', 'Coin Cashback compartilhado — parcela Seller', mrRow.coinCashbackCompartilhado),
+      item('reembolso', 'Valor reembolsado ao comprador', mrRow.reembolso),
+    ];
+    var totalC = items.reduce(function (s, it) { return s + it.valor; }, 0);
+    return { found: true, mrRow: mrRow, serviceFee: serviceFee, items: items, totalC: totalC };
+  }
   // pedidoResultadoFinal(orderId) — CANÔNICA (extraída de openPedidoFicha360 pro módulo de
   // Precificação poder consumir o mesmo "REALIZADO" que a Ficha mostra, sem duplicar cálculo).
   // Camada em cima de pedidoComposicaoFinanceira(): soma o que ainda falta pra chegar no lucro
@@ -5331,6 +5379,9 @@ buffer/index.js:
     // "REALIZADO" (pricingActualForOrder) — nunca duas contas divergentes pro mesmo pedido.
     var pr = pedidoResultadoFinal(orderId);
     var comp = pr.comp, ord = comp.ord, mrRow = comp.mrRow, svcRows = comp.svcRows, acRows = pr.acRows, affRow = pr.affRow, occs = pr.occs;
+    // PROMPT DEFINITIVO "Ficha do Pedido — Taxas Shopee + Custos da Loja + Cabeçalho + Resultado":
+    // fonte única do cabeçalho, da seção 3 e do Resultado do Pedido — ver resolveSellerCharges().
+    var sellerCharges = resolveSellerCharges(orderId);
     var shipRow = mrShip.find(function (s) { return s.id === orderId; });
     var wtx = wallet.filter(function (t) { return t.orderId === orderId; });
     var bip = shipBip[orderId];
@@ -5399,11 +5450,31 @@ buffer/index.js:
       return (gf.length ? gf.map(taxaLine).join('') : '<span class="tag neutral">nenhum lançamento deste tipo neste pedido</span>') +
         (gf.length > 1 ? '<div class="fin-line" style="margin-top:2px"><span>' + esc(subtotalLabel || ('Subtotal — ' + titulo.toLowerCase())) + '</span><b class="' + (soma < 0 ? 'neg' : soma > 0 ? 'pos' : '') + '">' + brlC(soma) + '</b></div>' : '');
     };
-    // 3. TAXAS SHOPEE DESCONTADAS DO VENDEDOR — só taxas reais, nomes reais, zero nunca aparece.
-    // PROMPT "Ajuste pontual da Ficha" §22: "TOTAL TAXAS SHOPEE" no lugar do genérico "Subtotal —
-    // taxas shopee" (só nesta seção — os outros grupos/blocos continuam com o rótulo padrão).
+    // 3. TAXAS SHOPEE DESCONTADAS DO VENDEDOR — PROMPT DEFINITIVO "Ficha do Pedido — Taxas Shopee +
+    // Custos da Loja": lista FIXA, todo campo sempre visível (R$ 0,00 quando o pedido genuinamente
+    // não teve aquela cobrança — nunca escondido, nunca inventado). Quando o pedido ainda não tem
+    // Income cruzado, mantém o estado provisório já existente (approximado a partir de Pedidos).
+    var sellerChargeLine = function (it) {
+      var subHtml = '';
+      if (it.key === 'servico') {
+        var sf = sellerCharges.serviceFee;
+        var childRows = (sf.children || []).map(function (c) {
+          return '<div class="fin-line" style="padding-left:18px;font-size:13px;border-left:2px solid var(--line);margin-left:4px"><span>↳ ' + esc(c.label) + '</span><span class="' + (c.valor < 0 ? 'neg' : 'pos') + '">' + brlC(c.valor) + '</span></div>';
+        }).join('');
+        var diffRow = '';
+        if (sf.reconciliationStatus === 'PARTIAL' && sf.difference != null && Math.abs(sf.difference) > 2) {
+          diffRow = '<div class="fin-line" style="padding-left:18px;font-size:13px;border-left:2px solid var(--line);margin-left:4px"><span>↳ Outros componentes não detalhados <span class="footnote" style="margin:0">(diferença entre total e componentes disponíveis)</span></span><span class="' + (sf.difference < 0 ? 'neg' : 'pos') + '">' + brlC(sf.difference) + '</span></div>';
+        }
+        var badge = RECON_BADGE[sf.reconciliationStatus] || '';
+        subHtml = childRows + diffRow + (badge ? '<div style="padding-left:18px;margin:2px 0 6px">' + badge + '</div>' : '');
+      }
+      return '<div class="fin-line rowlink" title="Fonte: Income / Renda"><span>' + esc(it.label) + '</span><b class="' + (it.valor < 0 ? 'neg' : it.valor > 0 ? 'pos' : '') + '">' + brlC(it.valor) + '</b></div>' + subHtml;
+    };
     var bloco3Taxas = '<div class="panel"><div class="ph"><h3>3. Taxas Shopee Descontadas do Vendedor</h3></div><div class="pb">' +
-      (gTaxas.length ? grupoBlock('Taxas Shopee', gTaxas, true, 'TOTAL TAXAS SHOPEE') : '<span class="tag neutral">sem taxas cobradas neste pedido</span>') +
+      (sellerCharges.found ?
+        (sellerCharges.items.map(sellerChargeLine).join('') +
+         '<div class="fin-line total" style="margin-top:2px"><span>TOTAL DESCONTADO DA LOJA</span><b class="' + (sellerCharges.totalC < 0 ? 'neg' : sellerCharges.totalC > 0 ? 'pos' : '') + '">' + brlC(sellerCharges.totalC) + '</b></div>')
+        : (gTaxas.length ? grupoBlock('Taxas Shopee', gTaxas, true, 'TOTAL TAXAS SHOPEE') : '<span class="tag neutral">sem taxas cobradas neste pedido — aguardando Income</span>')) +
       '</div></div>';
     // 4. ENVIO (§27-39): só aparece quando o impacto líquido é diferente de zero.
     var bloco4Envio = '';
@@ -5559,7 +5630,10 @@ buffer/index.js:
     // §26: deliberadamente NÃO entra Acelera/impostos/risco/custos fixos/devolução/afiliados nesta
     // conta — isso continua existindo em pedidoResultadoFinal() (usado pela Precificação e pelo
     // bloco "Devolução reabriu o resultado deste pedido", ambos fora do escopo desta alteração).
-    var taxasShopeeC = somaGrupo(gTaxas);
+    // §PROMPT DEFINITIVO: TAXAS = "TOTAL DESCONTADO DA LOJA" (sellerCharges.totalC) quando o pedido
+    // tem Income cruzado — a MESMA soma exibida no fim do bloco 3 acima, nunca um segundo cálculo.
+    // Sem Income ainda cruzado, mantém o fallback aproximado já existente (somaGrupo(gTaxas)).
+    var taxasShopeeC = sellerCharges.found ? sellerCharges.totalC : somaGrupo(gTaxas);
     var pagamentoPrevistoC = receitaC != null ? receitaC + taxasShopeeC : null;
     var lucroAtualSimplesC = (pagamentoPrevistoC != null && custoProdC != null) ? (pagamentoPrevistoC - custoProdC) : null;
     var margemAtualSimplesPct = (lucroAtualSimplesC != null && receitaC) ? r2(lucroAtualSimplesC / receitaC * 100) : null;
