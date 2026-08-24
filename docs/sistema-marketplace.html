@@ -8810,8 +8810,12 @@ buffer/index.js:
   function mrParseIncome(ab, filename) {
     var wb = XLSX.read(new Uint8Array(ab), { type: 'array' }); if (!mrIsIncome(wb)) return { notRecognized: true };
     var out = { notRecognized: false, renda: [], ship: [], adj: [], svc: [], summary: {}, period: {} };
+    // PROMPT "Auditoria obrigatória do importador Income": diagnóstico de importação — abas
+    // realmente encontradas no arquivo (nunca assumidas) + linhas lidas por aba, pra provar (não só
+    // dizer) que todas as abas/colunas foram processadas antes de mostrar "Importação concluída".
+    out.diag = { abas: wb.SheetNames.slice(), linhasPorAba: {} };
     // Summary (totais declarados pela Shopee)
-    var sm = mrAoa(wb, 'Summary'); if (sm) { sm.forEach(function (r) { var lab = normStatus(r[0]); var val = null; for (var c = 1; c < r.length; c++) { if (String(r[c]).trim() !== '') { val = r[c]; } } if (lab.indexOf('receita total') >= 0) out.summary.receita = mrCents(r[1]); if (lab.indexOf('quantidade total liberada') >= 0) out.summary.liberado = mrCents(val); if (lab.indexOf('despesas totais') >= 0) out.summary.despesas = mrCents(val); if (lab === 'de') out.period.from = String(r[1]).trim(); if (lab === 'para') out.period.to = String(r[1]).trim(); }); }
+    var sm = mrAoa(wb, 'Summary'); out.diag.linhasPorAba['Summary'] = sm ? sm.length : 0; if (sm) { sm.forEach(function (r) { var lab = normStatus(r[0]); var val = null; for (var c = 1; c < r.length; c++) { if (String(r[c]).trim() !== '') { val = r[c]; } } if (lab.indexOf('receita total') >= 0) out.summary.receita = mrCents(r[1]); if (lab.indexOf('quantidade total liberada') >= 0) out.summary.liberado = mrCents(val); if (lab.indexOf('despesas totais') >= 0) out.summary.despesas = mrCents(val); if (lab === 'de') out.period.from = String(r[1]).trim(); if (lab === 'para') out.period.to = String(r[1]).trim(); }); }
     // Renda — §35-38 do prompt "correção crítica Minha Renda": mapeamento por índice de coluna já
     // validado contra o cabeçalho real (não alterado — os campos abaixo já liam certo). Adicionamos
     // SÓ campos novos, financeiros e ainda não usados no sistema (ação comercial, vouchers, cashback,
@@ -8819,10 +8823,14 @@ buffer/index.js:
     // comprador, itens da devolução) — nunca descartados, mesmo os que ainda não alimentam nenhuma
     // tela (ficam disponíveis para auditoria em "Campos ainda não classificados", §46).
     var rd = mrAoa(wb, 'Renda');
+    out.diag.linhasPorAba['Renda'] = rd ? rd.length : 0;
     if (rd) {
       var hi = rd.findIndex(function (r) { return normStatus(r[2]) === 'id do pedido'; });
       if (hi >= 0) {
         var headerRow = rd[hi] || []; var headerLen = headerRow.length;
+        out.diag.colunasRenda = headerLen;
+        out.diag.ultimaColunaRenda = XLSX.utils.encode_col(headerLen - 1);
+        out.diag.headerRow = headerRow;
         for (var i = hi + 1; i < rd.length; i++) {
           var r = rd[i]; var oid = String(r[2] || '').trim(); if (!oid) continue;
           var ver = /sku/i.test(String(r[1])) ? 'Sku' : 'Order';
@@ -8846,11 +8854,18 @@ buffer/index.js:
       }
     }
     // Shipping Fee Discrepancy
-    var sh = mrAoa(wb, 'Shipping Fee Discrepancy'); if (sh) { var shi = sh.findIndex(function (r) { return normStatus(r[0]) === 'id do pedido'; }); if (shi >= 0) { for (var j = shi + 1; j < sh.length; j++) { var s2 = sh[j]; var oid2 = String(s2[0] || '').trim(); if (!oid2) continue; out.ship.push({ orderId: oid2, esperado: mrCents(s2[1]), real: mrCents(s2[2]), motivo: String(s2[3] || '').trim() }); } } }
+    var sh = mrAoa(wb, 'Shipping Fee Discrepancy'); out.diag.linhasPorAba['Shipping Fee Discrepancy'] = sh ? sh.length : 0; if (sh) { var shi = sh.findIndex(function (r) { return normStatus(r[0]) === 'id do pedido'; }); if (shi >= 0) { for (var j = shi + 1; j < sh.length; j++) { var s2 = sh[j]; var oid2 = String(s2[0] || '').trim(); if (!oid2) continue; out.ship.push({ orderId: oid2, esperado: mrCents(s2[1]), real: mrCents(s2[2]), motivo: String(s2[3] || '').trim() }); } } }
     // Adjustment
-    var ad = mrAoa(wb, 'Adjustment'); if (ad) { var ahi = ad.findIndex(function (r) { return normStatus(r[0]).indexOf('id do pedido') >= 0 || normStatus(r[0]).indexOf('data') >= 0 && r.length > 3; }); ad.forEach(function (r, idx) { var v = null; for (var c = 0; c < r.length; c++) { if (/-?\d+[.,]\d/.test(String(r[c]))) v = r[c]; } var oid3 = ''; r.forEach(function (c) { if (/^\d{6,}[A-Z0-9]+$/.test(String(c).trim())) oid3 = String(c).trim(); }); if (v != null && (oid3 || normStatus(r[0]).indexOf('valor total') >= 0)) { out.adj.push({ seq: idx, orderId: oid3, desc: r.filter(function (x) { return String(x).trim() && !/^-?\d+[.,]\d+$/.test(String(x).trim()); }).join(' ').slice(0, 80), valor: mrCents(v) }); } }); }
+    var ad = mrAoa(wb, 'Adjustment'); out.diag.linhasPorAba['Adjustment'] = ad ? ad.length : 0; if (ad) { var ahi = ad.findIndex(function (r) { return normStatus(r[0]).indexOf('id do pedido') >= 0 || normStatus(r[0]).indexOf('data') >= 0 && r.length > 3; }); ad.forEach(function (r, idx) { var v = null; for (var c = 0; c < r.length; c++) { if (/-?\d+[.,]\d/.test(String(r[c]))) v = r[c]; } var oid3 = ''; r.forEach(function (c) { if (/^\d{6,}[A-Z0-9]+$/.test(String(c).trim())) oid3 = String(c).trim(); }); if (v != null && (oid3 || normStatus(r[0]).indexOf('valor total') >= 0)) { out.adj.push({ seq: idx, orderId: oid3, desc: r.filter(function (x) { return String(x).trim() && !/^-?\d+[.,]\d+$/.test(String(x).trim()); }).join(' ').slice(0, 80), valor: mrCents(v) }); } }); }
     // Service Fee Details
-    var sv = mrAoa(wb, 'Service Fee Details'); if (sv) { var vhi = sv.findIndex(function (r) { return normStatus(r[1]) === 'id do pedido'; }); if (vhi >= 0) { for (var k = vhi + 1; k < sv.length; k++) { var v2 = sv[k]; var oid4 = String(v2[1] || '').trim(); if (!oid4) continue; out.svc.push({ seq: k, orderId: oid4, afiliadosVendedor: mrCents(v2[2]), transacao: mrCents(v2[3]), porItem: mrCents(v2[4]) }); } } }
+    var sv = mrAoa(wb, 'Service Fee Details'); out.diag.linhasPorAba['Service Fee Details'] = sv ? sv.length : 0; if (sv) { var vhi = sv.findIndex(function (r) { return normStatus(r[1]) === 'id do pedido'; }); if (vhi >= 0) { for (var k = vhi + 1; k < sv.length; k++) { var v2 = sv[k]; var oid4 = String(v2[1] || '').trim(); if (!oid4) continue; out.svc.push({ seq: k, orderId: oid4, afiliadosVendedor: mrCents(v2[2]), transacao: mrCents(v2[3]), porItem: mrCents(v2[4]) }); } } }
+    // Campos financeiros críticos citados no prompt de auditoria — prova, campo a campo, que o
+    // parser encontrou cada um (nunca "sucesso" genérico escondendo uma coluna que faltou).
+    var CAMPOS_CRITICOS = ['Taxa de comissão líquida', 'Taxa de serviço líquida', 'Taxa de comissão Afiliados do Vendedor', 'Taxa de Devolução Fácil Shopee', 'Taxa da Recarga Automática (Pedido)', 'Taxa de envio reverso', 'Taxa de devolução do vendedor', 'Voucher subsidiado pelo Seller', 'Voucher compartilhado subsidiado pelo Seller', 'Coin Cashback subsidiado pelo Seller', 'Coin Cashback compartilhado subsidiado pelo Seller', 'Taxa de comissão bruta', 'Taxa de serviço bruta', 'Ajuste por participação em ação comercial', 'Valor Reembolsado ao Comprador'];
+    out.diag.camposCriticos = CAMPOS_CRITICOS.map(function (nome) {
+      var idx = out.diag.headerRow ? out.diag.headerRow.findIndex(function (h) { return String(h || '').trim() === nome; }) : -1;
+      return { nome: nome, encontrado: idx >= 0, coluna: idx >= 0 ? XLSX.utils.encode_col(idx) : null };
+    });
     return out;
   }
   function importMinhaRenda(file) {
@@ -8878,7 +8893,7 @@ buffer/index.js:
       var byV = {}; mrSvc.forEach(function (x) { byV[(x.operationId || '') + '|' + x.orderId + '|' + x.seq] = x; }); var chV = [];
       p.svc.forEach(function (row) { var id = opId + '|' + row.orderId + '|' + row.seq; if (!byV[id]) { var rec = Object.assign({ id: id, operationId: opId, importedAt: importedAt }, row); byV[id] = rec; chV.push(rec); stats.svc++; } });
       mrSvc = Object.values(byV);
-      mrSummary = { summary: p.summary, period: p.period, importedAt: importedAt, fileName: file.name };
+      mrSummary = { summary: p.summary, period: p.period, importedAt: importedAt, fileName: file.name, diag: p.diag };
       var batch = { id: 'mr' + Date.now() + Math.round(performance.now()), module: 'Minha Renda', filename: file.name, createdAt: importedAt, seen: p.renda.length, novo: stats.renda, upd: 0, unch: p.renda.length - stats.renda, itemsSeen: p.renda.length };
       batches.unshift(batch); lastImportStamp = importedAt;
       // persiste em segundo plano (não bloqueia a UI); a memória já está atualizada, então a tela reflete na hora
@@ -9761,6 +9776,21 @@ buffer/index.js:
     // §39 — Auditoria da planilha Income
     var pedidosUnicosIncome = {}; e.orders.forEach(function (o) { pedidosUnicosIncome[o.orderId] = 1; });
     var datas = e.orders.map(function (o) { return o.dataConclusao || o.dataCriacao; }).filter(Boolean).sort();
+    // PROMPT "Auditoria obrigatória do importador Income": diagnóstico explícito — abas encontradas,
+    // linhas por aba, colunas da Renda e campos financeiros críticos, um a um. Nunca "sucesso"
+    // genérico escondendo uma aba/coluna que faltou.
+    var diagImp = mrSummary && mrSummary.diag ? mrSummary.diag : null;
+    var diagImpBlock = diagImp ? '<div class="panel"><div class="ph"><h3>Diagnóstico de Importação — Income</h3></div><div class="pb">' +
+      kv('Arquivo', mrSummary.fileName || '—') +
+      kv('Abas encontradas', nn(diagImp.abas.length) + ' (' + diagImp.abas.join(', ') + ')') +
+      Object.keys(diagImp.linhasPorAba).map(function (aba) { return kv(aba + ' — linhas lidas', nn(diagImp.linhasPorAba[aba])); }).join('') +
+      kv('Colunas da aba Renda', diagImp.colunasRenda != null ? nn(diagImp.colunasRenda) : '—') +
+      kv('Última coluna da Renda', diagImp.ultimaColunaRenda || '—') +
+      '<div class="table-wrap" style="margin-top:8px"><table class="report"><thead><tr><th>Campo financeiro crítico</th><th>Encontrado?</th><th>Coluna</th></tr></thead><tbody>' +
+      (diagImp.camposCriticos || []).map(function (c) { return '<tr><td class="cell-text">' + esc(c.nome) + '</td><td>' + (c.encontrado ? '<span class="tag ok">✓ encontrado</span>' : '<span class="tag warn">🔴 não encontrado</span>') + '</td><td class="mono">' + esc(c.coluna || '—') + '</td></tr>'; }).join('') +
+      '</tbody></table></div>' +
+      (diagImp.camposCriticos && diagImp.camposCriticos.every(function (c) { return c.encontrado; }) ? callout('green', '✓ Todos os campos financeiros críticos foram encontrados', 'A importação processou Renda, Service Fee Details, Adjustment e Shipping Fee Discrepancy.') : callout('warn', '🔴 Pelo menos um campo crítico não foi encontrado', 'Confira o cabeçalho real da planilha — a importação não deve ser considerada completa.')) +
+      '</div></div>' : '';
     var incomeAudit = mrSummary ? '<div class="panel"><div class="ph"><h3>Auditoria da planilha Income</h3></div><div class="pb">' +
       kv('Arquivo carregado', mrSummary.fileName || '—') + kv('Importado em', mrSummary.importedAt ? new Date(mrSummary.importedAt).toLocaleString('pt-BR') : '—') + kv('Linhas lidas (Order + Sku)', nn(mrRenda.length)) + kv('Pedidos únicos (linhas Order)', nn(Object.keys(pedidosUnicosIncome).length)) + kv('Período encontrado', datas.length ? (dbr(datas[0]) + ' a ' + dbr(datas[datas.length - 1])) : '—') + kv('Campos financeiros reconhecidos', nn(MR_FIELD_MAP.length) + ' mapeados por nome') +
       '</div></div>' : '';
@@ -9790,7 +9820,7 @@ buffer/index.js:
         diag.campos.map(function (c) { return '<tr><td class="cell-text">' + esc(c.label) + '</td><td class="nowrap">' + brlC(c.raw) + '</td><td class="nowrap">' + brlC(c.motor) + '</td><td class="nowrap' + (c.ok ? '' : ' neg') + '">' + brlC(c.diff) + '</td><td>' + (c.ok ? '<span class="tag ok">bate</span>' : '<span class="tag warn">divergente</span>') + '</td></tr>'; }).join('') +
         '</tbody></table></div></div>';
     })() : '';
-    return head + counts + incomeAudit + diagBlock + mrAuditoriaFreteBlock() + fieldMap + naoClassBlock + '<div class="panel"><div class="ph"><h3>Importações</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Quando</th><th>Arquivo</th><th>Linhas</th><th>Novos</th></tr></thead><tbody>' + (impRows || '<tr><td colspan="4" class="empty">—</td></tr>') + '</tbody></table></div></div>';
+    return head + counts + diagImpBlock + incomeAudit + diagBlock + mrAuditoriaFreteBlock() + fieldMap + naoClassBlock + '<div class="panel"><div class="ph"><h3>Importações</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Quando</th><th>Arquivo</th><th>Linhas</th><th>Novos</th></tr></thead><tbody>' + (impRows || '<tr><td colspan="4" class="empty">—</td></tr>') + '</tbody></table></div></div>';
   }
   // §40-44 do prompt mestre: a aba Shipping Fee Discrepancy só mostra fretes cobrados ACIMA do
   // esperado — serve para AUDITORIA, nunca para concluir prejuízo automaticamente (§42). Cruza cada
