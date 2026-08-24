@@ -1,0 +1,55 @@
+name: Deploy Staging (GitHub Pages)
+
+on:
+  push:
+    branches: [claude/shopee-ops-platform-mcb1ra]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/deploy-staging.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Publica o conteúdo de docs/ exatamente como está no repositório — nenhum
+      # arquivo é reescrito, reconstruído ou convertido. A única adição é um
+      # selo discreto (canto inferior direito) com o commit publicado e o
+      # horário do deploy, inserido só na cópia servida pelo Pages — o arquivo
+      # em docs/sistema-marketplace.html no repositório permanece intocado.
+      - name: Preparar site (cópia fiel de docs/)
+        run: |
+          mkdir -p _site
+          cp -r docs/. _site/
+          cp docs/sistema-marketplace.html _site/index.html
+          SHORT_SHA="${GITHUB_SHA::7}"
+          DEPLOYED_AT="$(date -u +'%Y-%m-%d %H:%M UTC')"
+          BADGE="<div id=\"__staging_build_badge\" style=\"position:fixed;right:8px;bottom:8px;z-index:999999;background:rgba(16,26,51,.85);color:#fff;font:11px system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;padding:4px 9px;border-radius:6px;opacity:.85;pointer-events:none\">Build ${SHORT_SHA} &middot; ${DEPLOYED_AT}</div></body>"
+          sed -i "s#</body>#${BADGE}#" _site/index.html
+          sed -i "s#</body>#${BADGE}#" _site/sistema-marketplace.html
+          {
+            echo "commit=${GITHUB_SHA}"
+            echo "commit_short=${SHORT_SHA}"
+            echo "deployed_at=${DEPLOYED_AT}"
+          } > _site/BUILD.txt
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
