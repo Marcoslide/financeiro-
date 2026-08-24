@@ -7437,8 +7437,12 @@
         : ('<div class="cx-kv"><span class="cxl">Descontos da Carteira</span><span class="cxv">' + brl(0) + '</span></div><div class="footnote" style="margin:-2px 0 8px">Nenhum desconto identificado neste dia.</div>');
 
       // ---- linha 8 (CARTEIRA): Outros Créditos da Carteira ----
-      var creditRows = movPost.todos.filter(function (t) { return t.amount > 0 && caixaMovCategoria(t, ac) !== 'TRANSFERENCIAS_BANCARIAS'; }).map(movRow).join('');
-      var cxOutrosCreditos = fluxo.outrosCreditos ? ('<details class="cx-collapse"><summary class="cx-kv"><span class="cxl">Outros Créditos da Carteira <span class="footnote" style="margin:0">(não são o crédito do Acelera já reconhecido acima)</span></span><span class="cxv pos">+' + brl(fluxo.outrosCreditos) + '</span></summary><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Pedido</th><th>Descrição</th><th>Valor</th><th>Situação</th></tr></thead><tbody>' + creditRows + '</tbody></table></div></div></details>')
+      // Mesma lógica da Fase 12 (Descontos da Carteira): CADA lançamento individual, com Categoria/
+      // Status/Ação — nunca só o agrupado. Classificável sem sair do Caixa (openWalletTx via [data-wtx],
+      // já ligado no wire() deste drawer, com refresh+render imediatos).
+      var creditosDoDia = movPost.todos.filter(function (t) { return t.amount > 0 && caixaMovCategoria(t, ac) !== 'TRANSFERENCIAS_BANCARIAS'; });
+      var creditRows = creditosDoDia.map(function (t) { return descMovRow(t, CAIXA_MOV_CAT_LABEL[caixaMovCategoria(t, ac)]); }).join('');
+      var cxOutrosCreditos = fluxo.outrosCreditos ? ('<details class="cx-collapse"><summary class="cx-kv"><span class="cxl">Outros Créditos da Carteira <span class="footnote" style="margin:0">(não são o crédito do Acelera já reconhecido acima)</span></span><span class="cxv pos">+' + brl(fluxo.outrosCreditos) + '</span></summary><div class="pb"><div class="footnote" style="margin-bottom:6px">' + nn(creditosDoDia.length) + ' lançamento(s) — clique em qualquer linha para reclassificar</div><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Pedido</th><th>Descrição Shopee</th><th>Valor</th><th>Categoria</th><th>Status</th><th>Ação</th></tr></thead><tbody>' + creditRows + '</tbody></table></div></div></details>')
         : ('<div class="cx-kv"><span class="cxl">Outros Créditos da Carteira</span><span class="cxv">' + brl(0) + '</span></div>');
 
       // ---- linha 9 (CARTEIRA): Transferido para Banco — nunca expõe "automático + manual" no
