@@ -12,7 +12,12 @@ const OUT = '.vercel-output';
 fs.mkdirSync(OUT, { recursive: true });
 
 const src = fs.readFileSync('sistema-marketplace.html', 'utf8');
-if (!src.includes('</body>')) {
+// "</body>" também aparece DENTRO de strings JS (SheetJS embutido e os
+// geradores de HTML de impressão/PDF) — substituir a primeira ocorrência
+// corrompe o script (foi exatamente o bug do primeiro deploy no Pages).
+// O fechamento real do documento é sempre a ÚLTIMA ocorrência.
+const bodyIdx = src.lastIndexOf('</body>');
+if (bodyIdx === -1) {
   throw new Error('</body> não encontrado em sistema-marketplace.html');
 }
 const badge =
@@ -21,7 +26,7 @@ const badge =
   'font:11px system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;' +
   'padding:4px 9px;border-radius:6px;opacity:.85;pointer-events:none">' +
   `STAGING &middot; Build ${short} &middot; ${deployedAt}</div></body>`;
-const withBadge = src.replace('</body>', badge);
+const withBadge = src.slice(0, bodyIdx) + badge + src.slice(bodyIdx + '</body>'.length);
 
 fs.writeFileSync(`${OUT}/index.html`, withBadge);
 fs.writeFileSync(`${OUT}/sistema-marketplace.html`, withBadge);

@@ -53,9 +53,14 @@ jobs:
           for path in files:
               with open(path, 'r', encoding='utf-8') as f:
                   content = f.read()
-              if '</body>' not in content:
+              # O arquivo contém "</body>" também DENTRO de strings JS (SheetJS
+              # embutido e geradores de HTML de impressão) — usar o PRIMEIRO
+              # corrompe o script. O fechamento real do documento é sempre o
+              # ÚLTIMO "</body>" do arquivo.
+              idx = content.rfind('</body>')
+              if idx == -1:
                   raise SystemExit(f'</body> not found in {path}')
-              content = content.replace('</body>', badge, 1)
+              content = content[:idx] + badge + content[idx + len('</body>'):]
               with open(path, 'w', encoding='utf-8') as f:
                   f.write(content)
           PY
