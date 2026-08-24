@@ -1457,10 +1457,19 @@
       return { found: false, mrRow: null, serviceFee: serviceFee, items: [], totalC: null };
     }
     function item(key, label, valor) { return { key: key, label: label, valor: valor || 0 }; }
+    // PROMPT "Refazer o Caixa" §1/§18-19: "Taxa de transação" (mrRow.transacao, campo de nível
+    // Renda) NUNCA entra como linha independente — é a Taxa de Transação que já aparece como FILHO
+    // da Taxa de Serviço (Service Fee Details, serviceFee.children). Confirmado com os 1.842 pedidos
+    // Order reais do Income: mrRow.transacao é sempre 0 nesta fonte — incluí-la aqui já foi um erro
+    // (mesmo somando zero, duplicava o CONCEITO "Taxa de Transação" como se fosse uma segunda
+    // cobrança). §4: "Valor reembolsado ao comprador" usa mrRow.reembolsoComprador (coluna real
+    // "Valor Reembolsado ao Comprador", AW) — NUNCA mrRow.reembolso ("Valor do Reembolso", coluna N),
+    // que é um campo diferente (confirmado: 13 de 102 pedidos reais têm valores distintos entre os
+    // dois — mrRow.reembolso continua intocado em pedidoComposicaoFinanceira/gDescontos, motor à
+    // parte, já reconciliado 1.662/1.662 contra a Quantia Total Lançada).
     var items = [
       item('comissao', 'Taxa de comissão líquida', mrRow.comissao),
       item('servico', 'Taxa de serviço líquida', serviceFee.total),
-      item('transacao', 'Taxa de transação', mrRow.transacao),
       item('afiliado', 'Taxa de comissão Afiliados do Vendedor', mrRow.afiliado),
       item('taxaDevolucaoFacil', 'Taxa de Devolução Fácil Shopee', mrRow.taxaDevolucaoFacil),
       item('taxaRecargaAutomatica', 'Taxa da Recarga Automática', mrRow.taxaRecargaAutomatica),
@@ -1470,7 +1479,7 @@
       item('voucherCompartilhado', 'Voucher compartilhado — parcela Seller', mrRow.voucherCompartilhado),
       item('coinCashbackSeller', 'Coin Cashback subsidiado pelo Seller', mrRow.coinCashbackSeller),
       item('coinCashbackCompartilhado', 'Coin Cashback compartilhado — parcela Seller', mrRow.coinCashbackCompartilhado),
-      item('reembolso', 'Valor reembolsado ao comprador', mrRow.reembolso),
+      item('reembolso', 'Valor reembolsado ao comprador', mrRow.reembolsoComprador),
     ];
     var totalC = items.reduce(function (s, it) { return s + it.valor; }, 0);
     return { found: true, mrRow: mrRow, serviceFee: serviceFee, items: items, totalC: totalC };
@@ -3832,6 +3841,59 @@
     var cl = document.getElementById('wclear'); if (cl) cl.onclick = function () { walletF = { search: '', cat: '', flow: '', sig: '' }; render(); };
     var csp = document.getElementById('wclearsp'); if (csp) csp.onclick = function () { walletF.flow = ''; walletF.sig = ''; render(); };
   }
+  // PROMPT "Refazer o Caixa" §42-55: NATUREZA — camada de classificação explícita por cima da
+  // categoria Shopee já existente (WCAT/wEffCat). Decide se o lançamento vira Contas a Pagar,
+  // Contas a Receber, ou nenhum dos dois (Transferência/Informativo nunca geram AP/AR — §50).
+  // Manual sempre tem prioridade (§55) — é justamente o que este campo representa.
+  var NATUREZA = { DESPESA: 'Despesa', RECEITA: 'Receita', CREDITO: 'Crédito', AJUSTE: 'Ajuste', TRANSFERENCIA: 'Transferência', INFORMATIVO: 'Informativo' };
+  // Aplica a classificação de natureza de UM lançamento da Carteira em Contas a Pagar/Receber —
+  // MESMA chave determinística (feKey) que caixaMontarIntegracaoFinanceira usaria automaticamente
+  // pro mesmo lançamento (operationId+source+categoria+id), então nunca duplica: reclassificar aqui
+  // e fechar o Caixa depois atualizam o MESMO registro. §54: trocar Despesa→Receita (ou vice-versa)
+  // cancela o título do lado antigo (se ainda sem baixa) antes de criar/atualizar o do lado novo —
+  // nunca os dois ao mesmo tempo.
+  function walletApplyClassificacao(t, cls) {
+    var opId = t.operationId || opActiveOrNull(); if (!opId) return Promise.resolve();
+    var op = operations.find(function (o) { return o.id === opId; }); var companyId = op ? op.companyId : null;
+    var movDateKey = t.date ? t.date.slice(0, 10) : (caixaFechamentoDate || '');
+    var acForKey = aceleraResultadoFechamento(movDateKey);
+    var k = caixaMovCategoria(t, acForKey) || 'OUTROS_CREDITOS';
+    // MESMA fórmula de chave que caixaMontarIntegracaoFinanceira usa pro mesmo lançamento
+    // (apRow()/arPlan abaixo, ambos com wOrderId(t)||dateKey — nunca t.id) — essencial pra não gerar
+    // dois títulos pro mesmo movimento quando o dia for fechado depois desta classificação manual.
+    var key = feKey(opId, 'WALLET', k, wOrderId(t) || movDateKey);
+    var walletAcc = faWalletForOperation(opId);
+    var label = (t.desc || t.tipo || CAIXA_MOV_CAT_LABEL[k] || 'Movimento') + ' — Carteira (' + dbr(t.date) + ')';
+    var competencia = cls.competencia || (t.date ? t.date.slice(0, 10) : cpToday());
+    var existingAP = contasPagar.find(function (h) { return h.sourceEventKey === key; });
+    var existingAR = contasReceber.find(function (h) { return h.sourceEventKey === key; });
+    var vaiAP = (cls.natureza === 'DESPESA' || cls.natureza === 'AJUSTE') && cls.apEnviar !== false;
+    var vaiAR = (cls.natureza === 'RECEITA' || cls.natureza === 'CREDITO') && cls.arEnviar !== false;
+    var tasks = [];
+    if (!vaiAP && existingAP && !existingAP.canceledAt) {
+      if (!cpPaymentsForHeader(existingAP.id).some(function (p) { return !p.estornado; })) tasks.push(cpCancelHeader(existingAP.id, 'Reclassificado no Caixa — natureza alterada para ' + (NATUREZA[cls.natureza] || cls.natureza || '—') + '.'));
+    }
+    if (!vaiAR && existingAR && !existingAR.canceledAt) {
+      if (!crReceiptsForHeader(existingAR.id).some(function (p) { return !p.estornado; })) tasks.push(crCancelHeader(existingAR.id, 'Reclassificado no Caixa — natureza alterada para ' + (NATUREZA[cls.natureza] || cls.natureza || '—') + '.'));
+    }
+    if (vaiAP) {
+      var recAP = { sourceEventKey: key, operationId: opId, companyId: companyId, orderId: wOrderId(t) || null, historico: label, valor: r2(Math.abs(t.amount)), valorManualOverride: true, emissao: competencia, competencia: competencia, vencimento: cls.apVencimento || competencia, origin: 'CAIXA_MANUAL', financialAccountId: walletAcc ? walletAcc.id : null, categoryId: cls.apCategoria || null };
+      var fullAP = cpUpsertBySourceKey(null, recAP);
+      tasks.push(putMany('cpheader', [fullAP]));
+      if (cls.apStatusManual === 'PAGO' && !cpPaymentsForHeader(fullAP.id).some(function (p) { return !p.estornado; })) {
+        tasks.push(cpRegistrarBaixa(fullAP.id, { valorPago: fullAP.valor, date: cpToday(), financialAccountId: walletAcc ? walletAcc.id : null, observacao: 'Retido/pago pela Shopee — classificação manual no Caixa.' }));
+      }
+    }
+    if (vaiAR) {
+      var recAR = { sourceEventKey: key, operationId: opId, companyId: companyId, orderId: wOrderId(t) || null, descricao: cls.arCategoria ? (cls.arCategoria + ' — ' + label) : label, pagador: 'Shopee', origin: 'MANUAL', valor: r2(Math.abs(t.amount)), competencia: competencia, vencimento: cls.arPrevisao || competencia, financialAccountId: walletAcc ? walletAcc.id : null, referencia: t.id };
+      var fullAR = crUpsertBySourceKey(null, recAR);
+      tasks.push(putMany('crheader', [fullAR]));
+      if (cls.arStatusManual === 'RECEBIDO' && !crReceiptsForHeader(fullAR.id).some(function (p) { return !p.estornado; })) {
+        tasks.push(crRegistrarBaixa(fullAR.id, { valorRecebido: fullAR.valor, date: cpToday(), financialAccountId: walletAcc ? walletAcc.id : null, observacao: 'Recebido na Carteira Shopee — classificação manual no Caixa.', auto: true }));
+      }
+    }
+    return Promise.all(tasks);
+  }
   function walletExplain(t) {
     if (t.origin === 'SISTEMA') {
       var base = 'A movimentação registrada não fecha o saldo: o esperado era ' + brl(t.expectedBalance) + ' e a Shopee informou ' + brl(t.informed) + ', uma diferença de ' + brl(t.amount) + '. ';
@@ -3855,7 +3917,27 @@
     var devol = (t.orderId && oc) ? '<div class="panel"><div class="ph"><h3>Devolução relacionada</h3><span class="tag info">' + esc(statusLabel(oc.status)) + '</span></div><div class="pb"><div class="fin-line"><span>Pedido</span><span class="mono">' + esc(t.orderId) + '</span></div><div class="fin-line"><span>Motivo</span><span class="cell-text">' + esc(oc.reason || '—') + '</span></div><div class="fin-line"><span>Valor descontado da carteira</span><span class="neg">' + brl(t.amount) + '</span></div><button class="btn-sm" data-godev="' + esc(oc.id) + '">Ver devolução</button></div></div>' : '';
     var c = wgetCls(t.id) || {};
     var opt = function (map, sel, autoLbl) { return (autoLbl ? '<option value="">' + autoLbl + '</option>' : '') + Object.keys(map).map(function (k) { return '<option value="' + k + '"' + (sel === k ? ' selected' : '') + '>' + map[k] + '</option>'; }).join(''); };
+    // PROMPT "Refazer o Caixa" §7/§42-50: Natureza é o PRIMEIRO campo — decide se este lançamento
+    // vira Contas a Pagar, Contas a Receber, ou nenhum dos dois (Transferência/Informativo nunca
+    // geram AP/AR). §45/§47: os campos de AP/AR só aparecem quando fazem sentido pra Natureza
+    // escolhida (wired via onchange, abaixo).
+    var natAtual = c.natureza || '';
+    var apBlockVisible = natAtual === 'DESPESA' || natAtual === 'AJUSTE';
+    var arBlockVisible = natAtual === 'RECEITA' || natAtual === 'CREDITO';
+    var naturezaBlock = '<label class="fld">Natureza</label><select class="select" id="wcls-nat" style="width:100%">' + opt(NATUREZA, natAtual, '(automática pelo sinal: ' + (t.amount < 0 ? 'Despesa' : 'Receita') + ')') + '</select>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label class="fld">Contabilizar no resultado?</label><select class="select" id="wcls-contab" style="width:100%"><option value="sim"' + (c.contabilizar !== false ? ' selected' : '') + '>Sim</option><option value="nao"' + (c.contabilizar === false ? ' selected' : '') + '>Não</option></select></div><div><label class="fld">Competência</label><input type="date" class="input" id="wcls-comp" style="width:100%" value="' + esc(c.competencia || (t.date ? t.date.slice(0, 10) : '')) + '"></div></div>' +
+      '<div id="wcls-ap-block" style="display:' + (apBlockVisible ? 'block' : 'none') + ';border-left:2px solid var(--line);padding-left:10px;margin:8px 0">' +
+      '<label class="fld">Enviar para Contas a Pagar?</label><select class="select" id="wcls-ap-enviar" style="width:100%"><option value="sim"' + (c.apEnviar !== false ? ' selected' : '') + '>Sim</option><option value="nao"' + (c.apEnviar === false ? ' selected' : '') + '>Não</option></select>' +
+      '<label class="fld">Categoria de Contas a Pagar</label><select class="select" id="wcls-ap-cat" style="width:100%">' + cpCategoryOptions(c.apCategoria, false) + '</select>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label class="fld">Vencimento</label><input type="date" class="input" id="wcls-ap-venc" style="width:100%" value="' + esc(c.apVencimento || '') + '"></div><div><label class="fld">Status</label><select class="select" id="wcls-ap-status" style="width:100%"><option value="EM_ABERTO"' + (c.apStatusManual !== 'PAGO' ? ' selected' : '') + '>Em aberto</option><option value="PAGO"' + (c.apStatusManual === 'PAGO' ? ' selected' : '') + '>Pago / Baixado (retenção automática Shopee)</option></select></div></div>' +
+      '</div>' +
+      '<div id="wcls-ar-block" style="display:' + (arBlockVisible ? 'block' : 'none') + ';border-left:2px solid var(--line);padding-left:10px;margin:8px 0">' +
+      '<label class="fld">Enviar para Contas a Receber?</label><select class="select" id="wcls-ar-enviar" style="width:100%"><option value="sim"' + (c.arEnviar !== false ? ' selected' : '') + '>Sim</option><option value="nao"' + (c.arEnviar === false ? ' selected' : '') + '>Não</option></select>' +
+      '<label class="fld">Categoria de Contas a Receber</label><input class="input" id="wcls-ar-cat" style="width:100%" value="' + esc(c.arCategoria || '') + '" placeholder="ex.: Compensações Shopee">' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label class="fld">Previsão</label><input type="date" class="input" id="wcls-ar-prev" style="width:100%" value="' + esc(c.arPrevisao || '') + '"></div><div><label class="fld">Status</label><select class="select" id="wcls-ar-status" style="width:100%"><option value="A_RECEBER"' + (c.arStatusManual !== 'RECEBIDO' ? ' selected' : '') + '>A receber</option><option value="RECEBIDO"' + (c.arStatusManual === 'RECEBIDO' ? ' selected' : '') + '>Recebido / Baixado</option></select></div></div>' +
+      '</div>';
     var classify = '<div class="panel"><div class="ph"><h3>Classificar / corrigir</h3><span class="footnote" style="margin:0">interno — não altera o dado Shopee</span></div><div class="pb">' +
+      naturezaBlock +
       '<label class="fld">Categoria</label><select class="select" id="wcls-cat" style="width:100%">' + opt(WCAT, c.catManual, '(automática: ' + wcatLabel(t.category) + ')') + '</select>' +
       '<label class="fld">Subcategoria (opcional)</label><input class="input" id="wcls-sub" style="width:100%" value="' + esc(c.subcat || '') + '" placeholder="ex.: Produto avariado">' +
       '<label class="fld">Responsabilidade</label><select class="select" id="wcls-resp" style="width:100%">' + opt(WRESP, c.responsibility || wResp(t)) + '</select>' +
@@ -3877,9 +3959,31 @@
       (isRec ? '' : '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Descrição original da Shopee</summary><div class="pb"><div class="ro">' + esc(t.desc || '—') + '</div></div></details>') +
       recon + pedido + devol + '</div>';
     panel.querySelector('.x').onclick = function () { d.remove(); };
+    var natSel = panel.querySelector('#wcls-nat');
+    if (natSel) natSel.onchange = function () {
+      var apBlock = panel.querySelector('#wcls-ap-block'), arBlock = panel.querySelector('#wcls-ar-block');
+      if (apBlock) apBlock.style.display = (natSel.value === 'DESPESA' || natSel.value === 'AJUSTE') ? 'block' : 'none';
+      if (arBlock) arBlock.style.display = (natSel.value === 'RECEITA' || natSel.value === 'CREDITO') ? 'block' : 'none';
+    };
     panel.querySelector('#wcls-save').onclick = function () {
-      var patch = { catManual: panel.querySelector('#wcls-cat').value || null, subcat: panel.querySelector('#wcls-sub').value.trim() || null, responsibility: panel.querySelector('#wcls-resp').value || null, internalStatus: panel.querySelector('#wcls-st').value || null, linkedOrderId: panel.querySelector('#wcls-ord').value.trim() || null, linkedOccId: panel.querySelector('#wcls-occ').value.trim() || null, linkedResgateId: panel.querySelector('#wcls-resg').value.trim() || null, flagDuplicidade: panel.querySelector('#wcls-dup').checked || null, flagDescontoIndevido: panel.querySelector('#wcls-indev').checked || null };
-      wsetCls(t.id, patch, panel.querySelector('#wcls-note').value.trim() || null, 'Operador').then(function () { d.remove(); render(); if (onDone) onDone(); toast('Classificação salva', ''); });
+      var patch = {
+        natureza: panel.querySelector('#wcls-nat').value || null,
+        contabilizar: panel.querySelector('#wcls-contab').value !== 'nao',
+        competencia: panel.querySelector('#wcls-comp').value || null,
+        apEnviar: panel.querySelector('#wcls-ap-enviar').value !== 'nao',
+        apCategoria: panel.querySelector('#wcls-ap-cat').value || null,
+        apVencimento: panel.querySelector('#wcls-ap-venc').value || null,
+        apStatusManual: panel.querySelector('#wcls-ap-status').value === 'PAGO' ? 'PAGO' : null,
+        arEnviar: panel.querySelector('#wcls-ar-enviar').value !== 'nao',
+        arCategoria: panel.querySelector('#wcls-ar-cat').value.trim() || null,
+        arPrevisao: panel.querySelector('#wcls-ar-prev').value || null,
+        arStatusManual: panel.querySelector('#wcls-ar-status').value === 'RECEBIDO' ? 'RECEBIDO' : null,
+        catManual: panel.querySelector('#wcls-cat').value || null, subcat: panel.querySelector('#wcls-sub').value.trim() || null, responsibility: panel.querySelector('#wcls-resp').value || null, internalStatus: panel.querySelector('#wcls-st').value || null, linkedOrderId: panel.querySelector('#wcls-ord').value.trim() || null, linkedOccId: panel.querySelector('#wcls-occ').value.trim() || null, linkedResgateId: panel.querySelector('#wcls-resg').value.trim() || null, flagDuplicidade: panel.querySelector('#wcls-dup').checked || null, flagDescontoIndevido: panel.querySelector('#wcls-indev').checked || null,
+      };
+      var mergedCls = Object.assign({}, c, patch);
+      wsetCls(t.id, patch, panel.querySelector('#wcls-note').value.trim() || null, 'Operador').then(function () {
+        return walletApplyClassificacao(t, mergedCls);
+      }).then(function () { d.remove(); render(); if (onDone) onDone(); toast('Classificação salva', patch.natureza ? (NATUREZA[patch.natureza] + (patch.natureza === 'DESPESA' && patch.apEnviar ? ' → Contas a Pagar' : patch.natureza === 'RECEITA' && patch.arEnviar ? ' → Contas a Receber' : '')) : ''); });
     };
     var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { d.remove(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
     var gd = panel.querySelector('[data-godev]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev; d.remove(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
@@ -7097,15 +7201,24 @@
     }
     // ---- Fase 5d/6 — movimentos da Carteira já CLASSIFICADOS (nunca NAO_IDENTIFICADOS — não inventa
     // categoria): débito vira despesa paga (AP), crédito vira recebível já liquidado na Carteira (AR) ----
+    // §55 "manual tem prioridade": lançamento com Natureza classificada manualmente (Transferência/
+    // Informativo/Ajuste explícito) nunca é reescrito pela regra automática de sinal — o próprio
+    // walletApplyClassificacao() (Classificar no Caixa) já aplicou o título certo com a MESMA chave
+    // (feKey(opId,'WALLET',k,wOrderId(t)||dateKey)); fechar o dia depois só teria que ATUALIZAR esse
+    // mesmo registro, nunca criar um segundo divergente por sinal.
     movPost.todos.forEach(function (t) {
       var k = caixaMovCategoria(t, ac); if (!k || k === 'TRANSFERENCIAS_BANCARIAS') return;
       var opId = t.operationId || opActiveOrNull(); if (!opId) return;
       var walletAcc = faWalletForOperation(opId);
       var label = (t.desc || t.tipo || CAIXA_MOV_CAT_LABEL[k]) + ' — Carteira (' + dbr(t.date) + ')';
-      if (t.amount < 0) {
+      var manCls = wgetCls(t.id) || {};
+      if (manCls.natureza === 'TRANSFERENCIA' || manCls.natureza === 'INFORMATIVO') return; // §50: nunca gera AP/AR
+      var vaiAP = manCls.natureza ? (manCls.natureza === 'DESPESA' || manCls.natureza === 'AJUSTE') && manCls.apEnviar !== false : t.amount < 0;
+      if (manCls.natureza === 'RECEITA' || manCls.natureza === 'CREDITO') vaiAP = false;
+      if (vaiAP) {
         apPlan.push(apRow(opId, wOrderId(t), 'WALLET', k, label, Math.abs(t.amount) * 100, walletAcc ? walletAcc.id : null));
       } else {
-        arPlan.push({ sourceEventKey: feKey(opId, 'WALLET', k, t.id), operationId: opId, companyId: opCompanyId(opId), orderId: wOrderId(t) || null, descricao: label, pagador: 'Shopee', origin: 'SHOPEE_CARTEIRA', valor: r2(t.amount), competencia: t.date ? t.date.slice(0, 10) : dateKey, vencimento: t.date ? t.date.slice(0, 10) : dateKey, financialAccountId: walletAcc ? walletAcc.id : null, referencia: t.id, __autoBaixa: { valorRecebido: r2(t.amount), financialAccountId: walletAcc ? walletAcc.id : null, date: dateKey } });
+        arPlan.push({ sourceEventKey: feKey(opId, 'WALLET', k, wOrderId(t) || dateKey), operationId: opId, companyId: opCompanyId(opId), orderId: wOrderId(t) || null, descricao: label, pagador: 'Shopee', origin: 'SHOPEE_CARTEIRA', valor: r2(Math.abs(t.amount)), competencia: t.date ? t.date.slice(0, 10) : dateKey, vencimento: t.date ? t.date.slice(0, 10) : dateKey, financialAccountId: walletAcc ? walletAcc.id : null, referencia: t.id, __autoBaixa: { valorRecebido: r2(Math.abs(t.amount)), financialAccountId: walletAcc ? walletAcc.id : null, date: dateKey } });
       }
     });
     var movTodosDoDia = caixaDayMovimentosCarteira(dateKey); var movTodos = movTodosDoDia.creditos.concat(movTodosDoDia.debitos);
@@ -7518,17 +7631,11 @@
     var taxaAceleraC = ac.resgatesN ? -Math.abs(ac.taxaAcelera) : 0;
     var liquidoCarteiraC = ac.resgatesN ? ac.valorLiquido : 0;
 
-    // ---- 1ª linha: cards-resumo (kstrip já quebra em 2 linhas de 3 quando não cabe 6 numa só — sem
-    // largura fixa, nunca espremido) ----
+    // PROMPT "Refazer o Caixa" §9-13: SEM faixa de cards KPI antes do fluxo — "quero aparência de
+    // extrato financeiro/conciliação", não dashboard. O fluxo do dinheiro abaixo é o protagonista
+    // direto após o cabeçalho; os mesmos números (Valor da Venda/Taxas/Líquido/Transferido/Diferença)
+    // já aparecem nele, na ordem exigida — nunca repetidos antes num card.
     var diferencaOk = Math.abs(fluxo.diferenca) <= 0.01;
-    var kpis = kstrip([
-      { l: 'Valor da Venda', v: brlC(valorVendaC) },
-      { l: 'Taxas Shopee', v: brlC(taxasC), cls: taxasC ? 'red' : '' },
-      { l: 'Líquido Shopee', v: brlC(liquidoReceberC) },
-      { l: 'Recebido na Carteira', v: brlC(liquidoCarteiraC), cls: liquidoCarteiraC ? 'green' : '' },
-      { l: 'Transferido ao Banco', v: brl(fluxo.transferido), cls: 'blue' },
-      { l: 'Diferença', v: brl(fluxo.diferenca), cls: diferencaOk ? 'green' : 'amber' },
-    ]);
 
     // ---- FLUXO DO DINHEIRO — sequência única, sem cards soltos: Venda → Descontos Shopee → Líquido
     // Shopee → Taxa de Antecipação → Recebido na Carteira → Créditos/Débitos → Transferido ao Banco →
@@ -7561,19 +7668,19 @@
       '<div class="cx-kv" style="font-weight:700"><span class="cxl">Taxas Shopee</span><span class="cxv neg">' + brlC(taxasC) + '</span></div>' +
       '<div class="pb" style="padding:4px 0 0 8px">' + descontosLinhas + '</div>' +
       arrow() +
-      '<div class="cx-kv" style="font-size:15px;font-weight:800"><span class="cxl">Líquido Shopee</span><span class="cxv">' + brlC(liquidoReceberC) + '</span></div>' +
+      '<div class="cx-kv" style="font-size:15px;font-weight:800"><span class="cxl">Líquido após taxas</span><span class="cxv">' + brlC(liquidoReceberC) + '</span></div>' +
       arrow() +
-      '<div class="footnote" style="margin:0 0 4px">A Shopee Acelera antecipa recebíveis já existentes (de vendas de qualquer dia, não só as de hoje) — por isso o valor antecipado abaixo não é necessariamente o mesmo do Líquido Shopee acima.</div>' +
+      '<div class="footnote" style="margin:0 0 4px">A Shopee Acelera antecipa recebíveis já existentes (de vendas de qualquer dia, não só as de hoje) — por isso o valor antecipado abaixo não é necessariamente o mesmo do líquido após taxas acima.</div>' +
       '<div class="cx-kv"><span class="cxl">Valor Antecipado</span><span class="cxv">' + brlC(valorAntecipadoC) + '</span></div>' +
       '<div class="cx-kv"><span class="cxl">Taxa de Antecipação</span><span class="cxv' + (taxaAceleraC ? ' neg' : '') + '">' + brlC(taxaAceleraC) + '</span></div>' +
       verResgate +
       arrow() +
-      '<div class="cx-kv" style="font-size:15px;font-weight:800"><span class="cxl">Recebido na Carteira</span><span class="cxv">' + brlC(liquidoCarteiraC) + '</span></div>' +
+      '<div class="cx-kv" style="font-size:15px;font-weight:800"><span class="cxl">Líquido recebido</span><span class="cxv">' + brlC(liquidoCarteiraC) + '</span></div>' +
       arrow() +
       '<div class="cx-kv"><span class="cxl">Créditos da Carteira</span><span class="cxv pos">+' + brl(fluxo.outrosCreditos) + '</span></div>' +
       '<div class="cx-kv"><span class="cxl">Débitos da Carteira</span><span class="cxv neg">-' + brl(fluxo.descontos) + '</span></div>' +
       arrow() +
-      '<div class="cx-kv" style="font-weight:700"><span class="cxl">Valor Após Movimentações</span><span class="cxv">' + brl(fluxo.disponivel) + '</span></div>' +
+      '<div class="cx-kv" style="font-weight:700"><span class="cxl">Disponível para transferência</span><span class="cxv">' + brl(fluxo.disponivel) + '</span></div>' +
       arrow() +
       '<div class="cx-kv" style="font-weight:700"><span class="cxl">Transferido para o Banco</span><span class="cxv">' + brl(fluxo.transferido) + '</span></div>' +
       arrow() +
@@ -7584,12 +7691,16 @@
     // ---- MOVIMENTAÇÕES DA CARTEIRA — UMA tabela só (nunca cards por lançamento), tudo que somou ou
     // diminuiu depois do recebimento; reclassificável linha a linha (openWalletTx, já aprovado) ----
     var movTodosFiltrados = movPost.todos.filter(function (t) { return caixaMovCategoria(t, ac) !== 'TRANSFERENCIAS_BANCARIAS'; }).slice().sort(function (a, b) { return (a.date || '').localeCompare(b.date || ''); });
+    // PROMPT "Refazer o Caixa" §6-7/§36-38: cada movimento mostra sua Natureza (manual, quando
+    // classificada — senão "—") e permite [Classificar]/[Alterar] direto na linha.
     var movRows = movTodosFiltrados.map(function (t) {
       var cat = caixaMovCategoria(t, ac);
-      return '<tr class="rowlink" data-wtx="' + esc(t.id) + '"><td class="nowrap">' + dbr(t.date) + '</td><td>' + esc(CAIXA_MOV_CAT_LABEL[cat]) + '</td><td class="cell-text">' + esc((t.desc || t.tipo || '—').slice(0, 60)) + '</td><td class="mono">' + esc(wOrderId(t) || '—') + '</td><td class="nowrap pos">' + (t.amount > 0 ? brl(t.amount) : '—') + '</td><td class="nowrap neg">' + (t.amount < 0 ? '-' + brl(Math.abs(t.amount)) : '—') + '</td></tr>';
+      var mcls = wgetCls(t.id) || {};
+      var natTag = mcls.natureza ? '<span class="tag info">' + esc(NATUREZA[mcls.natureza] || mcls.natureza) + '</span>' : '<span class="footnote" style="margin:0">—</span>';
+      return '<tr><td class="nowrap">' + dbr(t.date) + '</td><td>' + esc(CAIXA_MOV_CAT_LABEL[cat]) + '</td><td class="cell-text">' + esc((t.desc || t.tipo || '—').slice(0, 60)) + '</td><td class="mono">' + esc(wOrderId(t) || '—') + '</td><td>' + natTag + '</td><td class="nowrap pos">' + (t.amount > 0 ? brl(t.amount) : '—') + '</td><td class="nowrap neg">' + (t.amount < 0 ? '-' + brl(Math.abs(t.amount)) : '—') + '</td><td><button class="btn-sm" data-wtx="' + esc(t.id) + '">' + (mcls.natureza ? 'Alterar' : 'Classificar') + '</button></td></tr>';
     }).join('');
-    var movimentacoes = '<div class="cx-section"><h4>Movimentações da Carteira' + h4sub(movTodosFiltrados.length ? nn(movTodosFiltrados.length) + ' lançamento(s) — clique para reclassificar' : null) + '</h4>' +
-      (movRows ? '<div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Pedido</th><th>Entrada</th><th>Saída</th></tr></thead><tbody>' + movRows + '</tbody></table></div>' : '<div class="footnote">Nenhuma movimentação além do recebimento do Acelera neste dia.</div>') +
+    var movimentacoes = '<div class="cx-section"><h4>Movimentações da Carteira' + h4sub(movTodosFiltrados.length ? nn(movTodosFiltrados.length) + ' lançamento(s) — clique para classificar' : null) + '</h4>' +
+      (movRows ? '<div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Pedido</th><th>Natureza</th><th>Entrada</th><th>Saída</th><th>Ação</th></tr></thead><tbody>' + movRows + '</tbody></table></div>' : '<div class="footnote">Nenhuma movimentação além do recebimento do Acelera neste dia.</div>') +
       '<div class="cx-kv" style="border-top:1px solid var(--line);margin-top:8px;padding-top:8px;font-weight:700"><span class="cxl">Resultado das movimentações</span><span class="cxv">' + brl(r2(fluxo.outrosCreditos - fluxo.descontos)) + '</span></div>' +
       '</div>';
 
@@ -7674,7 +7785,7 @@
 
     var transfManualBtn = '<div style="margin:6px 0 0"><button class="btn-sm" id="bt-abrir-manual">+ Adicionar transferência não encontrada</button></div>';
 
-    return header + kpis + fluxoDinheiro + movimentacoes + dreResumo + conferencias + integracaoResumo + transfManualBtn + footer;
+    return header + fluxoDinheiro + movimentacoes + dreResumo + conferencias + integracaoResumo + transfManualBtn + footer;
   }
   function bindCaixaFechamentoBody(dateKey) {
     var dateSel = document.getElementById('cx-date-sel'); if (dateSel) dateSel.onchange = function () { caixaAbrirDia(dateSel.value); };
