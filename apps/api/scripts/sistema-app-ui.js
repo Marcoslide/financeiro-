@@ -3399,7 +3399,7 @@
   // PROMPT "EVOLUÇÃO DO CAIXA — CONCILIAÇÃO FINANCEIRA + CLASSIFICAÇÃO MANUAL + CONTAS A PAGAR" §5/§8:
   // categorias adicionadas de forma ADITIVA (FRETE/MARKETING/OPERACIONAL/BONIFICACAO) — as categorias
   // já existentes (derivadas dos dados reais da Carteira Shopee) continuam intactas.
-  var WCAT = { RENDA: 'Renda de pedido', DEVOLUCAO: 'Devolução / Reembolso', CANCELAMENTO: 'Cancelamento', INDENIZACAO: 'Indenização', PIX: 'Pix', SAQUE: 'Saque', TRANSFERENCIA_BANCARIA: 'Transferência Bancária', ADS: 'Ads', ACELERA: 'Shopee Acelera', AFILIADOS: 'Comissão de afiliados', PAGAMENTO: 'Pagamento', LOGISTICA: 'Logística', FRETE: 'Frete', MARKETING: 'Marketing', OPERACIONAL: 'Operacional', AJUSTE: 'Ajuste', COMPENSACAO: 'Compensação', CREDITO: 'Crédito', BONIFICACAO: 'Bonificação', TAXA: 'Taxa', SEMLINHA: 'Ajuste sem linha', OUTRO: 'Outro' };
+  var WCAT = { RENDA: 'Renda de pedido', DEVOLUCAO: 'Devolução / Reembolso', CANCELAMENTO: 'Cancelamento', INDENIZACAO: 'Indenização', PIX: 'Pix', SAQUE: 'Saque', TRANSFERENCIA_BANCARIA: 'Transferência Bancária', ADS: 'Ads', ACELERA: 'Shopee Acelera', AFILIADOS: 'Comissão de afiliados', PAGAMENTO: 'Pagamento', LOGISTICA: 'Logística', FRETE: 'Frete', MARKETING: 'Marketing', OPERACIONAL: 'Operacional', AJUSTE: 'Ajuste', COMPENSACAO: 'Compensação', CREDITO: 'Crédito', BONIFICACAO: 'Bonificação', TAXA: 'Taxa Shopee', SEMLINHA: 'Ajuste sem linha', OUTRO: 'Outro' };
   function wcatLabel(c) { return WCAT[c] || c; }
   // §E-H do complemento CAIXA/CARTEIRA: Pix/saque/transferência bancária real são MOVIMENTAÇÃO
   // PATRIMONIAL (Carteira Shopee → Banco), nunca despesa/taxa/débito operacional. Categoria já
@@ -3456,6 +3456,16 @@
     var x = new Date(t.date); if (isNaN(x)) return null;
     var y = x.getFullYear(), m = x.getMonth() + 1, dd = x.getDate();
     return y + '-' + (m < 10 ? '0' : '') + m + '-' + (dd < 10 ? '0' : '') + dd;
+  }
+  // PROMPT "Correção Definitiva Caixa — Conciliação Real": Créditos/Débitos da Carteira apareciam
+  // "vazios" para dias fora do período coberto pelo extrato importado (ex.: extrato até 11/08,
+  // fechamento de 18/08) — indistinguível de "sem lançamento neste dia". Esta função calcula o
+  // intervalo real coberto pela Carteira já importada, para o Caixa avisar quando o vazio é FALTA
+  // DE ARQUIVO, não ausência real de movimento.
+  function walletDateRange() {
+    var min = null, max = null;
+    wallet.forEach(function (t) { var k = walletLocalDayKey(t); if (!k) return; if (!min || k < min) min = k; if (!max || k > max) max = k; });
+    return { min: min, max: max };
   }
   function walletCat(tipo, desc, amount) {
     var t = normStatus(tipo), s = normStatus(desc), entrada = amount >= 0;
@@ -8042,15 +8052,27 @@
       var natTag = mcls.natureza ? '<span class="tag info">' + esc(NATUREZA[mcls.natureza] || mcls.natureza) + '</span>' : '<span class="footnote" style="margin:0">—</span>';
       return '<tr><td class="nowrap">' + dbr(t.date) + '</td><td>' + esc(CAIXA_MOV_CAT_LABEL[cat]) + '</td><td class="cell-text">' + esc((t.desc || t.tipo || '—').slice(0, 60)) + '</td><td class="mono">' + esc(wOrderId(t) || '—') + '</td><td>' + natTag + '</td><td class="nowrap ' + (t.amount > 0 ? 'pos' : 'neg') + '">' + (t.amount > 0 ? '+' : '-') + brl(Math.abs(t.amount)) + '</td><td><button class="btn-sm" data-wtx="' + esc(t.id) + '">' + (mcls.natureza ? 'Alterar' : 'Classificar') + '</button></td></tr>';
     }
+    var wRange = walletDateRange();
+    var walletCobreDia = wRange.min ? (dateKey >= wRange.min && dateKey <= wRange.max) : false;
     function movSectionHtml(titulo, lista, subtotal) {
       var rows = lista.map(movRowHtml).join('');
+      var vazioMsg = walletCobreDia ? 'Nenhum lançamento neste dia.' : (wRange.min ? ('⚠ Nenhum extrato da Carteira importado para este dia — o último arquivo importado cobre de ' + dbr(wRange.min) + ' até ' + dbr(wRange.max) + '. Importe um extrato mais recente para ver os lançamentos reais deste dia.') : '⚠ Nenhum extrato da Carteira (Saldo da Carteira Shopee) foi importado ainda.');
       return '<div class="cx-section"><h4>' + esc(titulo) + h4sub(lista.length ? nn(lista.length) + ' lançamento(s) — clique para classificar' : null) + '</h4>' +
-        (rows ? '<div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Pedido</th><th>Natureza</th><th>Valor</th><th>Ação</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<div class="footnote">Nenhum lançamento neste dia.</div>') +
+        (rows ? '<div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Pedido</th><th>Natureza</th><th>Valor</th><th>Ação</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<div class="footnote"' + (walletCobreDia ? '' : ' style="color:var(--err)"') + '>' + vazioMsg + '</div>') +
         '<div class="cx-kv" style="border-top:1px solid var(--line);margin-top:8px;padding-top:8px;font-weight:700"><span class="cxl">Total</span><span class="cxv">' + brl(subtotal) + '</span></div>' +
         '</div>';
     }
     var creditosSection = movSectionHtml('Créditos da Carteira', movCreditos, fluxo.outrosCreditos);
     var debitosSection = movSectionHtml('Débitos da Carteira', movDebitos, -fluxo.descontos);
+
+    // Bloco 9 — "Mostrar: Valor transferido / Data / Conta destino" (prompt "Correção Definitiva
+    // Caixa"): detalha o total já computado em fluxo.transferido (caixaDayTransferenciasBancarias),
+    // sem recalcular nada — Pix/Saque/Transferência bancária reconhecidos automaticamente na Carteira
+    // (autoTxs) não têm conta cadastrada (só a Shopee sabe o destino); transferências lançadas
+    // manualmente (manual) já têm conta escolhida no cadastro.
+    var transfRows = transf.autoTxs.map(function (t) { return '<tr><td class="nowrap">' + dbr(t.date) + '</td><td class="cell-text">' + esc((t.desc || t.tipo || 'Pix/Transferência') .slice(0, 60)) + '</td><td class="nowrap">' + brl(Math.abs(t.amount)) + '</td><td>Identificado automaticamente na Carteira (Pix)</td></tr>'; })
+      .concat(transf.manual.map(function (m) { return '<tr><td class="nowrap">' + dbr(m.quando) + '</td><td class="cell-text">' + esc(m.observacao || 'Transferência manual') + '</td><td class="nowrap">' + brl(m.valor) + '</td><td>' + esc(bankAccountLabel(m.contaId) || m.conta || '—') + '</td></tr>'; })).join('');
+    var verTransferenciasDetails = (transf.autoTxs.length || transf.manual.length) ? ('<details class="cx-collapse" style="margin-top:4px"><summary style="font-size:12px;padding:6px 12px">Ver transferências</summary><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Descrição</th><th>Valor transferido</th><th>Conta destino</th></tr></thead><tbody>' + transfRows + '</tbody></table></div></div></details>') : '';
 
     // ---- FLUXO DO DINHEIRO — blocos empilhados, sem setas: cada etapa é um número, não uma animação.
     var fluxoDinheiro = '<div class="cx-section"><h4>Fluxo do dinheiro</h4>' +
@@ -8067,7 +8089,7 @@
       '<div class="cx-block"><div class="cx-block-row"><span class="cxl">6. (+) Créditos da Carteira</span><span class="cxv pos">+' + brl(fluxo.outrosCreditos) + '</span></div></div>' +
       '<div class="cx-block"><div class="cx-block-row"><span class="cxl">7. (-) Débitos da Carteira</span><span class="cxv neg">-' + brl(fluxo.descontos) + '</span></div></div>' +
       '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">8. Disponível para Transferência</span><span class="cxv">' + brl(fluxo.disponivel) + '</span></div></div>' +
-      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">9. Transferido para o Banco</span><span class="cxv">' + brl(fluxo.transferido) + '</span></div></div>' +
+      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">9. Transferido para o Banco</span><span class="cxv">' + brl(fluxo.transferido) + '</span></div>' + verTransferenciasDetails + '</div>' +
       '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl" style="font-size:12px">10. Saldo Final na Carteira</span><span class="cxv ' + (diferencaOk ? 'pos' : 'neg') + '" style="font-size:20px">' + brl(fluxo.diferenca) + '</span></div>' +
       '<div style="margin-top:6px">' + (diferencaOk ? '<span class="tag ok">✓ Caixa conferido' + (fluxo.diferenca > 0.01 ? ' — saldo em carteira, ainda não transferido' : '') + '</span>' : '<span class="tag warn">⚠ Transferido a mais do que havia disponível</span> <button class="btn-sm" id="cx-ver-nao-conciliados" style="margin-left:6px">Ver movimentos não conciliados</button>') + '</div></div>' +
       '</div>';
