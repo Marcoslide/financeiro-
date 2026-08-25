@@ -4194,9 +4194,13 @@
       '<label class="fld">Categoria de Contas a Receber</label><input class="input" id="wcls-ar-cat" style="width:100%" value="' + esc(c.arCategoria || '') + '" placeholder="ex.: Compensações Shopee">' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label class="fld">Previsão</label><input type="date" class="input" id="wcls-ar-prev" style="width:100%" value="' + esc(c.arPrevisao || '') + '"></div><div><label class="fld">Status</label><select class="select" id="wcls-ar-status" style="width:100%"><option value="A_RECEBER"' + (c.arStatusManual !== 'RECEBIDO' ? ' selected' : '') + '>A receber</option><option value="RECEBIDO"' + (c.arStatusManual === 'RECEBIDO' ? ' selected' : '') + '>Recebido / Baixado</option></select></div></div>' +
       '</div>';
-    var classify = '<div class="panel"><div class="ph"><h3>Classificar / corrigir</h3><span class="footnote" style="margin:0">interno — não altera o dado Shopee</span></div><div class="pb">' +
-      naturezaBlock +
-      '<label class="fld">Categoria</label><select class="select" id="wcls-cat" style="width:100%">' + opt(WCAT, c.catManual, '(automática: ' + wcatLabel(t.category) + ')') + '</select>' +
+    // PROMPT "Correção Caixa — Ajuste de Nomenclatura, Conciliação e DRE Operacional" §3: o essencial
+    // pra classificar um lançamento é Natureza (Receita/Despesa) + Categoria + Observação — fica
+    // visível direto. Os campos de uso ocasional (subcategoria/responsabilidade/status manual da
+    // análise/vínculos/flags de duplicidade) continuam existindo (não removidos — outras telas da
+    // Carteira, como Auditoria/Divergências, dependem deles), só ficam atrás de "Mais opções" —
+    // nunca obrigatórios pra salvar uma classificação simples.
+    var classifyAvancado = '<details class="cx-collapse" style="margin-top:6px"><summary style="font-size:12px;padding:6px 0">Mais opções (avançado)</summary><div class="pb" style="padding:8px 0 0">' +
       '<label class="fld">Subcategoria (opcional)</label><input class="input" id="wcls-sub" style="width:100%" value="' + esc(c.subcat || '') + '" placeholder="ex.: Produto avariado">' +
       '<label class="fld">Responsabilidade</label><select class="select" id="wcls-resp" style="width:100%">' + opt(WRESP, c.responsibility || wResp(t)) + '</select>' +
       '<label class="fld">Status da análise</label><select class="select" id="wcls-st" style="width:100%">' + opt(WSTATUS, c.internalStatus || 'NAO_REVISADO') + '</select>' +
@@ -4205,7 +4209,12 @@
       '<label class="fld">Vincular resgate Acelera</label><input class="input" id="wcls-resg" style="width:100%" value="' + esc(c.linkedResgateId || '') + '" placeholder="ID do resgate">' +
       '<label class="fld" style="display:flex;align-items:center;gap:8px;margin-top:10px"><input type="checkbox" id="wcls-dup"' + (c.flagDuplicidade ? ' checked' : '') + '> Marcar como possível duplicidade</label>' +
       '<label class="fld" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="wcls-indev"' + (c.flagDescontoIndevido ? ' checked' : '') + '> Marcar como possível desconto indevido</label>' +
-      '<label class="fld">Observação interna</label><input class="input" id="wcls-note" style="width:100%" value="' + esc(c.note || '') + '" placeholder="ex.: confirmado como erro de embalagem da operação">' +
+      '</div></details>';
+    var classify = '<div class="panel"><div class="ph"><h3>Classificar / corrigir</h3><span class="footnote" style="margin:0">interno — não altera o dado Shopee</span></div><div class="pb">' +
+      naturezaBlock +
+      '<label class="fld">Categoria</label><select class="select" id="wcls-cat" style="width:100%">' + opt(WCAT, c.catManual, '(automática: ' + wcatLabel(t.category) + ')') + '</select>' +
+      '<label class="fld">Observação (opcional)</label><input class="input" id="wcls-note" style="width:100%" value="' + esc(c.note || '') + '" placeholder="ex.: confirmado como erro de embalagem da operação">' +
+      classifyAvancado +
       '<div style="margin-top:10px"><button class="btn-sm primary" id="wcls-save">Salvar classificação</button></div>' +
       ((c.history && c.history.length) ? '<div class="footnote" style="margin-top:10px">Histórico:</div>' + c.history.slice(0, 6).map(function (h) { return '<div class="fin-line"><span>' + (h.changes && h.changes.length ? h.changes.map(function (ch) { return esc(ch.field) + ': ' + esc(ch.old || '∅') + '→' + esc(ch.nw); }).join(' · ') : esc(h.obs || 'obs')) + '</span><span class="footnote" style="margin:0">' + new Date(h.at).toLocaleString('pt-BR') + ' · ' + esc(h.user) + '</span></div>'; }).join('') : '') +
       '</div></div>';
@@ -4238,6 +4247,14 @@
         arStatusManual: panel.querySelector('#wcls-ar-status').value === 'RECEBIDO' ? 'RECEBIDO' : null,
         catManual: panel.querySelector('#wcls-cat').value || null, subcat: panel.querySelector('#wcls-sub').value.trim() || null, responsibility: panel.querySelector('#wcls-resp').value || null, internalStatus: panel.querySelector('#wcls-st').value || null, linkedOrderId: panel.querySelector('#wcls-ord').value.trim() || null, linkedOccId: panel.querySelector('#wcls-occ').value.trim() || null, linkedResgateId: panel.querySelector('#wcls-resg').value.trim() || null, flagDuplicidade: panel.querySelector('#wcls-dup').checked || null, flagDescontoIndevido: panel.querySelector('#wcls-indev').checked || null,
       };
+      // PROMPT "Correção Caixa — Ajuste de Nomenclatura, Conciliação e DRE Operacional" §2: "a
+      // classificação precisa impactar a conciliação" — se o operador escolheu Natureza (Receita/
+      // Despesa/Ajuste/Crédito) mas deixou o "Status da análise" no padrão "Não revisado", isso é
+      // inconsistente (classificar É explicar) e o lançamento continuava aparecendo como pendência
+      // não resolvida em caixaDayPendenciasCarteira/wCarteiraResolvido. Promove para "Explicado"
+      // automaticamente nesse caso — nunca sobrescreve uma escolha explícita do operador (Em
+      // análise/Contestação/Resolvido continuam intocados).
+      if (patch.natureza && patch.internalStatus === 'NAO_REVISADO') patch.internalStatus = 'EXPLICADO';
       var mergedCls = Object.assign({}, c, patch);
       wsetCls(t.id, patch, panel.querySelector('#wcls-note').value.trim() || null, 'Operador').then(function () {
         return walletApplyClassificacao(t, mergedCls);
@@ -6857,8 +6874,10 @@
       // PROMPT §2: cada linha de taxa precisa dizer se é "CONFIRMADO PELO INCOME" ou "PROVISÓRIO —
       // aguardando Income" — como a linha é um AGREGADO de vários pedidos do resgate, ela fica
       // "provisório" se QUALQUER pedido que contribuiu ainda não tem Income (nunca esconde que uma
-      // parte do total é estimativa).
-      sc.items.forEach(function (it) { if (it.knownContribution) { mapTaxasLoja[it.label] = (mapTaxasLoja[it.label] || 0) + it.knownContribution; if (it.dataStatus === 'PROVISIONAL_ORDER') mapTaxasLojaProvisorio[it.label] = true; } });
+      // parte do total é estimativa). Agrupa por it.key (não it.label) — a mesma chave estável do
+      // motor de taxas (resolveSellerCharges), usada logo abaixo para separar taxa real de
+      // ajuste/reembolso na apresentação do Bloco 2, sem alterar o motor em si nem o total.
+      sc.items.forEach(function (it) { if (it.knownContribution) { var g = mapTaxasLoja[it.key] = mapTaxasLoja[it.key] || { label: it.label, valor: 0 }; g.valor += it.knownContribution; if (it.dataStatus === 'PROVISIONAL_ORDER') mapTaxasLojaProvisorio[it.key] = true; } });
       if (sc.totalStatus !== 'COMPLETO') taxasPendentesN++;
       var prod = o.items.length > 1 ? (o.items.length + ' produtos') : (o.items[0] ? o.items[0].productName : '—');
       var sku = o.items.length > 1 ? '—' : (o.items[0] ? o.items[0].sku : '—');
@@ -6868,10 +6887,21 @@
       var liquidoPedidoC = taxaPedidoC != null ? receitaC + taxaPedidoC : null;
       return { orderId: o.id, produto: prod, sku: sku, valorC: receitaC, status: o.normalizedStatus, statusLabel: S.pedidos.labels[o.normalizedStatus] || o.orderStatus, taxaC: taxaPedidoC, taxaStatus: sc.totalStatus, liquidoC: liquidoPedidoC };
     });
-    var linhasTaxasLoja = Object.keys(mapTaxasLoja).map(function (k) { return { label: k, valor: mapTaxasLoja[k], provisorio: !!mapTaxasLojaProvisorio[k] }; }).filter(function (l) { return l.valor; }).sort(function (a, b) { return a.valor - b.valor; });
+    var linhasTaxasLoja = Object.keys(mapTaxasLoja).map(function (k) { return { key: k, label: mapTaxasLoja[k].label, valor: mapTaxasLoja[k].valor, provisorio: !!mapTaxasLojaProvisorio[k] }; }).filter(function (l) { return l.valor; }).sort(function (a, b) { return a.valor - b.valor; });
     var taxasLojaC = linhasTaxasLoja.reduce(function (s, l) { return s + l.valor; }, 0);
     var resultadoLiquidoC = valorBrutoC + taxasLojaC;
     return { dateKey: dateKey, ac: ac, n: pedidos.length, pedidos: pedidos, pedidosRows: pedidosRows, valorBrutoC: valorBrutoC, linhasTaxasLoja: linhasTaxasLoja, taxasLojaC: taxasLojaC, taxasPendentesN: taxasPendentesN, resultadoLiquidoC: resultadoLiquidoC, pedidosNaoLocalizados: pedidosNaoLocalizados };
+  }
+  // PROMPT "Correção Caixa — Ajuste de Nomenclatura, Conciliação e DRE Operacional" §1: dentro do
+  // Bloco 2 do Fechamento, separa visualmente TAXA REAL (encargo cobrado pela Shopee sobre a venda)
+  // de AJUSTE/REEMBOLSO (não é taxa — é dinheiro devolvido ao comprador ou outro ajuste). Classifica
+  // só pela CHAVE já existente em resolveSellerCharges — nenhuma taxa nova, nenhum valor recalculado,
+  // o total das duas listas continua batendo exatamente com origem.taxasLojaC (Bloco 3 não muda).
+  var CAIXA_TAXA_REAL_KEYS = { comissao: 1, servico: 1, afiliado: 1, taxaDevolucaoFacil: 1, taxaRecargaAutomatica: 1, taxaDevolucaoVendedor: 1 };
+  function caixaAgruparDescontos(linhasTaxasLoja) {
+    var taxas = [], ajustes = [];
+    linhasTaxasLoja.forEach(function (l) { (CAIXA_TAXA_REAL_KEYS[l.key] ? taxas : ajustes).push(l); });
+    return { taxas: taxas, taxasC: taxas.reduce(function (s, l) { return s + l.valor; }, 0), ajustes: ajustes, ajustesC: ajustes.reduce(function (s, l) { return s + l.valor; }, 0) };
   }
   // ---- DRE do dia — motor NATIVO do Caixa: agrega pedidoComposicaoFinanceira() (Pedidos) dos
   // pedidos pagos do dia. Zero chamadas a mrEngine()/mrPeriodEngine()/mrResultadoDetalhado() —
@@ -6880,8 +6910,15 @@
   // (nunca uma linha genérica "Taxas cobradas da Líder") — agrega, por rótulo real, os mesmos
   // taxaRows que pedidoComposicaoFinanceira() já classificou para cada pedido pago do dia. Nenhum
   // valor é recalculado aqui: soma-se exatamente o que a função canônica de Pedidos já apurou.
-  function caixaDreDia(dateKey) {
-    var pagas = orders.filter(function (o) { return o.paidAt && o.paidAt.slice(0, 10) === dateKey; });
+  // PROMPT "Correção Caixa — Ajuste de Nomenclatura, Conciliação e DRE Operacional" §4: dentro do
+  // Fechamento de Caixa, a DRE precisa usar o MESMO conjunto de pedidos do Bloco 1 (vinculados à
+  // antecipação Acelera daquele dia), nunca "pedidos pagos no dia" — mesmo problema já corrigido nos
+  // Blocos 1-3. pedidosOverride (opcional) é passado só pelas telas do Fechamento de Caixa
+  // (tela/XLSX/PDF/drill de precificação); os demais chamadores (caixaPeriodEngine — Dashboard/
+  // Ponto de Equilíbrio/Meta de Lucro, que precisam do volume real vendido no período) continuam
+  // usando o padrão "pedidos pagos no dia" — nunca alterado.
+  function caixaDreDia(dateKey, pedidosOverride) {
+    var pagas = pedidosOverride || orders.filter(function (o) { return o.paidAt && o.paidAt.slice(0, 10) === dateKey; });
     var receitaBruta = 0, custoTotal = 0, custoConhecidoN = 0, comIncomeN = 0, comSvcDetailsN = 0, envioTotal = 0;
     var mapReducoes = {}, mapTaxas = {}, mapCreditos = {}, mapOutros = {};
     // §21/§26-27 do prompt "Taxa de Serviço até a raiz": os filhos da Taxa de Serviço são agregados
@@ -7010,7 +7047,7 @@
   // Drill dos pedidos vendidos abaixo do preço recomendado (§47) — reaproveita exatamente a lista já
   // calculada por caixaDreDia() (dre.pedidosAbaixoRecomendado), nunca recalcula.
   function caixaPrecAbaixoRecomendadoOpen(dateKey) {
-    var dre = caixaDreDia(dateKey);
+    var dre = caixaDreDia(dateKey, caixaOrigemAntecipacao(dateKey).pedidos);
     var rows = dre.pedidosAbaixoRecomendado.map(function (p) { return '<tr class="rowlink" data-goped360="' + esc(p.orderId) + '"><td class="mono">' + esc(p.orderId) + '</td><td class="nowrap neg">' + brlC(p.impactoC) + '</td></tr>'; }).join('');
     var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '520px'; panel.style.maxWidth = '96vw'; panel.style.zIndex = '65';
     d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
@@ -7039,7 +7076,7 @@
     if (!dre.n) return '<div class="panel"><div class="ph"><h3>DRE do dia</h3></div><div class="pb"><span class="tag neutral">Nenhum pedido pago neste dia.</span></div></div>';
     // §106-111 do prompt mestre: abre cada grupo pelo nome real das linhas que o compõem — nunca uma
     // linha genérica "Taxas cobradas da Líder"/"Descontos Bancados pela Líder" escondendo a origem.
-    var body = line('Receita Bruta (Preço do Produto)', dre.receitaBruta, { note: nn(dre.n) + ' pedidos pagos' }) +
+    var body = line('Receita Bruta (Preço do Produto)', dre.receitaBruta, { note: nn(dre.n) + ' pedidos vinculados à antecipação' }) +
       line('Reduções / Descontos do Pedido', dre.descComerciais, { op: '−' }) + dre.linhasReducoes.map(function (l) { return subLine(l.label, l.valor); }).join('') +
       (dre.envioTotal ? line('Subtotal de Envio', dre.envioTotal, { op: dre.envioTotal < 0 ? '−' : '+' }) : '') +
       line('Taxas Shopee', dre.taxasCobradas, { op: '−' }) + dre.linhasTaxas.map(subLineTaxa).join('') +
@@ -7963,7 +8000,8 @@
     var custoConhecido = vendas.pedidos.filter(function (o) { return pedidoComposicaoFinanceira(o.id).custoProdC != null; }).length;
     var naoClass = caixaCamposNaoClassificadosCount();
     var fluxo = caixaFluxoDia(dateKey); var ac = fluxo.ac, movPost = fluxo.movPost, transf = fluxo.transf;
-    var dre = caixaDreDia(dateKey);
+    var origem = caixaOrigemAntecipacao(dateKey);
+    var dre = caixaDreDia(dateKey, origem.pedidos);
     var conc = caixaDayLancamentosConciliados(dateKey);
     var saldoCart = caixaDaySaldoCarteira(dateKey);
     function caixaCartSituacao(t) {
@@ -7989,13 +8027,13 @@
     // PROMPT "REESTRUTURAÇÃO COMPLETA DO MÓDULO CAIXA / CONCILIAÇÃO FINANCEIRA SHOPEE" — REGRA
     // PRINCIPAL: "Venda ≠ Dinheiro recebido... não usar simplesmente venda do dia... trazer somente
     // os pedidos que compõem aquele recebimento." Os Blocos 1-3 (Pedidos vinculados à antecipação /
-    // Taxas Shopee dos pedidos / Resultado líquido) usam caixaOrigemAntecipacao() — o MESMO conjunto
-    // de pedidos do Bloco 4 (ac.pedidosAcelera) — nunca caixaDayVendas (pedidos pagos no dia, um
-    // conjunto DIFERENTE que só alimenta a "DRE Operacional" separada, mais abaixo — pergunta
-    // comercial distinta: "quanto vendi hoje", não "de onde veio esse dinheiro que chegou hoje").
-    // Nenhum valor novo é calculado aqui — reagrupa exatamente o que pedidoComposicaoFinanceira/
+    // Taxas Shopee dos pedidos / Resultado líquido) E a "DRE Operacional" abaixo usam
+    // caixaOrigemAntecipacao() (origem.pedidos, já computado acima e passado a caixaDreDia) — o
+    // MESMO conjunto de pedidos do Bloco 4 (ac.pedidosAcelera) — nunca caixaDayVendas (pedidos pagos
+    // no dia, conjunto DIFERENTE, usado só na contagem operacional de "Pedidos do dia" em
+    // Conferências, mais abaixo — pergunta de conferência de expedição, não financeira). Nenhum
+    // valor novo é calculado aqui — reagrupa exatamente o que pedidoComposicaoFinanceira/
     // resolveSellerCharges/aceleraResultadoFechamento/caixaFluxoDia já apuraram.
-    var origem = caixaOrigemAntecipacao(dateKey);
     var valorVendaC = origem.valorBrutoC;
     var taxasC = origem.taxasLojaC;
     var liquidoReceberC = origem.resultadoLiquidoC;
@@ -8030,15 +8068,27 @@
     var pedidosNaoLocAviso = origem.pedidosNaoLocalizados.length ? ('<div class="footnote" style="margin:6px 0;color:var(--err)">⚠ ' + nn(origem.pedidosNaoLocalizados.length) + ' pedido(s) do resgate Acelera não localizado(s) em Pedidos (fora do período importado ou ID divergente): ' + origem.pedidosNaoLocalizados.map(esc).join(', ') + '</div>') : '';
     var pedidosOrigemDetails = '<details class="cx-collapse" style="margin-top:4px"><summary style="font-size:12px;padding:6px 12px">Ver pedidos</summary><div class="pb">' + pedidosNaoLocAviso + '<div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Produto</th><th>SKU</th><th>Valor venda</th><th>Status</th><th>Taxas</th><th>Valor líquido</th></tr></thead><tbody>' + (pedidosOrigemRows || '<tr><td colspan="7" class="empty">Nenhum pedido.</td></tr>') + '</tbody></table></div></div></details>';
 
-    // Comissão/Taxa de Serviço aparecem DIRETO (sem precisar clicar) — só os FILHOS reais da Taxa de
-    // Serviço (Afiliados do Vendedor/Taxa de Transação/Taxa por item vendido) ficam atrás de "Ver
-    // composição", porque só eles têm uma composição a mostrar; explicam o pai, nunca somam de novo.
-    var descontosLinhas = origem.linhasTaxasLoja.length ? origem.linhasTaxasLoja.map(function (l) {
+    // PROMPT "Correção Caixa — Ajuste de Nomenclatura, Conciliação e DRE Operacional" §1: separa
+    // visualmente "Descontos Shopee do Vendedor" (taxa real: comissão/serviço/afiliados/devolução
+    // fácil/recarga automática/devolução vendedor) de "Ajustes / Outros descontos" (reembolso ao
+    // comprador, envio reverso, vouchers, coin cashback — não é taxa). Comissão/Taxa de Serviço
+    // aparecem DIRETO (sem precisar clicar) — só os FILHOS reais da Taxa de Serviço (Afiliados do
+    // Vendedor/Taxa de Transação/Taxa por item vendido) ficam atrás de "Ver composição", porque só
+    // eles têm uma composição a mostrar; explicam o pai, nunca somam de novo. O total das duas
+    // listas continua batendo com origem.taxasLojaC (Bloco 3 não muda) — só reagrupa, nada some.
+    var descGrupos = caixaAgruparDescontos(origem.linhasTaxasLoja);
+    function descontoLinhaHtml(l) {
       var isServico = dre.linhasSvcChildren.length && SVC_REAL_LABELS[l.label];
       var composicao = isServico ? ('<details class="cx-collapse" style="margin:2px 0 8px"><summary style="font-size:12px;padding:6px 12px">Ver composição</summary><div class="pb">' + dre.linhasSvcChildren.map(function (c) { return '<div class="fin-line" style="font-size:12.5px"><span>' + esc(c.label) + '</span><span class="' + (c.valor < 0 ? 'neg' : 'pos') + '">' + brlC(c.valor) + '</span></div>'; }).join('') + '</div></details>') : '';
       var statusTag = l.provisorio ? ' <span class="tag warn" style="font-size:9px">PROVISÓRIO — aguardando Income</span>' : ' <span class="tag ok" style="font-size:9px">CONFIRMADO PELO INCOME</span>';
       return '<div class="cx-kv rowlink" data-dredrill="' + esc(l.label) + '" data-dredrillorigem="ANTECIPACAO" title="Ver pedidos"><span class="cxl">' + esc(l.label) + statusTag + '</span><span class="cxv ' + (l.valor < 0 ? 'neg' : l.valor > 0 ? 'pos' : '') + '">' + brlC(l.valor) + '</span></div>' + composicao;
-    }).join('') : '<div class="footnote" style="margin:2px 0 8px">Nenhuma taxa cobrada nestes pedidos.</div>';
+    }
+    var descontosLinhas = '<div class="footnote" style="margin:6px 0 2px;font-weight:700">Descontos Shopee do Vendedor <span style="font-weight:400">(taxa real sobre a venda)</span></div>' +
+      (descGrupos.taxas.length ? descGrupos.taxas.map(descontoLinhaHtml).join('') : '<div class="footnote" style="margin:2px 0 8px">Nenhuma taxa cobrada nestes pedidos.</div>') +
+      '<div class="cx-kv" style="margin-top:2px;padding-top:4px;border-top:1px dashed var(--line);font-weight:700"><span class="cxl">Subtotal — Descontos Shopee</span><span class="cxv neg">' + brlC(descGrupos.taxasC) + '</span></div>' +
+      (descGrupos.ajustes.length ? ('<div class="footnote" style="margin:12px 0 2px;font-weight:700">Ajustes / Outros descontos <span style="font-weight:400">(não é taxa — reembolso ao comprador, envio reverso, vouchers/cashback bancados pela loja)</span></div>' +
+        descGrupos.ajustes.map(descontoLinhaHtml).join('') +
+        '<div class="cx-kv" style="margin-top:2px;padding-top:4px;border-top:1px dashed var(--line);font-weight:700"><span class="cxl">Subtotal — Ajustes/Outros</span><span class="cxv neg">' + brlC(descGrupos.ajustesC) + '</span></div>') : '');
 
     // Ver resgate — mesmos resgates do Acelera já usados antes (aceleraResultadoFechamento), só atrás
     // de um clique — nunca a tela inteira do Acelera reproduzida dentro do Caixa.
@@ -8087,7 +8137,7 @@
     // ---- FLUXO DO DINHEIRO — blocos empilhados, sem setas: cada etapa é um número, não uma animação.
     var fluxoDinheiro = '<div class="cx-section"><h4>Fluxo do dinheiro</h4>' +
       '<div class="cx-block"><div class="cx-block-row"><span class="cxl">1. Pedidos Vinculados à Antecipação</span><span class="cxv">' + brlC(valorVendaC) + '</span></div><div class="cxsub">' + vendaSub + '</div>' + pedidosOrigemDetails + '</div>' +
-      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">(-) 2. Taxas Shopee</span><span class="cxv neg">' + brlC(taxasC) + '</span></div>' +
+      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">(-) 2. Descontos Shopee do Vendedor</span><span class="cxv neg">' + brlC(taxasC) + '</span></div>' +
       (origem.taxasPendentesN ? ('<div class="cxsub">⚠ ' + nn(origem.taxasPendentesN) + ' de ' + nn(origem.n) + ' pedido(s) sem confirmação completa do Income — as taxas desses pedidos usam o valor provisório do Order.all (marcado "PROVISÓRIO — AGUARDANDO INCOME" abaixo) e são substituídas automaticamente pelo valor confirmado assim que o Income for importado.</div>') : '') +
       '<div class="pb" style="padding:4px 0 0 8px">' + descontosLinhas + '</div></div>' +
       '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">3. Resultado Líquido dos Pedidos</span><span class="cxv">' + brlC(liquidoReceberC) + '</span></div></div>' +
@@ -8101,7 +8151,12 @@
       '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">8. Disponível para Transferência</span><span class="cxv">' + brl(fluxo.disponivel) + '</span></div></div>' +
       '<div class="cx-block"><div class="cx-block-row"><span class="cxl">9. Transferido para o Banco</span><span class="cxv">' + brl(fluxo.transferido) + '</span></div>' + verTransferenciasDetails + '</div>' +
       '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl" style="font-size:12px">10. Saldo Final na Carteira</span><span class="cxv ' + (diferencaOk ? 'pos' : 'neg') + '" style="font-size:20px">' + brl(fluxo.diferenca) + '</span></div>' +
-      '<div style="margin-top:6px">' + (diferencaOk ? '<span class="tag ok">✓ Caixa conferido' + (fluxo.diferenca > 0.01 ? ' — saldo em carteira, ainda não transferido' : '') + '</span>' : '<span class="tag warn">⚠ Transferido a mais do que havia disponível</span> <button class="btn-sm" id="cx-ver-nao-conciliados" style="margin-left:6px">Ver movimentos não conciliados</button>') + '</div></div>' +
+      // PROMPT "Correção Caixa — Ajuste de Nomenclatura, Conciliação e DRE Operacional" §2: uma
+      // diferença negativa com TODOS os créditos/débitos da carteira já classificados (pendCart
+      // vazia) não é mais "não identificado" — vira um resíduo explicado (tipicamente a transferência
+      // saiu antes de um ajuste pequeno ser lançado na carteira), nunca escondido, mas também nunca
+      // rotulado como se nada tivesse sido investigado.
+      '<div style="margin-top:6px">' + (diferencaOk ? '<span class="tag ok">✓ Caixa conferido' + (fluxo.diferenca > 0.01 ? ' — saldo em carteira, ainda não transferido' : '') + '</span>' : (pendCart.itens.length === 0 ? '<span class="tag info">△ Diferença de ' + brl(Math.abs(fluxo.diferenca)) + ' — todos os créditos/débitos já classificados, sem pendência aberta na Carteira. Resíduo provável: a transferência saiu antes de um ajuste pequeno ser lançado.</span>' : '<span class="tag warn">⚠ Transferido a mais do que havia disponível</span> <button class="btn-sm" id="cx-ver-nao-conciliados" style="margin-left:6px">Ver movimentos não conciliados</button>')) + '</div></div>' +
       '</div>';
 
     // ---- DRE do dia — simples, na ordem pedida: Venda / (-) Taxas / (-) Acelera / (-) Custos / Resultado.
@@ -8400,7 +8455,7 @@
     pend.financeiras.forEach(function (f) { pendRows2.push([f.orderId, f.origem, f.motivo]); });
     pendCart.itens.forEach(function (it) { pendRows2.push([wOrderId(it.t) || '— Não identificado', 'CARTEIRA', it.motivo + ' (' + brl(it.t.amount) + ')']); });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pendRows2), 'Pendências');
-    var dre = caixaDreDia(dateKey);
+    var dre = caixaDreDia(dateKey, caixaOrigemAntecipacao(dateKey).pedidos);
     if (dre.n) {
       var dreRows = [['Linha', 'Valor (R$)']];
       dreRows.push(['Receita Bruta', dre.receitaBruta / 100]);
@@ -8432,7 +8487,7 @@
     var saldoCart = caixaDaySaldoCarteira(dateKey);
     var pendNaoExplicadaValor = pendCart.itens.reduce(function (s, it) { return s + Math.abs(it.t.amount); }, 0);
     var pc = conc.porCategoria; var outrasReceitasValor = ((pc.PENDENCIA_ANTERIOR ? pc.PENDENCIA_ANTERIOR.valor : 0) + (pc.COMPENSACAO ? pc.COMPENSACAO.valor : 0) + (pc.OUTRAS_RECEITAS ? pc.OUTRAS_RECEITAS.valor : 0));
-    var dre = caixaDreDia(dateKey);
+    var dre = caixaDreDia(dateKey, caixaOrigemAntecipacao(dateKey).pedidos);
     var prow = function (label, v, total) { return '<div class="prow' + (total ? ' ptotal' : '') + '"><span>' + esc(label) + '</span><span class="' + (typeof v === 'number' ? (v < 0 ? 'pneg' : 'ppos') : '') + '">' + (typeof v === 'number' ? brl(v) : esc(v)) + '</span></div>'; };
     var thTable = function (headers, rows) { return '<table><thead><tr>' + headers.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') + '</tr></thead><tbody>' + (rows.length ? rows.join('') : '<tr><td colspan="' + headers.length + '">—</td></tr>') + '</tbody></table>'; };
     var html = '<div class="pdoc">' +
