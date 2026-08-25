@@ -505,12 +505,12 @@
       var groups = {};
       (parsed.rows || []).forEach(function (r) { if (!r.orderId) return; (groups[r.orderId] = groups[r.orderId] || []).push(r); });
       var byId = {}; orders.forEach(function (o) { byId[o.id] = o; });
-      var novo = 0, upd = 0, unch = 0, itemsSeen = 0; var changed = [];
+      var novo = 0, upd = 0, unch = 0, itemsSeen = 0, statusChanged = 0, brFilled = 0; var changed = [];
       Object.keys(groups).forEach(function (id) {
         var g = groups[id]; var rep = g.find(function (r) { return r.orderStatus; }) || g[0]; itemsSeen += g.length;
         var items = g.map(function (r) { var qty = r.quantity || 1; var subtotal = r.productSubtotal != null ? num(r.productSubtotal) : num(r.agreedPrice) * qty; return { sku: r.sku, productName: r.productName, variationName: r.variationName, qty: qty, originalPrice: num(r.originalPrice), agreedPrice: num(r.agreedPrice), subtotal: subtotal }; });
         var toIso = function (d) { return d ? new Date(d).toISOString() : null; };
-        var next = { id: id, operationId: (byId[id] && byId[id].operationId) || opId, orderStatus: rep.orderStatus, normalizedStatus: S.pedidos.normalizeStatus(rep.orderStatus), tracking: rep.trackingNumber, createdAt: toIso(rep.orderCreatedAt), returnRefundStatus: rep.returnRefundStatus, cancelReason: rep.cancelReason, city: rep.city, uf: rep.uf, recipientName: rep.recipientName, buyerUsername: rep.buyerUsername, shippingOption: rep.shippingOption, shippingMethod: rep.shippingMethod, isFbs: /^\s*(yes|sim|true)\s*$/i.test(rep.isFbs || '') || rep.shippingOption === 'Full', totalAmount: num(rep.totalAmount), grandTotal: num(rep.grandTotal), commissionNet: num(rep.commissionNet), serviceFeeNet: num(rep.serviceFeeNet), transactionFee: num(rep.transactionFee), reverseShippingFee: num(rep.reverseShippingFee), estimatedShipping: num(rep.estimatedShipping), buyerPaidShipping: num(rep.buyerPaidShipping), unitsTotal: rep.unitsTotal || items.reduce(function (s, i) { return s + i.qty; }, 0), items: items,
+        var next = { id: id, operationId: (byId[id] && byId[id].operationId) || opId, orderStatus: rep.orderStatus, normalizedStatus: S.pedidos.normalizeStatus(rep.orderStatus), tracking: rep.trackingNumber || (byId[id] && byId[id].tracking) || null, createdAt: toIso(rep.orderCreatedAt), returnRefundStatus: rep.returnRefundStatus, cancelReason: rep.cancelReason, city: rep.city, uf: rep.uf, recipientName: rep.recipientName, buyerUsername: rep.buyerUsername, shippingOption: rep.shippingOption, shippingMethod: rep.shippingMethod, isFbs: /^\s*(yes|sim|true)\s*$/i.test(rep.isFbs || '') || rep.shippingOption === 'Full', totalAmount: num(rep.totalAmount), grandTotal: num(rep.grandTotal), commissionNet: num(rep.commissionNet), serviceFeeNet: num(rep.serviceFeeNet), transactionFee: num(rep.transactionFee), reverseShippingFee: num(rep.reverseShippingFee), estimatedShipping: num(rep.estimatedShipping), buyerPaidShipping: num(rep.buyerPaidShipping), unitsTotal: rep.unitsTotal || items.reduce(function (s, i) { return s + i.qty; }, 0), items: items,
           // §9-33 do prompt "Alterações — Sistema Marketplace Líder": pagamento/prazo/envio efetivo,
           // usados no Dashboard (pedidos feitos × pagos) e na aba Tempo de Envio.
           paidAt: toIso(rep.paidAt), shipByDate: toIso(rep.shipByDate), shippedAt: toIso(rep.shippedAt), deliveredAt: toIso(rep.deliveredAt), completedAt: toIso(rep.completedAt), cancelledAt: toIso(rep.cancelledAt) };
@@ -520,6 +520,8 @@
         else {
           var diff = ex.orderStatus !== next.orderStatus || ex.tracking !== next.tracking || ex.totalAmount !== next.totalAmount;
           if (diff) upd++; else unch++;
+          if (ex.normalizedStatus !== next.normalizedStatus) statusChanged++;
+          if (!ex.tracking && next.tracking) brFilled++;
           // Rastreamento histórico de status (prompt Expedição/Full/FBS §7-16): nunca reescreve o
           // passado — só acrescenta um evento quando o normalizedStatus realmente muda entre
           // importações. É o que permite detectar Full A_ENVIAR→ENVIADO sem exigir bipe físico.
@@ -530,7 +532,7 @@
         changed.push(next);
       });
       orders = Object.values(byId);
-      var batch = { id: 'b' + Date.now() + Math.round(performance.now()), module: 'Pedidos', filename: file.name, createdAt: new Date().toISOString(), seen: Object.keys(groups).length, itemsSeen: itemsSeen, novo: novo, upd: upd, unch: unch, periodStart: parsed.periodStart, periodEnd: parsed.periodEnd };
+      var batch = { id: 'b' + Date.now() + Math.round(performance.now()), module: 'Pedidos', filename: file.name, createdAt: new Date().toISOString(), seen: Object.keys(groups).length, itemsSeen: itemsSeen, novo: novo, upd: upd, unch: unch, statusChanged: statusChanged, brFilled: brFilled, periodStart: parsed.periodStart, periodEnd: parsed.periodEnd };
       batches.unshift(batch);
       return Promise.all([putMany('orders', changed), putMany('batches', [batch])]).then(function () { return batch; });
     });
@@ -745,7 +747,7 @@
       devPeriodBar() +
       '<div class="subtabs">' + subtab('pedidos', 'pedidos', 'Pedidos') + subtab('pedidos', 'expedicao', 'Expedição') + subtab('pedidos', 'dashboard', 'Dashboard') + subtab('pedidos', 'import', 'Importações') + '</div>' +
       (sub.pedidos === 'dashboard' ? pedidosDashboard() : sub.pedidos === 'import' ? importsFor('Pedidos') + pedidosSkuDiag() : (sub.pedidos === 'expedicao' || sub.pedidos === 'tempoenvio') ? pedidosExpedicao() : pedidosList());
-    document.getElementById('imp-ped').onclick = function () { fileInput(function (f) { importPedidos(f).then(function (b) { render(); toast('Pedidos importados', b.seen + ' pedidos · ' + b.novo + ' novos · ' + b.upd + ' atualizados · ' + b.unch + ' sem alteração'); }).catch(function (e) { toast('Falha', e.message, true); }); }); };
+    document.getElementById('imp-ped').onclick = function () { fileInput(function (f) { importPedidos(f).then(function (b) { render(); toast('Pedidos importados', b.novo + ' novos · ' + b.upd + ' atualizados · ' + b.statusChanged + ' status alterados · ' + b.brFilled + ' BR/rastreamentos preenchidos · ' + b.unch + ' sem alteração'); }).catch(function (e) { toast('Falha', e.message, true); }); }); };
     bindSubtabs('pedidos');
     bindDevPeriodBar();
     if (sub.pedidos === 'pedidos') bindPedidosList();
