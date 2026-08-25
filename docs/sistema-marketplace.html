@@ -291,7 +291,7 @@
     </nav>
     <div style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build bd37383 · 2026-08-25 21:31 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 674008b · 2026-08-25 21:48 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -8040,18 +8040,33 @@ buffer/index.js:
     var natAtual = c.natureza || '';
     var apBlockVisible = natAtual === 'DESPESA' || natAtual === 'AJUSTE';
     var arBlockVisible = natAtual === 'RECEITA' || natAtual === 'CREDITO';
+    // PROMPT "Modal — Classificar Movimentação": layout enxuto — Natureza+Categoria juntos no topo,
+    // depois o grupo de decisão (contabilizar/enviar/opção de pagamento), depois as datas
+    // (Competência+Vencimento), Observação, e só então (fora da moldura do modal pedido) os campos
+    // avançados. "Opção de pagamento" (Criar pendente / Criar e dar baixa automaticamente) substitui
+    // o antigo select "Status" — mesmo dado (apStatusManual/arStatusManual), rótulo mais claro do que
+    // "Pago/Baixado" pra quem não é contador. Categoria de Contas a Pagar/Receber (cpCategories —
+    // domínio DIFERENTE do WCAT usado aqui) sai do modal: continua editável depois, direto em Contas
+    // a Pagar/Receber — nunca gravamos um valor errado misturando os dois domínios.
+    function opcaoPagamentoRadio(name, atual) {
+      return '<label class="fld">Opção de pagamento</label>' +
+        '<label class="fld" style="display:flex;align-items:center;gap:8px;font-weight:400"><input type="radio" name="' + name + '" value="PENDENTE"' + (atual !== 'PAGO' ? ' checked' : '') + '> Criar pendente</label>' +
+        '<label class="fld" style="display:flex;align-items:center;gap:8px;font-weight:400;margin-top:2px"><input type="radio" name="' + name + '" value="BAIXA"' + (atual === 'PAGO' ? ' checked' : '') + '> Criar e dar baixa automaticamente</label>';
+    }
     var naturezaBlock = '<label class="fld">Natureza</label><select class="select" id="wcls-nat" style="width:100%">' + opt(NATUREZA, natAtual, '(automática pelo sinal: ' + (t.amount < 0 ? 'Despesa' : 'Receita') + ')') + '</select>' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label class="fld">Contabilizar no resultado?</label><select class="select" id="wcls-contab" style="width:100%"><option value="sim"' + (c.contabilizar !== false ? ' selected' : '') + '>Sim</option><option value="nao"' + (c.contabilizar === false ? ' selected' : '') + '>Não</option></select></div><div><label class="fld">Competência</label><input type="date" class="input" id="wcls-comp" style="width:100%" value="' + esc(c.competencia || (t.date ? t.date.slice(0, 10) : '')) + '"></div></div>' +
-      '<div id="wcls-ap-block" style="display:' + (apBlockVisible ? 'block' : 'none') + ';border-left:2px solid var(--line);padding-left:10px;margin:8px 0">' +
+      '<label class="fld">Categoria</label><select class="select" id="wcls-cat" style="width:100%">' + opt(WCAT, c.catManual, '(automática: ' + wcatLabel(t.category) + ')') + '</select>' +
+      '<div style="border-top:1px solid var(--line);margin:10px 0;padding-top:10px">' +
+      '<label class="fld">Contabilizar no resultado?</label><select class="select" id="wcls-contab" style="width:100%"><option value="sim"' + (c.contabilizar !== false ? ' selected' : '') + '>Sim</option><option value="nao"' + (c.contabilizar === false ? ' selected' : '') + '>Não</option></select>' +
+      '<div id="wcls-ap-block" style="display:' + (apBlockVisible ? 'block' : 'none') + ';margin-top:8px">' +
       '<label class="fld">Enviar para Contas a Pagar?</label><select class="select" id="wcls-ap-enviar" style="width:100%"><option value="sim"' + (c.apEnviar !== false ? ' selected' : '') + '>Sim</option><option value="nao"' + (c.apEnviar === false ? ' selected' : '') + '>Não</option></select>' +
-      '<label class="fld">Categoria de Contas a Pagar</label><select class="select" id="wcls-ap-cat" style="width:100%">' + cpCategoryOptions(c.apCategoria, false) + '</select>' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label class="fld">Vencimento</label><input type="date" class="input" id="wcls-ap-venc" style="width:100%" value="' + esc(c.apVencimento || '') + '"></div><div><label class="fld">Status</label><select class="select" id="wcls-ap-status" style="width:100%"><option value="EM_ABERTO"' + (c.apStatusManual !== 'PAGO' ? ' selected' : '') + '>Em aberto</option><option value="PAGO"' + (c.apStatusManual === 'PAGO' ? ' selected' : '') + '>Pago / Baixado (retenção automática Shopee)</option></select></div></div>' +
+      opcaoPagamentoRadio('wcls-ap-opcao', c.apStatusManual) +
       '</div>' +
-      '<div id="wcls-ar-block" style="display:' + (arBlockVisible ? 'block' : 'none') + ';border-left:2px solid var(--line);padding-left:10px;margin:8px 0">' +
+      '<div id="wcls-ar-block" style="display:' + (arBlockVisible ? 'block' : 'none') + ';margin-top:8px">' +
       '<label class="fld">Enviar para Contas a Receber?</label><select class="select" id="wcls-ar-enviar" style="width:100%"><option value="sim"' + (c.arEnviar !== false ? ' selected' : '') + '>Sim</option><option value="nao"' + (c.arEnviar === false ? ' selected' : '') + '>Não</option></select>' +
-      '<label class="fld">Categoria de Contas a Receber</label><input class="input" id="wcls-ar-cat" style="width:100%" value="' + esc(c.arCategoria || '') + '" placeholder="ex.: Compensações Shopee">' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label class="fld">Previsão</label><input type="date" class="input" id="wcls-ar-prev" style="width:100%" value="' + esc(c.arPrevisao || '') + '"></div><div><label class="fld">Status</label><select class="select" id="wcls-ar-status" style="width:100%"><option value="A_RECEBER"' + (c.arStatusManual !== 'RECEBIDO' ? ' selected' : '') + '>A receber</option><option value="RECEBIDO"' + (c.arStatusManual === 'RECEBIDO' ? ' selected' : '') + '>Recebido / Baixado</option></select></div></div>' +
-      '</div>';
+      opcaoPagamentoRadio('wcls-ar-opcao', c.arStatusManual === 'RECEBIDO' ? 'PAGO' : '') +
+      '</div>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;border-top:1px solid var(--line);margin-top:10px;padding-top:10px"><div><label class="fld">Competência</label><input type="date" class="input" id="wcls-comp" style="width:100%" value="' + esc(c.competencia || (t.date ? t.date.slice(0, 10) : '')) + '"></div><div><label class="fld">Vencimento</label><input type="date" class="input" id="wcls-venc" style="width:100%" value="' + esc(c.apVencimento || c.arPrevisao || '') + '"></div></div>';
     // PROMPT "Correção Caixa — Ajuste de Nomenclatura, Conciliação e DRE Operacional" §3: o essencial
     // pra classificar um lançamento é Natureza (Receita/Despesa) + Categoria + Observação — fica
     // visível direto. Os campos de uso ocasional (subcategoria/responsabilidade/status manual da
@@ -8068,16 +8083,20 @@ buffer/index.js:
       '<label class="fld" style="display:flex;align-items:center;gap:8px;margin-top:10px"><input type="checkbox" id="wcls-dup"' + (c.flagDuplicidade ? ' checked' : '') + '> Marcar como possível duplicidade</label>' +
       '<label class="fld" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="wcls-indev"' + (c.flagDescontoIndevido ? ' checked' : '') + '> Marcar como possível desconto indevido</label>' +
       '</div></details>';
-    var classify = '<div class="panel"><div class="ph"><h3>Classificar / corrigir</h3><span class="footnote" style="margin:0">interno — não altera o dado Shopee</span></div><div class="pb">' +
+    var classify = '<div class="panel"><div class="ph"><h3>Classificar movimentação</h3><span class="footnote" style="margin:0">interno — não altera o dado Shopee</span></div><div class="pb">' +
       naturezaBlock +
-      '<label class="fld">Categoria</label><select class="select" id="wcls-cat" style="width:100%">' + opt(WCAT, c.catManual, '(automática: ' + wcatLabel(t.category) + ')') + '</select>' +
-      '<label class="fld">Observação (opcional)</label><input class="input" id="wcls-note" style="width:100%" value="' + esc(c.note || '') + '" placeholder="ex.: confirmado como erro de embalagem da operação">' +
+      '<div style="border-top:1px solid var(--line);margin-top:10px;padding-top:10px"><label class="fld">Observação (opcional)</label><input class="input" id="wcls-note" style="width:100%" value="' + esc(c.note || '') + '" placeholder="ex.: confirmado como erro de embalagem da operação"></div>' +
       classifyAvancado +
       '<div style="margin-top:10px"><button class="btn-sm primary" id="wcls-save">Salvar classificação</button></div>' +
       ((c.history && c.history.length) ? '<div class="footnote" style="margin-top:10px">Histórico:</div>' + c.history.slice(0, 6).map(function (h) { return '<div class="fin-line"><span>' + (h.changes && h.changes.length ? h.changes.map(function (ch) { return esc(ch.field) + ': ' + esc(ch.old || '∅') + '→' + esc(ch.nw); }).join(' · ') : esc(h.obs || 'obs')) + '</span><span class="footnote" style="margin:0">' + new Date(h.at).toLocaleString('pt-BR') + ' · ' + esc(h.user) + '</span></div>'; }).join('') : '') +
       '</div></div>';
-    panel.innerHTML = '<div class="dh"><div><b>' + (isRec ? 'Ajuste reconstruído' : 'Movimentação') + '</b> ' + (isRec ? '<span class="tag warn" style="margin-left:6px">SISTEMA</span>' : '<span class="tag ok" style="margin-left:6px">SHOPEE</span>') + ' <span class="tag ' + (wStatus(t) === 'EXPLICADO' || wStatus(t) === 'RESOLVIDO' ? 'ok' : 'neutral') + '" style="margin-left:6px">' + (WSTATUS[wStatus(t)]) + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
-      '<div class="kstrip" style="margin-bottom:12px"><div class="kc"><div class="kl">Valor</div><div class="kv" style="font-size:20px;color:' + (t.amount < 0 ? 'var(--err)' : 'var(--ok)') + '">' + brl(t.amount) + '</div></div><div class="kc"><div class="kl">Categoria</div><div class="kv" style="font-size:15px">' + esc(wcatLabel(wEffCat(t))) + (c.catManual ? ' <span class="tag info">manual</span>' : '') + '</div></div><div class="kc"><div class="kl">Responsabilidade</div><div class="kv" style="font-size:14px">' + esc(WRESP[wResp(t)]) + '</div></div></div>' +
+    // PROMPT "Modal — Classificar Movimentação": cabeçalho vira "Movimentação Shopee" + subtítulo
+    // "Débito/Crédito identificado" (deriva do sinal — mesma semântica de sempre, só reapresentada) +
+    // Valor/Data/Pedido no topo (o que o operador precisa ver PRIMEIRO pra decidir a classificação) —
+    // Categoria/Responsabilidade continuam visíveis, só que abaixo (painel "Movimentação (Shopee)" e
+    // dentro do próprio formulário), não competindo no topo.
+    panel.innerHTML = '<div class="dh"><div><b>' + (isRec ? 'Ajuste reconstruído' : 'Movimentação Shopee') + '</b><div class="footnote" style="margin:2px 0 0">' + (isRec ? 'Ajuste do sistema' : (t.amount < 0 ? 'Débito identificado' : 'Crédito identificado')) + ' <span class="tag ' + (wStatus(t) === 'EXPLICADO' || wStatus(t) === 'RESOLVIDO' ? 'ok' : 'neutral') + '" style="margin-left:6px">' + (WSTATUS[wStatus(t)]) + '</span></div></div><button class="x">&times;</button></div><div class="dbd">' +
+      '<div class="kstrip" style="margin-bottom:12px"><div class="kc"><div class="kl">Valor</div><div class="kv" style="font-size:20px;color:' + (t.amount < 0 ? 'var(--err)' : 'var(--ok)') + '">' + brl(t.amount) + '</div></div><div class="kc"><div class="kl">Data</div><div class="kv" style="font-size:15px">' + (t.date ? dbr(t.date) : '—') + '</div></div><div class="kc"><div class="kl">Pedido</div><div class="kv" style="font-size:15px">' + esc(t.orderId || '—') + '</div></div></div>' +
       callout('', '✨ Explicar', walletExplain(t)) +
       classify +
       '<div class="panel"><div class="ph"><h3>Movimentação (Shopee)</h3></div><div class="pb">' + kv('Tipo (Shopee)', t.tipo || (isRec ? 'Reconstruído pelo sistema' : '—')) + kv('Categoria automática', wcatLabel(t.category)) + kv('Saldo após', t.balance != null ? brl(t.balance) : '—') + kv('Valor a ser ajustado', t.adjust != null ? brl(t.adjust) : '—') + '</div></div>' +
@@ -8091,18 +8110,24 @@ buffer/index.js:
       if (arBlock) arBlock.style.display = (natSel.value === 'RECEITA' || natSel.value === 'CREDITO') ? 'block' : 'none';
     };
     panel.querySelector('#wcls-save').onclick = function () {
+      var venc = panel.querySelector('#wcls-venc').value || null;
+      var apOpcaoEl = panel.querySelector('input[name="wcls-ap-opcao"]:checked');
+      var arOpcaoEl = panel.querySelector('input[name="wcls-ar-opcao"]:checked');
       var patch = {
         natureza: panel.querySelector('#wcls-nat').value || null,
         contabilizar: panel.querySelector('#wcls-contab').value !== 'nao',
         competencia: panel.querySelector('#wcls-comp').value || null,
         apEnviar: panel.querySelector('#wcls-ap-enviar').value !== 'nao',
-        apCategoria: panel.querySelector('#wcls-ap-cat').value || null,
-        apVencimento: panel.querySelector('#wcls-ap-venc').value || null,
-        apStatusManual: panel.querySelector('#wcls-ap-status').value === 'PAGO' ? 'PAGO' : null,
+        // Categoria de Contas a Pagar/Receber (cpCategories — domínio à parte do WCAT) não é mais
+        // definida por este modal — preserva o valor já existente (se o operador tiver editado direto
+        // em Contas a Pagar/Receber), nunca apaga silenciosamente.
+        apCategoria: c.apCategoria || null,
+        apVencimento: venc,
+        apStatusManual: (apOpcaoEl && apOpcaoEl.value === 'BAIXA') ? 'PAGO' : null,
         arEnviar: panel.querySelector('#wcls-ar-enviar').value !== 'nao',
-        arCategoria: panel.querySelector('#wcls-ar-cat').value.trim() || null,
-        arPrevisao: panel.querySelector('#wcls-ar-prev').value || null,
-        arStatusManual: panel.querySelector('#wcls-ar-status').value === 'RECEBIDO' ? 'RECEBIDO' : null,
+        arCategoria: c.arCategoria || null,
+        arPrevisao: venc,
+        arStatusManual: (arOpcaoEl && arOpcaoEl.value === 'BAIXA') ? 'RECEBIDO' : null,
         catManual: panel.querySelector('#wcls-cat').value || null, subcat: panel.querySelector('#wcls-sub').value.trim() || null, responsibility: panel.querySelector('#wcls-resp').value || null, internalStatus: panel.querySelector('#wcls-st').value || null, linkedOrderId: panel.querySelector('#wcls-ord').value.trim() || null, linkedOccId: panel.querySelector('#wcls-occ').value.trim() || null, linkedResgateId: panel.querySelector('#wcls-resg').value.trim() || null, flagDuplicidade: panel.querySelector('#wcls-dup').checked || null, flagDescontoIndevido: panel.querySelector('#wcls-indev').checked || null,
       };
       // PROMPT "Correção Caixa — Ajuste de Nomenclatura, Conciliação e DRE Operacional" §2: "a
