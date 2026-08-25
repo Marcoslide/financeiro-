@@ -7081,7 +7081,17 @@
   }
   // ID do resgate Acelera de um crédito da Carteira, quando localizável — join direto por pedido
   // (não recalcula nada do Acelera, só lê o registro já importado).
+  // §Correção Definitiva Caixa (duplicação do resgate em Créditos): a linha de crédito do PRÓPRIO
+  // resgate no extrato da Carteira ("Resgate do Shopee Acelera - ID da transação: <resgate>") vem
+  // com "ID do pedido" vazio ("-") e sem "pedido X" na descrição — ela é o resumo do resgate inteiro,
+  // não de 1 pedido. Sem extrair o ID direto da descrição, esse crédito nunca batia com nenhum
+  // resgate (join por pedido falhava) e ficava contado 2x: uma vez no Bloco 5 (Valor Recebido na
+  // Carteira, via aceleraResultadoFechamento) e de novo no Bloco 6 (Créditos da Carteira), inflando
+  // "Disponível para Transferência". Extrai só o ID (regex sobre o texto já importado — não altera o
+  // parser da Carteira nem o motor do Acelera) e confirma contra os resgates já carregados.
   function wCreditResgateId(t) {
+    var m = (t.desc || '').match(/id da transa[cç][aã]o:\s*(\d+)/i);
+    if (m && acelera.some(function (r) { return r.resgate === m[1]; })) return m[1];
     var oid = wOrderId(t); if (!oid || !acelera.length) return null;
     var rec = acelera.find(function (r) { return r.pedido === oid; });
     return rec ? rec.resgate : null;
