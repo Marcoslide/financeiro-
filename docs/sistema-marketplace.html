@@ -291,7 +291,7 @@
     </nav>
     <div style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 306e3b8 · 2026-08-25 23:01 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build e6dc7a2 · 2026-08-25 23:42 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -5867,6 +5867,36 @@ buffer/index.js:
       '</div></div>' +
       '<div class="footnote" style="padding:8px 0">Fontes usadas: Pedidos' + (mrRow ? ' · Minha Renda' : '') + (svcRows.length ? ' · Service Fee Details' : '') + (adjRows.length ? ' · Adjustment' : '') + (acRows.length ? ' · Shopee Acelera' : '') + (affRow ? ' · Afiliados' : '') + (wtx.length ? ' · Saldo da Carteira' : '') + (occs.length ? ' · Devoluções' : '') + '.</div>';
 
+    // PROMPT "MELHORIA CAIXA — AUDITORIA FINANCEIRA, EXPLICAÇÃO DE DIVERGÊNCIAS E FLUXO SHOPEE" §7:
+    // "Auditoria financeira" por pedido — Venda/Taxas Shopee/Líquido calculado/Valor antecipado/
+    // Diferença/Status, mesma fonte canônica do Resultado do Pedido acima (receitaC/taxasShopeeC/
+    // pagamentoPrevistoC), só comparando com o que o Shopee Acelera efetivamente antecipou para ESTE
+    // pedido (acRows, já usado no cálculo de acTaxaCents). Nunca recalcula nada novo; só classifica a
+    // origem já conhecida da diferença (reembolso/cancelamento/ajuste/taxa ainda provisória) — nunca
+    // inventa motivo, e nunca corrige o valor automaticamente.
+    var auditoriaFinPedidoBlock = '';
+    if (acRows.length) {
+      var pvPedido = acRows.reduce(function (s, r) { return { bruto: s.bruto + r.antecipado, taxa: s.taxa + r.taxa, reemb: s.reemb + (r.reembolsado || 0) }; }, { bruto: 0, taxa: 0, reemb: 0 });
+      var antecipadoPedC = pvPedido.bruto;
+      var diffPedC = (pagamentoPrevistoC != null) ? (pagamentoPrevistoC - antecipadoPedC) : null;
+      var cancelado = ord && ord.normalizedStatus === 'CANCELADO';
+      var taxaProvisoria = sellerCharges.totalStatus && sellerCharges.totalStatus !== 'COMPLETO';
+      var motivo = cancelado ? 'Pedido cancelado.' : (pvPedido.reemb > 0 ? 'Reembolso registrado no Acelera de ' + brlC(-Math.abs(pvPedido.reemb)) + '.' : (adjRows.length ? 'Ajustes posteriores aplicados ao repasse (ver seção 5 acima).' : (taxaProvisoria ? 'Taxas Shopee ainda provisórias — aguardando confirmação do Income.' : '')));
+      var status, statusCls;
+      if (diffPedC == null) { status = '—'; statusCls = ''; }
+      else if (Math.abs(diffPedC) <= 100) { status = '🟢 Conciliado'; statusCls = 'ok'; }
+      else if (motivo) { status = '🟡 Diferença explicada'; statusCls = 'warn'; }
+      else { status = '🔴 Divergência'; statusCls = 'err'; }
+      auditoriaFinPedidoBlock = '<div class="panel"><div class="ph"><h3>Auditoria financeira</h3></div><div class="pb">' +
+        fLine('Venda', receitaC) +
+        fLine('Taxas Shopee', taxasShopeeC) +
+        '<div class="fin-line total"><span>Líquido calculado</span><span>' + (pagamentoPrevistoC != null ? brlC(pagamentoPrevistoC) : '—') + '</span></div>' +
+        fLine('Valor antecipado (Shopee Acelera)', antecipadoPedC) +
+        '<div class="fin-line"><span>Diferença</span><span class="' + (diffPedC != null && diffPedC < 0 ? 'neg' : 'pos') + '">' + (diffPedC != null ? brlC(diffPedC) : '—') + '</span></div>' +
+        '<div style="margin-top:8px"><span class="tag ' + statusCls + '">' + status + '</span>' + (motivo ? ' <span class="footnote" style="margin:0 0 0 6px">' + esc(motivo) + '</span>' : '') + '</div>' +
+        '</div></div>';
+    }
+
     // 7 blocos (Parte 2 da correção): 1.Resumo Financeiro (5 números) → 2.Produto e Venda →
     // 3.Taxas Shopee Descontadas do Vendedor → 4.Envio → 5.Ajustes que Afetaram o Repasse →
     // 6.Créditos/Compensações → 7.Conciliação do Pagamento — depois Eventos do Pedido → Resultado.
@@ -5886,6 +5916,7 @@ buffer/index.js:
       precificacaoBlock +
       devReaberturaBlock +
       resultadoBlock +
+      auditoriaFinPedidoBlock +
       (ord ? '<button class="btn-sm" data-goped="' + esc(orderId) + '">Ver na lista de Pedidos</button>' : '') +
       '</div>';
     panel.querySelector('.x').onclick = function () { d.remove(); };
@@ -12076,12 +12107,49 @@ buffer/index.js:
     // NUNCA altera nenhum valor — só exibe a diferença de forma explícita, com motivo "a investigar"
     // (nunca inventa uma causa). Tolerância de 1 centavo pra ignorar ruído de arredondamento.
     var divergenciaLiquidoAceleraC = liquidoReceberC - valorAntecipadoC;
+    // PROMPT "MELHORIA CAIXA — AUDITORIA FINANCEIRA, EXPLICAÇÃO DE DIVERGÊNCIAS E FLUXO SHOPEE" §5-6:
+    // "Bloco de Conciliação" com status 🟢 Explicada/🔴 Necessita análise + botão "Ver auditoria"
+    // detalhando pedido a pedido de onde vem a diferença (sem alteração/reembolso/cancelados/ajustes).
+    // Classificação usa só sinais já existentes (ac.pedidoValores, status do pedido, reembolsado do
+    // Acelera, adjRows) — nunca inventa motivo, nunca corrige o valor exibido nos Blocos 3/4.
+    var divergenciaDetalheHtml = '';
+    var divergenciaExplicada = true;
+    if (ac.resgatesN && Math.abs(divergenciaLiquidoAceleraC) > 1) {
+      var BUCKETS = { SEM_ALTERACAO: { label: 'Pedidos sem alteração', somaC: 0, n: 0 }, REEMBOLSO: { label: 'Pedidos com reembolso', somaC: 0, n: 0 }, CANCELADOS: { label: 'Pedidos cancelados', somaC: 0, n: 0 }, AJUSTES: { label: 'Ajustes posteriores', somaC: 0, n: 0 } };
+      // "Explicada" nunca é decidido pela SOMA do bucket "sem alteração" — pequenas diferenças de
+      // poucos reais por pedido são normais e esperadas em TODO pedido (o Acelera reserva um valor de
+      // resgate mais conservador que o líquido confirmado depois pelo Income) e se acumulam com o
+      // volume de pedidos, mesmo quando nenhum é um problema real. Só um pedido isolado que foge muito
+      // do padrão normal (> R$50 sem nenhuma causa conhecida) é sinal real de algo a investigar.
+      var maiorDiscrepanciaSemCausaC = 0;
+      origem.pedidosRows.forEach(function (p) {
+        var pv = ac.pedidoValores[p.orderId];
+        if (!pv || p.liquidoC == null) return;
+        // Mesma base de comparação do total agregado acima (liquidoReceberC vs valorAntecipadoC =
+        // ac.valorBruto, ANTES da taxa de antecipação) — nunca pv.liquido (que já é líquido da taxa),
+        // senão a soma dos buckets não bate com a Diferença total mostrada no callout.
+        var diffP = p.liquidoC - pv.bruto;
+        var ord2 = orders.find(function (o) { return o.id === p.orderId; });
+        var acPedRows2 = acelera.filter(function (r) { return r.pedido === p.orderId; });
+        var reembC = acPedRows2.reduce(function (s, r) { return s + (r.reembolsado || 0); }, 0);
+        var comp2 = pedidoComposicaoFinanceira(p.orderId);
+        var cancelado2 = ord2 && ord2.normalizedStatus === 'CANCELADO';
+        var bucketKey = cancelado2 ? 'CANCELADOS' : (reembC > 0 ? 'REEMBOLSO' : ((comp2.adjRows && comp2.adjRows.length) ? 'AJUSTES' : 'SEM_ALTERACAO'));
+        BUCKETS[bucketKey].somaC += diffP; BUCKETS[bucketKey].n++;
+        if (bucketKey === 'SEM_ALTERACAO' && Math.abs(diffP) > Math.abs(maiorDiscrepanciaSemCausaC)) maiorDiscrepanciaSemCausaC = diffP;
+      });
+      divergenciaExplicada = Math.abs(maiorDiscrepanciaSemCausaC) <= 5000;
+      var bucketRows = Object.keys(BUCKETS).map(function (k) { var b = BUCKETS[k]; return b.n ? '<div class="fin-line"><span>' + esc(b.label) + ' <span class="footnote" style="margin:0">(' + nn(b.n) + ')</span></span><span class="' + (b.somaC < 0 ? 'neg' : b.somaC > 0 ? 'pos' : '') + '">' + brlC(b.somaC) + '</span></div>' : ''; }).join('');
+      divergenciaDetalheHtml = '<details class="cx-collapse" style="margin-top:4px"><summary style="font-size:12px;padding:6px 12px">Ver auditoria</summary><div class="pb"><div class="footnote" style="margin-bottom:6px">Diferença entre líquido calculado e valor antecipado, separada por origem já conhecida — nenhum valor é alterado.</div>' + bucketRows + '<div class="fin-line total" style="margin-top:4px"><span>Total</span><span class="' + (divergenciaLiquidoAceleraC < 0 ? 'neg' : 'pos') + '">' + brlC(divergenciaLiquidoAceleraC) + '</span></div>' + '</div></details>';
+    }
+    var divergenciaStatusTag = divergenciaExplicada ? '<span class="tag ok">🟢 Explicada</span>' : '<span class="tag warn">🔴 Necessita análise</span>';
     var divergenciaLiquidoAceleraHtml = (ac.resgatesN && Math.abs(divergenciaLiquidoAceleraC) > 1) ?
-      callout('warn', 'Divergência entre líquido calculado e antecipação Shopee',
-        '<div class="fin-line"><span>Resultado líquido calculado</span><span>' + brlC(liquidoReceberC) + '</span></div>' +
-        '<div class="fin-line"><span>Valor antecipado</span><span>' + brlC(valorAntecipadoC) + '</span></div>' +
+      callout('warn', 'Diferença entre líquido calculado e recebido',
+        '<div class="fin-line"><span>Líquido calculado</span><span>' + brlC(liquidoReceberC) + '</span></div>' +
+        '<div class="fin-line"><span>Recebido Acelera</span><span>' + brlC(valorAntecipadoC) + '</span></div>' +
         '<div class="fin-line total"><span>Diferença</span><span class="' + (divergenciaLiquidoAceleraC < 0 ? 'neg' : 'pos') + '">' + brlC(divergenciaLiquidoAceleraC) + '</span></div>' +
-        '<div class="footnote" style="margin-top:4px">Motivo: a investigar — nenhum valor foi alterado.</div>') : '';
+        '<div style="margin-top:6px">' + divergenciaStatusTag + '</div>' +
+        divergenciaDetalheHtml) : '';
 
     // PROMPT "Refazer o Caixa" §9-13: SEM faixa de cards KPI antes do fluxo — "quero aparência de
     // extrato financeiro/conciliação", não dashboard. O fluxo do dinheiro abaixo é o protagonista
@@ -12207,7 +12275,7 @@ buffer/index.js:
       '<div class="fin-line total"><span>= Líquido antes da antecipação</span><b>' + brlC(liquidoReceberC) + '</b></div>' +
       '</div></div>' +
       '<div class="cx-block"><div class="cx-block-row"><span class="cxl">4. Valor Antecipado (Shopee Acelera)</span><span class="cxv">' + brlC(valorAntecipadoC) + '</span></div>' +
-      '<div class="cxsub">Antecipa recebíveis já existentes (de vendas de qualquer dia, não só as deste dia) — por isso pode diferir do Valor Líquido dos Pedidos acima.</div>' +
+      '<div class="cxsub">Este valor representa o dinheiro liberado pela Shopee no momento da antecipação. Ele pode não ser igual ao líquido calculado dos pedidos (Bloco 3) devido a ajustes posteriores, reembolsos ou diferenças de ciclo financeiro — o Acelera antecipa recebíveis já existentes (de vendas de qualquer dia, não só as deste dia).</div>' +
       '<div class="cx-block-child cx-block-row"><span class="cxl">(-) Taxa de Antecipação</span><span class="cxv' + (taxaAceleraC ? ' neg' : '') + '">' + brlC(taxaAceleraC) + '</span></div>' +
       verResgate + divergenciaLiquidoAceleraHtml + '</div>' +
       '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">5. Valor Recebido na Carteira</span><span class="cxv">' + brlC(liquidoCarteiraC) + '</span></div></div>' +
