@@ -6892,8 +6892,17 @@
     var pedidos = ac.pedidosAcelera.map(function (id) { var o = ordersByNormId[normalizeOrderId(id)]; if (!o) pedidosNaoLocalizados.push(id); return o; }).filter(Boolean);
     var valorBrutoC = 0, mapTaxasLoja = {}, mapTaxasLojaProvisorio = {}, taxasPendentesN = 0;
     var pedidosRows = pedidos.map(function (o) {
-      var c = pedidoComposicaoFinanceira(o.id);
-      var receitaC = c.receitaC != null ? c.receitaC : Math.round((o.totalAmount || 0) * 100);
+      // PROMPT "Bloco 1 do Caixa usando valor errado": teste com dados reais (resgate Acelera de
+      // 01/08, 52 pedidos, todos localizados) mostrou "Valor da Venda" diferente da soma real do
+      // Preço Acordado do Order.all — causa raiz é que pedidoComposicaoFinanceira().receitaC PREFERE
+      // o Income (mrRow.preco) quando o pedido já tem Income cruzado, então o Bloco 1 misturava fonte
+      // Income/Order.all pedido a pedido em vez de ser sempre Order.all. Regra correta do prompt:
+      // "Bloco 1 - Valor da Venda: Acelera → ID pedidos → Order.all → Preço acordado" — nunca Income
+      // (isso é o Bloco 2, via resolveSellerCharges/Income) e nunca o valor bruto do próprio Acelera
+      // (isso é o Bloco 4, ac.valorBruto, que continua intocado). orderFinance(o).revenue é a MESMA
+      // função canônica que já soma "Preço acordado × Qtd" por item em todo o resto do sistema
+      // (Dashboard, Minha Renda) — nenhum motor novo, só a fonte certa para este bloco.
+      var receitaC = Math.round((orderFinance(o).revenue || 0) * 100);
       valorBrutoC += receitaC;
       var sc = resolveSellerCharges(o.id);
       // PROMPT §2: cada linha de taxa precisa dizer se é "CONFIRMADO PELO INCOME" ou "PROVISÓRIO —
