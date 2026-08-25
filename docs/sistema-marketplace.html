@@ -291,7 +291,7 @@
     </nav>
     <div style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build ad1bb34 · 2026-08-25 14:19 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build c1c8cfa · 2026-08-25 15:00 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -10686,23 +10686,40 @@ buffer/index.js:
   // valor novo é calculado aqui, só reagrupado pelo conjunto certo de pedidos.
   function caixaOrigemAntecipacao(dateKey) {
     var ac = aceleraResultadoFechamento(dateKey);
-    var pedidos = ac.pedidosAcelera.map(function (id) { return orders.find(function (o) { return o.id === id; }); }).filter(Boolean);
-    var valorBrutoC = 0, mapTaxasLoja = {}, taxasPendentesN = 0;
+    // CORREÇÃO OBRIGATÓRIA (prompt "Reestruturação completa do módulo Caixa — fluxo real de
+    // fechamento Shopee" §1/§2): "Pedidos vinculados à antecipação" aparecendo zerado — causa raiz
+    // é o mesmo problema já corrigido para Income (normalizeOrderId): o relatório do Shopee Acelera
+    // pode trazer o ID do pedido com caracteres invisíveis (zero-width/NBSP) que uma comparação
+    // exata (===) contra orders[].id nunca casa. Usa normalizeOrderId() nos dois lados — MESMA
+    // função já usada por resolveIncomeOrder — sem alterar o motor do Acelera (aceleraResultadoFechamento
+    // continua intocado; só a busca em `orders` para exibir produto/SKU/status fica robusta).
+    var ordersByNormId = {}; orders.forEach(function (o) { ordersByNormId[normalizeOrderId(o.id)] = o; });
+    var pedidosNaoLocalizados = [];
+    var pedidos = ac.pedidosAcelera.map(function (id) { var o = ordersByNormId[normalizeOrderId(id)]; if (!o) pedidosNaoLocalizados.push(id); return o; }).filter(Boolean);
+    var valorBrutoC = 0, mapTaxasLoja = {}, mapTaxasLojaProvisorio = {}, taxasPendentesN = 0;
     var pedidosRows = pedidos.map(function (o) {
       var c = pedidoComposicaoFinanceira(o.id);
       var receitaC = c.receitaC != null ? c.receitaC : Math.round((o.totalAmount || 0) * 100);
       valorBrutoC += receitaC;
       var sc = resolveSellerCharges(o.id);
-      sc.items.forEach(function (it) { if (it.knownContribution) mapTaxasLoja[it.label] = (mapTaxasLoja[it.label] || 0) + it.knownContribution; });
+      // PROMPT §2: cada linha de taxa precisa dizer se é "CONFIRMADO PELO INCOME" ou "PROVISÓRIO —
+      // aguardando Income" — como a linha é um AGREGADO de vários pedidos do resgate, ela fica
+      // "provisório" se QUALQUER pedido que contribuiu ainda não tem Income (nunca esconde que uma
+      // parte do total é estimativa).
+      sc.items.forEach(function (it) { if (it.knownContribution) { mapTaxasLoja[it.label] = (mapTaxasLoja[it.label] || 0) + it.knownContribution; if (it.dataStatus === 'PROVISIONAL_ORDER') mapTaxasLojaProvisorio[it.label] = true; } });
       if (sc.totalStatus !== 'COMPLETO') taxasPendentesN++;
       var prod = o.items.length > 1 ? (o.items.length + ' produtos') : (o.items[0] ? o.items[0].productName : '—');
       var sku = o.items.length > 1 ? '—' : (o.items[0] ? o.items[0].sku : '—');
-      return { orderId: o.id, produto: prod, sku: sku, valorC: receitaC, status: o.normalizedStatus, statusLabel: S.pedidos.labels[o.normalizedStatus] || o.orderStatus };
+      // §1 do prompt: lista de auditoria do pedido precisa mostrar Taxas e Valor líquido POR PEDIDO
+      // (não só o agregado do bloco) — mesma fonte (resolveSellerCharges), nunca um cálculo novo.
+      var taxaPedidoC = sc.totalC; // pode ser null quando SEM_DADOS — nunca vira 0 fictício
+      var liquidoPedidoC = taxaPedidoC != null ? receitaC + taxaPedidoC : null;
+      return { orderId: o.id, produto: prod, sku: sku, valorC: receitaC, status: o.normalizedStatus, statusLabel: S.pedidos.labels[o.normalizedStatus] || o.orderStatus, taxaC: taxaPedidoC, taxaStatus: sc.totalStatus, liquidoC: liquidoPedidoC };
     });
-    var linhasTaxasLoja = Object.keys(mapTaxasLoja).map(function (k) { return { label: k, valor: mapTaxasLoja[k] }; }).filter(function (l) { return l.valor; }).sort(function (a, b) { return a.valor - b.valor; });
+    var linhasTaxasLoja = Object.keys(mapTaxasLoja).map(function (k) { return { label: k, valor: mapTaxasLoja[k], provisorio: !!mapTaxasLojaProvisorio[k] }; }).filter(function (l) { return l.valor; }).sort(function (a, b) { return a.valor - b.valor; });
     var taxasLojaC = linhasTaxasLoja.reduce(function (s, l) { return s + l.valor; }, 0);
     var resultadoLiquidoC = valorBrutoC + taxasLojaC;
-    return { dateKey: dateKey, ac: ac, n: pedidos.length, pedidos: pedidos, pedidosRows: pedidosRows, valorBrutoC: valorBrutoC, linhasTaxasLoja: linhasTaxasLoja, taxasLojaC: taxasLojaC, taxasPendentesN: taxasPendentesN, resultadoLiquidoC: resultadoLiquidoC };
+    return { dateKey: dateKey, ac: ac, n: pedidos.length, pedidos: pedidos, pedidosRows: pedidosRows, valorBrutoC: valorBrutoC, linhasTaxasLoja: linhasTaxasLoja, taxasLojaC: taxasLojaC, taxasPendentesN: taxasPendentesN, resultadoLiquidoC: resultadoLiquidoC, pedidosNaoLocalizados: pedidosNaoLocalizados };
   }
   // ---- DRE do dia — motor NATIVO do Caixa: agrega pedidoComposicaoFinanceira() (Pedidos) dos
   // pedidos pagos do dia. Zero chamadas a mrEngine()/mrPeriodEngine()/mrResultadoDetalhado() —
@@ -11838,11 +11855,18 @@ buffer/index.js:
     // Antecipação Shopee → Recebido na carteira → créditos/débitos → transferido ao banco → saldo
     // final) é um .cx-block com divisor fino; os números continuam vindo só de origem/ac/fluxo, nada
     // é recalculado aqui. ----
-    var vendaSub = origem.n ? nn(origem.n) + ' pedido(s) vinculado(s) à antecipação' : 'nenhum pedido vinculado a uma antecipação neste dia';
+    var vendaSub = origem.n ? nn(origem.n) + ' pedido(s) vinculado(s) à antecipação' : (ac.resgatesN ? '⚠ ' + nn(ac.pedidosAceleraN) + ' pedido(s) no resgate do Acelera, mas nenhum localizado em Pedidos — abra "Ver pedidos" abaixo' : 'nenhum resgate do Acelera neste dia');
+    // §1 do prompt: lista de auditoria completa (Pedido/Produto/SKU/Valor venda/Status/Taxas/Valor
+    // líquido) — nunca esconde divergência: quando o Acelera referencia um pedido que não foi
+    // localizado em Pedidos (ID com caractere invisível/planilha diferente/pedido fora do período
+    // importado), mostra um aviso explícito em vez de silenciosamente sumir do total.
     var pedidosOrigemRows = origem.pedidosRows.map(function (p) {
-      return '<tr class="rowlink" data-goped360="' + esc(p.orderId) + '"><td class="mono">' + esc(p.orderId) + '</td><td class="cell-text">' + esc(p.produto || '—') + '</td><td class="mono">' + esc(p.sku || '—') + '</td><td class="nowrap">' + brlC(p.valorC) + '</td><td>' + esc(p.statusLabel) + '</td></tr>';
+      var taxaCell = p.taxaC != null ? ('<b class="' + (p.taxaC < 0 ? 'neg' : '') + '">' + brlC(p.taxaC) + '</b>' + (p.taxaStatus === 'PROVISORIO' ? ' <span class="tag warn" style="font-size:9px">provisório</span>' : (p.taxaStatus === 'COMPLETO' ? ' <span class="tag ok" style="font-size:9px">confirmado</span>' : ''))) : '—';
+      var liquidoCell = p.liquidoC != null ? brlC(p.liquidoC) : '—';
+      return '<tr class="rowlink" data-goped360="' + esc(p.orderId) + '"><td class="mono">' + esc(p.orderId) + '</td><td class="cell-text">' + esc(p.produto || '—') + '</td><td class="mono">' + esc(p.sku || '—') + '</td><td class="nowrap">' + brlC(p.valorC) + '</td><td>' + esc(p.statusLabel) + '</td><td class="nowrap">' + taxaCell + '</td><td class="nowrap">' + liquidoCell + '</td></tr>';
     }).join('');
-    var pedidosOrigemDetails = '<details class="cx-collapse" style="margin-top:4px"><summary style="font-size:12px;padding:6px 12px">Ver pedidos</summary><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Produto</th><th>SKU</th><th>Valor venda</th><th>Status</th></tr></thead><tbody>' + (pedidosOrigemRows || '<tr><td colspan="5" class="empty">Nenhum pedido.</td></tr>') + '</tbody></table></div></div></details>';
+    var pedidosNaoLocAviso = origem.pedidosNaoLocalizados.length ? ('<div class="footnote" style="margin:6px 0;color:var(--err)">⚠ ' + nn(origem.pedidosNaoLocalizados.length) + ' pedido(s) do resgate Acelera não localizado(s) em Pedidos (fora do período importado ou ID divergente): ' + origem.pedidosNaoLocalizados.map(esc).join(', ') + '</div>') : '';
+    var pedidosOrigemDetails = '<details class="cx-collapse" style="margin-top:4px"><summary style="font-size:12px;padding:6px 12px">Ver pedidos</summary><div class="pb">' + pedidosNaoLocAviso + '<div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Produto</th><th>SKU</th><th>Valor venda</th><th>Status</th><th>Taxas</th><th>Valor líquido</th></tr></thead><tbody>' + (pedidosOrigemRows || '<tr><td colspan="7" class="empty">Nenhum pedido.</td></tr>') + '</tbody></table></div></div></details>';
 
     // Comissão/Taxa de Serviço aparecem DIRETO (sem precisar clicar) — só os FILHOS reais da Taxa de
     // Serviço (Afiliados do Vendedor/Taxa de Transação/Taxa por item vendido) ficam atrás de "Ver
@@ -11850,7 +11874,8 @@ buffer/index.js:
     var descontosLinhas = origem.linhasTaxasLoja.length ? origem.linhasTaxasLoja.map(function (l) {
       var isServico = dre.linhasSvcChildren.length && SVC_REAL_LABELS[l.label];
       var composicao = isServico ? ('<details class="cx-collapse" style="margin:2px 0 8px"><summary style="font-size:12px;padding:6px 12px">Ver composição</summary><div class="pb">' + dre.linhasSvcChildren.map(function (c) { return '<div class="fin-line" style="font-size:12.5px"><span>' + esc(c.label) + '</span><span class="' + (c.valor < 0 ? 'neg' : 'pos') + '">' + brlC(c.valor) + '</span></div>'; }).join('') + '</div></details>') : '';
-      return '<div class="cx-kv rowlink" data-dredrill="' + esc(l.label) + '" data-dredrillorigem="ANTECIPACAO" title="Ver pedidos"><span class="cxl">' + esc(l.label) + '</span><span class="cxv ' + (l.valor < 0 ? 'neg' : l.valor > 0 ? 'pos' : '') + '">' + brlC(l.valor) + '</span></div>' + composicao;
+      var statusTag = l.provisorio ? ' <span class="tag warn" style="font-size:9px">PROVISÓRIO — aguardando Income</span>' : ' <span class="tag ok" style="font-size:9px">CONFIRMADO PELO INCOME</span>';
+      return '<div class="cx-kv rowlink" data-dredrill="' + esc(l.label) + '" data-dredrillorigem="ANTECIPACAO" title="Ver pedidos"><span class="cxl">' + esc(l.label) + statusTag + '</span><span class="cxv ' + (l.valor < 0 ? 'neg' : l.valor > 0 ? 'pos' : '') + '">' + brlC(l.valor) + '</span></div>' + composicao;
     }).join('') : '<div class="footnote" style="margin:2px 0 8px">Nenhuma taxa cobrada nestes pedidos.</div>';
 
     // Ver resgate — mesmos resgates do Acelera já usados antes (aceleraResultadoFechamento), só atrás
