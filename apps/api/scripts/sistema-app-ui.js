@@ -8510,6 +8510,19 @@
   // escopado por operationId) + regras de precificação por família (§16, GLOBAL — nunca duplica o
   // custo, que continua vivendo só em family.currentCostAmount). ----
   var pricingOpConfig = [], pricingFamilyRules = [];
+  // PROMPT "IMPLEMENTAR NOVO MÓDULO: PRECIFICAÇÃO & METAS" §6/§7: Ponto de Equilíbrio (custos fixos
+  // mensais cadastrados) e Meta de Lucro (meta mensal) — config leve por operação, guardada no MESMO
+  // padrão já usado por mrMetaCfg/aceleraCfg (um registro em `settings`, nunca uma tabela nova) — dict
+  // { [operationId]: {...} }. O "já coberto"/"lucro atual" NUNCA recalcula nada: sempre lê
+  // caixaPeriodEngine(caixaPeriodDays(periodRange())) — o MESMO motor canônico que o Dashboard do
+  // Caixa já usa para faturamento/lucro/margem do período selecionado (nunca uma segunda lógica
+  // financeira paralela).
+  var pontoEquilibrioCfg = {}, metaLucroCfg = {};
+  function pontoEquilibrioCfgForOp(opId) { return pontoEquilibrioCfg[opId] || { funcionarios: 0, aluguel: 0, energia: 0, sistemas: 0, outros: 0 }; }
+  function pontoEquilibrioTotalFixoC(opId) { var c = pontoEquilibrioCfgForOp(opId); return Math.round(((c.funcionarios || 0) + (c.aluguel || 0) + (c.energia || 0) + (c.sistemas || 0) + (c.outros || 0)) * 100); }
+  function pontoEquilibrioSave(opId, dto) { pontoEquilibrioCfg[opId] = Object.assign({}, pontoEquilibrioCfgForOp(opId), dto); return putMany('settings', [{ id: 'pontoEquilibrioCfg', data: pontoEquilibrioCfg }]); }
+  function metaLucroCfgForOp(opId) { return metaLucroCfg[opId] || { metaMensalC: 0 }; }
+  function metaLucroSave(opId, dto) { metaLucroCfg[opId] = Object.assign({}, metaLucroCfgForOp(opId), dto); return putMany('settings', [{ id: 'metaLucroCfg', data: metaLucroCfg }]); }
   var cpSub = 'lista'; // lista | categorias | planocontas | centroscusto | fornecedores | dre
   var cpSel = new Set(), cpPage = 1, cpPageSize = 30;
   var cpFiltrosAbertos = false; // toggle "+ Filtros" (filtros avançados só aparecem quando expandido)
@@ -10198,7 +10211,7 @@
   var precSub = 'simulador'; // visaogeral | simulador | familias | regras | auditoria
   var precSim = null; // estado do Simulador — inicializado no primeiro render, nunca persistido sozinho (só via "Salvar como regra")
   function precTabsHtml() {
-    return '<div class="tabs">' + [['simulador', 'Simulador'], ['familias', 'Famílias & Preços'], ['regras', 'Regras & Custos'], ['visaogeral', 'Visão Geral'], ['auditoria', 'Auditoria']].map(function (t) { return '<div class="tab' + (precSub === t[0] ? ' active' : '') + '" data-prectab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>';
+    return '<div class="tabs">' + [['simulador', 'Simulador'], ['familias', 'Famílias & Preços'], ['regras', 'Regras & Custos'], ['equilibrio', 'Ponto de Equilíbrio'], ['meta', 'Meta de Lucro'], ['visaogeral', 'Visão Geral'], ['auditoria', 'Auditoria']].map(function (t) { return '<div class="tab' + (precSub === t[0] ? ' active' : '') + '" data-prectab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>';
   }
   function precHead() { return secHead('PRECIFICAÇÃO', 'Precificação & Margem', 'Markup, fator, margem e o caminho inverso: para onde vai o seu fator? Simule antes de vender e compare com o resultado realizado.'); }
   function renderPrecificacao() {
@@ -10210,6 +10223,8 @@
     var body = document.getElementById('precbody');
     if (precSub === 'familias') { body.innerHTML = renderPrecFamilias(); bindPrecFamilias(); return; }
     if (precSub === 'regras') { body.innerHTML = renderPrecRegras(); bindPrecRegras(); return; }
+    if (precSub === 'equilibrio') { body.innerHTML = renderPrecEquilibrio(); bindPrecEquilibrio(); return; }
+    if (precSub === 'meta') { body.innerHTML = renderPrecMeta(); bindPrecMeta(); return; }
     if (precSub === 'visaogeral') { body.innerHTML = renderPrecVisaoGeral(); bindPrecVisaoGeral(); return; }
     if (precSub === 'auditoria') { body.innerHTML = renderPrecAuditoria(); return; }
     body.innerHTML = renderPrecSimulador(); bindPrecSimulador();
@@ -10513,6 +10528,113 @@
     };
   }
 
+  // ---- Ponto de Equilíbrio (PROMPT "Precificação & Metas" §6) ----
+  // "Já coberto" NUNCA recalcula financeiro: lê caixaPeriodEngine(caixaPeriodDays(periodRange())) —
+  // o MESMO motor que o Dashboard do Caixa usa pra faturamento/lucro/margem do período selecionado
+  // (nunca uma segunda lógica financeira paralela, per regra §10 do prompt).
+  var PE_STATUS_LABEL = { ATINGIDO: ['🟢 Atingido', 'b-ok'], PROXIMO: ['🟡 Próximo', 'b-warn'], NAO_ATINGIDO: ['🔴 Ainda não atingido', 'b-err'], SEM_CUSTOS: ['— cadastre os custos fixos', 'b-neutral'] };
+  function precEquilibrioCalc() {
+    var opId = opActiveOrNull() || (precOperationsList()[0] || {}).id || null;
+    var totalFixoC = pontoEquilibrioTotalFixoC(opId);
+    var eng = caixaPeriodEngine(caixaPeriodDays(periodRange()));
+    var jaCobertoC = Math.max(0, Math.round(eng.totLucro || 0));
+    var faltaC = Math.max(0, totalFixoC - jaCobertoC);
+    var pctCoberto = totalFixoC ? Math.min(100, r2(jaCobertoC / totalFixoC * 100)) : null;
+    var statusKey = pctCoberto == null ? 'SEM_CUSTOS' : (pctCoberto >= 100 ? 'ATINGIDO' : (pctCoberto >= 80 ? 'PROXIMO' : 'NAO_ATINGIDO'));
+    return { opId: opId, totalFixoC: totalFixoC, eng: eng, jaCobertoC: jaCobertoC, faltaC: faltaC, pctCoberto: pctCoberto, statusKey: statusKey };
+  }
+  function renderPrecEquilibrio() {
+    var opId = opActiveOrNull() || (precOperationsList()[0] || {}).id || null;
+    var cfg = pontoEquilibrioCfgForOp(opId);
+    var camposFixos = [['funcionarios', 'Funcionários'], ['aluguel', 'Aluguel'], ['energia', 'Energia'], ['sistemas', 'Sistemas'], ['outros', 'Outros']];
+    var form = '<div class="panel"><div class="ph"><h3>Custos fixos mensais</h3></div><div class="pb">' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
+      camposFixos.map(function (c) { return '<div><label class="fld">' + c[1] + ' (R$)</label><input class="input pe-fixo-input" data-key="' + c[0] + '" value="' + (cfg[c[0]] ? String(cfg[c[0]]).replace('.', ',') : '') + '" placeholder="0,00"></div>'; }).join('') +
+      '</div>' +
+      '<div style="margin-top:10px"><button class="btn-sm primary" id="pe-save">Salvar custos fixos</button></div>' +
+      '</div></div>';
+    var calc = precEquilibrioCalc(); var st = PE_STATUS_LABEL[calc.statusKey];
+    var custoIncompletoAviso = calc.eng.diasSemCustoCompleto ? ('<div class="footnote" style="margin-top:6px">⚠ ' + nn(calc.eng.diasSemCustoCompleto) + ' dia(s) do período com custo de produto incompleto — o lucro desses dias entra parcial, nunca estimado.</div>') : '';
+    var resultado = '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Ponto de Equilíbrio</h3><span class="badge ' + st[1] + '">' + st[0] + '</span></div><div class="pb">' +
+      devPeriodBarAsCp() +
+      '<div class="kstrip" style="margin-top:10px">' +
+      '<div class="kc"><div class="kl">Custos fixos do período</div><div class="kv">' + brlC(calc.totalFixoC) + '</div></div>' +
+      '<div class="kc"><div class="kl">Já coberto (lucro realizado)</div><div class="kv">' + brlC(calc.jaCobertoC) + '</div></div>' +
+      '<div class="kc"><div class="kl">Falta</div><div class="kv">' + brlC(calc.faltaC) + '</div></div>' +
+      '<div class="kc"><div class="kl">% coberto</div><div class="kv">' + (calc.pctCoberto != null ? pct(calc.pctCoberto) : '—') + '</div></div>' +
+      '</div>' +
+      custoIncompletoAviso +
+      '<div class="footnote" style="margin-top:8px">"Já coberto" é o lucro REAL do período selecionado no filtro acima (mesmo motor do Dashboard do Caixa) — nunca uma estimativa. Ajuste o período (ex.: "Este mês") para ver o quanto já cobriu a estrutura fixa do mês.</div>' +
+      '</div></div>';
+    return form + resultado;
+  }
+  function bindPrecEquilibrio() {
+    bindDevPeriodBar();
+    var opId = opActiveOrNull() || (precOperationsList()[0] || {}).id || null;
+    var btn = document.getElementById('pe-save');
+    if (btn) btn.onclick = function () {
+      var dto = {};
+      document.querySelectorAll('.pe-fixo-input').forEach(function (inp) { dto[inp.dataset.key] = parseFloat((inp.value || '0').replace(',', '.')) || 0; });
+      pontoEquilibrioSave(opId, dto).then(function () { render(); toast('Custos fixos salvos', ''); });
+    };
+  }
+
+  // ---- Meta de Lucro (PROMPT "Precificação & Metas" §7) ----
+  // "Lucro atual" idem — sempre caixaPeriodEngine(), nunca recalculado. O ranking de "produtos com
+  // maior capacidade de gerar lucro" reaproveita pricingForFamily() (o MESMO motor do Simulador/
+  // Famílias & Preços) — nunca um cálculo de precificação paralelo.
+  function precMetaCalc() {
+    var opId = opActiveOrNull() || (precOperationsList()[0] || {}).id || null;
+    var cfg = metaLucroCfgForOp(opId);
+    var metaC = Math.round(cfg.metaMensalC || 0);
+    var eng = caixaPeriodEngine(caixaPeriodDays(periodRange()));
+    var lucroAtualC = Math.round(eng.totLucro || 0);
+    var faltaC = Math.max(0, metaC - lucroAtualC);
+    var pctAtingido = metaC ? Math.min(100, r2(lucroAtualC / metaC * 100)) : null;
+    return { opId: opId, metaC: metaC, eng: eng, lucroAtualC: lucroAtualC, faltaC: faltaC, pctAtingido: pctAtingido };
+  }
+  function renderPrecMeta() {
+    var calc = precMetaCalc();
+    var form = '<div class="panel"><div class="ph"><h3>Meta mensal</h3></div><div class="pb">' +
+      '<label class="fld">Meta de lucro (R$)</label><input class="input" id="ml-meta" value="' + (calc.metaC ? (calc.metaC / 100).toFixed(2).replace('.', ',') : '') + '" placeholder="0,00">' +
+      '<div style="margin-top:10px"><button class="btn-sm primary" id="ml-save">Salvar meta</button></div>' +
+      '</div></div>';
+    var margemMedia = calc.eng.margem;
+    var faturamentoNecessarioC = (calc.faltaC > 0 && margemMedia != null && margemMedia > 0) ? Math.round(calc.faltaC / (margemMedia / 100)) : null;
+    var resultado = '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Meta de Lucro</h3></div><div class="pb">' +
+      devPeriodBarAsCp() +
+      '<div class="kstrip" style="margin-top:10px">' +
+      '<div class="kc"><div class="kl">Meta</div><div class="kv">' + (calc.metaC ? brlC(calc.metaC) : '—') + '</div></div>' +
+      '<div class="kc"><div class="kl">Lucro atual</div><div class="kv">' + brlC(calc.lucroAtualC) + '</div></div>' +
+      '<div class="kc"><div class="kl">Falta</div><div class="kv">' + brlC(calc.faltaC) + '</div></div>' +
+      '<div class="kc"><div class="kl">% atingido</div><div class="kv">' + (calc.pctAtingido != null ? pct(calc.pctAtingido) : '—') + '</div></div>' +
+      '</div>' +
+      (faturamentoNecessarioC != null ? ('<div class="callout" style="margin-top:10px"><div class="cbody">Com a margem média realizada no período (' + pct(margemMedia) + '), você precisa vender aproximadamente <b>' + brlC(faturamentoNecessarioC) + '</b> para atingir sua meta.</div></div>') : (calc.faltaC > 0 ? '<div class="footnote" style="margin-top:8px">Não é possível estimar o faturamento necessário: falta margem média completa no período (custo de produto incompleto em algum dia, ou nenhuma venda com custo conhecido).</div>' : '')) +
+      '</div></div>';
+    var fams = precFamiliesList();
+    var ranking = fams.map(function (f) {
+      if (f.currentCostAmount == null) return null;
+      var pf = pricingForFamily(f.id, calc.opId);
+      var lucroUnitC = pf.result.profitAmount;
+      if (lucroUnitC == null || lucroUnitC <= 0) return null;
+      var unidadesNecessarias = calc.faltaC > 0 ? Math.ceil(calc.faltaC / lucroUnitC) : 0;
+      return { familia: f.name, lucroUnitC: lucroUnitC, unidadesNecessarias: unidadesNecessarias };
+    }).filter(Boolean).sort(function (a, b) { return a.unidadesNecessarias - b.unidadesNecessarias; }).slice(0, 8);
+    var rankingBlock = ranking.length ? ('<div class="panel" style="margin-top:14px"><div class="ph"><h3>Produtos com maior capacidade de gerar lucro</h3><span class="footnote" style="margin:0">unidades que cada família precisaria vender, no fator/regra configurado, para cobrir o que falta da meta</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Família</th><th>Lucro por unidade</th><th>Unidades necessárias</th></tr></thead><tbody>' +
+      ranking.map(function (r) { return '<tr><td>' + esc(r.familia) + '</td><td class="nowrap">' + brlC(r.lucroUnitC) + '</td><td class="nowrap">' + nn(r.unidadesNecessarias) + ' un.</td></tr>'; }).join('') +
+      '</tbody></table></div></div>') : '<div class="footnote" style="margin-top:14px">Nenhuma família com custo cadastrado e lucro unitário positivo para ranquear.</div>';
+    return form + resultado + rankingBlock;
+  }
+  function bindPrecMeta() {
+    bindDevPeriodBar();
+    var opId = opActiveOrNull() || (precOperationsList()[0] || {}).id || null;
+    var btn = document.getElementById('ml-save');
+    if (btn) btn.onclick = function () {
+      var v = parseFloat((document.getElementById('ml-meta').value || '0').replace(',', '.')) || 0;
+      metaLucroSave(opId, { metaMensalC: Math.round(v * 100) }).then(function () { render(); toast('Meta salva', ''); });
+    };
+  }
+
   // ---- Visão Geral (leve, nesta fase — sem KPIs de pedidos reais, ver relatório de entrega) ----
   // Agrega vendas reais do período (reaproveita periodRange() — o MESMO seletor global de período de
   // todo o sistema, nunca duplicado — e pricingCompareOrder(), nunca um cálculo novo) pra alimentar os
@@ -10552,6 +10674,18 @@
     var comRegra = fams.filter(function (f) { return !!pricingFamilyRule(f.id); }).length;
     var opsConfig = ops.filter(function (o) { return !!pricingConfigForOperation(o.id); }).length;
     var ag = precVisaoGeralAgregado();
+    // PROMPT "Precificação & Metas" §8 — Dashboard Visual: faturamento/lucro/margem REAIS do período
+    // (caixaPeriodEngine, mesmo motor do Dashboard do Caixa) + % de progresso do Ponto de Equilíbrio
+    // e da Meta de Lucro (precEquilibrioCalc/precMetaCalc, que já leem o MESMO motor) — nunca um
+    // terceiro cálculo financeiro.
+    var peCalc = precEquilibrioCalc(); var mlCalc = precMetaCalc();
+    var dashboardCards = '<div class="kstrip">' +
+      '<div class="kc"><div class="kl">Faturamento atual (período)</div><div class="kv">' + brlC(peCalc.eng.totFat) + '</div></div>' +
+      '<div class="kc"><div class="kl">Lucro atual (período)</div><div class="kv">' + brlC(peCalc.eng.totLucro || 0) + '</div></div>' +
+      '<div class="kc"><div class="kl">Margem média</div><div class="kv">' + (peCalc.eng.margem != null ? pct(peCalc.eng.margem) : '—') + '</div></div>' +
+      '<div class="kc rowlink" data-prectab="equilibrio"><div class="kl">Ponto de equilíbrio</div><div class="kv">' + (peCalc.pctCoberto != null ? pct(peCalc.pctCoberto) : '—') + '</div></div>' +
+      '<div class="kc rowlink" data-prectab="meta"><div class="kl">Meta de lucro</div><div class="kv">' + (mlCalc.pctAtingido != null ? pct(mlCalc.pctAtingido) : '—') + '</div></div>' +
+      '</div>';
     // Produtos críticos (§30): famílias cuja precificação padrão (fator padrão ou 4x) cai em
     // MARGEM_BAIXA/ABAIXO_MINIMO/PREJUÍZO — reaproveita pricingForFamily(), mesma função da aba
     // Famílias & Preços, nunca um cálculo paralelo.
@@ -10565,7 +10699,8 @@
       criticas.map(function (x) { var st = PRICING_STATUS_LABEL[x.status]; return '<tr><td>' + esc(x.f.name) + '</td><td class="nowrap">' + (x.f.currentCostAmount != null ? brl(x.f.currentCostAmount) : '—') + '</td><td class="nowrap">' + (x.pf.result.factor != null ? x.pf.result.factor.toFixed(2).replace('.', ',') + 'x' : '—') + '</td><td class="nowrap">' + (x.pf.result.sellingPrice != null ? brlC(x.pf.result.sellingPrice) : '—') + '</td><td class="nowrap">' + (x.pf.result.profitPct != null ? pct(x.pf.result.profitPct) : '—') + '</td><td><span class="badge ' + st[1] + '">' + st[0] + '</span></td></tr>'; }).join('') +
       '</tbody></table></div></div>') : '<div class="callout" style="margin-top:14px"><div class="cbody">Nenhum produto crítico identificado nas famílias com fator/margem configurados.</div></div>';
     return devPeriodBarAsCp() +
-      '<div class="kstrip">' +
+      dashboardCards +
+      '<div class="kstrip" style="margin-top:10px">' +
       '<div class="kc"><div class="kl">Margem média projetada</div><div class="kv">' + (ag.margemProjetadaPct != null ? pct(ag.margemProjetadaPct) : '—') + '</div></div>' +
       '<div class="kc"><div class="kl">Margem média realizada</div><div class="kv">' + (ag.margemRealizadaPct != null ? pct(ag.margemRealizadaPct) : '—') + '</div></div>' +
       '<div class="kc"><div class="kl">Fator médio das vendas</div><div class="kv">' + (ag.fatorMedio != null ? ag.fatorMedio.toFixed(2).replace('.', ',') + 'x' : '—') + '</div></div>' +
@@ -10615,7 +10750,7 @@
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; pricingOpConfig = []; pricingFamilyRules = []; financialAccounts = []; financialEvents = []; contasReceber = []; crReceipts = []; financialTransfers = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; pricingOpConfig = []; pricingFamilyRules = []; pontoEquilibrioCfg = {}; metaLucroCfg = {}; financialAccounts = []; financialEvents = []; contasReceber = []; crReceipts = []; financialTransfers = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
   var opSelBtn = document.getElementById('op-selector'); if (opSelBtn) opSelBtn.onclick = function () { openOperationSelector(); };
 
   // Abre o banco; se falhar (corrompido/bloqueado/privado), ativa o modo em memória e SEGUE —
@@ -10637,6 +10772,8 @@
     mrRenda = r[13] || []; mrShip = r[14] || []; mrAdj = r[15] || []; mrSvc = r[16] || []; mrPdf = r[17] || [];
     var mrS = settings.filter(function (x) { return x.id === 'mrSummary'; })[0]; if (mrS) mrSummary = mrS.data;
     var mrMCfg = settings.filter(function (x) { return x.id === 'mrMetaCfg'; })[0]; if (mrMCfg && mrMCfg.data) Object.keys(mrMCfg.data).forEach(function (k) { mrMetaCfg[k] = mrMCfg.data[k]; });
+    var peCfg = settings.filter(function (x) { return x.id === 'pontoEquilibrioCfg'; })[0]; if (peCfg && peCfg.data) pontoEquilibrioCfg = peCfg.data;
+    var mlCfg = settings.filter(function (x) { return x.id === 'metaLucroCfg'; })[0]; if (mlCfg && mlCfg.data) metaLucroCfg = mlCfg.data;
     shipBip = {}; (r[18] || []).forEach(function (b) { shipBip[b.orderId] = b; });
     expSessions = (r[20] || []).sort(function (a, b) { return b.horaInicio.localeCompare(a.horaInicio); });
     var pendR = settings.filter(function (x) { return x.id === 'pendResolucoes'; })[0]; if (pendR && pendR.data) pendResolucoes = pendR.data;
