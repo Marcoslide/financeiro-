@@ -291,7 +291,7 @@
     </nav>
     <div style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build bffa3c7 · 2026-08-25 16:37 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 746d1a4 · 2026-08-25 16:56 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -11906,7 +11906,19 @@ buffer/index.js:
     // Bloco 10 (Saldo Final): um saldo POSITIVO é normal (dinheiro ainda na carteira, não transferido
     // — nem todo operador transfere 100% todo dia) — nunca tratado como "diferença/erro". Só um saldo
     // NEGATIVO é um problema real (transferiu mais do que havia disponível).
-    var diferencaOk = fluxo.diferenca >= -0.01;
+    // PROMPT "Correção Caixa — Conciliação Real": investigado com dados reais (dia 01/08) por que uma
+    // diferença de -R$0,70 sobrava mesmo com todo mundo já classificado — a causa raiz é que
+    // "Disponível para Transferência" (Bloco 8) só soma o dinheiro deste dia (Acelera + créditos -
+    // débitos), mas a Carteira real da Shopee é um SALDO CORRIDO: pode haver dinheiro de um dia
+    // ANTERIOR ainda não transferido, que também compõe o que a Shopee de fato transferiu hoje. Esse
+    // saldo já é rastreável pelo próprio extrato importado (coluna "Balança após as transações", já
+    // usado por caixaDaySaldoCarteira/saldoCart — nunca inventado). Somando saldoCart.saldoInicial ao
+    // disponível, a diferença deixa de ser um resíduo "provável" e vira exata: no caso auditado,
+    // R$0,70 (saldo inicial) + R$6.422,30 (disponível de hoje) = R$6.423,00 = exatamente o transferido.
+    var saldoInicialConhecido = saldoCart.saldoInicial != null;
+    var disponivelTotalC = Math.round(fluxo.disponivel * 100) + (saldoInicialConhecido ? Math.round(saldoCart.saldoInicial * 100) : 0);
+    var diferencaRealC = disponivelTotalC - Math.round(fluxo.transferido * 100);
+    var diferencaOk = diferencaRealC >= -1;
 
     // ---- FLUXO DO DINHEIRO — prompt "Reestruturação do Caixa": blocos empilhados, SEM setas — cada
     // etapa (Pedidos vinculados à antecipação → Taxas Shopee dos pedidos → Resultado líquido →
@@ -12006,15 +12018,17 @@ buffer/index.js:
       '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">5. Valor Recebido na Carteira</span><span class="cxv">' + brlC(liquidoCarteiraC) + '</span></div></div>' +
       '<div class="cx-block"><div class="cx-block-row"><span class="cxl">6. (+) Créditos da Carteira</span><span class="cxv pos">+' + brl(fluxo.outrosCreditos) + '</span></div></div>' +
       '<div class="cx-block"><div class="cx-block-row"><span class="cxl">7. (-) Débitos da Carteira</span><span class="cxv neg">-' + brl(fluxo.descontos) + '</span></div></div>' +
-      '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">8. Disponível para Transferência</span><span class="cxv">' + brl(fluxo.disponivel) + '</span></div></div>' +
+      (saldoInicialConhecido ? ('<div class="cx-block"><div class="cx-block-row"><span class="cxl">(+) Saldo inicial da Carteira</span><span class="cxv' + (saldoCart.saldoInicial ? ' pos' : '') + '">' + brl(saldoCart.saldoInicial) + '</span></div><div class="cxsub">Saldo que já estava na Carteira antes deste dia (de dias anteriores, ainda não transferido) — soma ao que dá para transferir hoje.</div></div>') : '') +
+      '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">8. Disponível para Transferência</span><span class="cxv">' + brlC(disponivelTotalC) + '</span></div></div>' +
       '<div class="cx-block"><div class="cx-block-row"><span class="cxl">9. Transferido para o Banco</span><span class="cxv">' + brl(fluxo.transferido) + '</span></div>' + verTransferenciasDetails + '</div>' +
-      '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl" style="font-size:12px">10. Saldo Final na Carteira</span><span class="cxv ' + (diferencaOk ? 'pos' : 'neg') + '" style="font-size:20px">' + brl(fluxo.diferenca) + '</span></div>' +
-      // PROMPT "Correção Caixa — Ajuste de Nomenclatura, Conciliação e DRE Operacional" §2: uma
-      // diferença negativa com TODOS os créditos/débitos da carteira já classificados (pendCart
-      // vazia) não é mais "não identificado" — vira um resíduo explicado (tipicamente a transferência
-      // saiu antes de um ajuste pequeno ser lançado na carteira), nunca escondido, mas também nunca
-      // rotulado como se nada tivesse sido investigado.
-      '<div style="margin-top:6px">' + (diferencaOk ? '<span class="tag ok">✓ Caixa conferido' + (fluxo.diferenca > 0.01 ? ' — saldo em carteira, ainda não transferido' : '') + '</span>' : (pendCart.itens.length === 0 ? '<span class="tag info">△ Diferença de ' + brl(Math.abs(fluxo.diferenca)) + ' — todos os créditos/débitos já classificados, sem pendência aberta na Carteira. Resíduo provável: a transferência saiu antes de um ajuste pequeno ser lançado.</span>' : '<span class="tag warn">⚠ Transferido a mais do que havia disponível</span> <button class="btn-sm" id="cx-ver-nao-conciliados" style="margin-left:6px">Ver movimentos não conciliados</button>')) + '</div></div>' +
+      '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl" style="font-size:12px">10. Saldo Final na Carteira</span><span class="cxv ' + (diferencaOk ? 'pos' : 'neg') + '" style="font-size:20px">' + brlC(diferencaRealC) + '</span></div>' +
+      // PROMPT "Correção Caixa — Conciliação Real": investigado com dados reais (dia 01/08) — a
+      // "Origem da diferença" e o "Status de conciliação" agora são determinísticos, nunca um
+      // "provavelmente": quando o saldo inicial da Carteira é conhecido (acima), a diferença já
+      // reflete tudo que a Shopee registrou (saldo anterior + movimentos de hoje − transferido) — se
+      // ainda sobrar diferença negativa MESMO somando o saldo inicial, e todos os créditos/débitos já
+      // classificados, é um resíduo genuinamente pendente de investigação manual (nunca escondido).
+      '<div style="margin-top:6px">' + (diferencaOk ? '<span class="tag ok">✓ Status de conciliação: Caixa conferido' + (diferencaRealC > 1 ? ' — saldo em carteira, ainda não transferido' : (saldoInicialConhecido ? ' — bate exatamente com o saldo real informado pela Shopee' : '')) + '</span>' : (pendCart.itens.length === 0 ? '<span class="tag info">△ Status de conciliação: diferença de ' + brlC(Math.abs(diferencaRealC)) + ' — todos os créditos/débitos já classificados, sem pendência aberta na Carteira' + (saldoInicialConhecido ? ' (já somando o saldo inicial da Carteira acima)' : '') + '. Origem da diferença: nenhum movimento identificável no extrato explica o restante — pode ser um lançamento da Shopee ainda não capturado neste arquivo.</span>' : '<span class="tag warn">⚠ Status de conciliação: pendência real — transferido a mais do que havia disponível</span> <button class="btn-sm" id="cx-ver-nao-conciliados" style="margin-left:6px">Ver movimentos não conciliados</button>')) + '</div></div>' +
       '</div>';
 
     // ---- DRE do dia — simples, na ordem pedida: Venda / (-) Taxas / (-) Acelera / (-) Custos / Resultado.
@@ -12118,7 +12132,7 @@ buffer/index.js:
     // ---- Fechar (rodapé) ----
     var podeFechar = pend.total === 0 && pendCart.total === 0;
     var footer = '<div class="cx-footer">' +
-      '<div class="footnote" style="margin:0">Diferença: <b>' + brl(fluxo.diferenca) + '</b> · ' + nn(pendTotal) + ' pendência(s)' + (st.rec ? ' · último registro: ' + esc(CAIXA_LABEL[st.rec.status] ? CAIXA_LABEL[st.rec.status][0] : st.rec.status) + ' por ' + esc(st.rec.closedBy || '—') : '') + '</div>' +
+      '<div class="footnote" style="margin:0">Diferença: <b>' + brlC(diferencaRealC) + '</b> · ' + nn(pendTotal) + ' pendência(s)' + (st.rec ? ' · último registro: ' + esc(CAIXA_LABEL[st.rec.status] ? CAIXA_LABEL[st.rec.status][0] : st.rec.status) + ' por ' + esc(st.rec.closedBy || '—') : '') + '</div>' +
       '<div style="display:flex;gap:8px">' +
       '<button class="btn-sm' + (podeFechar ? '' : ' primary') + '" id="caixa-closeress">Fechar com ressalva</button>' +
       '<button class="btn-sm' + (podeFechar ? ' primary' : '') + '"' + (podeFechar ? '' : ' disabled title="Só é possível Fechar sem pendências — use Fechar com ressalva"') + ' id="caixa-close">Fechar dia</button>' +
