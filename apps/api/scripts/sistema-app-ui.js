@@ -4170,8 +4170,12 @@
     if (!vaiAR && existingAR && !existingAR.canceledAt) {
       if (!crReceiptsForHeader(existingAR.id).some(function (p) { return !p.estornado; })) tasks.push(crCancelHeader(existingAR.id, 'Reclassificado no Caixa — natureza alterada para ' + (NATUREZA[cls.natureza] || cls.natureza || '—') + '.'));
     }
+    // PROMPT "Correção — Integração Classificação da Carteira/Caixa → Contas a Pagar/Receber → DRE":
+    // categoryId (AP) e categoryId (AR, campo novo) SEMPRE vêm de cls.categoriaFinanceiraId — o MESMO
+    // cadastro (cpCategories) que Contas a Pagar/Receber já usam, nunca cls.apCategoria/arCategoria
+    // (campos legados do WCAT, nunca escritos pelo modal atual) — causa raiz do "Categoria: —".
     if (vaiAP) {
-      var recAP = { sourceEventKey: key, operationId: opId, companyId: companyId, orderId: wOrderId(t) || null, historico: label, valor: r2(Math.abs(t.amount)), valorManualOverride: true, emissao: competencia, competencia: competencia, vencimento: cls.apVencimento || competencia, origin: 'CAIXA_MANUAL', financialAccountId: contaFinId, categoryId: cls.apCategoria || null, paymentMethod: cls.paymentMethod || null };
+      var recAP = { sourceEventKey: key, operationId: opId, companyId: companyId, orderId: wOrderId(t) || null, historico: label, valor: r2(Math.abs(t.amount)), valorManualOverride: true, emissao: competencia, competencia: competencia, vencimento: cls.apVencimento || competencia, origin: 'CAIXA_MANUAL', financialAccountId: contaFinId, categoryId: cls.categoriaFinanceiraId || cls.apCategoria || null, paymentMethod: cls.paymentMethod || null };
       var fullAP = cpUpsertBySourceKey(null, recAP);
       tasks.push(putMany('cpheader', [fullAP]));
       if (cls.apStatusManual === 'PAGO' && !cpPaymentsForHeader(fullAP.id).some(function (p) { return !p.estornado; })) {
@@ -4179,7 +4183,7 @@
       }
     }
     if (vaiAR) {
-      var recAR = { sourceEventKey: key, operationId: opId, companyId: companyId, orderId: wOrderId(t) || null, descricao: cls.arCategoria ? (cls.arCategoria + ' — ' + label) : label, pagador: 'Shopee', origin: 'MANUAL', valor: r2(Math.abs(t.amount)), competencia: competencia, vencimento: cls.arPrevisao || competencia, financialAccountId: contaFinId, referencia: t.id };
+      var recAR = { sourceEventKey: key, operationId: opId, companyId: companyId, orderId: wOrderId(t) || null, descricao: label, pagador: 'Shopee', origin: 'MANUAL', valor: r2(Math.abs(t.amount)), competencia: competencia, vencimento: cls.arPrevisao || competencia, financialAccountId: contaFinId, categoryId: cls.categoriaFinanceiraId || null, referencia: t.id };
       var fullAR = crUpsertBySourceKey(null, recAR);
       tasks.push(putMany('crheader', [fullAR]));
       if (cls.arStatusManual === 'RECEBIDO' && !crReceiptsForHeader(fullAR.id).some(function (p) { return !p.estornado; })) {
@@ -4229,40 +4233,42 @@
     // geram AP/AR). §45/§47: os campos de AP/AR só aparecem quando fazem sentido pra Natureza
     // escolhida (wired via onchange, abaixo).
     var natAtual = c.natureza || '';
-    var apBlockVisible = natAtual === 'DESPESA' || natAtual === 'AJUSTE';
-    var arBlockVisible = natAtual === 'RECEITA' || natAtual === 'CREDITO';
-    // PROMPT "Modal — Classificar Movimentação" / "Correção do fluxo financeiro": layout enxuto —
-    // Natureza+Categoria+Conta financeira juntos no topo (essencial, sempre visível), depois o grupo
-    // de decisão (Enviar para AP/AR + opção de pagamento) + Forma de pagamento, depois as datas
-    // (Competência+Vencimento), Observação, e só então (fora da moldura do modal pedido) os campos
-    // avançados. "Opção de pagamento" (Criar pendente / Criar e dar baixa automaticamente) substitui
-    // o antigo select "Status" — mesmo dado (apStatusManual/arStatusManual), rótulo mais claro do que
-    // "Pago/Baixado" pra quem não é contador. "Contabilizar no resultado?" SAIU do modal — nunca era
-    // lido por nenhum motor de DRE/resultado (campo morto, confirmado por busca exaustiva); o
-    // resultado financeiro/econômico é sempre derivado da Categoria, nunca de um flag à parte.
-    // Categoria de Contas a Pagar/Receber (cpCategories — domínio DIFERENTE do WCAT usado aqui) sai
-    // do modal: continua editável depois, direto em Contas a Pagar/Receber — nunca gravamos um valor
-    // errado misturando os dois domínios.
+    // PROMPT "Correção — Integração Classificação da Carteira/Caixa → Contas a Pagar/Receber → DRE":
+    // separa dois conceitos que antes estavam misturados num único select "Categoria" (WCAT): (1)
+    // ORIGEM/TIPO Shopee — informativo, nunca alimenta AP/AR/DRE, só rastreabilidade (mantido abaixo,
+    // reclassificado) — e (2) CATEGORIA FINANCEIRA — obrigatória, precisa ser EXATAMENTE o mesmo
+    // cadastro (cpCategories) já usado em Contas a Pagar/Receber, salva pelo ID, nunca um texto solto
+    // nem um enum paralelo. Sem isso, o título gerado em Contas a Pagar nascia com categoryId nulo
+    // (cls.apCategoria nunca era escrito por este modal) e a coluna Categoria ficava "—" — causa raiz
+    // confirmada nos dois lados (AP: cpCategoryLabel(null)='—'; AR nem tinha o conceito).
+    // Natureza: só 4 opções ficam SELECIONÁVEIS daqui pra frente (Despesa/Receita/Ajuste/Transferência
+    // — Crédito/Informativo saem da lista visível), mas um lançamento JÁ classificado com um desses
+    // dois valores legados continua aparecendo selecionado ao reabrir (nunca reclassifica sozinho).
+    var NATUREZA_OPCOES = ['DESPESA', 'RECEITA', 'AJUSTE', 'TRANSFERENCIA'];
+    if (natAtual && NATUREZA_OPCOES.indexOf(natAtual) < 0) NATUREZA_OPCOES.push(natAtual);
+    var naturezaOptionsHtml = '<option value="">(automática pelo sinal: ' + (t.amount < 0 ? 'Despesa' : 'Receita') + ')</option>' + NATUREZA_OPCOES.map(function (k) { return '<option value="' + k + '"' + (natAtual === k ? ' selected' : '') + '>' + (NATUREZA[k] || k) + '</option>'; }).join('');
+    var categoriaFinDefault = c.categoriaFinanceiraId || '';
+    var categoriaFinOptionsHtml = cpCategoryOptions(categoriaFinDefault, true).replace('Todas as categorias', '— selecionar —');
     function opcaoPagamentoRadio(name, atual) {
       return '<label class="fld">Opção de pagamento</label>' +
         '<label class="fld" style="display:flex;align-items:center;gap:8px;font-weight:400"><input type="radio" name="' + name + '" value="PENDENTE"' + (atual !== 'PAGO' ? ' checked' : '') + '> Criar pendente</label>' +
         '<label class="fld" style="display:flex;align-items:center;gap:8px;font-weight:400;margin-top:2px"><input type="radio" name="' + name + '" value="BAIXA"' + (atual === 'PAGO' ? ' checked' : '') + '> Criar e dar baixa automaticamente</label>';
     }
-    var naturezaBlock = '<label class="fld">Natureza</label><select class="select" id="wcls-nat" style="width:100%">' + opt(NATUREZA, natAtual, '(automática pelo sinal: ' + (t.amount < 0 ? 'Despesa' : 'Receita') + ')') + '</select>' +
-      '<label class="fld">Categoria</label><select class="select" id="wcls-cat" style="width:100%">' + opt(WCAT, c.catManual, '(automática: ' + wcatLabel(t.category) + ')') + '</select>' +
+    // "Enviar para financeiro" e "Opção de pagamento" deixam de ser dois blocos independentes
+    // (AP × AR) — a Natureza já decide qual lado (Despesa/Ajuste → AP; Receita → AR) vira título;
+    // aqui é UMA decisão só, nunca duas caixas de decisão pro mesmo lançamento.
+    var enviarAtual = c.apEnviar !== false && c.arEnviar !== false;
+    var opcaoAtual = c.apStatusManual === 'PAGO' || c.arStatusManual === 'RECEBIDO' ? 'PAGO' : null;
+    var naturezaBlock = '<label class="fld">Natureza</label><select class="select" id="wcls-nat" style="width:100%">' + naturezaOptionsHtml + '</select>' +
+      '<label class="fld">Categoria financeira</label><select class="select" id="wcls-catfin" style="width:100%">' + categoriaFinOptionsHtml + '</select>' +
       '<label class="fld">Conta financeira</label><select class="select" id="wcls-conta-fin" style="width:100%">' + contaFinOptions.map(function (a) { return '<option value="' + esc(a.id) + '"' + (contaFinDefault === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>'; }).join('') + '</select>' +
+      '<label class="fld">Forma de pagamento</label><select class="select" id="wcls-forma" style="width:100%"><option value="">— selecionar —</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '"' + (c.paymentMethod === f ? ' selected' : '') + '>' + esc(f) + '</option>'; }).join('') + '</select>' +
       '<div style="border-top:1px solid var(--line);margin:10px 0;padding-top:10px">' +
-      '<div id="wcls-ap-block" style="display:' + (apBlockVisible ? 'block' : 'none') + '">' +
-      '<label class="fld" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="wcls-ap-enviar"' + (c.apEnviar !== false ? ' checked' : '') + '> Enviar para Contas a Pagar</label>' +
-      opcaoPagamentoRadio('wcls-ap-opcao', c.apStatusManual) +
+      '<label class="fld" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="wcls-enviar-fin"' + (enviarAtual ? ' checked' : '') + '> Enviar para Contas a Pagar/Receber</label>' +
+      opcaoPagamentoRadio('wcls-opcao-pgto', opcaoAtual) +
       '</div>' +
-      '<div id="wcls-ar-block" style="display:' + (arBlockVisible ? 'block' : 'none') + '">' +
-      '<label class="fld" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="wcls-ar-enviar"' + (c.arEnviar !== false ? ' checked' : '') + '> Enviar para Contas a Receber</label>' +
-      opcaoPagamentoRadio('wcls-ar-opcao', c.arStatusManual === 'RECEBIDO' ? 'PAGO' : '') +
-      '</div>' +
-      '<label class="fld" style="margin-top:8px">Forma de pagamento</label><select class="select" id="wcls-forma" style="width:100%"><option value="">— selecionar —</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '"' + (c.paymentMethod === f ? ' selected' : '') + '>' + esc(f) + '</option>'; }).join('') + '</select>' +
-      '</div>' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;border-top:1px solid var(--line);margin-top:10px;padding-top:10px"><div><label class="fld">Competência</label><input type="date" class="input" id="wcls-comp" style="width:100%" value="' + esc(c.competencia || (t.date ? t.date.slice(0, 10) : '')) + '"></div><div><label class="fld">Vencimento</label><input type="date" class="input" id="wcls-venc" style="width:100%" value="' + esc(c.apVencimento || c.arPrevisao || '') + '"></div></div>';
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;border-top:1px solid var(--line);margin-top:10px;padding-top:10px"><div><label class="fld">Competência</label><input type="date" class="input" id="wcls-comp" style="width:100%" value="' + esc(c.competencia || (t.date ? t.date.slice(0, 10) : '')) + '"></div><div><label class="fld">Vencimento</label><input type="date" class="input" id="wcls-venc" style="width:100%" value="' + esc(c.apVencimento || c.arPrevisao || '') + '"></div></div>' +
+      '<div style="border-top:1px solid var(--line);margin-top:10px;padding-top:10px"><label class="fld">Origem / Tipo (Shopee) <span style="font-weight:400">— informativo, não alimenta Contas a Pagar/Receber/DRE</span></label><select class="select" id="wcls-cat" style="width:100%">' + opt(WCAT, c.catManual, '(automática: ' + wcatLabel(t.category) + ')') + '</select></div>';
     // PROMPT "Correção Caixa — Ajuste de Nomenclatura, Conciliação e DRE Operacional" §3: o essencial
     // pra classificar um lançamento é Natureza (Receita/Despesa) + Categoria + Observação — fica
     // visível direto. Os campos de uso ocasional (subcategoria/responsabilidade/status manual da
@@ -4299,38 +4305,46 @@
       (isRec ? '' : '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Descrição original da Shopee</summary><div class="pb"><div class="ro">' + esc(t.desc || '—') + '</div></div></details>') +
       recon + pedido + devol + '</div>';
     panel.querySelector('.x').onclick = function () { d.remove(); };
-    var natSel = panel.querySelector('#wcls-nat');
-    if (natSel) natSel.onchange = function () {
-      var apBlock = panel.querySelector('#wcls-ap-block'), arBlock = panel.querySelector('#wcls-ar-block');
-      if (apBlock) apBlock.style.display = (natSel.value === 'DESPESA' || natSel.value === 'AJUSTE') ? 'block' : 'none';
-      if (arBlock) arBlock.style.display = (natSel.value === 'RECEITA' || natSel.value === 'CREDITO') ? 'block' : 'none';
+    // "+ Criar categoria…" no select de Categoria financeira — mesmo padrão já usado no editor de
+    // Contas a Pagar (cp-categoria/catTopo, openCpCategoryQuickCreate) — cria direto no cadastro
+    // ÚNICO de categorias (cpCategories), nunca um cadastro paralelo pra Carteira/Caixa.
+    var catFinSel = panel.querySelector('#wcls-catfin');
+    if (catFinSel) catFinSel.onchange = function () {
+      if (catFinSel.value === '__new') {
+        openCpCategoryQuickCreate(function (cat) {
+          catFinSel.innerHTML = cpCategoryOptions(cat.id, true).replace('Todas as categorias', '— selecionar —');
+        });
+      }
     };
     panel.querySelector('#wcls-save').onclick = function () {
-      // PROMPT "Correção do fluxo financeiro": "Conta financeira" é campo obrigatório — sem ela a
-      // baixa criava título mas nunca virava dinheiro rastreável em conta nenhuma (raiz do bug
-      // relatado). Bloqueia o salvamento até o operador escolher uma conta (já vem pré-selecionada
-      // com a Carteira Shopee, então normalmente não exige ação extra).
+      // PROMPT "Correção — Integração Classificação da Carteira/Caixa → Contas a Pagar/Receber → DRE":
+      // "Nunca criar título sem categoria." — Categoria financeira e Conta financeira são obrigatórias
+      // pra salvar, exatamente como a causa raiz exigia (título nascia com categoryId nulo).
+      var catFinVal = panel.querySelector('#wcls-catfin').value || '';
+      if (!catFinVal || catFinVal === '__new') { toast('Categoria financeira é obrigatória', 'Selecione a categoria financeira antes de salvar.', true); return; }
       var contaFinVal = panel.querySelector('#wcls-conta-fin').value || '';
       if (!contaFinVal) { toast('Conta financeira é obrigatória', 'Selecione a conta de origem/destino deste movimento.', true); return; }
       var venc = panel.querySelector('#wcls-venc').value || null;
-      var apOpcaoEl = panel.querySelector('input[name="wcls-ap-opcao"]:checked');
-      var arOpcaoEl = panel.querySelector('input[name="wcls-ar-opcao"]:checked');
+      var enviarFinanceiro = panel.querySelector('#wcls-enviar-fin').checked;
+      var opcaoEl = panel.querySelector('input[name="wcls-opcao-pgto"]:checked');
+      var baixaAutomatica = !!(opcaoEl && opcaoEl.value === 'BAIXA');
       var patch = {
         natureza: panel.querySelector('#wcls-nat').value || null,
+        categoriaFinanceiraId: catFinVal,
         financialAccountId: contaFinVal,
         paymentMethod: panel.querySelector('#wcls-forma').value || null,
         competencia: panel.querySelector('#wcls-comp').value || null,
-        apEnviar: panel.querySelector('#wcls-ap-enviar').checked,
-        // Categoria de Contas a Pagar/Receber (cpCategories — domínio à parte do WCAT) não é mais
-        // definida por este modal — preserva o valor já existente (se o operador tiver editado direto
-        // em Contas a Pagar/Receber), nunca apaga silenciosamente.
+        // Enviar/Opção de pagamento são UMA decisão só — a Natureza já decide qual lado (AP/AR) usa;
+        // apEnviar/arEnviar e apStatusManual/arStatusManual continuam existindo (walletApplyClassificacao
+        // lê os dois), só que agora sempre gravados com o MESMO valor, nunca duas escolhas divergentes.
+        apEnviar: enviarFinanceiro,
         apCategoria: c.apCategoria || null,
         apVencimento: venc,
-        apStatusManual: (apOpcaoEl && apOpcaoEl.value === 'BAIXA') ? 'PAGO' : null,
-        arEnviar: panel.querySelector('#wcls-ar-enviar').checked,
+        apStatusManual: baixaAutomatica ? 'PAGO' : null,
+        arEnviar: enviarFinanceiro,
         arCategoria: c.arCategoria || null,
         arPrevisao: venc,
-        arStatusManual: (arOpcaoEl && arOpcaoEl.value === 'BAIXA') ? 'RECEBIDO' : null,
+        arStatusManual: baixaAutomatica ? 'RECEBIDO' : null,
         catManual: panel.querySelector('#wcls-cat').value || null, subcat: panel.querySelector('#wcls-sub').value.trim() || null, responsibility: panel.querySelector('#wcls-resp').value || null, internalStatus: panel.querySelector('#wcls-st').value || null, linkedOrderId: panel.querySelector('#wcls-ord').value.trim() || null, linkedOccId: panel.querySelector('#wcls-occ').value.trim() || null, linkedResgateId: panel.querySelector('#wcls-resg').value.trim() || null, flagDuplicidade: panel.querySelector('#wcls-dup').checked || null, flagDescontoIndevido: panel.querySelector('#wcls-indev').checked || null,
       };
       // PROMPT "Correção Caixa — Ajuste de Nomenclatura, Conciliação e DRE Operacional" §2: "a
@@ -6758,7 +6772,12 @@
     function editMasterFamily(cell, pid, masters) { var m = masters.find(function (x) { return x.p.id === pid; }); if (!m) return; var actives = S2.families.filter(function (f) { return f.status === 'ACTIVE'; }); cell.innerHTML = '<select class="select sm inl"><option value="">— sem família —</option>' + actives.map(function (f) { return '<option value="' + f.id + '">' + esc(f.name) + '</option>'; }).join('') + '<option value="__new">+ criar nova família…</option></select>'; var se = cell.querySelector('select'); se.focus(); se.onkeydown = function (e) { if (e.key === 'Escape') refresh(); }; se.onchange = function () { var all = m.all; if (se.value === '__new') { familyEditor(null, function (f) { assignFamilyToVariations(all.map(function (v) { return v.id; }), f.id).then(function () { refresh(); toast('Família criada e aplicada', all.length + ' SKUs em “' + f.name + '”.'); }); }); return; } var fid = se.value || null; var mixed = uniq(all.map(function (v) { return v.familyId || null; })); var needConfirm = all.length > 1 && (mixed.length > 1 || (mixed.length === 1 && mixed[0] !== fid && mixed[0] != null)); var apply = function () { assignFamilyToVariations(all.map(function (v) { return v.id; }), fid).then(function () { refresh(); toast('Família aplicada', all.length + ' SKUs classificados' + (fid ? ' em “' + famName(fid) + '”' : '') + '.'); }); }; if (needConfirm) confirmModal('Aplicar família a ' + all.length + ' variações?', 'Este anúncio possui variações com classificações diferentes. Aplicar “' + (fid ? famName(fid) : 'sem família') + '” substituirá as famílias atuais em TODAS as ' + all.length + ' variações do produto (não só as visíveis no filtro atual).', apply, refresh); else apply(); }; }
     function editMasterClose(cell, pid, masters) { var m = masters.find(function (x) { return x.p.id === pid; }); if (!m) return; cell.innerHTML = '<input class="input sm inl" style="width:120px" placeholder="0,00">'; var inp = cell.querySelector('input'); inp.focus(); function done() { var val = parseNum(inp.value), all = m.all, hasIndiv = all.some(function (v) { return v.closingPrice != null; }) && uniq(all.map(function (v) { return v.closingPrice == null ? null : v.closingPrice; })).length > 1; var apply = function () { all.forEach(function (v) { v.closingPrice = val; }); saveVars(all).then(function () { refresh(); toast('Preço aplicado', all.length + ' SKUs com ' + brl(val) + '.'); }); }; if (all.length > 1 && hasIndiv) confirmModal('Aplicar ' + brl(val) + ' a ' + all.length + ' variações?', 'Existem preços de fechamento individuais neste anúncio. Eles serão substituídos em TODAS as ' + all.length + ' variações do produto.', apply, refresh); else apply(); } inp.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); done(); } else if (e.key === 'Escape') refresh(); }; inp.onblur = function () { setTimeout(function () { if (document.body.contains(inp)) refresh(); }, 120); }; }
     function confirmModal(title, body, onYes, onNo) { var o = overlay('<div class="mh"><h3>' + esc(title) + '</h3><button class="x">×</button></div><div class="mbd"><p style="margin-top:0">' + esc(body) + '</p></div><div class="mf"><button class="btn-sm" id="no">Cancelar</button><button class="btn-sm primary" id="yes">Aplicar</button></div>'); o.querySelector('.x').onclick = o.querySelector('#no').onclick = function () { o.remove(); if (onNo) onNo(); }; o.querySelector('#yes').onclick = function () { o.remove(); onYes(); }; }
-    function renderBulk() { var el = q('#bulk'); if (!S2.selected.size) { el.innerHTML = ''; return; } el.innerHTML = '<div class="bulkbar"><b>' + nn(S2.selected.size) + ' SKUs selecionados</b><div class="spacer"></div><button class="btn-sm primary" id="bAssign">Classificar família</button><button class="btn-sm" id="bPrice">Preço de fechamento</button><button class="btn-sm" id="bOff">Inativar</button><button class="btn-sm" id="bOn">Ativar</button><button class="btn-sm" id="bClr">Limpar</button></div>'; q('#bAssign').onclick = openAssign; q('#bPrice').onclick = openBulkPrice; q('#bClr').onclick = function () { S2.selected.clear(); S2.allFiltered = false; refresh(); }; q('#bOff').onclick = function () { statusBulk('INACTIVE'); }; q('#bOn').onclick = function () { statusBulk('ACTIVE'); }; }
+    // PROMPT "Correção cadastro de Famílias, Produtos e Variações" — Edição em massa: botão único
+    // "Alterar selecionadas" que informa Família E Custo juntos pra N variações selecionadas —
+    // reaproveita openCostEditor (já faz exatamente isso, família+custo numa modal só) em vez de criar
+    // um motor novo; "Classificar família" (só família) continua existindo à parte pra quem só precisa
+    // reclassificar sem mexer no custo.
+    function renderBulk() { var el = q('#bulk'); if (!S2.selected.size) { el.innerHTML = ''; return; } el.innerHTML = '<div class="bulkbar"><b>' + nn(S2.selected.size) + ' SKUs selecionados</b><div class="spacer"></div><button class="btn-sm primary" id="bAlterar">Alterar selecionadas</button><button class="btn-sm" id="bAssign">Classificar família</button><button class="btn-sm" id="bPrice">Preço de fechamento</button><button class="btn-sm" id="bOff">Inativar</button><button class="btn-sm" id="bOn">Ativar</button><button class="btn-sm" id="bClr">Limpar</button></div>'; q('#bAlterar').onclick = function () { openCostEditor(selIds()); }; q('#bAssign').onclick = openAssign; q('#bPrice').onclick = openBulkPrice; q('#bClr').onclick = function () { S2.selected.clear(); S2.allFiltered = false; refresh(); }; q('#bOff').onclick = function () { statusBulk('INACTIVE'); }; q('#bOn').onclick = function () { statusBulk('ACTIVE'); }; }
     function selIds() { return Array.from(S2.selected); }
     // Ativar/Inativar muda o status do PRODUTO, que agora também afeta a resolução de conflito de SKU
     // (rebuildSkuCost ignora variações de anúncios inativos) — por isso precisa disparar onChange()
@@ -7677,10 +7696,21 @@
     var transf = caixaDayTransferenciasBancarias(dateKey);
     var arPlan = [], apPlan = [], transferPlan = [], naoClassificados = [];
     function opCompanyId(opId) { var op = operations.find(function (o) { return o.id === opId; }); return op ? op.companyId : null; }
-    function apRow(opId, orderId, source, cat, label, valorC, contaId) {
+    function apRow(opId, orderId, source, cat, label, valorC, contaId, categoryId) {
       // cpUpsertBySourceKey grava os campos direto (não passa por cpValorOriginal) — por isso `valor`
       // já vai pronto aqui; valorManualOverride só documenta a origem (nunca recalculado por item).
-      return { sourceEventKey: feKey(opId, source, cat, orderId || dateKey), operationId: opId, companyId: opCompanyId(opId), orderId: orderId || null, historico: label, valor: r2(Math.abs(valorC) / 100), valorManualOverride: true, emissao: dateKey, competencia: dateKey, vencimento: dateKey, origin: 'FECHAMENTO_CAIXA', financialAccountId: contaId || null };
+      var rec = { sourceEventKey: feKey(opId, source, cat, orderId || dateKey), operationId: opId, companyId: opCompanyId(opId), orderId: orderId || null, historico: label, valor: r2(Math.abs(valorC) / 100), valorManualOverride: true, emissao: dateKey, competencia: dateKey, vencimento: dateKey, origin: 'FECHAMENTO_CAIXA', financialAccountId: contaId || null };
+      // categoryId (8º param, opcional): PROMPT "Correção — Integração Classificação da Carteira/
+      // Caixa → Contas a Pagar/Receber → DRE" — só o branch de movimentos da Carteira já classificados
+      // manualmente (abaixo) tem uma categoriaFinanceiraId real pra propagar; os demais chamadores
+      // (taxas de Income/Acelera por pedido) continuam sem passar este argumento. CRÍTICO: a chave só
+      // entra no objeto quando há valor real — cpUpsertBySourceKey faz upsert campo a campo
+      // (Object.keys(rec).forEach), então incluir sempre `categoryId: null` apagaria, a cada
+      // reabertura/refechamento idempotente do dia, qualquer categoria que o operador já tivesse
+      // classificado manualmente direto em Contas a Pagar nos títulos que nunca passam categoryId
+      // aqui — nunca perder uma classificação manual já existente.
+      if (categoryId) rec.categoryId = categoryId;
+      return rec;
     }
     // PROMPT "Reestruturar Contas a Receber + Controle Bancário" §3/§7: pedido NUNCA gera Contas a
     // Receber (isso lotava a lista com um título por pedido, todos auto-baixados assim que o Income
@@ -7753,7 +7783,7 @@
       // Conta financeira: prioriza a que o operador já escolheu no modal de classificação
       // (manCls.financialAccountId) — mesma conta que a baixa manual usaria — cai pra Carteira Shopee
       // automática só quando o lançamento nunca passou pelo modal (natureza inferida pelo sinal).
-      if (vaiAP) apPlan.push(apRow(opId, wOrderId(t), 'WALLET', k, label, Math.abs(t.amount) * 100, manCls.financialAccountId || (walletAcc ? walletAcc.id : null)));
+      if (vaiAP) apPlan.push(apRow(opId, wOrderId(t), 'WALLET', k, label, Math.abs(t.amount) * 100, manCls.financialAccountId || (walletAcc ? walletAcc.id : null), manCls.categoriaFinanceiraId));
     });
     var movTodosDoDia = caixaDayMovimentosCarteira(dateKey); var movTodos = movTodosDoDia.creditos.concat(movTodosDoDia.debitos);
     movTodos.forEach(function (t) { var k = caixaMovCategoria(t, ac); if (!k || k === 'NAO_IDENTIFICADOS') naoClassificados.push(t); });
@@ -10215,6 +10245,7 @@
         '<td class="rowlink cell-text" data-cropen="' + h.id + '"><b>' + esc((h.descricao || '').slice(0, 60)) + '</b></td>' +
         '<td>' + esc(h.pagador || '—') + '</td>' +
         '<td>' + esc(CR_ORIGIN_LABEL[h.origin] || h.origin || '—') + '</td>' +
+        '<td>' + esc(cpCategoryPathLabel(h.categoryId)) + '</td>' +
         '<td>' + esc(h.orderId || h.referencia || '—') + '</td>' +
         '<td class="nowrap">' + brl(h.valor) + '</td><td class="nowrap">' + brl(crRecebidoTotal(h)) + '</td><td class="nowrap">' + brl(saldo) + '</td>' +
         '<td><span class="badge ' + lbl[1] + '">' + lbl[0] + '</span></td>' +
@@ -10222,10 +10253,10 @@
         '<td><button class="btn-sm" data-cropen="' + h.id + '">Abrir</button></td></tr>';
     }).join('');
     var table = '<div class="panel" style="margin-top:14px"><div class="table-wrap"><table class="report"><thead><tr>' +
-      ['vencimento:Vencimento', ':Descrição', ':Pagador', ':Origem', ':Pedido / Referência', 'valor:Valor', ':Recebido', ':Saldo', ':Status', ':Conta', ':'].map(function (c) {
+      ['vencimento:Vencimento', ':Descrição', ':Pagador', ':Origem', ':Categoria', ':Pedido / Referência', 'valor:Valor', ':Recebido', ':Saldo', ':Status', ':Conta', ':'].map(function (c) {
         var parts = c.split(':'); var key = parts[0], lbl = parts[1];
         return '<th' + (key ? ' class="rowlink" data-crsort="' + key + '"' : '') + '>' + esc(lbl) + (key && crF.sort === key ? (crF.dir === 'asc' ? ' ▲' : ' ▼') : '') + '</th>';
-      }).join('') + '</tr></thead><tbody>' + (rows || '<tr><td colspan="11"><div class="empty" style="border:none"><p>Nenhuma conta encontrada com estes filtros.</p></div></td></tr>') + '</tbody></table></div>' +
+      }).join('') + '</tr></thead><tbody>' + (rows || '<tr><td colspan="12"><div class="empty" style="border:none"><p>Nenhuma conta encontrada com estes filtros.</p></div></td></tr>') + '</tbody></table></div>' +
       crPagerHtml(all.length) + '</div>';
     return header + kpiHtml + filtros + table;
   }
