@@ -291,7 +291,7 @@
     </nav>
     <div style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build c52a930 · 2026-08-25 13:08 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 8cb4e71 · 2026-08-25 14:04 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -7254,7 +7254,10 @@ buffer/index.js:
   // ==================================================================================
   // SALDO DA CARTEIRA — mostrar + medir + rastrear + reconciliar (determinístico)
   // ==================================================================================
-  var WCAT = { RENDA: 'Renda de pedido', DEVOLUCAO: 'Devolução / Reembolso', CANCELAMENTO: 'Cancelamento', INDENIZACAO: 'Indenização', PIX: 'Pix', SAQUE: 'Saque', TRANSFERENCIA_BANCARIA: 'Transferência Bancária', ADS: 'Ads', ACELERA: 'Shopee Acelera', AFILIADOS: 'Comissão de afiliados', PAGAMENTO: 'Pagamento', LOGISTICA: 'Logística', AJUSTE: 'Ajuste', COMPENSACAO: 'Compensação', CREDITO: 'Crédito', TAXA: 'Taxa', SEMLINHA: 'Ajuste sem linha', OUTRO: 'Outro' };
+  // PROMPT "EVOLUÇÃO DO CAIXA — CONCILIAÇÃO FINANCEIRA + CLASSIFICAÇÃO MANUAL + CONTAS A PAGAR" §5/§8:
+  // categorias adicionadas de forma ADITIVA (FRETE/MARKETING/OPERACIONAL/BONIFICACAO) — as categorias
+  // já existentes (derivadas dos dados reais da Carteira Shopee) continuam intactas.
+  var WCAT = { RENDA: 'Renda de pedido', DEVOLUCAO: 'Devolução / Reembolso', CANCELAMENTO: 'Cancelamento', INDENIZACAO: 'Indenização', PIX: 'Pix', SAQUE: 'Saque', TRANSFERENCIA_BANCARIA: 'Transferência Bancária', ADS: 'Ads', ACELERA: 'Shopee Acelera', AFILIADOS: 'Comissão de afiliados', PAGAMENTO: 'Pagamento', LOGISTICA: 'Logística', FRETE: 'Frete', MARKETING: 'Marketing', OPERACIONAL: 'Operacional', AJUSTE: 'Ajuste', COMPENSACAO: 'Compensação', CREDITO: 'Crédito', BONIFICACAO: 'Bonificação', TAXA: 'Taxa', SEMLINHA: 'Ajuste sem linha', OUTRO: 'Outro' };
   function wcatLabel(c) { return WCAT[c] || c; }
   // §E-H do complemento CAIXA/CARTEIRA: Pix/saque/transferência bancária real são MOVIMENTAÇÃO
   // PATRIMONIAL (Carteira Shopee → Banco), nunca despesa/taxa/débito operacional. Categoria já
@@ -10671,6 +10674,36 @@ buffer/index.js:
     var pendFin = caixaPendenciasFinanceirasPedidos(pagas.map(function (o) { return o.id; }));
     return { n: pagas.length, valor: r2(valor), lucroC: lucro, nLucroConhecido: nLucroConhecido, pendFin: pendFin, pedidos: pagas };
   }
+  // PROMPT "REESTRUTURAÇÃO COMPLETA DO MÓDULO CAIXA / CONCILIAÇÃO FINANCEIRA SHOPEE" — REGRA
+  // PRINCIPAL: "Venda ≠ Dinheiro recebido... não usar simplesmente venda do dia... trazer somente os
+  // pedidos que compõem aquele recebimento." Os Blocos 1-3 do fluxo (Pedidos vinculados à
+  // antecipação / Taxas Shopee dos pedidos / Resultado líquido) precisam ser calculados sobre o
+  // MESMO conjunto de pedidos que o Bloco 4 (aceleraResultadoFechamento.pedidosAcelera — os pedidos
+  // que efetivamente compõem o resgate do Acelera daquele dia), NUNCA sobre caixaDayVendas (pedidos
+  // pagos no dia — conjunto DIFERENTE, usado só na "DRE Operacional" separada, uma pergunta comercial
+  // distinta: "quanto vendi hoje", não "de onde veio esse dinheiro"). Reaproveita 100% dos motores já
+  // canônicos (pedidoComposicaoFinanceira/resolveSellerCharges/aceleraResultadoFechamento) — nenhum
+  // valor novo é calculado aqui, só reagrupado pelo conjunto certo de pedidos.
+  function caixaOrigemAntecipacao(dateKey) {
+    var ac = aceleraResultadoFechamento(dateKey);
+    var pedidos = ac.pedidosAcelera.map(function (id) { return orders.find(function (o) { return o.id === id; }); }).filter(Boolean);
+    var valorBrutoC = 0, mapTaxasLoja = {}, taxasPendentesN = 0;
+    var pedidosRows = pedidos.map(function (o) {
+      var c = pedidoComposicaoFinanceira(o.id);
+      var receitaC = c.receitaC != null ? c.receitaC : Math.round((o.totalAmount || 0) * 100);
+      valorBrutoC += receitaC;
+      var sc = resolveSellerCharges(o.id);
+      sc.items.forEach(function (it) { if (it.knownContribution) mapTaxasLoja[it.label] = (mapTaxasLoja[it.label] || 0) + it.knownContribution; });
+      if (sc.totalStatus !== 'COMPLETO') taxasPendentesN++;
+      var prod = o.items.length > 1 ? (o.items.length + ' produtos') : (o.items[0] ? o.items[0].productName : '—');
+      var sku = o.items.length > 1 ? '—' : (o.items[0] ? o.items[0].sku : '—');
+      return { orderId: o.id, produto: prod, sku: sku, valorC: receitaC, status: o.normalizedStatus, statusLabel: S.pedidos.labels[o.normalizedStatus] || o.orderStatus };
+    });
+    var linhasTaxasLoja = Object.keys(mapTaxasLoja).map(function (k) { return { label: k, valor: mapTaxasLoja[k] }; }).filter(function (l) { return l.valor; }).sort(function (a, b) { return a.valor - b.valor; });
+    var taxasLojaC = linhasTaxasLoja.reduce(function (s, l) { return s + l.valor; }, 0);
+    var resultadoLiquidoC = valorBrutoC + taxasLojaC;
+    return { dateKey: dateKey, ac: ac, n: pedidos.length, pedidos: pedidos, pedidosRows: pedidosRows, valorBrutoC: valorBrutoC, linhasTaxasLoja: linhasTaxasLoja, taxasLojaC: taxasLojaC, taxasPendentesN: taxasPendentesN, resultadoLiquidoC: resultadoLiquidoC };
+  }
   // ---- DRE do dia — motor NATIVO do Caixa: agrega pedidoComposicaoFinanceira() (Pedidos) dos
   // pedidos pagos do dia. Zero chamadas a mrEngine()/mrPeriodEngine()/mrResultadoDetalhado() —
   // funciona mesmo que Minha Renda nunca tenha sido usada (teste de isolamento da arquitetura).
@@ -10759,8 +10792,11 @@ buffer/index.js:
   // Categoria/Status e permitir [Classificar]/[Alterar] — resolvendo o MESMO título de Contas a Pagar
   // que caixaMontarIntegracaoFinanceira gera para esse pedido (mesma sourceEventKey), nunca um
   // segundo cadastro: editar aqui É editar em Contas a Pagar (openCpEditor).
-  function caixaDreDrillOpen(dateKey, label, childKey) {
-    var vendas = caixaDayVendas(dateKey);
+  function caixaDreDrillOpen(dateKey, label, childKey, origem) {
+    // origem 'ANTECIPACAO' (Bloco 2 do novo fluxo — Taxas Shopee dos pedidos vinculados à
+    // antecipação): drilla sobre caixaOrigemAntecipacao().pedidos (ac.pedidosAcelera), NUNCA sobre
+    // caixaDayVendas (pedidos pagos no dia — conjunto diferente, usado só na DRE Operacional).
+    var vendas = origem === 'ANTECIPACAO' ? caixaOrigemAntecipacao(dateKey) : caixaDayVendas(dateKey);
     var rows = []; var soma = 0;
     vendas.pedidos.forEach(function (o) {
       var comp = pedidoComposicaoFinanceira(o.id);
@@ -11335,6 +11371,24 @@ buffer/index.js:
       // teste: gerava R$38.015,00 de "taxa" onde o correto era R$380,15).
       if (opIdAc) { var walletAc = faWalletForOperation(opIdAc); apPlan.push(apRow(opIdAc, null, 'ACELERA', 'FEE', 'Taxa de Antecipação — Shopee Acelera (' + dbr(dateKey) + ')', Math.abs(ac.taxaAcelera), walletAc ? walletAc.id : null)); }
     }
+    // PROMPT "REESTRUTURAÇÃO COMPLETA DO MÓDULO CAIXA": "O fechamento do Caixa deve alimentar
+    // automaticamente [Contas a Receber]... Origem: Fechamento Caixa Shopee... Status: Recebido...
+    // Usar chave única. Nunca duplicar ao reabrir o fechamento." — lançamento de NÍVEL DIA (1 por
+    // dia, não 1 por pedido — os recebíveis por pedido já existem acima, esse é o espelho do valor
+    // que efetivamente chegou na Carteira via Acelera naquele dia), sourceEventKey própria
+    // (CAIXA_FECHAMENTO/RECEBIMENTO/dateKey) — upsert por dia, nunca duplica ao fechar de novo.
+    if (ac.resgatesN && ac.valorLiquido) {
+      var opIdRec = opActiveOrNull();
+      if (opIdRec) {
+        var walletAccRec = faWalletForOperation(opIdRec);
+        arPlan.push({
+          sourceEventKey: feKey(opIdRec, 'CAIXA_FECHAMENTO', 'RECEBIMENTO', dateKey), operationId: opIdRec, companyId: opCompanyId(opIdRec),
+          orderId: null, descricao: 'Fechamento Caixa Shopee — ' + dbr(dateKey), pagador: 'Shopee', origin: 'FECHAMENTO_CAIXA',
+          valor: r2(ac.valorLiquido / 100), competencia: dateKey, vencimento: dateKey, financialAccountId: walletAccRec ? walletAccRec.id : null, referencia: dateKey,
+          __autoBaixa: { valorRecebido: r2(ac.valorLiquido / 100), financialAccountId: walletAccRec ? walletAccRec.id : null, date: dateKey },
+        });
+      }
+    }
     // ---- Fase 5d/6 — movimentos da Carteira já CLASSIFICADOS (nunca NAO_IDENTIFICADOS — não inventa
     // categoria): débito vira despesa paga (AP), crédito vira recebível já liquidado na Carteira (AR) ----
     // §55 "manual tem prioridade": lançamento com Natureza classificada manualmente (Transferência/
@@ -11753,16 +11807,19 @@ buffer/index.js:
       '<button class="btn-sm" id="caixa-print" title="Imprimir / gerar PDF">Imprimir</button>' +
       '</div></div>';
 
-    // Nenhum valor novo é calculado aqui — os mesmos números canônicos já aprovados só ganham nomes
-    // simples (Comissão/Taxa de Serviço/Líquido Shopee/Recebido na Carteira/Transferido ao Banco/
-    // Diferença), sempre a partir de dre/ac/fluxo (caixaDreDia/aceleraResultadoFechamento/caixaFluxoDia).
-    var valorVendaC = dre.receitaBruta;
-    // PROMPT DEFINITIVO "Refazer o Caixa" §13/§83/§84: "Taxas Shopee" do fluxo principal é a MESMA
-    // soma que a Ficha do Pedido mostra em "TOTAL DESCONTADO DA LOJA" (resolveSellerCharges, via
-    // dre.taxasLojaC em caixaDreDia) — nunca dre.taxasCobradas (gTaxas, mais estreito, usado só na
-    // DRE completa detalhada abaixo, que continua com Subtotal de Envio como linha própria).
-    var taxasC = dre.taxasLojaC;
-    var liquidoReceberC = valorVendaC + taxasC;
+    // PROMPT "REESTRUTURAÇÃO COMPLETA DO MÓDULO CAIXA / CONCILIAÇÃO FINANCEIRA SHOPEE" — REGRA
+    // PRINCIPAL: "Venda ≠ Dinheiro recebido... não usar simplesmente venda do dia... trazer somente
+    // os pedidos que compõem aquele recebimento." Os Blocos 1-3 (Pedidos vinculados à antecipação /
+    // Taxas Shopee dos pedidos / Resultado líquido) usam caixaOrigemAntecipacao() — o MESMO conjunto
+    // de pedidos do Bloco 4 (ac.pedidosAcelera) — nunca caixaDayVendas (pedidos pagos no dia, um
+    // conjunto DIFERENTE que só alimenta a "DRE Operacional" separada, mais abaixo — pergunta
+    // comercial distinta: "quanto vendi hoje", não "de onde veio esse dinheiro que chegou hoje").
+    // Nenhum valor novo é calculado aqui — reagrupa exatamente o que pedidoComposicaoFinanceira/
+    // resolveSellerCharges/aceleraResultadoFechamento/caixaFluxoDia já apuraram.
+    var origem = caixaOrigemAntecipacao(dateKey);
+    var valorVendaC = origem.valorBrutoC;
+    var taxasC = origem.taxasLojaC;
+    var liquidoReceberC = origem.resultadoLiquidoC;
     var valorAntecipadoC = ac.valorBruto;
     var taxaAceleraC = ac.resgatesN ? -Math.abs(ac.taxaAcelera) : 0;
     var liquidoCarteiraC = ac.resgatesN ? ac.valorLiquido : 0;
@@ -11771,22 +11828,30 @@ buffer/index.js:
     // extrato financeiro/conciliação", não dashboard. O fluxo do dinheiro abaixo é o protagonista
     // direto após o cabeçalho; os mesmos números (Valor da Venda/Taxas/Líquido/Transferido/Diferença)
     // já aparecem nele, na ordem exigida — nunca repetidos antes num card.
-    var diferencaOk = Math.abs(fluxo.diferenca) <= 0.01;
+    // Bloco 10 (Saldo Final): um saldo POSITIVO é normal (dinheiro ainda na carteira, não transferido
+    // — nem todo operador transfere 100% todo dia) — nunca tratado como "diferença/erro". Só um saldo
+    // NEGATIVO é um problema real (transferiu mais do que havia disponível).
+    var diferencaOk = fluxo.diferenca >= -0.01;
 
     // ---- FLUXO DO DINHEIRO — prompt "Reestruturação do Caixa": blocos empilhados, SEM setas — cada
-    // etapa (Venda → Taxas Shopee → Resultado após taxas → Acelera → Disponível na carteira →
-    // créditos/débitos → transferido ao banco → diferença) é um .cx-block com divisor fino; os números
-    // continuam vindo só de dre/ac/fluxo, nada é recalculado aqui. ----
-    var vendaSub = dre.n ? nn(dre.n) + ' pedido(s) pago(s)' : 'nenhum pedido pago neste dia';
+    // etapa (Pedidos vinculados à antecipação → Taxas Shopee dos pedidos → Resultado líquido →
+    // Antecipação Shopee → Recebido na carteira → créditos/débitos → transferido ao banco → saldo
+    // final) é um .cx-block com divisor fino; os números continuam vindo só de origem/ac/fluxo, nada
+    // é recalculado aqui. ----
+    var vendaSub = origem.n ? nn(origem.n) + ' pedido(s) vinculado(s) à antecipação' : 'nenhum pedido vinculado a uma antecipação neste dia';
+    var pedidosOrigemRows = origem.pedidosRows.map(function (p) {
+      return '<tr class="rowlink" data-goped360="' + esc(p.orderId) + '"><td class="mono">' + esc(p.orderId) + '</td><td class="cell-text">' + esc(p.produto || '—') + '</td><td class="mono">' + esc(p.sku || '—') + '</td><td class="nowrap">' + brlC(p.valorC) + '</td><td>' + esc(p.statusLabel) + '</td></tr>';
+    }).join('');
+    var pedidosOrigemDetails = '<details class="cx-collapse" style="margin-top:4px"><summary style="font-size:12px;padding:6px 12px">Ver pedidos</summary><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Produto</th><th>SKU</th><th>Valor venda</th><th>Status</th></tr></thead><tbody>' + (pedidosOrigemRows || '<tr><td colspan="5" class="empty">Nenhum pedido.</td></tr>') + '</tbody></table></div></div></details>';
 
     // Comissão/Taxa de Serviço aparecem DIRETO (sem precisar clicar) — só os FILHOS reais da Taxa de
     // Serviço (Afiliados do Vendedor/Taxa de Transação/Taxa por item vendido) ficam atrás de "Ver
     // composição", porque só eles têm uma composição a mostrar; explicam o pai, nunca somam de novo.
-    var descontosLinhas = dre.linhasTaxasLoja.length ? dre.linhasTaxasLoja.map(function (l) {
+    var descontosLinhas = origem.linhasTaxasLoja.length ? origem.linhasTaxasLoja.map(function (l) {
       var isServico = dre.linhasSvcChildren.length && SVC_REAL_LABELS[l.label];
       var composicao = isServico ? ('<details class="cx-collapse" style="margin:2px 0 8px"><summary style="font-size:12px;padding:6px 12px">Ver composição</summary><div class="pb">' + dre.linhasSvcChildren.map(function (c) { return '<div class="fin-line" style="font-size:12.5px"><span>' + esc(c.label) + '</span><span class="' + (c.valor < 0 ? 'neg' : 'pos') + '">' + brlC(c.valor) + '</span></div>'; }).join('') + '</div></details>') : '';
-      return '<div class="cx-kv rowlink" data-dredrill="' + esc(l.label) + '" title="Ver pedidos"><span class="cxl">' + esc(l.label) + '</span><span class="cxv ' + (l.valor < 0 ? 'neg' : l.valor > 0 ? 'pos' : '') + '">' + brlC(l.valor) + '</span></div>' + composicao;
-    }).join('') : '<div class="footnote" style="margin:2px 0 8px">Nenhuma taxa cobrada neste dia.</div>';
+      return '<div class="cx-kv rowlink" data-dredrill="' + esc(l.label) + '" data-dredrillorigem="ANTECIPACAO" title="Ver pedidos"><span class="cxl">' + esc(l.label) + '</span><span class="cxv ' + (l.valor < 0 ? 'neg' : l.valor > 0 ? 'pos' : '') + '">' + brlC(l.valor) + '</span></div>' + composicao;
+    }).join('') : '<div class="footnote" style="margin:2px 0 8px">Nenhuma taxa cobrada nestes pedidos.</div>';
 
     // Ver resgate — mesmos resgates do Acelera já usados antes (aceleraResultadoFechamento), só atrás
     // de um clique — nunca a tela inteira do Acelera reproduzida dentro do Caixa.
@@ -11822,23 +11887,22 @@ buffer/index.js:
 
     // ---- FLUXO DO DINHEIRO — blocos empilhados, sem setas: cada etapa é um número, não uma animação.
     var fluxoDinheiro = '<div class="cx-section"><h4>Fluxo do dinheiro</h4>' +
-      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">1. Valor da Venda</span><span class="cxv">' + brlC(valorVendaC) + '</span></div><div class="cxsub">' + vendaSub + '</div></div>' +
+      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">1. Pedidos Vinculados à Antecipação</span><span class="cxv">' + brlC(valorVendaC) + '</span></div><div class="cxsub">' + vendaSub + '</div>' + pedidosOrigemDetails + '</div>' +
       '<div class="cx-block"><div class="cx-block-row"><span class="cxl">(-) 2. Taxas Shopee</span><span class="cxv neg">' + brlC(taxasC) + '</span></div>' +
-      (dre.taxasPendentesN ? ('<div class="cxsub">⚠ ' + nn(dre.taxasPendentesN) + ' de ' + nn(dre.n) + ' pedido(s) sem confirmação completa do Income — as taxas desses pedidos entram só pelo que já é real (Service Fee Details), nunca por estimativa.</div>') : '') +
+      (origem.taxasPendentesN ? ('<div class="cxsub">⚠ ' + nn(origem.taxasPendentesN) + ' de ' + nn(origem.n) + ' pedido(s) sem confirmação completa do Income — as taxas desses pedidos entram só pelo que já é real (Service Fee Details), nunca por estimativa.</div>') : '') +
       '<div class="pb" style="padding:4px 0 0 8px">' + descontosLinhas + '</div></div>' +
-      '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">3. Resultado após Taxas</span><span class="cxv">' + brlC(liquidoReceberC) + '</span></div></div>' +
-      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">(-) Shopee Acelera</span><span class="cxv' + (taxaAceleraC ? ' neg' : '') + '">' + brlC(taxaAceleraC) + '</span></div>' +
-      '<div class="cxsub">Antecipa recebíveis já existentes (de vendas de qualquer dia, não só as de hoje) — o valor antecipado não é necessariamente o mesmo do resultado após taxas acima.</div>' +
-      '<div class="cx-block-child cx-block-row"><span class="cxl">Valor Antecipado</span><span class="cxv">' + brlC(valorAntecipadoC) + '</span></div>' +
-      '<div class="cx-block-child cx-block-row"><span class="cxl">Taxa de Antecipação</span><span class="cxv' + (taxaAceleraC ? ' neg' : '') + '">' + brlC(taxaAceleraC) + '</span></div>' +
+      '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">3. Resultado Líquido dos Pedidos</span><span class="cxv">' + brlC(liquidoReceberC) + '</span></div></div>' +
+      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">4. Valor Antecipado (Shopee Acelera)</span><span class="cxv">' + brlC(valorAntecipadoC) + '</span></div>' +
+      '<div class="cxsub">Antecipa recebíveis já existentes (de vendas de qualquer dia, não só as deste dia) — por isso pode diferir do Resultado Líquido dos Pedidos acima.</div>' +
+      '<div class="cx-block-child cx-block-row"><span class="cxl">(-) Taxa de Antecipação</span><span class="cxv' + (taxaAceleraC ? ' neg' : '') + '">' + brlC(taxaAceleraC) + '</span></div>' +
       verResgate + '</div>' +
-      '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">4. Valor Disponível na Carteira</span><span class="cxv">' + brlC(liquidoCarteiraC) + '</span></div></div>' +
-      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">(+) Créditos da Carteira</span><span class="cxv pos">+' + brl(fluxo.outrosCreditos) + '</span></div>' +
-      '<div class="cx-block-row"><span class="cxl">(-) Débitos da Carteira</span><span class="cxv neg">-' + brl(fluxo.descontos) + '</span></div></div>' +
-      '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">Disponível para Transferência</span><span class="cxv">' + brl(fluxo.disponivel) + '</span></div></div>' +
-      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">5. Transferido para o Banco</span><span class="cxv">' + brl(fluxo.transferido) + '</span></div></div>' +
-      '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl" style="font-size:12px">6. Diferença Final</span><span class="cxv ' + (diferencaOk ? 'pos' : 'neg') + '" style="font-size:20px">' + brl(fluxo.diferenca) + '</span></div>' +
-      '<div style="margin-top:6px">' + (diferencaOk ? '<span class="tag ok">✓ Caixa conferido</span>' : '<span class="tag warn">⚠ Caixa com diferença</span> <button class="btn-sm" id="cx-ver-nao-conciliados" style="margin-left:6px">Ver movimentos não conciliados</button>') + '</div></div>' +
+      '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">5. Valor Recebido na Carteira</span><span class="cxv">' + brlC(liquidoCarteiraC) + '</span></div></div>' +
+      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">6. (+) Créditos da Carteira</span><span class="cxv pos">+' + brl(fluxo.outrosCreditos) + '</span></div></div>' +
+      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">7. (-) Débitos da Carteira</span><span class="cxv neg">-' + brl(fluxo.descontos) + '</span></div></div>' +
+      '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">8. Disponível para Transferência</span><span class="cxv">' + brl(fluxo.disponivel) + '</span></div></div>' +
+      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">9. Transferido para o Banco</span><span class="cxv">' + brl(fluxo.transferido) + '</span></div></div>' +
+      '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl" style="font-size:12px">10. Saldo Final na Carteira</span><span class="cxv ' + (diferencaOk ? 'pos' : 'neg') + '" style="font-size:20px">' + brl(fluxo.diferenca) + '</span></div>' +
+      '<div style="margin-top:6px">' + (diferencaOk ? '<span class="tag ok">✓ Caixa conferido' + (fluxo.diferenca > 0.01 ? ' — saldo em carteira, ainda não transferido' : '') + '</span>' : '<span class="tag warn">⚠ Transferido a mais do que havia disponível</span> <button class="btn-sm" id="cx-ver-nao-conciliados" style="margin-left:6px">Ver movimentos não conciliados</button>') + '</div></div>' +
       '</div>';
 
     // ---- DRE do dia — simples, na ordem pedida: Venda / (-) Taxas / (-) Acelera / (-) Custos / Resultado.
@@ -11849,13 +11913,17 @@ buffer/index.js:
     // (resolveSellerCharges, dados reais confirmados pelo Income) — isso é esperado, nunca dois motores
     // calculando a MESMA coisa: são duas perguntas diferentes (encargo real da loja × DRE contábil
     // completa), cada uma com sua fonte já existente. ----
-    var dreResumo = '<div class="cx-section"><h4>DRE do dia' + h4sub(dre.n ? (dre.lucro != null ? brlC(dre.lucro) : 'aguardando custo') : null) + '</h4>' +
+    // PROMPT: "DRE DO DIA (SEPARADO) — Depois do fechamento financeiro." Visão COMERCIAL do dia
+    // (pedidos pagos neste dia, caixaDreDia) — intencionalmente um conjunto de pedidos diferente do
+    // fluxo de conciliação acima (que usa caixaOrigemAntecipacao/ac.pedidosAcelera) — "quanto vendi
+    // hoje" é uma pergunta diferente de "de onde veio o dinheiro que chegou hoje".
+    var dreResumo = '<div class="cx-section"><h4>DRE Operacional' + h4sub(dre.n ? (dre.lucro != null ? brlC(dre.lucro) : 'aguardando custo') : null) + '</h4>' +
       (dre.n ? (
-        '<div class="cx-kv"><span class="cxl">Venda</span><span class="cxv">' + brlC(dre.receitaBruta) + '</span></div>' +
+        '<div class="cx-kv"><span class="cxl">Venda Bruta</span><span class="cxv">' + brlC(dre.receitaBruta) + '</span></div>' +
         '<div class="cx-kv"><span class="cxl">(-) Taxas Shopee (DRE completa)</span><span class="cxv neg">' + brlC(dre.taxasCobradas) + '</span></div>' +
         (dre.temAcelera ? ('<div class="cx-kv"><span class="cxl">(-) Acelera</span><span class="cxv neg">' + brlC(dre.acTaxa) + '</span></div>') : '') +
         (dre.custoTotal != null ? ('<div class="cx-kv"><span class="cxl">(-) Custos do Produto</span><span class="cxv neg">' + brlC(-dre.custoTotal) + '</span></div>') : '<div class="cx-kv"><span class="cxl">(-) Custos do Produto</span><span class="cxv">não disponível</span></div>') +
-        '<div class="cx-kv" style="border-top:1px solid var(--line);margin-top:4px;padding-top:8px"><span class="cxl" style="font-weight:800">Resultado</span><span class="cxv ' + (dre.lucro != null && dre.lucro < 0 ? 'neg' : 'pos') + '" style="font-size:16px">' + (dre.lucro != null ? brlC(dre.lucro) : 'aguardando custo') + '</span></div>' +
+        '<div class="cx-kv" style="border-top:1px solid var(--line);margin-top:4px;padding-top:8px"><span class="cxl" style="font-weight:800">Lucro Operacional</span><span class="cxv ' + (dre.lucro != null && dre.lucro < 0 ? 'neg' : 'pos') + '" style="font-size:16px">' + (dre.lucro != null ? brlC(dre.lucro) : 'aguardando custo') + '</span></div>' +
         (dre.margem != null ? ('<div class="cx-kv"><span class="cxl">Margem</span><span class="cxv">' + pct(dre.margem) + '</span></div>') : '') +
         '<details class="cx-collapse"><summary>Ver DRE completa</summary><div class="pb">' + caixaDreBlock(dre, dateKey) + '</div></details>'
       ) : '<div class="footnote">Nenhum pedido pago neste dia.</div>') +
@@ -11978,7 +12046,7 @@ buffer/index.js:
     // (mesma janela do dia, valor ~igual a um Pix já importado da Carteira).
     var btAbrir = document.getElementById('bt-abrir-manual'); if (btAbrir) btAbrir.onclick = function () { openTransferenciaManualModal(dateKey, function () { render(); }); };
     app.querySelectorAll('[data-wtx]').forEach(function (b) { b.onclick = function () { openWalletTx(b.dataset.wtx, function () { render(); }); }; });
-    app.querySelectorAll('[data-dredrill]').forEach(function (b) { b.onclick = function () { caixaDreDrillOpen(dateKey, b.dataset.dredrill); }; });
+    app.querySelectorAll('[data-dredrill]').forEach(function (b) { b.onclick = function () { caixaDreDrillOpen(dateKey, b.dataset.dredrill, null, b.dataset.dredrillorigem); }; });
     app.querySelectorAll('[data-dredrillchild]').forEach(function (b) { b.onclick = function () { var parts = b.dataset.dredrillchild.split('|'); caixaDreDrillOpen(dateKey, parts[0], parts[1]); }; });
     var precAbaixoBtn = document.querySelector('[data-precabaixorec]'); if (precAbaixoBtn) precAbaixoBtn.onclick = function () { caixaPrecAbaixoRecomendadoOpen(dateKey); };
     var verNaoConc = document.getElementById('cx-ver-nao-conciliados'); if (verNaoConc) verNaoConc.onclick = function () {
@@ -12473,7 +12541,7 @@ buffer/index.js:
       var agoraConfirmado = /\(Confirmado — Income\)/.test(rec.historico || '');
       Object.keys(rec).forEach(function (k) { if (k !== 'id' && k !== 'createdAt' && k !== 'history') full[k] = rec[k]; });
       full.updatedAt = now;
-      if (eraProvisorio && agoraConfirmado) cpPushHistory(full, 'TAXA_CONFIRMADA', 'Taxa atualizada da fonte Order para Income (valor provisório substituído pelo valor confirmado, sem duplicar).');
+      if (eraProvisorio && agoraConfirmado) cpPushHistory(full, 'TAXA_CONFIRMADA', 'Valor atualizado de Pedido para Income confirmado.');
       else cpPushHistory(full, 'ATUALIZACAO_AUTOMATICA', 'Atualizado pelo fechamento de caixa.');
     } else {
       full = Object.assign({ id: cpUid('CP'), createdAt: now, history: [] }, rec, { updatedAt: now });
