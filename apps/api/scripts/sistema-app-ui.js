@@ -8056,7 +8056,7 @@
     var fluxoDinheiro = '<div class="cx-section"><h4>Fluxo do dinheiro</h4>' +
       '<div class="cx-block"><div class="cx-block-row"><span class="cxl">1. Pedidos Vinculados à Antecipação</span><span class="cxv">' + brlC(valorVendaC) + '</span></div><div class="cxsub">' + vendaSub + '</div>' + pedidosOrigemDetails + '</div>' +
       '<div class="cx-block"><div class="cx-block-row"><span class="cxl">(-) 2. Taxas Shopee</span><span class="cxv neg">' + brlC(taxasC) + '</span></div>' +
-      (origem.taxasPendentesN ? ('<div class="cxsub">⚠ ' + nn(origem.taxasPendentesN) + ' de ' + nn(origem.n) + ' pedido(s) sem confirmação completa do Income — as taxas desses pedidos entram só pelo que já é real (Service Fee Details), nunca por estimativa.</div>') : '') +
+      (origem.taxasPendentesN ? ('<div class="cxsub">⚠ ' + nn(origem.taxasPendentesN) + ' de ' + nn(origem.n) + ' pedido(s) sem confirmação completa do Income — as taxas desses pedidos usam o valor provisório do Order.all (marcado "PROVISÓRIO — AGUARDANDO INCOME" abaixo) e são substituídas automaticamente pelo valor confirmado assim que o Income for importado.</div>') : '') +
       '<div class="pb" style="padding:4px 0 0 8px">' + descontosLinhas + '</div></div>' +
       '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">3. Resultado Líquido dos Pedidos</span><span class="cxv">' + brlC(liquidoReceberC) + '</span></div></div>' +
       '<div class="cx-block"><div class="cx-block-row"><span class="cxl">4. Valor Antecipado (Shopee Acelera)</span><span class="cxv">' + brlC(valorAntecipadoC) + '</span></div>' +
