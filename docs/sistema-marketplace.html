@@ -4255,7 +4255,17 @@ buffer/index.js:
   //  6. mais de uma candidata no mesmo nível (2 anúncios ATIVOS com o mesmo SKU, ou 2+ INATIVOS sem
   //     nenhum identificador pra desempatar) → SKU_CONFLITANTE / SKU_CONFLITANTE_HISTORICAL. Nunca
   //     escolhe uma arbitrariamente.
+  // §finalStatus: mapa opaco motivo→status canônico exigido pelo diagnóstico (SKU_NOT_FOUND/
+  // SKU_CONFLICT/FAMILY_NOT_ASSIGNED/FAMILY_NOT_FOUND/COST_NOT_DEFINED/COST_RESOLVED) — nunca troca
+  // os valores internos de "motivo" (usados como chave em SKU_MOTIVO_LABEL e no regex de conflito),
+  // só adiciona um rótulo extra em inglês para quem consome via auditOrderProductCost().
+  var SKU_FINAL_STATUS = { SKU_NAO_LOCALIZADO: 'SKU_NOT_FOUND', SEM_FAMILIA: 'FAMILY_NOT_ASSIGNED', FAMILIA_NAO_ENCONTRADA: 'FAMILY_NOT_FOUND', FAMILIA_SEM_CUSTO: 'COST_NOT_DEFINED', SKU_CONFLITANTE: 'SKU_CONFLICT', SKU_CONFLITANTE_HISTORICAL: 'SKU_CONFLICT' };
   function resolveSkuCostByKey(key, requestedSku, itemHint) {
+    var r = resolveSkuCostByKeyRaw(key, requestedSku, itemHint);
+    r.finalStatus = r.found ? 'COST_RESOLVED' : (SKU_FINAL_STATUS[r.motivo] || 'SKU_NOT_FOUND');
+    return r;
+  }
+  function resolveSkuCostByKeyRaw(key, requestedSku, itemHint) {
     if (!key) return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
     var candidates = skuAliasIndex[key];
     if (!candidates || !candidates.length) return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
@@ -4264,7 +4274,10 @@ buffer/index.js:
       if (!v) return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
       if (!v.familyId) return { found: false, requestedSku: requestedSku, matchedBy: cand.matchedBy, canonicalSku: v.sku, variationId: v.id, productId: v.productId, motivo: 'SEM_FAMILIA', regra: regra };
       var f = skuFamById[v.familyId];
-      if (!f || f.currentCostAmount == null) return { found: false, requestedSku: requestedSku, matchedBy: cand.matchedBy, canonicalSku: v.sku, variationId: v.id, productId: v.productId, familyId: v.familyId, familyName: f ? f.name : null, motivo: 'FAMILIA_SEM_CUSTO', regra: regra };
+      // familyId aponta pra um registro que não existe mais (referência órfã) — nunca confundir com
+      // "família existe mas sem custo cadastrado"; são causas e ações de correção diferentes.
+      if (!f) return { found: false, requestedSku: requestedSku, matchedBy: cand.matchedBy, canonicalSku: v.sku, variationId: v.id, productId: v.productId, familyId: v.familyId, motivo: 'FAMILIA_NAO_ENCONTRADA', regra: regra };
+      if (f.currentCostAmount == null) return { found: false, requestedSku: requestedSku, matchedBy: cand.matchedBy, canonicalSku: v.sku, variationId: v.id, productId: v.productId, familyId: v.familyId, familyName: f.name, motivo: 'FAMILIA_SEM_CUSTO', regra: regra };
       return { found: true, matchedBy: cand.matchedBy, requestedSku: requestedSku, canonicalSku: v.sku, variationId: v.id, productId: v.productId, familyId: v.familyId, familyName: f.name, cost: Number(f.currentCostAmount), regra: regra };
     }
     if (itemHint && itemHint.variationId) {
@@ -4287,7 +4300,7 @@ buffer/index.js:
     return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
   }
   function resolveSkuCost(sku, itemHint) { return resolveSkuCostByKey(normalizeSkuKey(sku), sku, itemHint); }
-  var SKU_MOTIVO_LABEL = { SKU_NAO_LOCALIZADO: 'SKU não localizado em Produtos', SEM_FAMILIA: 'Família não atribuída', FAMILIA_SEM_CUSTO: 'Custo da família não informado', SKU_CONFLITANTE: 'Conflito de SKU — mais de um anúncio ATIVO usa o mesmo código', SKU_CONFLITANTE_HISTORICAL: 'Conflito de SKU — mais de um anúncio INATIVO usa o mesmo código, sem identificador para desempatar' };
+  var SKU_MOTIVO_LABEL = { SKU_NAO_LOCALIZADO: 'SKU não localizado em Produtos', SEM_FAMILIA: 'Família não atribuída', FAMILIA_NAO_ENCONTRADA: 'Família referenciada não existe mais em Produtos', FAMILIA_SEM_CUSTO: 'Custo da família não informado', SKU_CONFLITANTE: 'Conflito de SKU — mais de um anúncio ATIVO usa o mesmo código', SKU_CONFLITANTE_HISTORICAL: 'Conflito de SKU — mais de um anúncio INATIVO usa o mesmo código, sem identificador para desempatar' };
   var SKU_REGRA_LABEL = { STRONG_VARIATION_ID: 'Identificador de variação do pedido', ACTIVE_EXACT_SKU: 'SKU exato · anúncio ativo', ACTIVE_REFERENCE_SKU: 'SKU de referência · anúncio ativo', HISTORICAL_INACTIVE_MATCH: 'Correspondência histórica · anúncio inativo' };
   // §44/§59 do prompt "Correção Financeira": rótulos únicos para incomeResolve.status/statusFinanceiro,
   // usados na Ficha do Pedido — declarados no escopo do módulo (não dentro de openPedidoFicha360) para
@@ -5706,12 +5719,14 @@ buffer/index.js:
       (itemRows.length ? '<div class="table-wrap" style="margin-top:8px"><table class="report"><thead><tr><th>Produto</th><th>SKU do Pedido</th><th>SKU em Produtos</th><th>Variação</th><th>Família</th><th>Qtd</th><th>Valor unit.</th><th>Valor total</th><th>Custo unit.</th><th>Custo total</th></tr></thead><tbody>' +
         itemRows.map(function (r) {
           var cruzTitle = r.matchedBy ? 'Cruzamento: ' + esc(SKU_MATCHEDBY_LABEL[r.matchedBy] || r.matchedBy) : (r.motivo ? esc(SKU_MOTIVO_LABEL[r.motivo] || r.motivo) : '');
-          var skuEncontradoCell = r.linked ? '<span title="' + cruzTitle + '">' + esc(r.skuEncontrado || r.sku || '—') + (r.matchedBy === 'REFERENCE_SKU' ? ' <span class="tag info" style="font-size:10px" title="' + cruzTitle + '">via ref.</span>' : '') + '</span>' : '<span class="tag warn" title="' + cruzTitle + '">' + esc(SKU_MOTIVO_LABEL[r.motivo] ? (r.motivo === 'SKU_NAO_LOCALIZADO' ? 'não localizado' : r.motivo === 'SEM_FAMILIA' ? 'sem família' : r.motivo === 'FAMILIA_SEM_CUSTO' ? 'sem custo' : 'conflito') : '—') + '</span>';
+          var SKU_MOTIVO_CURTO = { SKU_NAO_LOCALIZADO: 'não localizado', SEM_FAMILIA: 'sem família', FAMILIA_NAO_ENCONTRADA: 'família inexistente', FAMILIA_SEM_CUSTO: 'sem custo', SKU_CONFLITANTE: 'conflito', SKU_CONFLITANTE_HISTORICAL: 'conflito' };
+          var skuEncontradoCell = r.linked ? '<span title="' + cruzTitle + '">' + esc(r.skuEncontrado || r.sku || '—') + (r.matchedBy === 'REFERENCE_SKU' ? ' <span class="tag info" style="font-size:10px" title="' + cruzTitle + '">via ref.</span>' : '') + '</span>' : '<span class="tag warn" title="' + cruzTitle + '">' + esc(SKU_MOTIVO_CURTO[r.motivo] || '—') + '</span>';
           var custoCell = r.custoUnit != null ? brl(r.custoUnit) : '<span class="tag warn" title="' + cruzTitle + '">' + esc(SKU_MOTIVO_LABEL[r.motivo] || 'sem custo') + '</span>';
-          return '<tr><td class="cell-text">' + esc(r.produto || '—') + '</td><td class="mono">' + esc(r.sku || '—') + '</td><td class="mono">' + skuEncontradoCell + '</td><td>' + esc(r.variacao || '—') + '</td><td>' + esc(r.familia || '—') + '</td><td>' + nn(r.qty) + '</td><td class="nowrap">' + (r.unitPrice != null ? brl(r.unitPrice) : '—') + '</td><td class="nowrap">' + (r.total != null ? brl(r.total) : '—') + '</td><td class="nowrap">' + custoCell + '</td><td class="nowrap">' + (r.custoTotal != null ? brl(r.custoTotal) : '—') + '</td></tr>';
+          var diagCell = r.linked ? '' : ' <button class="btn-sm" data-skucostdiag="' + esc(orderId) + '" style="margin-left:4px;padding:1px 6px;font-size:10px">Diagnóstico</button>';
+          return '<tr><td class="cell-text">' + esc(r.produto || '—') + '</td><td class="mono">' + esc(r.sku || '—') + '</td><td class="mono">' + skuEncontradoCell + diagCell + '</td><td>' + esc(r.variacao || '—') + '</td><td>' + esc(r.familia || '—') + '</td><td>' + nn(r.qty) + '</td><td class="nowrap">' + (r.unitPrice != null ? brl(r.unitPrice) : '—') + '</td><td class="nowrap">' + (r.total != null ? brl(r.total) : '—') + '</td><td class="nowrap">' + custoCell + '</td><td class="nowrap">' + (r.custoTotal != null ? brl(r.custoTotal) : '—') + '</td></tr>';
         }).join('') +
         '</tbody></table></div>' : '') +
-      (itemRows.some(function (r) { return !r.linked; }) ? '<div class="footnote" style="margin-top:6px">⚠ Custo parcialmente pendente — pelo menos um item deste pedido não tem custo cadastrado (passe o mouse sobre o item para ver o motivo).</div>' : '') +
+      (itemRows.some(function (r) { return !r.linked; }) ? '<div class="footnote" style="margin-top:6px">⚠ Custo parcialmente pendente — pelo menos um item deste pedido não tem custo cadastrado. Motivo exato em cada linha (passe o mouse ou clique em "Diagnóstico").</div>' : '') +
       '</div></div>';
 
     // PROMPT "Ficha do Pedido — remover Eventos + Taxa de Serviço": o bloco "Eventos do Pedido"
@@ -5794,6 +5809,7 @@ buffer/index.js:
     var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { d.remove(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
     var gd = panel.querySelector('[data-godev360]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev360; d.remove(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
     var sd = panel.querySelector('[data-selldiag]'); if (sd) sd.onclick = function () { openSellerChargesDiag(orderId); };
+    panel.querySelectorAll('[data-skucostdiag]').forEach(function (b) { b.onclick = function () { openSkuCostDiag(orderId); }; });
     var ga = panel.querySelector('[data-acped360]'); if (ga) ga.onclick = function () { d.remove(); route = 'acelera'; aceleraSub = 'antecipacoes'; render(); setTimeout(function () { openAceleraPedido(orderId); }, 60); };
     var gf = panel.querySelector('[data-affped360]'); if (gf) gf.onclick = function () { d.remove(); route = 'afiliados'; affSub = 'pedidos'; render(); setTimeout(function () { openAffPedido(orderId); }, 60); };
     panel.querySelectorAll('[data-wtx]').forEach(function (b) { b.onclick = function () { d.remove(); route = 'carteira'; walletSub = 'mov'; render(); setTimeout(function () { openWalletTx(b.dataset.wtx); }, 60); }; });
@@ -5826,6 +5842,50 @@ buffer/index.js:
     var html = '<div class="modal" style="width:560px"><div class="mh"><h3>Diagnóstico — cruzamento Income</h3><button class="x">&times;</button></div><div class="mbd">' +
       rows.map(function (r) { return kv(r[0], r[1]); }).join('') +
       '<div class="footnote" style="margin-top:8px">Esses valores vêm direto do que foi importado nesta sessão — nenhum é estimado.</div>' +
+      '</div></div>';
+    o.innerHTML = html;
+    o.onclick = function (e) { if (e.target === o) o.remove(); };
+    document.body.appendChild(o);
+    o.querySelector('.x').onclick = function () { o.remove(); };
+  }
+
+  // Diagnóstico de custo do produto (prompt "Resolver canônico SKU→Variação→Família→Custo") —
+  // mostra, item a item, exatamente onde a resolução quebrou: SKU inexistente, conflito entre
+  // anúncios, família não atribuída, família apagada ou família sem custo cadastrado. Nunca
+  // recalcula nada — só formata o que auditOrderProductCost() (fonte única) já produziu.
+  var SKU_FINAL_STATUS_LABEL = { SKU_NOT_FOUND: 'SKU_NOT_FOUND — SKU não localizado', SKU_CONFLICT: 'SKU_CONFLICT — mais de um anúncio disputa o mesmo código', FAMILY_NOT_ASSIGNED: 'FAMILY_NOT_ASSIGNED — variação localizada, família não atribuída', FAMILY_NOT_FOUND: 'FAMILY_NOT_FOUND — família referenciada não existe mais', COST_NOT_DEFINED: 'COST_NOT_DEFINED — família sem custo cadastrado', COST_RESOLVED: 'COST_RESOLVED — custo resolvido' };
+  function openSkuCostDiag(orderId) {
+    var a = auditOrderProductCost(orderId);
+    var o = document.createElement('div'); o.className = 'overlay';
+    var itemsHtml = (a.items || []).map(function (it, idx) {
+      var fs = it.resolveResult ? it.resolveResult.finalStatus : (it.status === 'OK' ? 'COST_RESOLVED' : (SKU_FINAL_STATUS_LABEL[it.status] ? it.status : 'SKU_NOT_FOUND'));
+      var cand = function (list, label) { return kv(label, list && list.length ? list.map(function (c) { return (skuVarById[c.variationId] ? (skuVarById[c.variationId].sku || skuVarById[c.variationId].referenceSku || c.variationId) : c.variationId) + ' · produto ' + c.productId + ' · ' + (c.status || '—'); }).join('<br>') : '—'); };
+      var exact = (it.candidatos || []).filter(function (c) { return c.matchedBy === 'SKU'; });
+      var ref = (it.candidatos || []).filter(function (c) { return c.matchedBy === 'REFERENCE_SKU'; });
+      var exactActive = exact.filter(function (c) { return c.status !== 'INACTIVE'; });
+      var exactInactive = exact.filter(function (c) { return c.status === 'INACTIVE'; });
+      var refActive = ref.filter(function (c) { return c.status !== 'INACTIVE'; });
+      var refInactive = ref.filter(function (c) { return c.status === 'INACTIVE'; });
+      return '<div style="margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid #22304a"><div style="font-weight:700;margin-bottom:6px">Item ' + (idx + 1) + ' — ' + esc(it.skuPedido || '—') + '</div>' +
+        kv('SKU original', it.skuPedido || '—') + kv('SKU normalizado', it.normalizedSku || '—') +
+        cand(exactActive, 'Candidatas — SKU exato · ativas') + cand(refActive, 'Candidatas — SKU de referência · ativas') +
+        cand(exactInactive, 'Candidatas — SKU exato · inativas') + cand(refInactive, 'Candidatas — SKU de referência · inativas') +
+        kv('MATCHED BY', it.regraVencedoraLabel || '—') +
+        kv('VARIATION', it.variationId ? (it.canonicalSku || it.variationId) : '—') +
+        kv('PRODUCT', it.productId || '—') +
+        kv('FAMILY ID', it.familyId || '—') +
+        kv('FAMILY NAME', it.familyName || '—') +
+        kv('FAMILY CURRENT COST', it.currentCostAmount != null ? brl(it.currentCostAmount) : '—') +
+        kv('Quantidade', nn(it.qty)) +
+        kv('Custo unitário', it.custoUnitario != null ? brl(it.custoUnitario) : '—') +
+        kv('Custo total do item', it.custoTotal != null ? brl(it.custoTotal) : '—') +
+        kv('STATUS FINAL', SKU_FINAL_STATUS_LABEL[fs] || fs) +
+        '</div>';
+    }).join('');
+    var html = '<div class="modal" style="width:620px;max-height:82vh;overflow:auto"><div class="mh"><h3>Diagnóstico — custo do produto</h3><button class="x">&times;</button></div><div class="mbd">' +
+      kv('Pedido', a.orderId) + kv('operationId', a.operationId || '(nenhum)') +
+      (itemsHtml || '<div class="footnote">Pedido sem itens ou não localizado.</div>') +
+      '<div class="footnote" style="margin-top:8px">Resolver canônico: SKU exato ativo &gt; SKU de referência ativo &gt; SKU exato inativo &gt; SKU de referência inativo. Conflito entre duas ou mais candidatas do mesmo nível nunca escolhe uma arbitrariamente.</div>' +
       '</div></div>';
     o.innerHTML = html;
     o.onclick = function (e) { if (e.target === o) o.remove(); };
