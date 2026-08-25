@@ -8113,10 +8113,11 @@
     }
     var descontosLinhas = '<div class="footnote" style="margin:6px 0 2px;font-weight:700">Descontos Shopee do Vendedor <span style="font-weight:400">(taxa real sobre a venda)</span></div>' +
       (descGrupos.taxas.length ? descGrupos.taxas.map(descontoLinhaHtml).join('') : '<div class="footnote" style="margin:2px 0 8px">Nenhuma taxa cobrada nestes pedidos.</div>') +
-      '<div class="cx-kv" style="margin-top:2px;padding-top:4px;border-top:1px dashed var(--line);font-weight:700"><span class="cxl">Subtotal — Descontos Shopee</span><span class="cxv neg">' + brlC(descGrupos.taxasC) + '</span></div>' +
-      (descGrupos.ajustes.length ? ('<div class="footnote" style="margin:12px 0 2px;font-weight:700">Ajustes / Outros descontos <span style="font-weight:400">(não é taxa — reembolso ao comprador, envio reverso, vouchers/cashback bancados pela loja)</span></div>' +
+      '<div class="cx-kv" style="margin-top:2px;padding-top:4px;border-top:1px dashed var(--line);font-weight:700"><span class="cxl">Subtotal Taxas Shopee</span><span class="cxv neg">' + brlC(descGrupos.taxasC) + '</span></div>' +
+      (descGrupos.ajustes.length ? ('<div class="footnote" style="margin:12px 0 2px;font-weight:700">Outros descontos <span style="font-weight:400">(não é taxa — reembolso ao comprador, envio reverso, vouchers/cashback bancados pela loja)</span></div>' +
         descGrupos.ajustes.map(descontoLinhaHtml).join('') +
-        '<div class="cx-kv" style="margin-top:2px;padding-top:4px;border-top:1px dashed var(--line);font-weight:700"><span class="cxl">Subtotal — Ajustes/Outros</span><span class="cxv neg">' + brlC(descGrupos.ajustesC) + '</span></div>') : '');
+        '<div class="cx-kv" style="margin-top:2px;padding-top:4px;border-top:1px dashed var(--line);font-weight:700"><span class="cxl">Subtotal Outros descontos</span><span class="cxv neg">' + brlC(descGrupos.ajustesC) + '</span></div>') : '') +
+      '<div class="cx-kv" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line);font-weight:800"><span class="cxl">TOTAL DESCONTOS SHOPEE</span><span class="cxv neg">' + brlC(taxasC) + '</span></div>';
 
     // Ver resgate — mesmos resgates do Acelera já usados antes (aceleraResultadoFechamento), só atrás
     // de um clique — nunca a tela inteira do Acelera reproduzida dentro do Caixa.
@@ -8164,13 +8165,19 @@
 
     // ---- FLUXO DO DINHEIRO — blocos empilhados, sem setas: cada etapa é um número, não uma animação.
     var fluxoDinheiro = '<div class="cx-section"><h4>Fluxo do dinheiro</h4>' +
-      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">1. Pedidos Vinculados à Antecipação</span><span class="cxv">' + brlC(valorVendaC) + '</span></div><div class="cxsub">' + vendaSub + '</div>' + pedidosOrigemDetails + '</div>' +
-      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">(-) 2. Descontos Shopee do Vendedor</span><span class="cxv neg">' + brlC(taxasC) + '</span></div>' +
+      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">1. Valor da Venda <span style="font-weight:400">(Pedidos vinculados à antecipação)</span></span><span class="cxv">' + brlC(valorVendaC) + '</span></div><div class="cxsub">' + vendaSub + '</div>' + pedidosOrigemDetails + '</div>' +
+      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">(-) 2. Descontos Shopee do Vendedor</span></div>' +
       (origem.taxasPendentesN ? ('<div class="cxsub">⚠ ' + nn(origem.taxasPendentesN) + ' de ' + nn(origem.n) + ' pedido(s) sem confirmação completa do Income — as taxas desses pedidos usam o valor provisório do Order.all (marcado "PROVISÓRIO — AGUARDANDO INCOME" abaixo) e são substituídas automaticamente pelo valor confirmado assim que o Income for importado.</div>') : '') +
       '<div class="pb" style="padding:4px 0 0 8px">' + descontosLinhas + '</div></div>' +
-      '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">3. Resultado Líquido dos Pedidos</span><span class="cxv">' + brlC(liquidoReceberC) + '</span></div></div>' +
+      '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">3. Valor Líquido dos Pedidos</span><span class="cxv">' + brlC(liquidoReceberC) + '</span></div>' +
+      '<div class="pb" style="padding:4px 0 0 8px">' +
+      '<div class="fin-line"><span>Venda</span><span>' + brlC(valorVendaC) + '</span></div>' +
+      '<div class="fin-line"><span>(-) Taxas Shopee</span><span class="neg">' + brlC(descGrupos.taxasC) + '</span></div>' +
+      '<div class="fin-line"><span>(-) Outros descontos</span><span class="neg">' + brlC(descGrupos.ajustesC) + '</span></div>' +
+      '<div class="fin-line total"><span>= Líquido antes da antecipação</span><b>' + brlC(liquidoReceberC) + '</b></div>' +
+      '</div></div>' +
       '<div class="cx-block"><div class="cx-block-row"><span class="cxl">4. Valor Antecipado (Shopee Acelera)</span><span class="cxv">' + brlC(valorAntecipadoC) + '</span></div>' +
-      '<div class="cxsub">Antecipa recebíveis já existentes (de vendas de qualquer dia, não só as deste dia) — por isso pode diferir do Resultado Líquido dos Pedidos acima.</div>' +
+      '<div class="cxsub">Antecipa recebíveis já existentes (de vendas de qualquer dia, não só as deste dia) — por isso pode diferir do Valor Líquido dos Pedidos acima.</div>' +
       '<div class="cx-block-child cx-block-row"><span class="cxl">(-) Taxa de Antecipação</span><span class="cxv' + (taxaAceleraC ? ' neg' : '') + '">' + brlC(taxaAceleraC) + '</span></div>' +
       verResgate + '</div>' +
       '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">5. Valor Recebido na Carteira</span><span class="cxv">' + brlC(liquidoCarteiraC) + '</span></div></div>' +
