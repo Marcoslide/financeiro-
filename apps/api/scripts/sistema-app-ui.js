@@ -7276,12 +7276,30 @@
   // momento do cadastro; operationId é opcional (uma conta pode servir a mais de uma loja da mesma
   // empresa). Contas sem companyId (cadastradas antes desta correção) continuam visíveis em qualquer
   // empresa — mesma regra defensiva de compatibilidade já usada no resto da arquitetura multiempresa.
+  // PROMPT "Reestruturar Contas a Receber + Controle Bancário" §1: saldoInicial/dataInicial são a
+  // base do motor de conciliação (bankAccountSaldoAtual, abaixo) — nunca um saldo "corrente" gravado
+  // à parte (isso divergiria do que os recebimentos/pagamentos realmente registram). Aditivo: contas
+  // já cadastradas sem esses campos continuam funcionando (saldoInicial vira 0, dataInicial vira null
+  // → conta desde sempre).
   function bankAccountSave(rec) {
     var id = rec.id || ('BANK-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
     var op = opActive(); var comp = op ? opCompany(op) : null;
-    var full = { id: id, companyId: rec.companyId !== undefined ? rec.companyId : (comp ? comp.id : null), operationId: rec.operationId !== undefined ? rec.operationId : null, nome: rec.nome, banco: rec.banco || '', agencia: rec.agencia || '', conta: rec.conta || '', tipo: rec.tipo || '', titular: rec.titular || '', documento: rec.documento || '', observacao: rec.observacao || '', ativa: rec.ativa !== false, createdAt: rec.createdAt || new Date().toISOString() };
+    var existing = bankAccounts.find(function (b) { return b.id === id; });
+    var full = { id: id, companyId: rec.companyId !== undefined ? rec.companyId : (comp ? comp.id : null), operationId: rec.operationId !== undefined ? rec.operationId : null, nome: rec.nome, banco: rec.banco || '', agencia: rec.agencia || '', conta: rec.conta || '', tipo: rec.tipo || '', titular: rec.titular || '', documento: rec.documento || '', observacao: rec.observacao || '', saldoInicial: rec.saldoInicial !== undefined ? r2(rec.saldoInicial || 0) : (existing ? existing.saldoInicial : 0), dataInicial: rec.dataInicial !== undefined ? (rec.dataInicial || null) : (existing ? existing.dataInicial : null), ativa: rec.ativa !== false, createdAt: rec.createdAt || (existing && existing.createdAt) || new Date().toISOString() };
     bankAccounts = [full].concat(bankAccounts.filter(function (b) { return b.id !== id; }));
     return putMany('bankaccounts', [full]).then(function () { return full; });
+  }
+  // Conciliação bancária real (§6): Saldo inicial + Entradas (recebimentos de Contas a Receber
+  // creditados nesta conta) − Saídas (pagamentos de Contas a Pagar debitados desta conta) = Saldo
+  // atual. Nunca soma pedido/venda diretamente — só o que de fato entrou/saiu da conta via baixa
+  // (mesmos crReceipts/cpPayments já usados em crSaldo/cpSaldo, nenhum motor novo).
+  function bankAccountSaldoAtual(bankId) {
+    var b = bankAccounts.find(function (x) { return x.id === bankId; }); if (!b) return null;
+    var desde = b.dataInicial || '0000-01-01';
+    var entradas = crReceipts.filter(function (p) { return !p.estornado && p.financialAccountId === bankId && (p.date || '') >= desde; }).reduce(function (s, p) { return s + crAmortizado(p); }, 0);
+    var saidas = cpPayments.filter(function (p) { return !p.estornado && p.financialAccountId === bankId && (p.date || '') >= desde; }).reduce(function (s, p) { return s + cpAmortizado(p); }, 0);
+    var saldoInicial = b.saldoInicial || 0;
+    return { saldoInicial: r2(saldoInicial), entradas: r2(entradas), saidas: r2(saidas), saldoAtual: r2(saldoInicial + entradas - saidas) };
   }
   // Contas visíveis para a empresa ativa: sem companyId (legado) OU companyId igual ao da operação
   // ativa. Nunca lista a conta de outro CNPJ por padrão.
@@ -7301,6 +7319,7 @@
       '<label class="fld">Tipo</label><select class="select" id="nc-tipo" style="width:100%"><option value="Corrente">Corrente</option><option value="Poupança">Poupança</option><option value="Pagamentos">Pagamentos</option><option value="Outro">Outro</option></select>' +
       '<label class="fld">Titular</label><input class="input" id="nc-titular" style="width:100%">' +
       '<label class="fld">CPF/CNPJ do titular</label><input class="input" id="nc-doc" style="width:100%">' +
+      '<div style="display:flex;gap:8px"><div style="flex:1"><label class="fld">Saldo inicial</label><input class="input" id="nc-saldo" style="width:100%" value="0,00"></div><div style="flex:1"><label class="fld">Data inicial</label><input type="date" class="input" id="nc-data" style="width:100%" value="' + cpToday() + '"></div></div>' +
       '<label class="fld">Observação (opcional)</label><input class="input" id="nc-obs" style="width:100%">' +
       '<label class="fld" style="display:flex;align-items:center;gap:8px;margin-top:8px"><input type="checkbox" id="nc-ativa" checked> Conta ativa</label>' +
       '<div style="margin-top:12px"><button class="btn-sm primary" id="nc-salvar">Salvar conta</button></div>' +
@@ -7308,7 +7327,7 @@
     panel.querySelector('.x').onclick = function () { d.remove(); };
     panel.querySelector('#nc-salvar').onclick = function () {
       var nome = panel.querySelector('#nc-nome').value.trim(); if (!nome) { toast('Informe o nome/apelido da conta', '', true); return; }
-      bankAccountSave({ nome: nome, banco: panel.querySelector('#nc-banco').value.trim(), agencia: panel.querySelector('#nc-agencia').value.trim(), conta: panel.querySelector('#nc-conta').value.trim(), tipo: panel.querySelector('#nc-tipo').value, titular: panel.querySelector('#nc-titular').value.trim(), documento: panel.querySelector('#nc-doc').value.trim(), observacao: panel.querySelector('#nc-obs').value.trim(), ativa: panel.querySelector('#nc-ativa').checked }).then(function (full) {
+      bankAccountSave({ nome: nome, banco: panel.querySelector('#nc-banco').value.trim(), agencia: panel.querySelector('#nc-agencia').value.trim(), conta: panel.querySelector('#nc-conta').value.trim(), tipo: panel.querySelector('#nc-tipo').value, titular: panel.querySelector('#nc-titular').value.trim(), documento: panel.querySelector('#nc-doc').value.trim(), saldoInicial: cpParseNum(panel.querySelector('#nc-saldo').value) || 0, dataInicial: panel.querySelector('#nc-data').value || null, observacao: panel.querySelector('#nc-obs').value.trim(), ativa: panel.querySelector('#nc-ativa').checked }).then(function (full) {
         d.remove(); toast('Conta cadastrada', nome); if (onSaved) onSaved(full);
       });
     };
@@ -7463,14 +7482,16 @@
     d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
     function refresh() { panel.innerHTML = body(); wire(); }
     function body() {
-      var rows = bankAccounts.map(function (b) { return '<tr><td class="cell-text">' + esc(b.nome) + '</td><td class="cell-text">' + esc(b.banco || '—') + '</td><td class="mono">' + esc(b.agencia || '—') + '</td><td class="mono">' + esc(b.conta || '—') + '</td><td>' + esc(b.tipo || '—') + '</td><td>' + (b.ativa !== false ? '<span class="tag ok">ativa</span>' : '<span class="tag neutral">inativa</span>') + '</td><td><button class="btn-sm" data-bankedit="' + esc(b.id) + '">Editar</button> <button class="btn-sm" data-banktoggle="' + esc(b.id) + '">' + (b.ativa !== false ? 'Desativar' : 'Ativar') + '</button></td></tr>'; }).join('');
-      var table = '<div class="table-wrap"><table class="report"><thead><tr><th>Nome</th><th>Banco</th><th>Agência</th><th>Conta</th><th>Tipo</th><th>Status</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="7" class="empty">Nenhuma conta cadastrada ainda.</td></tr>') + '</tbody></table></div>';
+      var rows = bankAccounts.map(function (b) { var s = bankAccountSaldoAtual(b.id); return '<tr><td class="cell-text">' + esc(b.nome) + '</td><td class="cell-text">' + esc(b.banco || '—') + '</td><td class="mono">' + esc(b.agencia || '—') + '</td><td class="mono">' + esc(b.conta || '—') + '</td><td>' + esc(b.tipo || '—') + '</td><td class="nowrap">' + brl(s.saldoAtual) + '</td><td>' + (b.ativa !== false ? '<span class="tag ok">ativa</span>' : '<span class="tag neutral">inativa</span>') + '</td><td><button class="btn-sm" data-bankedit="' + esc(b.id) + '">Editar</button> <button class="btn-sm" data-banktoggle="' + esc(b.id) + '">' + (b.ativa !== false ? 'Desativar' : 'Ativar') + '</button></td></tr>'; }).join('');
+      var table = '<div class="table-wrap"><table class="report"><thead><tr><th>Nome</th><th>Banco</th><th>Agência</th><th>Conta</th><th>Tipo</th><th>Saldo atual</th><th>Status</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="8" class="empty">Nenhuma conta cadastrada ainda.</td></tr>') + '</tbody></table></div>';
       var form = '<div class="panel" style="margin-top:10px"><div class="ph"><h3>Nova conta</h3></div><div class="pb"><div style="display:flex;gap:8px;flex-wrap:wrap">' +
         '<input class="input sm" id="bk-nome" placeholder="Nome da conta" style="width:180px">' +
         '<input class="input sm" id="bk-banco" placeholder="Banco" style="width:140px">' +
         '<input class="input sm" id="bk-agencia" placeholder="Agência" style="width:100px">' +
         '<input class="input sm" id="bk-conta" placeholder="Conta" style="width:120px">' +
         '<select class="select sm" id="bk-tipo"><option value="">Tipo</option><option value="Corrente">Corrente</option><option value="Poupança">Poupança</option><option value="Digital">Digital</option></select>' +
+        '<input class="input sm" id="bk-saldo" placeholder="Saldo inicial" style="width:120px" value="0,00">' +
+        '<input type="date" class="input sm" id="bk-data" placeholder="Data inicial" style="width:140px" value="' + cpToday() + '">' +
         '<button class="btn-sm primary" id="bk-salvar">Salvar</button></div></div></div>';
       return '<div class="dh"><div><b>Gerenciar bancos / contas</b></div><button class="x">&times;</button></div><div class="dbd">' + table + form + '</div>';
     }
@@ -7478,13 +7499,15 @@
       panel.querySelector('.x').onclick = function () { d.remove(); if (onDone) onDone(); };
       panel.querySelector('#bk-salvar').onclick = function () {
         var nome = panel.querySelector('#bk-nome').value.trim(); if (!nome) { toast('Informe o nome da conta', '', true); return; }
-        bankAccountSave({ nome: nome, banco: panel.querySelector('#bk-banco').value.trim(), agencia: panel.querySelector('#bk-agencia').value.trim(), conta: panel.querySelector('#bk-conta').value.trim(), tipo: panel.querySelector('#bk-tipo').value }).then(function () { toast('Conta cadastrada', nome); refresh(); });
+        bankAccountSave({ nome: nome, banco: panel.querySelector('#bk-banco').value.trim(), agencia: panel.querySelector('#bk-agencia').value.trim(), conta: panel.querySelector('#bk-conta').value.trim(), tipo: panel.querySelector('#bk-tipo').value, saldoInicial: cpParseNum(panel.querySelector('#bk-saldo').value) || 0, dataInicial: panel.querySelector('#bk-data').value || null }).then(function () { toast('Conta cadastrada', nome); refresh(); });
       };
       panel.querySelectorAll('[data-banktoggle]').forEach(function (b) { b.onclick = function () { var acc = bankAccounts.find(function (x) { return x.id === b.dataset.banktoggle; }); if (acc) bankAccountSave(Object.assign({}, acc, { ativa: acc.ativa === false })).then(refresh); }; });
       panel.querySelectorAll('[data-bankedit]').forEach(function (b) { b.onclick = function () {
         var acc = bankAccounts.find(function (x) { return x.id === b.dataset.bankedit; }); if (!acc) return;
         var nome = prompt('Nome da conta:', acc.nome); if (nome == null) return;
-        bankAccountSave(Object.assign({}, acc, { nome: nome.trim() || acc.nome })).then(refresh);
+        var saldoTxt = prompt('Saldo inicial (R$):', String(acc.saldoInicial || 0)); if (saldoTxt == null) return;
+        var dataTxt = prompt('Data inicial (AAAA-MM-DD):', acc.dataInicial || cpToday()); if (dataTxt == null) return;
+        bankAccountSave(Object.assign({}, acc, { nome: nome.trim() || acc.nome, saldoInicial: cpParseNum(saldoTxt) || 0, dataInicial: dataTxt.trim() || null })).then(refresh);
       }; });
     }
     refresh();
@@ -7536,20 +7559,19 @@
       // já vai pronto aqui; valorManualOverride só documenta a origem (nunca recalculado por item).
       return { sourceEventKey: feKey(opId, source, cat, orderId || dateKey), operationId: opId, companyId: opCompanyId(opId), orderId: orderId || null, historico: label, valor: r2(Math.abs(valorC) / 100), valorManualOverride: true, emissao: dateKey, competencia: dateKey, vencimento: dateKey, origin: 'FECHAMENTO_CAIXA', financialAccountId: contaId || null };
     }
-    // ---- Fase 5/6 — por pedido pago do dia: recebível (AR) + despesas já retidas pela Shopee (AP) ----
+    // PROMPT "Reestruturar Contas a Receber + Controle Bancário" §3/§7: pedido NUNCA gera Contas a
+    // Receber (isso lotava a lista com um título por pedido, todos auto-baixados assim que o Income
+    // confirmava — "zerando saldo" na percepção do usuário). Pedido continua só como detalhamento/
+    // auditoria (Ficha do Pedido, "Ver pedidos" do Caixa, aba "Pedidos (auditoria)" de Contas a
+    // Receber). Contas a Receber nasce SÓ do dinheiro que a Shopee efetivamente move para um banco
+    // real — ver bloco de transferência mais abaixo (Fase 7).
+    // ---- Fase 6 — por pedido pago do dia: despesas já retidas pela Shopee (AP) — motor de taxas
+    // intocado, só a geração de AR acima é que mudou. ----
     vendas.pedidos.forEach(function (o) {
       var comp = pedidoComposicaoFinanceira(o.id);
       if (comp.receitaC == null) return;
       var opId = comp.operationId; if (!opId) return;
-      var walletAcc = faWalletForOperation(opId), recebAcc = faReceivableForOperation(opId);
-      var liquidoC = comp.receitaC + comp.taxasSomaC;
-      var jaLiquidado = !!comp.mrRow; // Income confirma que a Shopee já processou/liberou este pedido
-      arPlan.push({
-        sourceEventKey: feKey(opId, 'SHOPEE_RECEIVABLE', 'ORDER', o.id), operationId: opId, companyId: opCompanyId(opId),
-        orderId: o.id, descricao: 'Pedido ' + o.id + ' — valor líquido a receber', pagador: 'Shopee', origin: 'SHOPEE_PEDIDO',
-        valor: r2(liquidoC / 100), competencia: dateKey, vencimento: dateKey, financialAccountId: recebAcc ? recebAcc.id : null, referencia: o.id,
-        __autoBaixa: jaLiquidado ? { valorRecebido: r2(liquidoC / 100), financialAccountId: walletAcc ? walletAcc.id : null, date: dateKey } : null,
-      });
+      var recebAcc = faReceivableForOperation(opId);
       // PROMPT "ALTERAÇÃO DE REGRA — MOTOR DE TAXAS SHOPEE COM FALLBACK E CONCILIAÇÃO AUTOMÁTICA":
       // Contas a Pagar nasce de UMA ÚNICA lista (sellerCharges.items), independente de Income ter
       // sido encontrado ou não — nunca mais um branch separado lendo comp.gTaxas. Quando o pedido está
@@ -7587,31 +7609,15 @@
       // teste: gerava R$38.015,00 de "taxa" onde o correto era R$380,15).
       if (opIdAc) { var walletAc = faWalletForOperation(opIdAc); apPlan.push(apRow(opIdAc, null, 'ACELERA', 'FEE', 'Taxa de Antecipação — Shopee Acelera (' + dbr(dateKey) + ')', Math.abs(ac.taxaAcelera), walletAc ? walletAc.id : null)); }
     }
-    // PROMPT "REESTRUTURAÇÃO COMPLETA DO MÓDULO CAIXA": "O fechamento do Caixa deve alimentar
-    // automaticamente [Contas a Receber]... Origem: Fechamento Caixa Shopee... Status: Recebido...
-    // Usar chave única. Nunca duplicar ao reabrir o fechamento." — lançamento de NÍVEL DIA (1 por
-    // dia, não 1 por pedido — os recebíveis por pedido já existem acima, esse é o espelho do valor
-    // que efetivamente chegou na Carteira via Acelera naquele dia), sourceEventKey própria
-    // (CAIXA_FECHAMENTO/RECEBIMENTO/dateKey) — upsert por dia, nunca duplica ao fechar de novo.
-    if (ac.resgatesN && ac.valorLiquido) {
-      var opIdRec = opActiveOrNull();
-      if (opIdRec) {
-        var walletAccRec = faWalletForOperation(opIdRec);
-        arPlan.push({
-          sourceEventKey: feKey(opIdRec, 'CAIXA_FECHAMENTO', 'RECEBIMENTO', dateKey), operationId: opIdRec, companyId: opCompanyId(opIdRec),
-          orderId: null, descricao: 'Fechamento Caixa Shopee — ' + dbr(dateKey), pagador: 'Shopee', origin: 'FECHAMENTO_CAIXA',
-          valor: r2(ac.valorLiquido / 100), competencia: dateKey, vencimento: dateKey, financialAccountId: walletAccRec ? walletAccRec.id : null, referencia: dateKey,
-          __autoBaixa: { valorRecebido: r2(ac.valorLiquido / 100), financialAccountId: walletAccRec ? walletAccRec.id : null, date: dateKey },
-        });
-      }
-    }
-    // ---- Fase 5d/6 — movimentos da Carteira já CLASSIFICADOS (nunca NAO_IDENTIFICADOS — não inventa
-    // categoria): débito vira despesa paga (AP), crédito vira recebível já liquidado na Carteira (AR) ----
-    // §55 "manual tem prioridade": lançamento com Natureza classificada manualmente (Transferência/
-    // Informativo/Ajuste explícito) nunca é reescrito pela regra automática de sinal — o próprio
-    // walletApplyClassificacao() (Classificar no Caixa) já aplicou o título certo com a MESMA chave
-    // (feKey(opId,'WALLET',k,wOrderId(t)||dateKey)); fechar o dia depois só teria que ATUALIZAR esse
-    // mesmo registro, nunca criar um segundo divergente por sinal.
+    // ---- Fase 5d/6 — movimentos da Carteira já CLASSIFICADOS como despesa (débito vira Contas a
+    // Pagar) — o lado crédito NÃO gera mais Contas a Receber automaticamente (§3/§7): é dinheiro que
+    // ainda está na Carteira Shopee, não um movimento bancário; só vira AR quando (e se) sair de fato
+    // para um banco real, capturado no bloco de transferência abaixo. O operador ainda pode, se
+    // quiser, enviar manualmente um crédito específico para Contas a Receber classificando-o como
+    // Receita/Crédito no Caixa (walletApplyClassificacao, caminho manual, intocado) — só o automático
+    // do fechamento é que deixou de duplicar isso. §55 "manual tem prioridade" continua valendo para
+    // o lado despesa: lançamento com Natureza classificada manualmente (Transferência/Informativo/
+    // Ajuste explícito) nunca é reescrito pela regra automática de sinal.
     movPost.todos.forEach(function (t) {
       var k = caixaMovCategoria(t, ac); if (!k || k === 'TRANSFERENCIAS_BANCARIAS') return;
       var opId = t.operationId || opActiveOrNull(); if (!opId) return;
@@ -7621,20 +7627,30 @@
       if (manCls.natureza === 'TRANSFERENCIA' || manCls.natureza === 'INFORMATIVO') return; // §50: nunca gera AP/AR
       var vaiAP = manCls.natureza ? (manCls.natureza === 'DESPESA' || manCls.natureza === 'AJUSTE') && manCls.apEnviar !== false : t.amount < 0;
       if (manCls.natureza === 'RECEITA' || manCls.natureza === 'CREDITO') vaiAP = false;
-      if (vaiAP) {
-        apPlan.push(apRow(opId, wOrderId(t), 'WALLET', k, label, Math.abs(t.amount) * 100, walletAcc ? walletAcc.id : null));
-      } else {
-        arPlan.push({ sourceEventKey: feKey(opId, 'WALLET', k, wOrderId(t) || dateKey), operationId: opId, companyId: opCompanyId(opId), orderId: wOrderId(t) || null, descricao: label, pagador: 'Shopee', origin: 'SHOPEE_CARTEIRA', valor: r2(Math.abs(t.amount)), competencia: t.date ? t.date.slice(0, 10) : dateKey, vencimento: t.date ? t.date.slice(0, 10) : dateKey, financialAccountId: walletAcc ? walletAcc.id : null, referencia: t.id, __autoBaixa: { valorRecebido: r2(Math.abs(t.amount)), financialAccountId: walletAcc ? walletAcc.id : null, date: dateKey } });
-      }
+      if (vaiAP) apPlan.push(apRow(opId, wOrderId(t), 'WALLET', k, label, Math.abs(t.amount) * 100, walletAcc ? walletAcc.id : null));
     });
     var movTodosDoDia = caixaDayMovimentosCarteira(dateKey); var movTodos = movTodosDoDia.creditos.concat(movTodosDoDia.debitos);
     movTodos.forEach(function (t) { var k = caixaMovCategoria(t, ac); if (!k || k === 'NAO_IDENTIFICADOS') naoClassificados.push(t); });
-    // ---- Fase 7 — transferências Carteira→Banco: evento PURO (zero despesa/zero receita) ----
+    // ---- Fase 7 — transferências Carteira→Banco: ÚNICA origem de Contas a Receber automática do
+    // Caixa (§3B/§7 do prompt "Reestruturar Contas a Receber + Controle Bancário" — "Quando o Caixa
+    // gerar transferência: criar lançamento bancário consolidado. Não criar vários recebimentos por
+    // pedido."). Cada transferência real (nunca por pedido, nunca por micro-movimento da Carteira)
+    // vira UM título: transferência manual (bankTransfers, já tem o banco escolhido no registro)
+    // nasce já baixada na conta certa; Pix/transferência bancária reconhecidos automaticamente na
+    // Carteira nascem em aberto (status derivado PREVISTO) até o operador confirmar o banco e dar
+    // baixa manual em Contas a Receber — só aí o saldo daquele banco é atualizado (bankAccountSaldoAtual
+    // é sempre derivado de crReceipts/cpPayments, nunca um campo de saldo gravado à parte).
     var opIdT = opActiveOrNull();
     if (opIdT) {
-      var walletT = faWalletForOperation(opIdT);
-      transf.autoTxs.forEach(function (t) { transferPlan.push({ sourceEventKey: feKey(opIdT, 'TRANSFER', 'WALLET_AUTO', t.id), operationId: opIdT, companyId: opCompanyId(opIdT), fromAccountId: walletT ? walletT.id : null, toAccountId: null, valor: r2(Math.abs(t.amount)), date: t.date ? t.date.slice(0, 10) : dateKey, source: 'WALLET_AUTO', sourceId: t.id, status: 'CONCLUIDO' }); });
-      transf.manual.forEach(function (bt) { transferPlan.push({ sourceEventKey: feKey(opIdT, 'TRANSFER', 'BANK_MANUAL', bt.id), operationId: opIdT, companyId: opCompanyId(opIdT), fromAccountId: walletT ? walletT.id : null, toAccountId: bt.contaId || null, valor: r2(bt.valor), date: bt.quando ? bt.quando.slice(0, 10) : dateKey, source: 'BANK_MANUAL', sourceId: bt.id, status: 'CONCLUIDO' }); });
+      var walletT = faWalletForOperation(opIdT); var opCompId = opCompanyId(opIdT);
+      transf.autoTxs.forEach(function (t) {
+        transferPlan.push({ sourceEventKey: feKey(opIdT, 'TRANSFER', 'WALLET_AUTO', t.id), operationId: opIdT, companyId: opCompId, fromAccountId: walletT ? walletT.id : null, toAccountId: null, valor: r2(Math.abs(t.amount)), date: t.date ? t.date.slice(0, 10) : dateKey, source: 'WALLET_AUTO', sourceId: t.id, status: 'CONCLUIDO' });
+        arPlan.push({ sourceEventKey: feKey(opIdT, 'CAIXA_TRANSFERENCIA', 'PIX_AUTO', t.id), operationId: opIdT, companyId: opCompId, orderId: null, descricao: 'Fechamento Caixa Shopee — Pix identificado na Carteira (' + dbr(t.date ? t.date.slice(0, 10) : dateKey) + ')', pagador: 'Shopee', origin: 'CAIXA_TRANSFERENCIA', valor: r2(Math.abs(t.amount)), competencia: t.date ? t.date.slice(0, 10) : dateKey, vencimento: t.date ? t.date.slice(0, 10) : dateKey, financialAccountId: null, referencia: t.id, __autoBaixa: null });
+      });
+      transf.manual.forEach(function (bt) {
+        transferPlan.push({ sourceEventKey: feKey(opIdT, 'TRANSFER', 'BANK_MANUAL', bt.id), operationId: opIdT, companyId: opCompId, fromAccountId: walletT ? walletT.id : null, toAccountId: bt.contaId || null, valor: r2(bt.valor), date: bt.quando ? bt.quando.slice(0, 10) : dateKey, source: 'BANK_MANUAL', sourceId: bt.id, status: 'CONCLUIDO' });
+        arPlan.push({ sourceEventKey: feKey(opIdT, 'CAIXA_TRANSFERENCIA', 'BANCO', bt.id), operationId: opIdT, companyId: opCompId, orderId: null, descricao: 'Fechamento Caixa Shopee — transferência para ' + (bankAccountLabel(bt.contaId) || 'banco a definir') + ' (' + dbr(bt.quando ? bt.quando.slice(0, 10) : dateKey) + ')', pagador: 'Shopee', origin: 'CAIXA_TRANSFERENCIA', valor: r2(bt.valor), competencia: bt.quando ? bt.quando.slice(0, 10) : dateKey, vencimento: bt.quando ? bt.quando.slice(0, 10) : dateKey, financialAccountId: bt.contaId || null, referencia: bt.id, __autoBaixa: bt.contaId ? { valorRecebido: r2(bt.valor), financialAccountId: bt.contaId, date: bt.quando ? bt.quando.slice(0, 10) : dateKey } : null });
+      });
     }
     return { ar: arPlan, ap: apPlan, transfers: transferPlan, naoClassificados: { n: naoClassificados.length, valor: r2(naoClassificados.reduce(function (s, t) { return s + Math.abs(t.amount); }, 0)) } };
   }
@@ -9841,9 +9857,13 @@
   var crSub = 'lista'; // lista | shopee
   var crPage = 1, crPageSize = 30;
   var crF = { situacao: '', financialAccountId: '', search: '', dateBasis: 'vencimento', sort: 'vencimento', dir: 'asc' };
-  var CR_STATUS_LABEL = { EM_ABERTO: ['Em aberto', 'b-info'], VENCIDO: ['Vencido', 'b-err'], PARCIAL: ['Parcialmente recebido', 'b-warn'], RECEBIDO: ['Recebido', 'b-ok'], CANCELADO: ['Cancelado', 'b-neutral'], EM_CONCILIACAO: ['Em conciliação', 'b-warn'] };
-  var CR_SITUACOES = [['', 'Todas'], ['EM_ABERTO', 'Em aberto'], ['VENCIDO', 'Vencidas'], ['PARCIAL', 'Parcialmente recebidas'], ['RECEBIDO', 'Recebidas'], ['EM_CONCILIACAO', 'Em conciliação'], ['CANCELADO', 'Canceladas']];
-  var CR_ORIGIN_LABEL = { MANUAL: 'Manual', SHOPEE_PEDIDO: 'Shopee — Pedido' };
+  // PROMPT "Reestruturar Contas a Receber + Controle Bancário" §4: PREVISTO é o estado de um título
+  // gerado por transferência Carteira→Banco reconhecida automaticamente (Pix), mas sem baixa/conta
+  // confirmada ainda — dinheiro que já saiu da Shopee, só falta o operador confirmar em qual banco
+  // caiu. "Vencido" mantido com o rótulo "Atrasado" pedido (mesmo conceito, mesma derivação).
+  var CR_STATUS_LABEL = { EM_ABERTO: ['Em aberto', 'b-info'], PREVISTO: ['Previsto', 'b-info'], VENCIDO: ['Atrasado', 'b-err'], PARCIAL: ['Parcialmente recebido', 'b-warn'], RECEBIDO: ['Recebido', 'b-ok'], CANCELADO: ['Cancelado', 'b-neutral'], EM_CONCILIACAO: ['Em conciliação', 'b-warn'] };
+  var CR_SITUACOES = [['', 'Todas'], ['EM_ABERTO', 'Em aberto'], ['PREVISTO', 'Previstas'], ['VENCIDO', 'Atrasadas'], ['PARCIAL', 'Parcialmente recebidas'], ['RECEBIDO', 'Recebidas'], ['EM_CONCILIACAO', 'Em conciliação'], ['CANCELADO', 'Canceladas']];
+  var CR_ORIGIN_LABEL = { MANUAL: 'Manual', SHOPEE_PEDIDO: 'Shopee — Pedido', CAIXA_TRANSFERENCIA: 'Caixa — Transferência bancária' };
   function crUid(prefix) { return (prefix || 'CR') + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8); }
   function crPushHistory(h, action, detail) { h.history = h.history || []; h.history.unshift({ at: new Date().toISOString(), user: 'Operador', action: action, detail: detail || null }); }
   function crReceiptsForHeader(id) { return crReceipts.filter(function (p) { return p.accountsReceivableId === id; }); }
@@ -9860,6 +9880,7 @@
     if (h.emConciliacao) return 'EM_CONCILIACAO';
     if (crRecebidoTotal(h) > 0.005) return 'PARCIAL';
     if (h.vencimento && h.vencimento < cpToday()) return 'VENCIDO';
+    if (h.origin === 'CAIXA_TRANSFERENCIA') return 'PREVISTO';
     return 'EM_ABERTO';
   }
   function crFinAccountLabel(id) { if (!id) return '— sem conta financeira —'; return faLabel(id) || '—'; }
@@ -9912,6 +9933,11 @@
     var full = { id: id, accountsReceivableId: headerId, date: dto.date || cpToday(), financialAccountId: dto.financialAccountId || null, valorRecebido: r2(dto.valorRecebido || 0), desconto: r2(dto.desconto || 0), acrescimo: r2(dto.acrescimo || 0), observacao: dto.observacao || null, estornado: false, auto: !!dto.auto, createdAt: now };
     crReceipts = [full].concat(crReceipts);
     crPushHistory(h, 'RECEBIMENTO', 'Recebido ' + brl(full.valorRecebido) + (full.financialAccountId ? ' na conta ' + crFinAccountLabel(full.financialAccountId) : '') + '.');
+    // §CAIXA_TRANSFERENCIA (Pix auto-detectado nasce sem conta escolhida — ver caixaMontarIntegracaoFinanceira):
+    // a baixa manual é o momento em que o operador CONFIRMA em qual banco o dinheiro entrou — refletir
+    // isso na conta do título (não só do recebimento) pra lista/coluna "Conta" nunca ficar mostrando
+    // "sem conta financeira" depois de já recebido.
+    if (full.financialAccountId && !h.financialAccountId) h.financialAccountId = full.financialAccountId;
     h.updatedAt = now;
     return Promise.all([putMany('crreceipts', [full]), putMany('crheader', [h])]).then(function () { return full; });
   }
@@ -9944,20 +9970,54 @@
     return list;
   }
   function renderContasReceber() {
-    app.innerHTML = secHead('FINANCEIRO', 'Contas a Receber', 'Quem deve, quanto, quando vence e onde entra — inclui o valor líquido a receber de cada pedido pago da Shopee (gerado automaticamente no fechamento) e lançamentos manuais.') +
-      '<div class="subtabs">' + [['lista', 'Lista'], ['shopee', 'Shopee por dia']].map(function (t) { return '<div class="subtab' + (crSub === t[0] ? ' active' : '') + '" data-crtab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>' +
+    app.innerHTML = secHead('FINANCEIRO', 'Contas a Receber', 'Controle de dinheiro que a empresa tem para receber, o que já foi recebido, onde entrou e o saldo dos bancos — nasce do fechamento de Caixa (só transferências reais para banco, nunca por pedido) e de lançamentos manuais.') +
+      '<div class="subtabs">' + [['visaogeral', 'Visão Geral'], ['lista', 'Lista'], ['shopee', 'Pedidos (auditoria)']].map(function (t) { return '<div class="subtab' + (crSub === t[0] ? ' active' : '') + '" data-crtab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>' +
       '<div id="crbody" style="margin-top:14px"></div>';
     crRenderBody();
     app.querySelectorAll('[data-crtab]').forEach(function (t) { t.onclick = function () { crSub = t.dataset.crtab; crPage = 1; render(); }; });
   }
   function crRenderBody() {
     var body = document.getElementById('crbody');
+    if (crSub === 'visaogeral') { body.innerHTML = renderCrVisaoGeral(); bindCrVisaoGeral(); return; }
     if (crSub === 'shopee') { body.innerHTML = renderCrShopeeDia(); bindCrShopeeDia(); return; }
     body.innerHTML = renderCrLista(); bindCrLista();
   }
+  // PROMPT "Reestruturar Contas a Receber + Controle Bancário" §2: indicadores de topo — total a
+  // receber, recebido no período, em atraso, saldo dos bancos, próximos recebimentos. Nenhum cálculo
+  // novo: reaproveita crKpis/crFilteredList (já existentes) + bankAccountSaldoAtual (novo, mas só lê
+  // crReceipts/cpPayments já existentes).
+  function renderCrVisaoGeral() {
+    var all = crFilteredList();
+    var kpis = crKpis(all);
+    var bancos = bankAccountsForActiveCompany().filter(function (b) { return b.ativa !== false; });
+    var saldoBancos = bancos.reduce(function (s, b) { return s + bankAccountSaldoAtual(b.id).saldoAtual; }, 0);
+    var kpiHtml = kstrip([
+      { l: 'Total a receber', v: brl(kpis.aReceber) },
+      { l: 'Recebido no período', v: brl(kpis.recebidoPeriodo) },
+      { l: 'Em atraso', v: brl(kpis.vencido) },
+      { l: 'Saldo dos bancos', v: brl(saldoBancos) },
+    ]);
+    var bancosRows = bancos.map(function (b) { var s = bankAccountSaldoAtual(b.id); return '<div class="panel" style="margin-bottom:8px"><div class="pb"><details class="cx-collapse"><summary class="cx-kv"><span>' + esc(b.nome) + (b.banco ? ' — ' + esc(b.banco) : '') + '</span><b>' + brl(s.saldoAtual) + '</b></summary>' +
+      '<div class="fin-line"><span>Saldo inicial' + (b.dataInicial ? ' (' + dbr(b.dataInicial) + ')' : '') + '</span><span>' + brl(s.saldoInicial) + '</span></div>' +
+      '<div class="fin-line"><span>+ Entradas</span><span class="pos">' + brl(s.entradas) + '</span></div>' +
+      '<div class="fin-line"><span>− Saídas</span><span class="neg">' + brl(s.saidas) + '</span></div>' +
+      '<div class="fin-line total"><span>= Saldo atual</span><b>' + brl(s.saldoAtual) + '</b></div>' +
+      '</details></div></div>'; }).join('');
+    var bancosBlock = '<div class="panel"><div class="ph"><h3>Saldo dos bancos</h3><button class="btn-sm" id="crvg-gerenciar">Gerenciar bancos</button></div><div class="pb">' + (bancosRows || '<div class="footnote">Nenhum banco cadastrado ainda.</div>') + '</div></div>';
+    var hoje = cpToday();
+    var proximos = all.filter(function (h) { var s = crStatusDerivado(h); return (s === 'EM_ABERTO' || s === 'PREVISTO' || s === 'PARCIAL') && h.vencimento >= hoje; }).sort(function (a, b) { return (a.vencimento || '').localeCompare(b.vencimento || ''); }).slice(0, 10);
+    var proximosRows = proximos.map(function (h) { var lbl = CR_STATUS_LABEL[crStatusDerivado(h)]; return '<tr><td class="nowrap">' + dbr(h.vencimento) + '</td><td class="rowlink cell-text" data-cropen="' + h.id + '">' + esc((h.descricao || '').slice(0, 60)) + '</td><td class="nowrap">' + brl(crSaldo(h)) + '</td><td><span class="badge ' + lbl[1] + '">' + lbl[0] + '</span></td></tr>'; }).join('');
+    var proximosBlock = '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Próximos recebimentos</h3></div><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>Vencimento</th><th>Descrição</th><th>Saldo</th><th>Status</th></tr></thead><tbody>' + (proximosRows || '<tr><td colspan="4" class="empty">Nenhum recebimento previsto.</td></tr>') + '</tbody></table></div></div></div>';
+    return devPeriodBarAsCp() + kpiHtml + bancosBlock + proximosBlock;
+  }
+  function bindCrVisaoGeral() {
+    bindDevPeriodBar();
+    app.querySelectorAll('[data-cropen]').forEach(function (el) { el.onclick = function () { openCrEditor(el.dataset.cropen); }; });
+    var g = document.getElementById('crvg-gerenciar'); if (g) g.onclick = function () { openGerenciarBancos(function () { crRenderBody(); }); };
+  }
   function crKpis(list) {
     var hoje = cpToday();
-    var aReceber = list.filter(function (h) { var s = crStatusDerivado(h); return s === 'EM_ABERTO' || s === 'VENCIDO' || s === 'PARCIAL'; }).reduce(function (s, h) { return s + crSaldo(h); }, 0);
+    var aReceber = list.filter(function (h) { var s = crStatusDerivado(h); return s === 'EM_ABERTO' || s === 'PREVISTO' || s === 'VENCIDO' || s === 'PARCIAL'; }).reduce(function (s, h) { return s + crSaldo(h); }, 0);
     var vencido = list.filter(function (h) { return crStatusDerivado(h) === 'VENCIDO'; }).reduce(function (s, h) { return s + crSaldo(h); }, 0);
     var recebidoPeriodo = 0, recebidoHoje = 0;
     list.forEach(function (h) { crReceiptsForHeader(h.id).filter(function (p) { return !p.estornado; }).forEach(function (p) { recebidoPeriodo += p.valorRecebido; if (p.date === hoje) recebidoHoje += p.valorRecebido; }); });
@@ -9965,14 +10025,14 @@
   }
   function renderCrLista() {
     if (!contasReceber.length && !crF.search && !crF.situacao) {
-      return devPeriodBarAsCp() + emptyBox('Nenhuma conta a receber ainda. Ela nasce automaticamente do fechamento de caixa (pedidos Shopee) ou pode ser lançada manualmente.') + '<div style="margin-top:12px"><button class="btn-sm primary" id="cr-new">+ Nova conta a receber</button></div>';
+      return devPeriodBarAsCp() + emptyBox('Nenhuma conta a receber ainda. Ela nasce automaticamente quando o Caixa registra uma transferência para o banco, ou pode ser lançada manualmente.') + '<div style="margin-top:12px"><button class="btn-sm primary" id="cr-new">+ Nova conta a receber</button></div>';
     }
     var all = crFilteredList();
     var pageList = all.slice((crPage - 1) * crPageSize, crPage * crPageSize);
     var kpis = crKpis(all);
     var kpiHtml = kstrip([
       { l: 'A receber', v: brl(kpis.aReceber) },
-      { l: 'Vencido', v: brl(kpis.vencido) },
+      { l: 'Em atraso', v: brl(kpis.vencido) },
       { l: 'Recebido no período', v: brl(kpis.recebidoPeriodo) },
       { l: 'Recebido hoje', v: brl(kpis.recebidoHoje) },
     ]);
@@ -10026,25 +10086,34 @@
     var prev = document.getElementById('cr-prev'); if (prev) prev.onclick = function () { crPage--; crRenderBody(); };
     var next = document.getElementById('cr-next'); if (next) next.onclick = function () { crPage++; crRenderBody(); };
   }
-  // ---- Aba "Shopee por dia" — agrupamento visual (Fase 10) dos recebíveis nascidos de pedido, com
-  // drill por pedido mostrando Pedido/Venda/Taxas/Líquido a receber/Data/Acelera/Recebido/Saldo ----
+  // ---- Aba "Pedidos (auditoria)" — PROMPT "Reestruturar Contas a Receber + Controle Bancário" §7:
+  // "Pedidos continuam apenas como detalhamento/auditoria" — nunca mais gera Contas a Receber (isso
+  // é o que causava um título por pedido, todos auto-baixados). Lê direto de orders/
+  // pedidoComposicaoFinanceira (mesma função canônica da Ficha do Pedido/Caixa), nunca de contasReceber
+  // — é só uma janela pro dado, não um lançamento financeiro.
   function renderCrShopeeDia() {
-    var list = contasReceber.filter(function (h) { return h.origin === 'SHOPEE_PEDIDO'; });
-    var op = opActiveOrNull(); if (op) list = list.filter(function (h) { return !h.operationId || h.operationId === op; });
-    if (!list.length) return emptyBox('Nenhum recebível de pedido Shopee gerado ainda. Ele é criado automaticamente ao fechar o Caixa de um dia com pedidos pagos.');
+    var op = opActiveOrNull();
+    var pagos = orders.filter(function (o) { return o.paidAt && (!op || o.operationId === op); });
+    if (!pagos.length) return emptyBox('Nenhum pedido pago ainda.');
     var byDia = {};
-    list.forEach(function (h) { var k = h.competencia || '—'; (byDia[k] = byDia[k] || []).push(h); });
-    var dias = Object.keys(byDia).sort().reverse();
+    pagos.forEach(function (o) { var k = o.paidAt.slice(0, 10); (byDia[k] = byDia[k] || []).push(o); });
+    var dias = Object.keys(byDia).sort().reverse().slice(0, 60);
     var rows = dias.map(function (k) {
-      var items = byDia[k]; var valor = items.reduce(function (s, h) { return s + h.valor; }, 0); var saldo = items.reduce(function (s, h) { return s + crSaldo(h); }, 0);
-      return '<div class="panel" style="margin-bottom:10px"><div class="pb"><details class="cx-collapse"><summary class="cx-kv"><span>' + dbr(k) + ' — ' + nn(items.length) + ' pedido(s)</span><b>' + brl(valor) + ' <span class="footnote" style="margin:0">(saldo ' + brl(saldo) + ')</span></b></summary>' +
-        '<div class="table-wrap" style="margin-top:8px"><table class="report"><thead><tr><th>Pedido</th><th>Valor líquido a receber</th><th>Recebido</th><th>Saldo</th><th>Status</th><th></th></tr></thead><tbody>' +
-        items.map(function (h) { var lbl = CR_STATUS_LABEL[crStatusDerivado(h)]; return '<tr><td class="rowlink" data-cropen="' + h.id + '">' + esc(h.orderId || '—') + '</td><td class="nowrap">' + brl(h.valor) + '</td><td class="nowrap">' + brl(crRecebidoTotal(h)) + '</td><td class="nowrap">' + brl(crSaldo(h)) + '</td><td><span class="badge ' + lbl[1] + '">' + lbl[0] + '</span></td><td><button class="btn-sm" data-cropen="' + h.id + '">Abrir</button></td></tr>'; }).join('') +
-        '</tbody></table></div></details></div></div>';
+      var linhas = byDia[k].map(function (o) {
+        var c = pedidoComposicaoFinanceira(o.id);
+        var receitaC = c.receitaC != null ? c.receitaC : Math.round((o.totalAmount || 0) * 100);
+        var liquidoC = c.receitaC != null ? c.receitaC + c.taxasSomaC : null;
+        return { o: o, receitaC: receitaC, liquidoC: liquidoC };
+      });
+      var valor = linhas.reduce(function (s, l) { return s + l.receitaC; }, 0);
+      var liquido = linhas.reduce(function (s, l) { return s + (l.liquidoC || 0); }, 0);
+      var rowsHtml = linhas.map(function (l) { return '<tr><td class="rowlink" data-goped360="' + esc(l.o.id) + '">' + esc(l.o.id) + '</td><td class="nowrap">' + brlC(l.receitaC) + '</td><td class="nowrap">' + (l.liquidoC != null ? brlC(l.liquidoC) : '—') + '</td></tr>'; }).join('');
+      return '<div class="panel" style="margin-bottom:10px"><div class="pb"><details class="cx-collapse"><summary class="cx-kv"><span>' + dbr(k) + ' — ' + nn(linhas.length) + ' pedido(s)</span><b>' + brlC(valor) + ' <span class="footnote" style="margin:0">(líquido estimado ' + brlC(liquido) + ')</span></b></summary>' +
+        '<div class="table-wrap" style="margin-top:8px"><table class="report"><thead><tr><th>Pedido</th><th>Valor venda</th><th>Líquido estimado</th></tr></thead><tbody>' + rowsHtml + '</tbody></table></div></details></div></div>';
     }).join('');
-    return rows;
+    return '<div class="footnote" style="margin-bottom:10px">Só auditoria — pedido nunca vira Contas a Receber. O que efetivamente entra em Contas a Receber é a transferência bancária consolidada do fechamento de Caixa (ver Lista/Visão Geral).</div>' + rows;
   }
-  function bindCrShopeeDia() { app.querySelectorAll('[data-cropen]').forEach(function (el) { el.onclick = function () { openCrEditor(el.dataset.cropen); }; }); }
+  function bindCrShopeeDia() { app.querySelectorAll('[data-goped360]').forEach(function (el) { el.onclick = function () { openPedidoFicha360(el.dataset.goped360); }; }); }
   // ---- editor/drawer: criação manual + baixa parcial + cancelar + histórico ----
   function openCrEditor(id) {
     var h = id ? contasReceber.find(function (x) { return x.id === id; }) : null;
