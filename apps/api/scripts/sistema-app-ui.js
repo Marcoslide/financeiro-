@@ -6803,20 +6803,24 @@
     // (resultado real do pedido, mesmo pedidoResultadoFinal() da Ficha) — só entram pedidos com
     // família resolvida (sem família não há o que comparar). Ponderada pela receita, não média simples.
     var precReceitaC = 0, precLucroProjC = 0, precLucroRealC = 0, precComFamiliaN = 0, pedidosAbaixoRecomendado = [];
-    // PROMPT DEFINITIVO "Refazer o Caixa": "Taxas Shopee" do FLUXO PRINCIPAL do Caixa precisa ser a
-    // MESMA soma que a Ficha do Pedido mostra em "TOTAL DESCONTADO DA LOJA" (resolveSellerCharges) —
-    // nunca um segundo motor (§13/§83/§84). mapTaxasLoja é ESSA soma (lista fixa de encargos da
-    // loja); mapTaxas/linhasTaxas (gTaxas, abaixo, inalterados) continuam alimentando só a DRE
-    // COMPLETA detalhada (que preserva Subtotal de Envio como linha própria — frete do parceiro
-    // logístico é custo real e não pode desaparecer do Lucro/Receita Líquida da DRE completa).
-    var mapTaxasLoja = {};
+    // PROMPT DEFINITIVO "Refazer o Caixa" / prompt "Validação Final": "Taxas Shopee" do FLUXO PRINCIPAL
+    // do Caixa precisa ser a MESMA soma que a Ficha do Pedido mostra em "TOTAL DESCONTADO DA LOJA"
+    // (resolveSellerCharges) — nunca um segundo motor, nunca uma estimativa de fallback (§13/§83/§84).
+    // mapTaxasLoja soma it.knownContribution de CADA item de resolveSellerCharges — o mesmo campo que
+    // totalC usa — não it.valor (que fica null em CHILDREN_ONLY mesmo quando a contribuição é real) e
+    // NUNCA cai para c.gTaxas quando o pedido não tem Income: um pedido sem Income cruzado contribui
+    // ZERO aqui (mesma semântica "—" da Ficha), nunca um valor estimado a partir de Pedidos.
+    // mapTaxas/linhasTaxas (gTaxas, abaixo, inalterados) continuam alimentando só a DRE COMPLETA
+    // detalhada (que preserva Subtotal de Envio como linha própria — frete do parceiro logístico é
+    // custo real e não pode desaparecer do Lucro/Receita Líquida da DRE completa).
+    var mapTaxasLoja = {}; var taxasPendentesN = 0;
     pagas.forEach(function (o) {
       var c = pedidoComposicaoFinanceira(o.id);
       receitaBruta += (c.receitaC || 0);
       soma(mapReducoes, c.gDescontos); soma(mapTaxas, c.gTaxas); soma(mapCreditos, c.gCreditos); soma(mapOutros, c.gOutros);
       var sc = resolveSellerCharges(o.id);
-      if (sc.found) { sc.items.forEach(function (it) { if (it.valor) mapTaxasLoja[it.label] = (mapTaxasLoja[it.label] || 0) + it.valor; }); }
-      else { soma(mapTaxasLoja, c.gTaxas); }
+      sc.items.forEach(function (it) { if (it.knownContribution) mapTaxasLoja[it.label] = (mapTaxasLoja[it.label] || 0) + it.knownContribution; });
+      if (sc.totalStatus !== 'COMPLETO') taxasPendentesN++;
       if (c.serviceFee && c.serviceFee.children.length) { comSvcDetailsN++; c.serviceFee.children.forEach(function (ch) { mapSvcChildren[ch.key] = (mapSvcChildren[ch.key] || 0) + ch.valor; }); }
       if (c.envio) envioTotal += c.envio.subtotalC;
       if (c.custoProdC != null) { custoTotal += c.custoProdC; custoConhecidoN++; }
@@ -6846,7 +6850,7 @@
     var custoCompleto = pagas.length > 0 && custoConhecidoN === pagas.length;
     var lucro = custoCompleto ? receitaLiquida - custoTotal + acTaxa : null;
     var margem = (receitaBruta && lucro != null) ? r2(lucro / receitaBruta * 100) : null;
-    return { n: pagas.length, comIncomeN: comIncomeN, comSvcDetailsN: comSvcDetailsN, receitaBruta: receitaBruta, descComerciais: descComerciais, linhasReducoes: linhasReducoes, envioTotal: envioTotal, taxasCobradas: taxasCobradas, linhasTaxas: linhasTaxas, taxasLojaC: taxasLojaC, linhasTaxasLoja: linhasTaxasLoja, linhasSvcChildren: linhasSvcChildren, creditos: creditos, linhasCreditos: linhasCreditos, outros: outros, linhasOutros: linhasOutros, receitaLiquida: receitaLiquida, custoTotal: custoConhecidoN ? custoTotal : null, custoConhecidoN: custoConhecidoN, custoCompleto: custoCompleto, acTaxa: acTaxa, temAcelera: !!ac.resgatesN, eventosPosteriores: eventosPosteriores, lucro: lucro, margem: margem, precComFamiliaN: precComFamiliaN, margemProjetadaDia: margemProjetadaDia, margemRealizadaDia: margemRealizadaDia, pedidosAbaixoRecomendado: pedidosAbaixoRecomendado, impactoAbaixoRecomendadoC: impactoAbaixoRecomendadoC };
+    return { n: pagas.length, comIncomeN: comIncomeN, comSvcDetailsN: comSvcDetailsN, receitaBruta: receitaBruta, descComerciais: descComerciais, linhasReducoes: linhasReducoes, envioTotal: envioTotal, taxasCobradas: taxasCobradas, linhasTaxas: linhasTaxas, taxasLojaC: taxasLojaC, linhasTaxasLoja: linhasTaxasLoja, taxasPendentesN: taxasPendentesN, linhasSvcChildren: linhasSvcChildren, creditos: creditos, linhasCreditos: linhasCreditos, outros: outros, linhasOutros: linhasOutros, receitaLiquida: receitaLiquida, custoTotal: custoConhecidoN ? custoTotal : null, custoConhecidoN: custoConhecidoN, custoCompleto: custoCompleto, acTaxa: acTaxa, temAcelera: !!ac.resgatesN, eventosPosteriores: eventosPosteriores, lucro: lucro, margem: margem, precComFamiliaN: precComFamiliaN, margemProjetadaDia: margemProjetadaDia, margemRealizadaDia: margemRealizadaDia, pedidosAbaixoRecomendado: pedidosAbaixoRecomendado, impactoAbaixoRecomendadoC: impactoAbaixoRecomendadoC };
   }
   // Conta colunas do Income com valor real ainda sem destino — lê mrRenda DIRETO (dado bruto já
   // marcado por linha durante a importação), nunca mrEngine()/mrCamposNaoClassificados() (Minha Renda).
@@ -7940,7 +7944,9 @@
     // ---- FLUXO DO DINHEIRO — blocos empilhados, sem setas: cada etapa é um número, não uma animação.
     var fluxoDinheiro = '<div class="cx-section"><h4>Fluxo do dinheiro</h4>' +
       '<div class="cx-block"><div class="cx-block-row"><span class="cxl">1. Valor da Venda</span><span class="cxv">' + brlC(valorVendaC) + '</span></div><div class="cxsub">' + vendaSub + '</div></div>' +
-      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">(-) 2. Taxas Shopee</span><span class="cxv neg">' + brlC(taxasC) + '</span></div><div class="pb" style="padding:4px 0 0 8px">' + descontosLinhas + '</div></div>' +
+      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">(-) 2. Taxas Shopee</span><span class="cxv neg">' + brlC(taxasC) + '</span></div>' +
+      (dre.taxasPendentesN ? ('<div class="cxsub">⚠ ' + nn(dre.taxasPendentesN) + ' de ' + nn(dre.n) + ' pedido(s) sem confirmação completa do Income — as taxas desses pedidos entram só pelo que já é real (Service Fee Details), nunca por estimativa.</div>') : '') +
+      '<div class="pb" style="padding:4px 0 0 8px">' + descontosLinhas + '</div></div>' +
       '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">3. Resultado após Taxas</span><span class="cxv">' + brlC(liquidoReceberC) + '</span></div></div>' +
       '<div class="cx-block"><div class="cx-block-row"><span class="cxl">(-) Shopee Acelera</span><span class="cxv' + (taxaAceleraC ? ' neg' : '') + '">' + brlC(taxaAceleraC) + '</span></div>' +
       '<div class="cxsub">Antecipa recebíveis já existentes (de vendas de qualquer dia, não só as de hoje) — o valor antecipado não é necessariamente o mesmo do resultado após taxas acima.</div>' +
@@ -7957,11 +7963,17 @@
       '</div>';
 
     // ---- DRE do dia — simples, na ordem pedida: Venda / (-) Taxas / (-) Acelera / (-) Custos / Resultado.
-    // Sem informação duplicada — os mesmos números do fluxo acima, só na forma de demonstrativo. ----
+    // Sem informação duplicada — os mesmos números do fluxo acima, só na forma de demonstrativo.
+    // A linha de Taxas aqui usa dre.taxasCobradas (gTaxas), a mesma base ampla da DRE COMPLETA — inclui
+    // Subtotal de Envio e demais componentes que nunca são "encargo da loja" (por isso o rótulo diz
+    // "(DRE completa)"); pode diferir do bloco 2 do fluxo acima, que é só o TOTAL DESCONTADO DA LOJA
+    // (resolveSellerCharges, dados reais confirmados pelo Income) — isso é esperado, nunca dois motores
+    // calculando a MESMA coisa: são duas perguntas diferentes (encargo real da loja × DRE contábil
+    // completa), cada uma com sua fonte já existente. ----
     var dreResumo = '<div class="cx-section"><h4>DRE do dia' + h4sub(dre.n ? (dre.lucro != null ? brlC(dre.lucro) : 'aguardando custo') : null) + '</h4>' +
       (dre.n ? (
         '<div class="cx-kv"><span class="cxl">Venda</span><span class="cxv">' + brlC(dre.receitaBruta) + '</span></div>' +
-        '<div class="cx-kv"><span class="cxl">(-) Taxas Shopee</span><span class="cxv neg">' + brlC(dre.taxasCobradas) + '</span></div>' +
+        '<div class="cx-kv"><span class="cxl">(-) Taxas Shopee (DRE completa)</span><span class="cxv neg">' + brlC(dre.taxasCobradas) + '</span></div>' +
         (dre.temAcelera ? ('<div class="cx-kv"><span class="cxl">(-) Acelera</span><span class="cxv neg">' + brlC(dre.acTaxa) + '</span></div>') : '') +
         (dre.custoTotal != null ? ('<div class="cx-kv"><span class="cxl">(-) Custos do Produto</span><span class="cxv neg">' + brlC(-dre.custoTotal) + '</span></div>') : '<div class="cx-kv"><span class="cxl">(-) Custos do Produto</span><span class="cxv">não disponível</span></div>') +
         '<div class="cx-kv" style="border-top:1px solid var(--line);margin-top:4px;padding-top:8px"><span class="cxl" style="font-weight:800">Resultado</span><span class="cxv ' + (dre.lucro != null && dre.lucro < 0 ? 'neg' : 'pos') + '" style="font-size:16px">' + (dre.lucro != null ? brlC(dre.lucro) : 'aguardando custo') + '</span></div>' +
