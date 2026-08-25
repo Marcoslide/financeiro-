@@ -291,7 +291,7 @@
     </nav>
     <div style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 7b8dc5d · 2026-08-25 22:00 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 6f005b7 · 2026-08-25 22:25 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -4302,18 +4302,38 @@ buffer/index.js:
       if (strong) return finalize(strong, 'STRONG_VARIATION_ID');
     }
     function tier(matchedBy, activeOnly) { return candidates.filter(function (c) { return c.matchedBy === matchedBy && (activeOnly ? c.status !== 'INACTIVE' : c.status === 'INACTIVE'); }); }
+    // PROMPT "Correção cadastro de Famílias e Custos": "SKU não deve ser tratado como chave única
+    // absoluta... a Shopee pode possuir mesmo SKU em múltiplos anúncios... não bloquear a criação por
+    // conflito de SKU." Duas+ variações ATIVAS reivindicando o mesmo texto de SKU só são um conflito
+    // REAL quando apontam pra famílias (logo custos) diferentes — se todas já foram vinculadas à MESMA
+    // família, o custo é o mesmo não importa qual delas vendeu, então não há ambiguidade nenhuma pra
+    // resolver: finaliza normalmente (nunca escolhe arbitrariamente QUAL variação, só reconhece que a
+    // resposta — o custo — é idêntica em qualquer uma). Só quando as famílias divergem (ou alguma
+    // ainda não tem família) é que sobra um SKU_CONFLITANTE de verdade — nesse caso o pedido não é
+    // bloqueado em lugar nenhum (cadastro/vínculo de família continuam livres), só o custo deste SKU
+    // específico fica "não resolvido" até o operador desambiguar, com o motivo already exibido de
+    // forma informativa (SKU_MOTIVO_LABEL) em vez de travar qualquer ação.
+    function sameFamilyAll(cands) {
+      var famId = null;
+      for (var i = 0; i < cands.length; i++) {
+        var v = skuVarById[cands[i].variationId];
+        if (!v || !v.familyId) return null;
+        if (famId == null) famId = v.familyId; else if (famId !== v.familyId) return null;
+      }
+      return famId;
+    }
     var activeSku = tier('SKU', true);
     if (activeSku.length === 1) return finalize(activeSku[0], 'ACTIVE_EXACT_SKU');
-    if (activeSku.length > 1) return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE', candidatos: activeSku };
+    if (activeSku.length > 1) { if (sameFamilyAll(activeSku)) return finalize(activeSku[0], 'MULTIPLE_LISTINGS_SAME_FAMILY'); return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE', candidatos: activeSku }; }
     var activeRef = tier('REFERENCE_SKU', true);
     if (activeRef.length === 1) return finalize(activeRef[0], 'ACTIVE_REFERENCE_SKU');
-    if (activeRef.length > 1) return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE', candidatos: activeRef };
+    if (activeRef.length > 1) { if (sameFamilyAll(activeRef)) return finalize(activeRef[0], 'MULTIPLE_LISTINGS_SAME_FAMILY'); return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE', candidatos: activeRef }; }
     var inactiveSku = tier('SKU', false);
     if (inactiveSku.length === 1) return finalize(inactiveSku[0], 'HISTORICAL_INACTIVE_MATCH');
-    if (inactiveSku.length > 1) return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE_HISTORICAL', candidatos: inactiveSku };
+    if (inactiveSku.length > 1) { if (sameFamilyAll(inactiveSku)) return finalize(inactiveSku[0], 'MULTIPLE_LISTINGS_SAME_FAMILY'); return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE_HISTORICAL', candidatos: inactiveSku }; }
     var inactiveRef = tier('REFERENCE_SKU', false);
     if (inactiveRef.length === 1) return finalize(inactiveRef[0], 'HISTORICAL_INACTIVE_MATCH');
-    if (inactiveRef.length > 1) return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE_HISTORICAL', candidatos: inactiveRef };
+    if (inactiveRef.length > 1) { if (sameFamilyAll(inactiveRef)) return finalize(inactiveRef[0], 'MULTIPLE_LISTINGS_SAME_FAMILY'); return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE_HISTORICAL', candidatos: inactiveRef }; }
     return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
   }
   function resolveSkuCost(sku, itemHint) { return resolveSkuCostByKey(normalizeSkuKey(sku), sku, itemHint); }
@@ -7978,7 +7998,15 @@ buffer/index.js:
     // (apRow()/arPlan abaixo, ambos com wOrderId(t)||dateKey — nunca t.id) — essencial pra não gerar
     // dois títulos pro mesmo movimento quando o dia for fechado depois desta classificação manual.
     var key = feKey(opId, 'WALLET', k, wOrderId(t) || movDateKey);
+    // PROMPT "Correção do fluxo financeiro da classificação de movimentações + Contas bancárias": a
+    // baixa não acontecia de verdade porque não existia conta de origem/destino escolhida pelo
+    // operador — o modal só resolvia uma conta "Carteira Shopee" automática (faWalletForOperation),
+    // invisível nas telas de banco. Agora o modal (openWalletTx) grava cls.financialAccountId com a
+    // conta que o operador escolheu (obrigatório, pré-selecionado com a Carteira Shopee) — usa-o
+    // SEMPRE que presente; faWalletForOperation continua como fallback só para classificações salvas
+    // ANTES desta mudança (nunca perde o vínculo já existente).
     var walletAcc = faWalletForOperation(opId);
+    var contaFinId = cls.financialAccountId || (walletAcc ? walletAcc.id : null);
     var label = (t.desc || t.tipo || CAIXA_MOV_CAT_LABEL[k] || 'Movimento') + ' — Carteira (' + dbr(t.date) + ')';
     var competencia = cls.competencia || (t.date ? t.date.slice(0, 10) : cpToday());
     var existingAP = contasPagar.find(function (h) { return h.sourceEventKey === key; });
@@ -7993,19 +8021,19 @@ buffer/index.js:
       if (!crReceiptsForHeader(existingAR.id).some(function (p) { return !p.estornado; })) tasks.push(crCancelHeader(existingAR.id, 'Reclassificado no Caixa — natureza alterada para ' + (NATUREZA[cls.natureza] || cls.natureza || '—') + '.'));
     }
     if (vaiAP) {
-      var recAP = { sourceEventKey: key, operationId: opId, companyId: companyId, orderId: wOrderId(t) || null, historico: label, valor: r2(Math.abs(t.amount)), valorManualOverride: true, emissao: competencia, competencia: competencia, vencimento: cls.apVencimento || competencia, origin: 'CAIXA_MANUAL', financialAccountId: walletAcc ? walletAcc.id : null, categoryId: cls.apCategoria || null };
+      var recAP = { sourceEventKey: key, operationId: opId, companyId: companyId, orderId: wOrderId(t) || null, historico: label, valor: r2(Math.abs(t.amount)), valorManualOverride: true, emissao: competencia, competencia: competencia, vencimento: cls.apVencimento || competencia, origin: 'CAIXA_MANUAL', financialAccountId: contaFinId, categoryId: cls.apCategoria || null, paymentMethod: cls.paymentMethod || null };
       var fullAP = cpUpsertBySourceKey(null, recAP);
       tasks.push(putMany('cpheader', [fullAP]));
       if (cls.apStatusManual === 'PAGO' && !cpPaymentsForHeader(fullAP.id).some(function (p) { return !p.estornado; })) {
-        tasks.push(cpRegistrarBaixa(fullAP.id, { valorPago: fullAP.valor, date: cpToday(), financialAccountId: walletAcc ? walletAcc.id : null, observacao: 'Retido/pago pela Shopee — classificação manual no Caixa.' }));
+        tasks.push(cpRegistrarBaixa(fullAP.id, { valorPago: fullAP.valor, date: cpToday(), financialAccountId: contaFinId, paymentMethod: cls.paymentMethod || null, observacao: 'Retido/pago pela Shopee — classificação manual no Caixa.' }));
       }
     }
     if (vaiAR) {
-      var recAR = { sourceEventKey: key, operationId: opId, companyId: companyId, orderId: wOrderId(t) || null, descricao: cls.arCategoria ? (cls.arCategoria + ' — ' + label) : label, pagador: 'Shopee', origin: 'MANUAL', valor: r2(Math.abs(t.amount)), competencia: competencia, vencimento: cls.arPrevisao || competencia, financialAccountId: walletAcc ? walletAcc.id : null, referencia: t.id };
+      var recAR = { sourceEventKey: key, operationId: opId, companyId: companyId, orderId: wOrderId(t) || null, descricao: cls.arCategoria ? (cls.arCategoria + ' — ' + label) : label, pagador: 'Shopee', origin: 'MANUAL', valor: r2(Math.abs(t.amount)), competencia: competencia, vencimento: cls.arPrevisao || competencia, financialAccountId: contaFinId, referencia: t.id };
       var fullAR = crUpsertBySourceKey(null, recAR);
       tasks.push(putMany('crheader', [fullAR]));
       if (cls.arStatusManual === 'RECEBIDO' && !crReceiptsForHeader(fullAR.id).some(function (p) { return !p.estornado; })) {
-        tasks.push(crRegistrarBaixa(fullAR.id, { valorRecebido: fullAR.valor, date: cpToday(), financialAccountId: walletAcc ? walletAcc.id : null, observacao: 'Recebido na Carteira Shopee — classificação manual no Caixa.', auto: true }));
+        tasks.push(crRegistrarBaixa(fullAR.id, { valorRecebido: fullAR.valor, date: cpToday(), financialAccountId: contaFinId, paymentMethod: cls.paymentMethod || null, observacao: 'Recebido na Carteira Shopee — classificação manual no Caixa.', auto: true }));
       }
     }
     return Promise.all(tasks);
@@ -8033,6 +8061,19 @@ buffer/index.js:
     var devol = (t.orderId && oc) ? '<div class="panel"><div class="ph"><h3>Devolução relacionada</h3><span class="tag info">' + esc(statusLabel(oc.status)) + '</span></div><div class="pb"><div class="fin-line"><span>Pedido</span><span class="mono">' + esc(t.orderId) + '</span></div><div class="fin-line"><span>Motivo</span><span class="cell-text">' + esc(oc.reason || '—') + '</span></div><div class="fin-line"><span>Valor descontado da carteira</span><span class="neg">' + brl(t.amount) + '</span></div><button class="btn-sm" data-godev="' + esc(oc.id) + '">Ver devolução</button></div></div>' : '';
     var c = wgetCls(t.id) || {};
     var opt = function (map, sel, autoLbl) { return (autoLbl ? '<option value="">' + autoLbl + '</option>' : '') + Object.keys(map).map(function (k) { return '<option value="' + k + '"' + (sel === k ? ' selected' : '') + '>' + map[k] + '</option>'; }).join(''); };
+    // PROMPT "Correção do fluxo financeiro da classificação de movimentações + Contas bancárias":
+    // toda movimentação da Carteira precisa ter uma conta de origem/destino financeiro — sem isso a
+    // baixa criava o título em Contas a Pagar/Receber mas nunca virava dinheiro rastreável em conta
+    // nenhuma. faSeedForOperation garante (idempotente) que a conta "Saldo Carteira Shopee" já existe
+    // pra esta operação ANTES de montar as opções do select — nunca deixa o campo obrigatório vazio
+    // por falta de seed. financialAccountsForSelector já mescla financialAccounts (Carteira/Recebíveis
+    // Shopee) com bankAccounts (bancos reais cadastrados) — nenhum catálogo novo, só reaproveita o
+    // motor já usado nos seletores de Contas a Pagar/Receber.
+    var opIdW = t.operationId || opActiveOrNull();
+    if (opIdW) faSeedForOperation(opIdW);
+    var contaFinOptions = opIdW ? financialAccountsForSelector(opIdW) : [];
+    var walletAccW = opIdW ? faWalletForOperation(opIdW) : null;
+    var contaFinDefault = c.financialAccountId || (walletAccW ? walletAccW.id : '');
     // PROMPT "Refazer o Caixa" §7/§42-50: Natureza é o PRIMEIRO campo — decide se este lançamento
     // vira Contas a Pagar, Contas a Receber, ou nenhum dos dois (Transferência/Informativo nunca
     // geram AP/AR). §45/§47: os campos de AP/AR só aparecem quando fazem sentido pra Natureza
@@ -8040,14 +8081,18 @@ buffer/index.js:
     var natAtual = c.natureza || '';
     var apBlockVisible = natAtual === 'DESPESA' || natAtual === 'AJUSTE';
     var arBlockVisible = natAtual === 'RECEITA' || natAtual === 'CREDITO';
-    // PROMPT "Modal — Classificar Movimentação": layout enxuto — Natureza+Categoria juntos no topo,
-    // depois o grupo de decisão (contabilizar/enviar/opção de pagamento), depois as datas
+    // PROMPT "Modal — Classificar Movimentação" / "Correção do fluxo financeiro": layout enxuto —
+    // Natureza+Categoria+Conta financeira juntos no topo (essencial, sempre visível), depois o grupo
+    // de decisão (Enviar para AP/AR + opção de pagamento) + Forma de pagamento, depois as datas
     // (Competência+Vencimento), Observação, e só então (fora da moldura do modal pedido) os campos
     // avançados. "Opção de pagamento" (Criar pendente / Criar e dar baixa automaticamente) substitui
     // o antigo select "Status" — mesmo dado (apStatusManual/arStatusManual), rótulo mais claro do que
-    // "Pago/Baixado" pra quem não é contador. Categoria de Contas a Pagar/Receber (cpCategories —
-    // domínio DIFERENTE do WCAT usado aqui) sai do modal: continua editável depois, direto em Contas
-    // a Pagar/Receber — nunca gravamos um valor errado misturando os dois domínios.
+    // "Pago/Baixado" pra quem não é contador. "Contabilizar no resultado?" SAIU do modal — nunca era
+    // lido por nenhum motor de DRE/resultado (campo morto, confirmado por busca exaustiva); o
+    // resultado financeiro/econômico é sempre derivado da Categoria, nunca de um flag à parte.
+    // Categoria de Contas a Pagar/Receber (cpCategories — domínio DIFERENTE do WCAT usado aqui) sai
+    // do modal: continua editável depois, direto em Contas a Pagar/Receber — nunca gravamos um valor
+    // errado misturando os dois domínios.
     function opcaoPagamentoRadio(name, atual) {
       return '<label class="fld">Opção de pagamento</label>' +
         '<label class="fld" style="display:flex;align-items:center;gap:8px;font-weight:400"><input type="radio" name="' + name + '" value="PENDENTE"' + (atual !== 'PAGO' ? ' checked' : '') + '> Criar pendente</label>' +
@@ -8055,16 +8100,17 @@ buffer/index.js:
     }
     var naturezaBlock = '<label class="fld">Natureza</label><select class="select" id="wcls-nat" style="width:100%">' + opt(NATUREZA, natAtual, '(automática pelo sinal: ' + (t.amount < 0 ? 'Despesa' : 'Receita') + ')') + '</select>' +
       '<label class="fld">Categoria</label><select class="select" id="wcls-cat" style="width:100%">' + opt(WCAT, c.catManual, '(automática: ' + wcatLabel(t.category) + ')') + '</select>' +
+      '<label class="fld">Conta financeira</label><select class="select" id="wcls-conta-fin" style="width:100%">' + contaFinOptions.map(function (a) { return '<option value="' + esc(a.id) + '"' + (contaFinDefault === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>'; }).join('') + '</select>' +
       '<div style="border-top:1px solid var(--line);margin:10px 0;padding-top:10px">' +
-      '<label class="fld">Contabilizar no resultado?</label><select class="select" id="wcls-contab" style="width:100%"><option value="sim"' + (c.contabilizar !== false ? ' selected' : '') + '>Sim</option><option value="nao"' + (c.contabilizar === false ? ' selected' : '') + '>Não</option></select>' +
-      '<div id="wcls-ap-block" style="display:' + (apBlockVisible ? 'block' : 'none') + ';margin-top:8px">' +
-      '<label class="fld">Enviar para Contas a Pagar?</label><select class="select" id="wcls-ap-enviar" style="width:100%"><option value="sim"' + (c.apEnviar !== false ? ' selected' : '') + '>Sim</option><option value="nao"' + (c.apEnviar === false ? ' selected' : '') + '>Não</option></select>' +
+      '<div id="wcls-ap-block" style="display:' + (apBlockVisible ? 'block' : 'none') + '">' +
+      '<label class="fld" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="wcls-ap-enviar"' + (c.apEnviar !== false ? ' checked' : '') + '> Enviar para Contas a Pagar</label>' +
       opcaoPagamentoRadio('wcls-ap-opcao', c.apStatusManual) +
       '</div>' +
-      '<div id="wcls-ar-block" style="display:' + (arBlockVisible ? 'block' : 'none') + ';margin-top:8px">' +
-      '<label class="fld">Enviar para Contas a Receber?</label><select class="select" id="wcls-ar-enviar" style="width:100%"><option value="sim"' + (c.arEnviar !== false ? ' selected' : '') + '>Sim</option><option value="nao"' + (c.arEnviar === false ? ' selected' : '') + '>Não</option></select>' +
+      '<div id="wcls-ar-block" style="display:' + (arBlockVisible ? 'block' : 'none') + '">' +
+      '<label class="fld" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="wcls-ar-enviar"' + (c.arEnviar !== false ? ' checked' : '') + '> Enviar para Contas a Receber</label>' +
       opcaoPagamentoRadio('wcls-ar-opcao', c.arStatusManual === 'RECEBIDO' ? 'PAGO' : '') +
       '</div>' +
+      '<label class="fld" style="margin-top:8px">Forma de pagamento</label><select class="select" id="wcls-forma" style="width:100%"><option value="">— selecionar —</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '"' + (c.paymentMethod === f ? ' selected' : '') + '>' + esc(f) + '</option>'; }).join('') + '</select>' +
       '</div>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;border-top:1px solid var(--line);margin-top:10px;padding-top:10px"><div><label class="fld">Competência</label><input type="date" class="input" id="wcls-comp" style="width:100%" value="' + esc(c.competencia || (t.date ? t.date.slice(0, 10) : '')) + '"></div><div><label class="fld">Vencimento</label><input type="date" class="input" id="wcls-venc" style="width:100%" value="' + esc(c.apVencimento || c.arPrevisao || '') + '"></div></div>';
     // PROMPT "Correção Caixa — Ajuste de Nomenclatura, Conciliação e DRE Operacional" §3: o essencial
@@ -8110,21 +8156,28 @@ buffer/index.js:
       if (arBlock) arBlock.style.display = (natSel.value === 'RECEITA' || natSel.value === 'CREDITO') ? 'block' : 'none';
     };
     panel.querySelector('#wcls-save').onclick = function () {
+      // PROMPT "Correção do fluxo financeiro": "Conta financeira" é campo obrigatório — sem ela a
+      // baixa criava título mas nunca virava dinheiro rastreável em conta nenhuma (raiz do bug
+      // relatado). Bloqueia o salvamento até o operador escolher uma conta (já vem pré-selecionada
+      // com a Carteira Shopee, então normalmente não exige ação extra).
+      var contaFinVal = panel.querySelector('#wcls-conta-fin').value || '';
+      if (!contaFinVal) { toast('Conta financeira é obrigatória', 'Selecione a conta de origem/destino deste movimento.', true); return; }
       var venc = panel.querySelector('#wcls-venc').value || null;
       var apOpcaoEl = panel.querySelector('input[name="wcls-ap-opcao"]:checked');
       var arOpcaoEl = panel.querySelector('input[name="wcls-ar-opcao"]:checked');
       var patch = {
         natureza: panel.querySelector('#wcls-nat').value || null,
-        contabilizar: panel.querySelector('#wcls-contab').value !== 'nao',
+        financialAccountId: contaFinVal,
+        paymentMethod: panel.querySelector('#wcls-forma').value || null,
         competencia: panel.querySelector('#wcls-comp').value || null,
-        apEnviar: panel.querySelector('#wcls-ap-enviar').value !== 'nao',
+        apEnviar: panel.querySelector('#wcls-ap-enviar').checked,
         // Categoria de Contas a Pagar/Receber (cpCategories — domínio à parte do WCAT) não é mais
         // definida por este modal — preserva o valor já existente (se o operador tiver editado direto
         // em Contas a Pagar/Receber), nunca apaga silenciosamente.
         apCategoria: c.apCategoria || null,
         apVencimento: venc,
         apStatusManual: (apOpcaoEl && apOpcaoEl.value === 'BAIXA') ? 'PAGO' : null,
-        arEnviar: panel.querySelector('#wcls-ar-enviar').value !== 'nao',
+        arEnviar: panel.querySelector('#wcls-ar-enviar').checked,
         arCategoria: c.arCategoria || null,
         arPrevisao: venc,
         arStatusManual: (arOpcaoEl && arOpcaoEl.value === 'BAIXA') ? 'RECEBIDO' : null,
@@ -11193,6 +11246,19 @@ buffer/index.js:
     var saldoInicial = b.saldoInicial || 0;
     return { saldoInicial: r2(saldoInicial), entradas: r2(entradas), saidas: r2(saidas), saldoAtual: r2(saldoInicial + entradas - saidas) };
   }
+  // PROMPT "Correção do fluxo financeiro": generaliza bankAccountSaldoAtual pra também aceitar um id
+  // de financialAccounts (Carteira/Recebíveis Shopee) — MESMOS crReceipts/cpPayments, nenhum motor
+  // novo — só pra "Saldo dos bancos"/"Gerenciar bancos" pararem de mostrar só bancos reais e passarem
+  // a mostrar também a Carteira Shopee (onde a baixa manual da classificação de movimentações agora
+  // pode apontar). Contas de financialAccounts não têm saldoInicial/dataInicial próprios (sempre 0,
+  // desde sempre) — o saldo é 100% derivado do que entrou/saiu por baixa, igual às demais.
+  function faSaldoAtual(id) {
+    if (bankAccounts.some(function (b) { return b.id === id; })) return bankAccountSaldoAtual(id);
+    if (!faGetById(id)) return null;
+    var entradas = crReceipts.filter(function (p) { return !p.estornado && p.financialAccountId === id; }).reduce(function (s, p) { return s + crAmortizado(p); }, 0);
+    var saidas = cpPayments.filter(function (p) { return !p.estornado && p.financialAccountId === id; }).reduce(function (s, p) { return s + cpAmortizado(p); }, 0);
+    return { saldoInicial: 0, entradas: r2(entradas), saidas: r2(saidas), saldoAtual: r2(entradas - saidas) };
+  }
   // Contas visíveis para a empresa ativa: sem companyId (legado) OU companyId igual ao da operação
   // ativa. Nunca lista a conta de outro CNPJ por padrão.
   function bankAccountsForActiveCompany() {
@@ -11376,6 +11442,14 @@ buffer/index.js:
     function body() {
       var rows = bankAccounts.map(function (b) { var s = bankAccountSaldoAtual(b.id); return '<tr><td class="cell-text">' + esc(b.nome) + '</td><td class="cell-text">' + esc(b.banco || '—') + '</td><td class="mono">' + esc(b.agencia || '—') + '</td><td class="mono">' + esc(b.conta || '—') + '</td><td>' + esc(b.tipo || '—') + '</td><td class="nowrap">' + brl(s.saldoAtual) + '</td><td>' + (b.ativa !== false ? '<span class="tag ok">ativa</span>' : '<span class="tag neutral">inativa</span>') + '</td><td><button class="btn-sm" data-bankedit="' + esc(b.id) + '">Editar</button> <button class="btn-sm" data-banktoggle="' + esc(b.id) + '">' + (b.ativa !== false ? 'Desativar' : 'Ativar') + '</button></td></tr>'; }).join('');
       var table = '<div class="table-wrap"><table class="report"><thead><tr><th>Nome</th><th>Banco</th><th>Agência</th><th>Conta</th><th>Tipo</th><th>Saldo atual</th><th>Status</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="8" class="empty">Nenhuma conta cadastrada ainda.</td></tr>') + '</tbody></table></div>';
+      // PROMPT "Correção do fluxo financeiro": financialAccounts (Saldo Carteira Shopee/Recebíveis
+      // Shopee) são contas internas geridas pelo próprio sistema (seed automático por operação) — só
+      // exibidas aqui pra transparência de saldo, sem editor próprio (não fazem sentido "editar" uma
+      // conta que a Shopee controla).
+      var opIdGB = opActiveOrNull();
+      var contasFaGB = financialAccounts.filter(function (a) { return a.active !== false && (!a.operationId || a.operationId === opIdGB); });
+      var faRows = contasFaGB.map(function (a) { var s = faSaldoAtual(a.id); return '<tr><td class="cell-text">' + esc(a.name) + '</td><td class="cell-text">Shopee</td><td>—</td><td>—</td><td>Conta interna</td><td class="nowrap">' + brl(s.saldoAtual) + '</td><td><span class="tag ok">ativa</span></td><td>—</td></tr>'; }).join('');
+      var tableFa = faRows ? '<div class="table-wrap" style="margin-top:6px"><table class="report"><tbody>' + faRows + '</tbody></table></div>' : '';
       var form = '<div class="panel" style="margin-top:10px"><div class="ph"><h3>Nova conta</h3></div><div class="pb"><div style="display:flex;gap:8px;flex-wrap:wrap">' +
         '<input class="input sm" id="bk-nome" placeholder="Nome da conta" style="width:180px">' +
         '<input class="input sm" id="bk-banco" placeholder="Banco" style="width:140px">' +
@@ -11385,7 +11459,7 @@ buffer/index.js:
         '<input class="input sm" id="bk-saldo" placeholder="Saldo inicial" style="width:120px" value="0,00">' +
         '<input type="date" class="input sm" id="bk-data" placeholder="Data inicial" style="width:140px" value="' + cpToday() + '">' +
         '<button class="btn-sm primary" id="bk-salvar">Salvar</button></div></div></div>';
-      return '<div class="dh"><div><b>Gerenciar bancos / contas</b></div><button class="x">&times;</button></div><div class="dbd">' + table + form + '</div>';
+      return '<div class="dh"><div><b>Gerenciar bancos / contas</b></div><button class="x">&times;</button></div><div class="dbd">' + table + tableFa + form + '</div>';
     }
     function wire() {
       panel.querySelector('.x').onclick = function () { d.remove(); if (onDone) onDone(); };
@@ -11519,7 +11593,10 @@ buffer/index.js:
       if (manCls.natureza === 'TRANSFERENCIA' || manCls.natureza === 'INFORMATIVO') return; // §50: nunca gera AP/AR
       var vaiAP = manCls.natureza ? (manCls.natureza === 'DESPESA' || manCls.natureza === 'AJUSTE') && manCls.apEnviar !== false : t.amount < 0;
       if (manCls.natureza === 'RECEITA' || manCls.natureza === 'CREDITO') vaiAP = false;
-      if (vaiAP) apPlan.push(apRow(opId, wOrderId(t), 'WALLET', k, label, Math.abs(t.amount) * 100, walletAcc ? walletAcc.id : null));
+      // Conta financeira: prioriza a que o operador já escolheu no modal de classificação
+      // (manCls.financialAccountId) — mesma conta que a baixa manual usaria — cai pra Carteira Shopee
+      // automática só quando o lançamento nunca passou pelo modal (natureza inferida pelo sinal).
+      if (vaiAP) apPlan.push(apRow(opId, wOrderId(t), 'WALLET', k, label, Math.abs(t.amount) * 100, manCls.financialAccountId || (walletAcc ? walletAcc.id : null)));
     });
     var movTodosDoDia = caixaDayMovimentosCarteira(dateKey); var movTodos = movTodosDoDia.creditos.concat(movTodosDoDia.debitos);
     movTodos.forEach(function (t) { var k = caixaMovCategoria(t, ac); if (!k || k === 'NAO_IDENTIFICADOS') naoClassificados.push(t); });
@@ -12465,7 +12542,7 @@ buffer/index.js:
   // e travado) — financialAccounts NÃO duplica isso; financialAccountsForSelector() apenas MESCLA os
   // dois catálogos para exibição/seleção unificada, sem criar um segundo cadastro de bancos.
   var financialAccounts = [];
-  var FA_TYPE_LABEL = { MARKETPLACE_RECEIVABLE: 'Recebíveis Shopee', MARKETPLACE_WALLET: 'Carteira Shopee', BANK: 'Banco', CASH: 'Caixa', OTHER: 'Outra' };
+  var FA_TYPE_LABEL = { MARKETPLACE_RECEIVABLE: 'Recebíveis Shopee', MARKETPLACE_WALLET: 'Saldo Carteira Shopee', BANK: 'Banco', CASH: 'Caixa', OTHER: 'Outra' };
   function faUid() { return 'FA-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8); }
   function faSave(rec) {
     var id = rec.id || faUid(); var now = new Date().toISOString();
@@ -12481,7 +12558,7 @@ buffer/index.js:
     var op = operations.find(function (o) { return o.id === opId; }); var compId = op ? op.companyId : null;
     var existing = financialAccounts.filter(function (a) { return a.operationId === opId; });
     var toCreate = [];
-    if (!existing.some(function (a) { return a.type === 'MARKETPLACE_WALLET'; })) toCreate.push({ type: 'MARKETPLACE_WALLET', name: 'Carteira Shopee', institution: 'Shopee' });
+    if (!existing.some(function (a) { return a.type === 'MARKETPLACE_WALLET'; })) toCreate.push({ type: 'MARKETPLACE_WALLET', name: 'Saldo Carteira Shopee', institution: 'Shopee' });
     if (!existing.some(function (a) { return a.type === 'MARKETPLACE_RECEIVABLE'; })) toCreate.push({ type: 'MARKETPLACE_RECEIVABLE', name: 'Recebíveis Shopee', institution: 'Shopee' });
     if (!toCreate.length) return Promise.resolve(existing);
     var now = new Date().toISOString();
@@ -13829,7 +13906,7 @@ buffer/index.js:
   function crRegistrarBaixa(headerId, dto) {
     var h = contasReceber.find(function (x) { return x.id === headerId; }); if (!h) return Promise.reject(new Error('Conta a receber não encontrada.'));
     var id = crUid('REC'); var now = new Date().toISOString();
-    var full = { id: id, accountsReceivableId: headerId, date: dto.date || cpToday(), financialAccountId: dto.financialAccountId || null, valorRecebido: r2(dto.valorRecebido || 0), desconto: r2(dto.desconto || 0), acrescimo: r2(dto.acrescimo || 0), observacao: dto.observacao || null, estornado: false, auto: !!dto.auto, createdAt: now };
+    var full = { id: id, accountsReceivableId: headerId, date: dto.date || cpToday(), financialAccountId: dto.financialAccountId || null, paymentMethod: dto.paymentMethod || null, valorRecebido: r2(dto.valorRecebido || 0), desconto: r2(dto.desconto || 0), acrescimo: r2(dto.acrescimo || 0), observacao: dto.observacao || null, estornado: false, auto: !!dto.auto, createdAt: now };
     crReceipts = [full].concat(crReceipts);
     crPushHistory(h, 'RECEBIMENTO', 'Recebido ' + brl(full.valorRecebido) + (full.financialAccountId ? ' na conta ' + crFinAccountLabel(full.financialAccountId) : '') + '.');
     // §CAIXA_TRANSFERENCIA (Pix auto-detectado nasce sem conta escolhida — ver caixaMontarIntegracaoFinanceira):
@@ -13889,7 +13966,13 @@ buffer/index.js:
     var all = crFilteredList();
     var kpis = crKpis(all);
     var bancos = bankAccountsForActiveCompany().filter(function (b) { return b.ativa !== false; });
-    var saldoBancos = bancos.reduce(function (s, b) { return s + bankAccountSaldoAtual(b.id).saldoAtual; }, 0);
+    // PROMPT "Correção do fluxo financeiro": este painel deixou de mostrar só bancos "reais" —
+    // financialAccounts (Saldo Carteira Shopee/Recebíveis Shopee) agora também aparece aqui, com o
+    // mesmo saldo derivado (faSaldoAtual) — é a conta que a classificação de movimentações da
+    // Carteira grava por padrão, então precisa ser visível no mesmo lugar que os bancos reais.
+    var opIdVG = opActiveOrNull();
+    var contasFa = financialAccounts.filter(function (a) { return a.active !== false && (!a.operationId || a.operationId === opIdVG); });
+    var saldoBancos = bancos.reduce(function (s, b) { return s + bankAccountSaldoAtual(b.id).saldoAtual; }, 0) + contasFa.reduce(function (s, a) { return s + faSaldoAtual(a.id).saldoAtual; }, 0);
     var kpiHtml = kstrip([
       { l: 'Total a receber', v: brl(kpis.aReceber) },
       { l: 'Recebido no período', v: brl(kpis.recebidoPeriodo) },
@@ -13898,6 +13981,11 @@ buffer/index.js:
     ]);
     var bancosRows = bancos.map(function (b) { var s = bankAccountSaldoAtual(b.id); return '<div class="panel" style="margin-bottom:8px"><div class="pb"><details class="cx-collapse"><summary class="cx-kv"><span>' + esc(b.nome) + (b.banco ? ' — ' + esc(b.banco) : '') + '</span><b>' + brl(s.saldoAtual) + '</b></summary>' +
       '<div class="fin-line"><span>Saldo inicial' + (b.dataInicial ? ' (' + dbr(b.dataInicial) + ')' : '') + '</span><span>' + brl(s.saldoInicial) + '</span></div>' +
+      '<div class="fin-line"><span>+ Entradas</span><span class="pos">' + brl(s.entradas) + '</span></div>' +
+      '<div class="fin-line"><span>− Saídas</span><span class="neg">' + brl(s.saidas) + '</span></div>' +
+      '<div class="fin-line total"><span>= Saldo atual</span><b>' + brl(s.saldoAtual) + '</b></div>' +
+      '</details></div></div>'; }).join('') +
+      contasFa.map(function (a) { var s = faSaldoAtual(a.id); return '<div class="panel" style="margin-bottom:8px"><div class="pb"><details class="cx-collapse"><summary class="cx-kv"><span>' + esc(a.name) + ' <span class="footnote" style="margin:0">(conta interna Shopee)</span></span><b>' + brl(s.saldoAtual) + '</b></summary>' +
       '<div class="fin-line"><span>+ Entradas</span><span class="pos">' + brl(s.entradas) + '</span></div>' +
       '<div class="fin-line"><span>− Saídas</span><span class="neg">' + brl(s.saidas) + '</span></div>' +
       '<div class="fin-line total"><span>= Saldo atual</span><b>' + brl(s.saldoAtual) + '</b></div>' +
