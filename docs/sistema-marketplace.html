@@ -291,7 +291,7 @@
     </nav>
     <div style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 6f005b7 · 2026-08-25 22:25 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 4828430 · 2026-08-25 22:45 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -5231,7 +5231,15 @@ buffer/index.js:
     var mrRow = incomeResolve.status === 'FOUND' ? incomeResolve.row : null;
     var svcResolve = resolveServiceFeeDetails(opIdOrd, orderId);
     var svcRows = svcResolve.rows;
-    var receitaC = mrRow ? mrRow.preco : (ord ? Math.round(orderFinance(ord).revenue * 100) : null);
+    // PROMPT "REGRA FINANCEIRA — SEPARAÇÃO VENDA, TAXAS E ANTECIPAÇÃO SHOPEE" §1/§7: "Valor da Venda"
+    // NUNCA vem do Income (mrRow.preco é "Preço do produto" — um campo do relatório de Renda,
+    // diferente de "Preço acordado" do Order.all, confirmado em auditoria anterior) — a fonte oficial
+    // é sempre Order.all (Preço Acordado × Qtd, já calculado por orderFinance/S.pedidos.computeFinance,
+    // a mesma função canônica usada em Dashboard/Minha Renda/Caixa Bloco 1 — nenhum motor novo).
+    // mrRow.preco continua usado abaixo SÓ para a reconciliação interna do Income (linha ~1465:
+    // liberado vs preço+taxas — valida a MATEMÁTICA DO PRÓPRIO INCOME, nunca "quanto foi vendido"),
+    // propósito completamente diferente de receitaC e por isso não migrado por esta regra.
+    var receitaC = ord ? Math.round(orderFinance(ord).revenue * 100) : null;
     var custoProdC = null, custoPendente = false;
     if (ord) { var fOrd = orderFinance(ord); if (fOrd.costPending) custoPendente = true; else custoProdC = Math.round((fOrd.productCostTotal || 0) * 100); }
     var taxaRows = [];
@@ -10830,7 +10838,14 @@ buffer/index.js:
       // (não só o agregado do bloco) — mesma fonte (resolveSellerCharges), nunca um cálculo novo.
       var taxaPedidoC = sc.totalC; // pode ser null quando SEM_DADOS — nunca vira 0 fictício
       var liquidoPedidoC = taxaPedidoC != null ? receitaC + taxaPedidoC : null;
-      return { orderId: o.id, produto: prod, sku: sku, valorC: receitaC, status: o.normalizedStatus, statusLabel: S.pedidos.labels[o.normalizedStatus] || o.orderStatus, taxaC: taxaPedidoC, taxaStatus: sc.totalStatus, liquidoC: liquidoPedidoC };
+      // PROMPT "REGRA FINANCEIRA — SEPARAÇÃO VENDA, TAXAS E ANTECIPAÇÃO" §5 (Auditoria obrigatória):
+      // "Ver pedidos" precisa mostrar Quantidade e Preço acordado, não só o total já multiplicado —
+      // permite validar o cálculo manualmente (Preço acordado × Qtd = Valor considerado na venda).
+      // Preço acordado unitário só faz sentido quando o pedido tem um único item (múltiplos itens têm
+      // preços possivelmente diferentes cada — mesmo tratamento já usado pra produto/sku acima).
+      var qty = o.items.reduce(function (s, it) { return s + (it.qty || 0); }, 0);
+      var precoAcordadoUnit = o.items.length === 1 ? o.items[0].agreedPrice : null;
+      return { orderId: o.id, produto: prod, sku: sku, qty: qty, precoAcordadoUnit: precoAcordadoUnit, valorC: receitaC, status: o.normalizedStatus, statusLabel: S.pedidos.labels[o.normalizedStatus] || o.orderStatus, taxaC: taxaPedidoC, taxaStatus: sc.totalStatus, liquidoC: liquidoPedidoC };
     });
     var linhasTaxasLoja = Object.keys(mapTaxasLoja).map(function (k) { return { key: k, label: mapTaxasLoja[k].label, valor: mapTaxasLoja[k].valor, provisorio: !!mapTaxasLojaProvisorio[k] }; }).filter(function (l) { return l.valor; }).sort(function (a, b) { return a.valor - b.valor; });
     var taxasLojaC = linhasTaxasLoja.reduce(function (s, l) { return s + l.valor; }, 0);
@@ -12025,6 +12040,18 @@ buffer/index.js:
     var valorAntecipadoC = ac.valorBruto;
     var taxaAceleraC = ac.resgatesN ? -Math.abs(ac.taxaAcelera) : 0;
     var liquidoCarteiraC = ac.resgatesN ? ac.valorLiquido : 0;
+    // PROMPT "REGRA FINANCEIRA — SEPARAÇÃO VENDA, TAXAS E ANTECIPAÇÃO" §6: quando o Resultado Líquido
+    // dos Pedidos (Bloco 3, calculado deste dia) diverge do Valor Antecipado pelo Acelera (Bloco 4,
+    // que pode antecipar recebíveis de OUTROS dias — nunca o mesmo conjunto de pedidos por definição),
+    // NUNCA altera nenhum valor — só exibe a diferença de forma explícita, com motivo "a investigar"
+    // (nunca inventa uma causa). Tolerância de 1 centavo pra ignorar ruído de arredondamento.
+    var divergenciaLiquidoAceleraC = liquidoReceberC - valorAntecipadoC;
+    var divergenciaLiquidoAceleraHtml = (ac.resgatesN && Math.abs(divergenciaLiquidoAceleraC) > 1) ?
+      callout('warn', 'Divergência entre líquido calculado e antecipação Shopee',
+        '<div class="fin-line"><span>Resultado líquido calculado</span><span>' + brlC(liquidoReceberC) + '</span></div>' +
+        '<div class="fin-line"><span>Valor antecipado</span><span>' + brlC(valorAntecipadoC) + '</span></div>' +
+        '<div class="fin-line total"><span>Diferença</span><span class="' + (divergenciaLiquidoAceleraC < 0 ? 'neg' : 'pos') + '">' + brlC(divergenciaLiquidoAceleraC) + '</span></div>' +
+        '<div class="footnote" style="margin-top:4px">Motivo: a investigar — nenhum valor foi alterado.</div>') : '';
 
     // PROMPT "Refazer o Caixa" §9-13: SEM faixa de cards KPI antes do fluxo — "quero aparência de
     // extrato financeiro/conciliação", não dashboard. O fluxo do dinheiro abaixo é o protagonista
@@ -12053,17 +12080,21 @@ buffer/index.js:
     // final) é um .cx-block com divisor fino; os números continuam vindo só de origem/ac/fluxo, nada
     // é recalculado aqui. ----
     var vendaSub = origem.n ? nn(origem.n) + ' pedido(s) vinculado(s) à antecipação' : (ac.resgatesN ? '⚠ ' + nn(ac.pedidosAceleraN) + ' pedido(s) no resgate do Acelera, mas nenhum localizado em Pedidos — abra "Ver pedidos" abaixo' : 'nenhum resgate do Acelera neste dia');
-    // §1 do prompt: lista de auditoria completa (Pedido/Produto/SKU/Valor venda/Status/Taxas/Valor
-    // líquido) — nunca esconde divergência: quando o Acelera referencia um pedido que não foi
-    // localizado em Pedidos (ID com caractere invisível/planilha diferente/pedido fora do período
-    // importado), mostra um aviso explícito em vez de silenciosamente sumir do total.
+    // PROMPT "REGRA FINANCEIRA — SEPARAÇÃO VENDA, TAXAS E ANTECIPAÇÃO" §5 (Auditoria obrigatória):
+    // "Ver pedidos" precisa mostrar Pedido/Produto/SKU/Quantidade/Preço acordado/Valor considerado na
+    // venda (+Status/Taxas/Valor líquido, já existentes) — permite validar manualmente Preço acordado
+    // × Qtd = Valor considerado na venda, e o total da tabela bater com o Bloco 1. Nunca esconde
+    // divergência: quando o Acelera referencia um pedido que não foi localizado em Pedidos (ID com
+    // caractere invisível/planilha diferente/pedido fora do período importado), mostra um aviso
+    // explícito em vez de silenciosamente sumir do total.
     var pedidosOrigemRows = origem.pedidosRows.map(function (p) {
       var taxaCell = p.taxaC != null ? ('<b class="' + (p.taxaC < 0 ? 'neg' : '') + '">' + brlC(p.taxaC) + '</b>' + (p.taxaStatus === 'PROVISORIO' ? ' <span class="tag warn" style="font-size:9px">provisório</span>' : (p.taxaStatus === 'COMPLETO' ? ' <span class="tag ok" style="font-size:9px">confirmado</span>' : ''))) : '—';
       var liquidoCell = p.liquidoC != null ? brlC(p.liquidoC) : '—';
-      return '<tr class="rowlink" data-goped360="' + esc(p.orderId) + '"><td class="mono">' + esc(p.orderId) + '</td><td class="cell-text">' + esc(p.produto || '—') + '</td><td class="mono">' + esc(p.sku || '—') + '</td><td class="nowrap">' + brlC(p.valorC) + '</td><td>' + esc(p.statusLabel) + '</td><td class="nowrap">' + taxaCell + '</td><td class="nowrap">' + liquidoCell + '</td></tr>';
+      var precoAcordadoCell = p.precoAcordadoUnit != null ? brl(p.precoAcordadoUnit) : '—';
+      return '<tr class="rowlink" data-goped360="' + esc(p.orderId) + '"><td class="mono">' + esc(p.orderId) + '</td><td class="cell-text">' + esc(p.produto || '—') + '</td><td class="mono">' + esc(p.sku || '—') + '</td><td class="nowrap">' + nn(p.qty) + '</td><td class="nowrap">' + precoAcordadoCell + '</td><td class="nowrap">' + brlC(p.valorC) + '</td><td>' + esc(p.statusLabel) + '</td><td class="nowrap">' + taxaCell + '</td><td class="nowrap">' + liquidoCell + '</td></tr>';
     }).join('');
     var pedidosNaoLocAviso = origem.pedidosNaoLocalizados.length ? ('<div class="footnote" style="margin:6px 0;color:var(--err)">⚠ ' + nn(origem.pedidosNaoLocalizados.length) + ' pedido(s) do resgate Acelera não localizado(s) em Pedidos (fora do período importado ou ID divergente): ' + origem.pedidosNaoLocalizados.map(esc).join(', ') + '</div>') : '';
-    var pedidosOrigemDetails = '<details class="cx-collapse" style="margin-top:4px"><summary style="font-size:12px;padding:6px 12px">Ver pedidos</summary><div class="pb">' + pedidosNaoLocAviso + '<div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Produto</th><th>SKU</th><th>Valor venda</th><th>Status</th><th>Taxas</th><th>Valor líquido</th></tr></thead><tbody>' + (pedidosOrigemRows || '<tr><td colspan="7" class="empty">Nenhum pedido.</td></tr>') + '</tbody></table></div></div></details>';
+    var pedidosOrigemDetails = '<details class="cx-collapse" style="margin-top:4px"><summary style="font-size:12px;padding:6px 12px">Ver pedidos</summary><div class="pb">' + pedidosNaoLocAviso + '<div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Produto</th><th>SKU</th><th>Qtd</th><th>Preço acordado</th><th>Valor considerado na venda</th><th>Status</th><th>Taxas</th><th>Valor líquido</th></tr></thead><tbody>' + (pedidosOrigemRows || '<tr><td colspan="9" class="empty">Nenhum pedido.</td></tr>') + '</tbody></table></div>' + (origem.pedidosRows.length ? ('<div class="fin-line total" style="margin-top:6px"><span>Total (deve bater com o Bloco 1 — Valor da Venda)</span><b>' + brlC(origem.valorBrutoC) + '</b></div>') : '') + '</div></details>';
 
     // PROMPT "Correção Caixa — Ajuste de Nomenclatura, Conciliação e DRE Operacional" §1: separa
     // visualmente "Descontos Shopee do Vendedor" (taxa real: comissão/serviço/afiliados/devolução
@@ -12148,7 +12179,7 @@ buffer/index.js:
       '<div class="cx-block"><div class="cx-block-row"><span class="cxl">4. Valor Antecipado (Shopee Acelera)</span><span class="cxv">' + brlC(valorAntecipadoC) + '</span></div>' +
       '<div class="cxsub">Antecipa recebíveis já existentes (de vendas de qualquer dia, não só as deste dia) — por isso pode diferir do Valor Líquido dos Pedidos acima.</div>' +
       '<div class="cx-block-child cx-block-row"><span class="cxl">(-) Taxa de Antecipação</span><span class="cxv' + (taxaAceleraC ? ' neg' : '') + '">' + brlC(taxaAceleraC) + '</span></div>' +
-      verResgate + '</div>' +
+      verResgate + divergenciaLiquidoAceleraHtml + '</div>' +
       '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">5. Valor Recebido na Carteira</span><span class="cxv">' + brlC(liquidoCarteiraC) + '</span></div></div>' +
       '<div class="cx-block"><div class="cx-block-row"><span class="cxl">6. (+) Créditos da Carteira</span><span class="cxv pos">+' + brl(fluxo.outrosCreditos) + '</span></div></div>' +
       '<div class="cx-block"><div class="cx-block-row"><span class="cxl">7. (-) Débitos da Carteira</span><span class="cxv neg">-' + brl(fluxo.descontos) + '</span></div></div>' +
