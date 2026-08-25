@@ -1516,6 +1516,68 @@
     var totalC = totalStatus === 'SEM_DADOS' ? null : items.reduce(function (s, it) { return s + (it.knownContribution || 0); }, 0);
     return { found: !!mrRow, mrRow: mrRow, serviceFee: serviceFee, items: items, totalC: totalC, complete: complete, totalStatus: totalStatus };
   }
+  // auditIncomeOrder(orderId) — trace RUNTIME completo do cruzamento Pedido×Income para UM pedido
+  // (usado pelo botão [Diagnóstico] na Ficha, quando a seção 3 não está COMPLETO). Nunca recalcula
+  // nada por conta própria — só expõe, passo a passo, o que resolveIncomeOrder/resolveServiceFeeDetails/
+  // resolveSellerCharges já resolveram, para provar EM QUAL ETAPA o dado se perdeu (import/persistência
+  // vs normalização vs operationId vs resolver) em vez de um "—" mudo.
+  function auditIncomeOrder(orderId) {
+    var orderIdNormalized = normalizeOrderId(orderId);
+    var ord = orders.find(function (x) { return x.id === orderId; });
+    var pedidoOperationId = ord ? (ord.operationId || null) : null;
+    var activeOperationId = opActiveOrNull();
+    var opId = pedidoOperationId || activeOperationId || null;
+    var rawIncomeMatches = mrRenda.filter(function (r) { return normalizeOrderId(r.orderId) === orderIdNormalized; });
+    var scopedIncomeMatches = rawIncomeMatches.filter(function (r) { return !opId || !r.operationId || r.operationId === opId; });
+    var incomeOperationIds = Array.from(rawIncomeMatches.reduce(function (s, r) { s.add(r.operationId || '(sem operationId)'); return s; }, new Set()));
+    var resolveIncomeStatus = resolveIncomeOrder(opId, orderId);
+    var rawSvcMatches = mrSvc.filter(function (v) { return normalizeOrderId(v.orderId) === orderIdNormalized; });
+    var scopedSvcMatches = rawSvcMatches.filter(function (v) { return !opId || !v.operationId || v.operationId === opId; });
+    var svcOperationIds = Array.from(rawSvcMatches.reduce(function (s, v) { s.add(v.operationId || '(sem operationId)'); return s; }, new Set()));
+    var serviceFeeStatus = resolveServiceFeeDetails(opId, orderId);
+    return {
+      orderIdOriginal: orderId, orderIdNormalized: orderIdNormalized,
+      pedidoOperationId: pedidoOperationId, activeOperationId: activeOperationId,
+      rawIncomeMatches: rawIncomeMatches.length, scopedIncomeMatches: scopedIncomeMatches.length,
+      verValues: rawIncomeMatches.map(function (r) { return r.ver; }), incomeOperationIds: incomeOperationIds,
+      resolveIncomeStatus: resolveIncomeStatus.status, incomeRow: resolveIncomeStatus.row,
+      rawSvcMatches: rawSvcMatches.length, scopedSvcMatches: scopedSvcMatches.length, svcOperationIds: svcOperationIds,
+      serviceFeeStatus: serviceFeeStatus.found,
+      pedidoStatus: ord ? ord.normalizedStatus : null, pedidoCriadoEm: ord ? ord.createdAt : null,
+    };
+  }
+  // auditIncomeCoverage() — auditoria RUNTIME em massa do cruzamento Pedidos×Income, sobre os
+  // dados REALMENTE importados (nunca uma amostra estática) — usada pelo painel de Auditoria de
+  // Minha Renda para provar se uma taxa de cruzamento baixa é sistêmica (bug) ou esperada (pedidos
+  // ainda não liberados pela Shopee: cancelado/não pago/a caminho nunca têm Income, por definição).
+  function auditIncomeCoverage() {
+    var incomeOrderRows = mrRenda.filter(function (r) { return String(r.ver || '').trim().toUpperCase() === 'ORDER'; });
+    var incomeOrderIdsSet = incomeOrderRows.reduce(function (s, r) { s.add(normalizeOrderId(r.orderId)); return s; }, new Set());
+    var matched = 0, unmatched = 0, wrongOperation = 0, serviceFeeMatched = 0, incomeButNoServiceFee = 0, serviceFeeButNoIncome = 0;
+    var sampleUnmatched = [], sampleMatched = [], statusUnmatched = {};
+    orders.forEach(function (o) {
+      var opId = o.operationId || opActiveOrNull() || null;
+      var res = resolveIncomeOrder(opId, o.id);
+      var svc = resolveServiceFeeDetails(opId, o.id);
+      var found = res.status === 'FOUND';
+      if (found) { matched++; if (sampleMatched.length < 10) sampleMatched.push({ orderId: o.id, status: o.normalizedStatus }); }
+      else {
+        if (res.status === 'WRONG_OPERATION') wrongOperation++;
+        unmatched++;
+        statusUnmatched[o.normalizedStatus] = (statusUnmatched[o.normalizedStatus] || 0) + 1;
+        if (sampleUnmatched.length < 10) sampleUnmatched.push({ orderId: o.id, status: o.normalizedStatus, motivo: res.status });
+      }
+      if (svc.found) { serviceFeeMatched++; if (!found) serviceFeeButNoIncome++; }
+      else if (found) { incomeButNoServiceFee++; }
+    });
+    return {
+      pedidosTotal: orders.length, incomeRows: mrRenda.length, incomeOrders: incomeOrderIdsSet.size,
+      matched: matched, unmatched: unmatched, wrongOperation: wrongOperation,
+      matchRate: orders.length ? r2(matched / orders.length * 100) : 0,
+      serviceFeeMatched: serviceFeeMatched, incomeButNoServiceFee: incomeButNoServiceFee, serviceFeeButNoIncome: serviceFeeButNoIncome,
+      statusUnmatched: statusUnmatched, sampleUnmatched: sampleUnmatched, sampleMatched: sampleMatched,
+    };
+  }
   // pedidoResultadoFinal(orderId) — CANÔNICA (extraída de openPedidoFicha360 pro módulo de
   // Precificação poder consumir o mesmo "REALIZADO" que a Ficha mostra, sem duplicar cálculo).
   // Camada em cima de pedidoComposicaoFinanceira(): soma o que ainda falta pra chegar no lucro
@@ -1681,7 +1743,12 @@
     };
     var totalStatusTag = sellerCharges.totalStatus === 'PARCIAL' ? ' <span class="tag warn">PARCIAL — existem componentes ainda não confirmados</span>' : (sellerCharges.totalStatus === 'SEM_DADOS' ? ' <span class="tag warn">aguardando Income</span>' : '');
     var totalValorHtml = sellerCharges.totalC == null ? '<b>—</b>' : '<b class="' + (sellerCharges.totalC < 0 ? 'neg' : sellerCharges.totalC > 0 ? 'pos' : '') + '">' + brlC(sellerCharges.totalC) + '</b>';
+    // Aviso discreto + [Diagnóstico] SÓ quando a seção não está COMPLETA — nunca polui a ficha
+    // quando o Income já resolveu tudo (§ "melhorar a mensagem na ficha").
+    var naoLocalizadoAviso = sellerCharges.totalStatus !== 'COMPLETO' ?
+      '<div class="footnote" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">DADOS FINANCEIROS NÃO LOCALIZADOS NO INCOME <button class="link-btn" data-selldiag="' + esc(orderId) + '">Diagnóstico</button></div>' : '';
     var bloco3Taxas = '<div class="panel"><div class="ph"><h3>3. Taxas Shopee Descontadas do Vendedor</h3></div><div class="pb">' +
+      naoLocalizadoAviso +
       sellerCharges.items.map(sellerChargeLine).join('') +
       '<div class="fin-line total" style="margin-top:2px"><span>TOTAL DESCONTADO DA LOJA' + totalStatusTag + '</span>' + totalValorHtml + '</div>' +
       '</div></div>';
@@ -1883,10 +1950,44 @@
     panel.querySelector('.x').onclick = function () { d.remove(); };
     var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { d.remove(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
     var gd = panel.querySelector('[data-godev360]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev360; d.remove(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
+    var sd = panel.querySelector('[data-selldiag]'); if (sd) sd.onclick = function () { openSellerChargesDiag(orderId); };
     var ga = panel.querySelector('[data-acped360]'); if (ga) ga.onclick = function () { d.remove(); route = 'acelera'; aceleraSub = 'antecipacoes'; render(); setTimeout(function () { openAceleraPedido(orderId); }, 60); };
     var gf = panel.querySelector('[data-affped360]'); if (gf) gf.onclick = function () { d.remove(); route = 'afiliados'; affSub = 'pedidos'; render(); setTimeout(function () { openAffPedido(orderId); }, 60); };
     panel.querySelectorAll('[data-wtx]').forEach(function (b) { b.onclick = function () { d.remove(); route = 'carteira'; walletSub = 'mov'; render(); setTimeout(function () { openWalletTx(b.dataset.wtx); }, 60); }; });
     var gprec = panel.querySelector('[data-goprec]'); if (gprec) gprec.onclick = function () { var famId = gprec.dataset.goprec; d.remove(); route = 'precificacao'; precSub = 'simulador'; if (!precSim) precInitSim(); precSim.familyId = famId; var fam = skuFamById[famId]; if (fam && fam.currentCostAmount != null) precSim.custoCents = Math.round(fam.currentCostAmount * 100); var rule = pricingFamilyRule(famId); if (rule) { if (rule.factorPadrao != null) precSim.factor = rule.factorPadrao; if (rule.targetMarginPct != null) precSim.targetMarginPct = rule.targetMarginPct; if (rule.minMarginPct != null) precSim.minMarginPct = rule.minMarginPct; } render(); };
+  }
+  // Botão [Diagnóstico] da seção 3 (só aparece quando ela não está COMPLETA) — abre o trace RUNTIME
+  // de auditIncomeOrder() sobre os dados de verdade importados. Não substitui nem duplica a Ficha —
+  // é uma janela só de leitura, fechada por padrão, existe só pra provar em qual etapa o cruzamento
+  // Pedido×Income parou (nunca "Income ainda não apareceu" sem prova).
+  function openSellerChargesDiag(orderId) {
+    var a = auditIncomeOrder(orderId);
+    var o = document.createElement('div'); o.className = 'overlay';
+    var rows = [
+      ['ID do pedido (original)', a.orderIdOriginal],
+      ['ID do pedido (normalizado)', a.orderIdNormalized],
+      ['Status do pedido', a.pedidoStatus || '—'],
+      ['Pedido criado em', a.pedidoCriadoEm ? dbr(a.pedidoCriadoEm) : '—'],
+      ['operationId do pedido', a.pedidoOperationId || '(nenhum)'],
+      ['operationId ativo no seletor', a.activeOperationId || '(nenhum)'],
+      ['Linhas do Income com este ID (sem filtro de operação)', nn(a.rawIncomeMatches)],
+      ['— dessas, dentro do escopo da operação', nn(a.scopedIncomeMatches)],
+      ['Valores de "Ver" encontrados nessas linhas', a.verValues.length ? a.verValues.join(', ') : '—'],
+      ['operationId(s) dessas linhas no Income', a.incomeOperationIds.length ? a.incomeOperationIds.join(', ') : '—'],
+      ['resolveIncomeOrder → status', INCOME_RESOLVE_LABEL[a.resolveIncomeStatus] || a.resolveIncomeStatus],
+      ['Linhas do Service Fee Details com este ID (sem filtro)', nn(a.rawSvcMatches)],
+      ['— dessas, dentro do escopo da operação', nn(a.scopedSvcMatches)],
+      ['operationId(s) dessas linhas no Service Fee Details', a.svcOperationIds.length ? a.svcOperationIds.join(', ') : '—'],
+      ['Service Fee Details → encontrado?', a.serviceFeeStatus ? 'Sim' : 'Não'],
+    ];
+    var html = '<div class="modal" style="width:560px"><div class="mh"><h3>Diagnóstico — cruzamento Income</h3><button class="x">&times;</button></div><div class="mbd">' +
+      rows.map(function (r) { return kv(r[0], r[1]); }).join('') +
+      '<div class="footnote" style="margin-top:8px">Esses valores vêm direto do que foi importado nesta sessão — nenhum é estimado.</div>' +
+      '</div></div>';
+    o.innerHTML = html;
+    o.onclick = function (e) { if (e.target === o) o.remove(); };
+    document.body.appendChild(o);
+    o.querySelector('.x').onclick = function () { o.remove(); };
   }
 
   // ---------- PÓS-VENDA ----------
@@ -6125,7 +6226,32 @@
         diag.campos.map(function (c) { return '<tr><td class="cell-text">' + esc(c.label) + '</td><td class="nowrap">' + brlC(c.raw) + '</td><td class="nowrap">' + brlC(c.motor) + '</td><td class="nowrap' + (c.ok ? '' : ' neg') + '">' + brlC(c.diff) + '</td><td>' + (c.ok ? '<span class="tag ok">bate</span>' : '<span class="tag warn">divergente</span>') + '</td></tr>'; }).join('') +
         '</tbody></table></div></div>';
     })() : '';
-    return head + counts + diagImpBlock + incomeAudit + diagBlock + mrAuditoriaFreteBlock() + fieldMap + naoClassBlock + '<div class="panel"><div class="ph"><h3>Importações</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Quando</th><th>Arquivo</th><th>Linhas</th><th>Novos</th></tr></thead><tbody>' + (impRows || '<tr><td colspan="4" class="empty">—</td></tr>') + '</tbody></table></div></div>';
+    // PROMPT "Auditoria global do cruzamento": cobertura RUNTIME Pedidos×Income, sobre os dados
+    // realmente importados nesta sessão — nunca uma amostra estática. Prova se uma taxa de
+    // cruzamento baixa é sistêmica (bug de normalização/operationId) ou esperada (pedido
+    // cancelado/não pago/ainda não liberado pela Shopee nunca tem linha no Income, por definição).
+    var covBlock = orders.length ? (function () {
+      var c = auditIncomeCoverage();
+      var statusRows = Object.keys(c.statusUnmatched).sort(function (a, b) { return c.statusUnmatched[b] - c.statusUnmatched[a]; })
+        .map(function (k) { return '<tr><td>' + esc(S.pedidos.labels[k] || k) + '</td><td>' + nn(c.statusUnmatched[k]) + '</td></tr>'; }).join('');
+      var sampleRows = function (list) { return list.map(function (s) { return '<tr><td class="mono">' + esc(s.orderId) + '</td><td>' + esc(S.pedidos.labels[s.status] || s.status) + '</td>' + (s.motivo ? '<td>' + esc(INCOME_RESOLVE_LABEL[s.motivo] || s.motivo) + '</td>' : '') + '</tr>'; }).join(''); };
+      return '<div class="panel"><div class="ph"><h3>Auditoria global do cruzamento — Pedidos × Income</h3></div><div class="pb">' +
+        kv('Total de pedidos no sistema', nn(c.pedidosTotal)) +
+        kv('Total de linhas Order no Income', nn(c.incomeOrders)) +
+        kv('Pedidos com match no Income', nn(c.matched)) +
+        kv('Pedidos sem match no Income', nn(c.unmatched)) +
+        kv('Pedidos com operationId diferente (match existe, operação errada)', nn(c.wrongOperation)) +
+        kv('Match rate (Pedidos → Income)', pct(c.matchRate)) +
+        kv('Pedidos com match em Service Fee Details', nn(c.serviceFeeMatched)) +
+        kv('Income encontrado mas sem Service Fee Details', nn(c.incomeButNoServiceFee)) +
+        kv('Service Fee Details encontrado mas sem Income (Cenário C)', nn(c.serviceFeeButNoIncome)) +
+        '<div class="footnote" style="margin-top:8px">Distribuição por status Shopee dos pedidos SEM match (cancelado/não pago/ainda não liberado nunca têm linha no Income — isso é esperado, não é bug):</div>' +
+        '<div class="table-wrap" style="margin-top:4px"><table class="report"><thead><tr><th>Status do pedido</th><th>Qtd. sem match</th></tr></thead><tbody>' + (statusRows || '<tr><td colspan="2" class="empty">—</td></tr>') + '</tbody></table></div>' +
+        '<details style="margin-top:8px"><summary style="cursor:pointer;font-weight:600">Amostra de pedidos COM match (' + Math.min(10, c.sampleMatched.length) + ')</summary><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Status</th></tr></thead><tbody>' + sampleRows(c.sampleMatched) + '</tbody></table></div></details>' +
+        '<details style="margin-top:6px"><summary style="cursor:pointer;font-weight:600">Amostra de pedidos SEM match (' + Math.min(10, c.sampleUnmatched.length) + ')</summary><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Status</th><th>Motivo (resolveIncomeOrder)</th></tr></thead><tbody>' + sampleRows(c.sampleUnmatched) + '</tbody></table></div></details>' +
+        '</div></div>';
+    })() : '';
+    return head + counts + diagImpBlock + incomeAudit + covBlock + diagBlock + mrAuditoriaFreteBlock() + fieldMap + naoClassBlock + '<div class="panel"><div class="ph"><h3>Importações</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Quando</th><th>Arquivo</th><th>Linhas</th><th>Novos</th></tr></thead><tbody>' + (impRows || '<tr><td colspan="4" class="empty">—</td></tr>') + '</tbody></table></div></div>';
   }
   // §40-44 do prompt mestre: a aba Shipping Fee Discrepancy só mostra fretes cobrados ACIMA do
   // esperado — serve para AUDITORIA, nunca para concluir prejuízo automaticamente (§42). Cruza cada
