@@ -1445,14 +1445,18 @@
   // "Taxa de comissão Afiliados do Vendedor" (mrRow.afiliado, campo Renda de nível pedido) é
   // DIFERENTE dos filhos de Service Fee Details (svc_affiliate, componente da Taxa de Serviço) —
   // os dois nunca se substituem nem se somam entre si; ambos contam, cada um na sua própria linha.
-  // PROMPT "Ficha do Pedido — lista fixa definitiva": a lista de 12 linhas SEMPRE existe, em
-  // qualquer estado do pedido — nunca mais um `if(mrRow)` decide se a seção 3 inteira aparece ou
-  // não. Cada item carrega seu próprio dataStatus (KNOWN_VALUE/KNOWN_ZERO/SOURCE_NOT_FOUND/
-  // ESTIMATED) para o renderer decidir "R$ 0,00" vs "—" — nunca o inverso (zero real nunca vira
-  // "—", ausência de fonte nunca vira "R$ 0,00"). `found` continua com o MESMO significado de antes
-  // (mrRow foi localizado) — Caixa/DRE (caixaDreDia, caixaDreDrillOpen, caixaMontarIntegracaoFinanceira)
-  // continuam lendo `.found` exatamente como sempre leram; nada nesses três consumidores muda.
-  var SELLER_CHARGE_STATUS = { KNOWN_VALUE: 'KNOWN_VALUE', KNOWN_ZERO: 'KNOWN_ZERO', SOURCE_NOT_FOUND: 'SOURCE_NOT_FOUND', ESTIMATED: 'ESTIMATED' };
+  // PROMPT "Ficha do Pedido — lista fixa definitiva" (+ correção "nunca estimativa de Pedidos nesta
+  // seção"): a lista de 12 linhas SEMPRE existe, em qualquer estado do pedido — nunca mais um
+  // `if(mrRow)` decide se a seção 3 inteira aparece ou não. Cada item carrega seu próprio dataStatus
+  // (KNOWN_VALUE/KNOWN_ZERO/SOURCE_NOT_FOUND/CHILDREN_ONLY) para o renderer decidir "R$ 0,00" vs
+  // "—" — nunca o inverso. Esta seção é FINANCEIRA: um valor só entra aqui vindo de Income/Renda
+  // real ou de Service Fee Details real — NUNCA de estimativa/aproximação calculada a partir de
+  // Pedidos (esse fallback continua existindo em buildServiceFeeComposition/pedidoComposicaoFinanceira
+  // para os blocos 4-7 já aprovados — só não é mais consumido AQUI como se fosse cobrança real).
+  // `found` continua com o MESMO significado de antes (mrRow foi localizado) — Caixa/DRE
+  // (caixaDreDia, caixaDreDrillOpen, caixaMontarIntegracaoFinanceira) continuam lendo `.found`
+  // exatamente como sempre leram; nada nesses três consumidores muda.
+  var SELLER_CHARGE_STATUS = { KNOWN_VALUE: 'KNOWN_VALUE', KNOWN_ZERO: 'KNOWN_ZERO', SOURCE_NOT_FOUND: 'SOURCE_NOT_FOUND', CHILDREN_ONLY: 'CHILDREN_ONLY' };
   function resolveSellerCharges(orderId) {
     var ord = orders.find(function (x) { return x.id === orderId; });
     var opId = (ord && ord.operationId) || opActiveOrNull() || null;
@@ -1471,24 +1475,30 @@
     // dois — mrRow.reembolso continua intocado em pedidoComposicaoFinanceira/gDescontos, motor à
     // parte, já reconciliado 1.662/1.662 contra a Quantia Total Lançada).
     function incomeItem(key, label, field) {
-      if (!mrRow) return { key: key, label: label, valor: null, dataStatus: SELLER_CHARGE_STATUS.SOURCE_NOT_FOUND, source: null, countsTowardTotal: true };
+      if (!mrRow) return { key: key, label: label, valor: null, dataStatus: SELLER_CHARGE_STATUS.SOURCE_NOT_FOUND, source: null, knownContribution: 0 };
       var v = mrRow[field] || 0;
-      return { key: key, label: label, valor: v, dataStatus: v === 0 ? SELLER_CHARGE_STATUS.KNOWN_ZERO : SELLER_CHARGE_STATUS.KNOWN_VALUE, source: 'INCOME_ORDER', countsTowardTotal: true };
+      return { key: key, label: label, valor: v, dataStatus: v === 0 ? SELLER_CHARGE_STATUS.KNOWN_ZERO : SELLER_CHARGE_STATUS.KNOWN_VALUE, source: 'INCOME_ORDER', knownContribution: v };
     }
     // Taxa de Serviço é resolvida à parte (buildServiceFeeComposition já cobre os 4 cenários,
-    // independente de mrRow existir) — nunca reduzida a um `if(mrRow)` que jogaria fora dados reais
-    // de Service Fee Details quando o Order ainda não confirmou (Cenário C).
-    var servicoValor, servicoStatus;
-    if (serviceFee.sourceTotal === 'INCOME_ORDER' || serviceFee.sourceTotal === 'SERVICE_FEE_DETAILS_ONLY') {
-      servicoValor = serviceFee.total; servicoStatus = servicoValor === 0 ? SELLER_CHARGE_STATUS.KNOWN_ZERO : SELLER_CHARGE_STATUS.KNOWN_VALUE;
-    } else if (serviceFee.sourceTotal === 'ESTIMATED') {
-      servicoValor = serviceFee.total; servicoStatus = SELLER_CHARGE_STATUS.ESTIMATED;
+    // independente de mrRow existir) — mas AQUI só dois cenários viram valor financeiro real:
+    // A) Order confirmou o total oficial (INCOME_ORDER) — mostra o total real.
+    // B) só Service Fee Details encontrado (SERVICE_FEE_DETAILS_ONLY) — o pai "Taxa de serviço
+    //    líquida" fica "—" (o total OFICIAL ainda não veio da Renda), mas os FILHOS reais continuam
+    //    visíveis (renderizados à parte, abaixo) e a SOMA deles conta pro TOTAL DESCONTADO DA LOJA
+    //    (são dado real, só não têm o "selo oficial" do Order ainda).
+    // C) ESTIMATED (estimativa calculada a partir de Pedidos, sem Income nem Service Fee Details) e
+    //    NONE nunca viram valor aqui — SOURCE_NOT_FOUND, contribuição zero.
+    var servicoValor, servicoStatus, servicoContribution;
+    if (serviceFee.sourceTotal === 'INCOME_ORDER') {
+      servicoValor = serviceFee.total; servicoStatus = servicoValor === 0 ? SELLER_CHARGE_STATUS.KNOWN_ZERO : SELLER_CHARGE_STATUS.KNOWN_VALUE; servicoContribution = servicoValor;
+    } else if (serviceFee.sourceTotal === 'SERVICE_FEE_DETAILS_ONLY') {
+      servicoValor = null; servicoStatus = SELLER_CHARGE_STATUS.CHILDREN_ONLY; servicoContribution = serviceFee.childrenTotal;
     } else {
-      servicoValor = null; servicoStatus = SELLER_CHARGE_STATUS.SOURCE_NOT_FOUND;
+      servicoValor = null; servicoStatus = SELLER_CHARGE_STATUS.SOURCE_NOT_FOUND; servicoContribution = 0;
     }
     var items = [
       incomeItem('comissao', 'Taxa de comissão líquida', 'comissao'),
-      { key: 'servico', label: 'Taxa de serviço líquida', valor: servicoValor, dataStatus: servicoStatus, source: serviceFee.sourceTotal, countsTowardTotal: true },
+      { key: 'servico', label: 'Taxa de serviço líquida', valor: servicoValor, dataStatus: servicoStatus, source: serviceFee.sourceTotal, knownContribution: servicoContribution },
       incomeItem('afiliado', 'Taxa de comissão Afiliados do Vendedor', 'afiliado'),
       incomeItem('taxaDevolucaoFacil', 'Taxa de Devolução Fácil Shopee', 'taxaDevolucaoFacil'),
       incomeItem('taxaRecargaAutomatica', 'Taxa da Recarga Automática', 'taxaRecargaAutomatica'),
@@ -1501,9 +1511,9 @@
       incomeItem('reembolso', 'Valor reembolsado ao comprador', 'reembolsoComprador'),
     ];
     var complete = items.every(function (it) { return it.dataStatus === SELLER_CHARGE_STATUS.KNOWN_VALUE || it.dataStatus === SELLER_CHARGE_STATUS.KNOWN_ZERO; });
-    var known = items.some(function (it) { return it.valor != null; });
+    var known = items.some(function (it) { return it.dataStatus !== SELLER_CHARGE_STATUS.SOURCE_NOT_FOUND; });
     var totalStatus = complete ? 'COMPLETO' : (known ? 'PARCIAL' : 'SEM_DADOS');
-    var totalC = items.reduce(function (s, it) { return s + (it.valor || 0); }, 0);
+    var totalC = totalStatus === 'SEM_DADOS' ? null : items.reduce(function (s, it) { return s + (it.knownContribution || 0); }, 0);
     return { found: !!mrRow, mrRow: mrRow, serviceFee: serviceFee, items: items, totalC: totalC, complete: complete, totalStatus: totalStatus };
   }
   // pedidoResultadoFinal(orderId) — CANÔNICA (extraída de openPedidoFicha360 pro módulo de
@@ -1662,15 +1672,18 @@
       var valorHtml;
       if (it.dataStatus === 'SOURCE_NOT_FOUND') {
         valorHtml = '<b>—</b> <span class="footnote" style="margin:0">dado não localizado</span>';
+      } else if (it.dataStatus === 'CHILDREN_ONLY') {
+        valorHtml = '<b>—</b> <span class="footnote" style="margin:0">componentes localizados · total oficial aguardando Income</span>';
       } else {
-        valorHtml = '<b class="' + (it.valor < 0 ? 'neg' : it.valor > 0 ? 'pos' : '') + '">' + brlC(it.valor) + '</b>' + (it.dataStatus === 'ESTIMATED' ? ' <span class="footnote" style="margin:0">(aproximado — sem Income cruzado)</span>' : '');
+        valorHtml = '<b class="' + (it.valor < 0 ? 'neg' : it.valor > 0 ? 'pos' : '') + '">' + brlC(it.valor) + '</b>';
       }
       return '<div class="fin-line rowlink" title="Fonte: Income / Renda"><span>' + esc(it.label) + '</span>' + valorHtml + '</div>' + subHtml;
     };
-    var totalStatusTag = sellerCharges.totalStatus === 'PARCIAL' ? ' <span class="tag warn">PARCIAL — aguardando Income</span>' : (sellerCharges.totalStatus === 'SEM_DADOS' ? ' <span class="tag warn">aguardando Income</span>' : '');
+    var totalStatusTag = sellerCharges.totalStatus === 'PARCIAL' ? ' <span class="tag warn">PARCIAL — existem componentes ainda não confirmados</span>' : (sellerCharges.totalStatus === 'SEM_DADOS' ? ' <span class="tag warn">aguardando Income</span>' : '');
+    var totalValorHtml = sellerCharges.totalC == null ? '<b>—</b>' : '<b class="' + (sellerCharges.totalC < 0 ? 'neg' : sellerCharges.totalC > 0 ? 'pos' : '') + '">' + brlC(sellerCharges.totalC) + '</b>';
     var bloco3Taxas = '<div class="panel"><div class="ph"><h3>3. Taxas Shopee Descontadas do Vendedor</h3></div><div class="pb">' +
       sellerCharges.items.map(sellerChargeLine).join('') +
-      '<div class="fin-line total" style="margin-top:2px"><span>TOTAL DESCONTADO DA LOJA' + totalStatusTag + '</span><b class="' + (sellerCharges.totalC < 0 ? 'neg' : sellerCharges.totalC > 0 ? 'pos' : '') + '">' + brlC(sellerCharges.totalC) + '</b></div>' +
+      '<div class="fin-line total" style="margin-top:2px"><span>TOTAL DESCONTADO DA LOJA' + totalStatusTag + '</span>' + totalValorHtml + '</div>' +
       '</div></div>';
     // 4. ENVIO (§27-39): só aparece quando o impacto líquido é diferente de zero.
     var bloco4Envio = '';
@@ -1831,7 +1844,7 @@
     // reflete só o que é conhecido (ex.: Taxa de serviço via Service Fee Details/estimativa) e carrega
     // sellerCharges.totalStatus (PARCIAL/SEM_DADOS) — nunca mais um cálculo paralelo via gTaxas aqui.
     var taxasShopeeC = sellerCharges.totalC;
-    var pagamentoPrevistoC = receitaC != null ? receitaC + taxasShopeeC : null;
+    var pagamentoPrevistoC = (receitaC != null && taxasShopeeC != null) ? receitaC + taxasShopeeC : null;
     var lucroAtualSimplesC = (pagamentoPrevistoC != null && custoProdC != null) ? (pagamentoPrevistoC - custoProdC) : null;
     var margemAtualSimplesPct = (lucroAtualSimplesC != null && receitaC) ? r2(lucroAtualSimplesC / receitaC * 100) : null;
 
@@ -1853,7 +1866,7 @@
     var heroBlock = '<div class="panel"><div class="ph"><h3>1. Resumo Financeiro</h3></div><div class="pb" style="padding-top:0">' +
       '<div class="kstrip">' +
       '<div class="kc"><div class="kl">Valor da venda</div><div class="kv" style="font-size:18px">' + (receitaC != null ? brlC(receitaC) : '—') + '</div></div>' +
-      '<div class="kc"><div class="kl">Taxas</div><div class="kv" style="font-size:18px">' + (receitaC != null ? brlC(taxasShopeeC) : '—') + '</div></div>' +
+      '<div class="kc"><div class="kl">Taxas</div><div class="kv" style="font-size:18px">' + (taxasShopeeC != null ? brlC(taxasShopeeC) : '—') + '</div></div>' +
       '<div class="kc"><div class="kl">Pagamento previsto</div><div class="kv" style="font-size:18px">' + (pagamentoPrevistoC != null ? brlC(pagamentoPrevistoC) : '—') + '</div></div>' +
       '<div class="kc"><div class="kl">Custo do produto</div><div class="kv" style="font-size:18px">' + (custoProdC != null ? brlC(-custoProdC) : (custoPendente ? '<span class="tag warn">pendente</span>' : '—')) + '</div></div>' +
       '<div class="kc"><div class="kl">Lucro atual</div><div class="kv" style="font-size:18px;color:' + (lucroAtualSimplesC != null && lucroAtualSimplesC < 0 ? 'var(--err)' : 'var(--ok)') + '">' + (lucroAtualSimplesC != null ? brlC(lucroAtualSimplesC) : '<span class="tag warn">custo pendente</span>') + '</div></div>' +
