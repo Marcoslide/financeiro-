@@ -1472,15 +1472,24 @@
   // PROMPT "Ficha do Pedido — lista fixa definitiva" (+ correção "nunca estimativa de Pedidos nesta
   // seção"): a lista de 12 linhas SEMPRE existe, em qualquer estado do pedido — nunca mais um
   // `if(mrRow)` decide se a seção 3 inteira aparece ou não. Cada item carrega seu próprio dataStatus
-  // (KNOWN_VALUE/KNOWN_ZERO/SOURCE_NOT_FOUND/CHILDREN_ONLY) para o renderer decidir "R$ 0,00" vs
-  // "—" — nunca o inverso. Esta seção é FINANCEIRA: um valor só entra aqui vindo de Income/Renda
-  // real ou de Service Fee Details real — NUNCA de estimativa/aproximação calculada a partir de
-  // Pedidos (esse fallback continua existindo em buildServiceFeeComposition/pedidoComposicaoFinanceira
-  // para os blocos 4-7 já aprovados — só não é mais consumido AQUI como se fosse cobrança real).
-  // `found` continua com o MESMO significado de antes (mrRow foi localizado) — Caixa/DRE
-  // (caixaDreDia, caixaDreDrillOpen, caixaMontarIntegracaoFinanceira) continuam lendo `.found`
-  // exatamente como sempre leram; nada nesses três consumidores muda.
-  var SELLER_CHARGE_STATUS = { KNOWN_VALUE: 'KNOWN_VALUE', KNOWN_ZERO: 'KNOWN_ZERO', SOURCE_NOT_FOUND: 'SOURCE_NOT_FOUND', CHILDREN_ONLY: 'CHILDREN_ONLY' };
+  // (KNOWN_VALUE/KNOWN_ZERO/SOURCE_NOT_FOUND/CHILDREN_ONLY/PROVISIONAL_ORDER) para o renderer decidir
+  // "R$ 0,00" vs "—" vs "provisório" — nunca o inverso.
+  // PROMPT "ALTERAÇÃO DE REGRA — MOTOR DE TAXAS SHOPEE COM FALLBACK E CONCILIAÇÃO AUTOMÁTICA"
+  // (reverte a regra anterior "nunca estimativa de Pedidos nesta seção"): hierarquia de DUAS fontes,
+  // documentada e igual em todo o sistema (Ficha, Caixa, DRE, Minha Renda, Fechamento) —
+  // Nível 1 (Income/Renda real, quando existe): valores detalhados, dataStatus KNOWN_VALUE/KNOWN_ZERO/
+  // CHILDREN_ONLY, rótulo "Confirmado pela Renda Shopee".
+  // Nível 2 (Order.all/Pedidos, fallback SÓ quando Income não existe ainda): APENAS dois valores —
+  // Taxa de comissão líquida (ord.commissionNet) e Taxa de serviço líquida (ord.serviceFeeNet) — NUNCA
+  // quebrados em subcategorias, porque esse detalhe simplesmente não existe no Order. dataStatus
+  // PROVISIONAL_ORDER, rótulo "Provisório — aguardando liberação da Renda Shopee". Os outros 10 campos
+  // desta lista não têm equivalente em Order.all e continuam SOURCE_NOT_FOUND quando não há Income.
+  // Não-duplicação: quando o Income chega depois, o valor provisório é SUBSTITUÍDO (nunca somado) —
+  // garantido porque esta função sempre recalcula do zero a partir do estado atual (mrRow ou ord), e
+  // os consumidores (caixaMontarIntegracaoFinanceira) fazem upsert por sourceEventKey, nunca insert.
+  // `found` continua com o MESMO significado de antes (mrRow foi localizado) — indica se a fonte é
+  // Income (confirmado) ou não (mesmo que agora existam valores provisórios do Order).
+  var SELLER_CHARGE_STATUS = { KNOWN_VALUE: 'KNOWN_VALUE', KNOWN_ZERO: 'KNOWN_ZERO', SOURCE_NOT_FOUND: 'SOURCE_NOT_FOUND', CHILDREN_ONLY: 'CHILDREN_ONLY', PROVISIONAL_ORDER: 'PROVISIONAL_ORDER' };
   function resolveSellerCharges(orderId) {
     var ord = orders.find(function (x) { return x.id === orderId; });
     var opId = (ord && ord.operationId) || opActiveOrNull() || null;
@@ -1498,8 +1507,14 @@
     // que é um campo diferente (confirmado: 13 de 102 pedidos reais têm valores distintos entre os
     // dois — mrRow.reembolso continua intocado em pedidoComposicaoFinanceira/gDescontos, motor à
     // parte, já reconciliado 1.662/1.662 contra a Quantia Total Lançada).
-    function incomeItem(key, label, field) {
-      if (!mrRow) return { key: key, label: label, valor: null, dataStatus: SELLER_CHARGE_STATUS.SOURCE_NOT_FOUND, source: null, knownContribution: 0 };
+    function incomeItem(key, label, field, ordField) {
+      if (!mrRow) {
+        if (ordField && ord && ord[ordField] != null) {
+          var vOrd = -Math.round((ord[ordField] || 0) * 100);
+          return { key: key, label: label, valor: vOrd, dataStatus: SELLER_CHARGE_STATUS.PROVISIONAL_ORDER, source: 'ORDER_ALL', knownContribution: vOrd };
+        }
+        return { key: key, label: label, valor: null, dataStatus: SELLER_CHARGE_STATUS.SOURCE_NOT_FOUND, source: null, knownContribution: 0 };
+      }
       var v = mrRow[field] || 0;
       return { key: key, label: label, valor: v, dataStatus: v === 0 ? SELLER_CHARGE_STATUS.KNOWN_ZERO : SELLER_CHARGE_STATUS.KNOWN_VALUE, source: 'INCOME_ORDER', knownContribution: v };
     }
@@ -1512,17 +1527,20 @@
     //    (são dado real, só não têm o "selo oficial" do Order ainda).
     // C) ESTIMATED (estimativa calculada a partir de Pedidos, sem Income nem Service Fee Details) e
     //    NONE nunca viram valor aqui — SOURCE_NOT_FOUND, contribuição zero.
-    var servicoValor, servicoStatus, servicoContribution;
+    var servicoValor, servicoStatus, servicoContribution, servicoSource;
     if (serviceFee.sourceTotal === 'INCOME_ORDER') {
-      servicoValor = serviceFee.total; servicoStatus = servicoValor === 0 ? SELLER_CHARGE_STATUS.KNOWN_ZERO : SELLER_CHARGE_STATUS.KNOWN_VALUE; servicoContribution = servicoValor;
+      servicoValor = serviceFee.total; servicoStatus = servicoValor === 0 ? SELLER_CHARGE_STATUS.KNOWN_ZERO : SELLER_CHARGE_STATUS.KNOWN_VALUE; servicoContribution = servicoValor; servicoSource = serviceFee.sourceTotal;
     } else if (serviceFee.sourceTotal === 'SERVICE_FEE_DETAILS_ONLY') {
-      servicoValor = null; servicoStatus = SELLER_CHARGE_STATUS.CHILDREN_ONLY; servicoContribution = serviceFee.childrenTotal;
+      servicoValor = null; servicoStatus = SELLER_CHARGE_STATUS.CHILDREN_ONLY; servicoContribution = serviceFee.childrenTotal; servicoSource = serviceFee.sourceTotal;
+    } else if (!mrRow && ord && ord.serviceFeeNet != null) {
+      // Nível 2 (fallback Order.all): só o total líquido, sem detalhamento de filhos — provisório.
+      servicoValor = -Math.round((ord.serviceFeeNet || 0) * 100); servicoStatus = SELLER_CHARGE_STATUS.PROVISIONAL_ORDER; servicoContribution = servicoValor; servicoSource = 'ORDER_ALL';
     } else {
-      servicoValor = null; servicoStatus = SELLER_CHARGE_STATUS.SOURCE_NOT_FOUND; servicoContribution = 0;
+      servicoValor = null; servicoStatus = SELLER_CHARGE_STATUS.SOURCE_NOT_FOUND; servicoContribution = 0; servicoSource = serviceFee.sourceTotal;
     }
     var items = [
-      incomeItem('comissao', 'Taxa de comissão líquida', 'comissao'),
-      { key: 'servico', label: 'Taxa de serviço líquida', valor: servicoValor, dataStatus: servicoStatus, source: serviceFee.sourceTotal, knownContribution: servicoContribution },
+      incomeItem('comissao', 'Taxa de comissão líquida', 'comissao', 'commissionNet'),
+      { key: 'servico', label: 'Taxa de serviço líquida', valor: servicoValor, dataStatus: servicoStatus, source: servicoSource, knownContribution: servicoContribution },
       incomeItem('afiliado', 'Taxa de comissão Afiliados do Vendedor', 'afiliado'),
       incomeItem('taxaDevolucaoFacil', 'Taxa de Devolução Fácil Shopee', 'taxaDevolucaoFacil'),
       incomeItem('taxaRecargaAutomatica', 'Taxa da Recarga Automática', 'taxaRecargaAutomatica'),
@@ -1535,8 +1553,9 @@
       incomeItem('reembolso', 'Valor reembolsado ao comprador', 'reembolsoComprador'),
     ];
     var complete = items.every(function (it) { return it.dataStatus === SELLER_CHARGE_STATUS.KNOWN_VALUE || it.dataStatus === SELLER_CHARGE_STATUS.KNOWN_ZERO; });
+    var hasProvisional = items.some(function (it) { return it.dataStatus === SELLER_CHARGE_STATUS.PROVISIONAL_ORDER; });
     var known = items.some(function (it) { return it.dataStatus !== SELLER_CHARGE_STATUS.SOURCE_NOT_FOUND; });
-    var totalStatus = complete ? 'COMPLETO' : (known ? 'PARCIAL' : 'SEM_DADOS');
+    var totalStatus = complete ? 'COMPLETO' : (hasProvisional ? 'PROVISORIO' : (known ? 'PARCIAL' : 'SEM_DADOS'));
     var totalC = totalStatus === 'SEM_DADOS' ? null : items.reduce(function (s, it) { return s + (it.knownContribution || 0); }, 0);
     return { found: !!mrRow, mrRow: mrRow, serviceFee: serviceFee, items: items, totalC: totalC, complete: complete, totalStatus: totalStatus };
   }
@@ -1760,20 +1779,30 @@
         valorHtml = '<b>—</b> <span class="footnote" style="margin:0">dado não localizado</span>';
       } else if (it.dataStatus === 'CHILDREN_ONLY') {
         valorHtml = '<b>—</b> <span class="footnote" style="margin:0">componentes localizados · total oficial aguardando Income</span>';
+      } else if (it.dataStatus === 'PROVISIONAL_ORDER') {
+        valorHtml = '<b class="' + (it.valor < 0 ? 'neg' : it.valor > 0 ? 'pos' : '') + '">' + brlC(it.valor) + '</b> <span class="tag warn" style="margin-left:4px">Provisório</span>';
       } else {
-        valorHtml = '<b class="' + (it.valor < 0 ? 'neg' : it.valor > 0 ? 'pos' : '') + '">' + brlC(it.valor) + '</b>';
+        valorHtml = '<b class="' + (it.valor < 0 ? 'neg' : it.valor > 0 ? 'pos' : '') + '">' + brlC(it.valor) + '</b>' + (sellerCharges.found ? ' <span class="tag ok" style="margin-left:4px">Confirmado</span>' : '');
       }
-      return '<div class="fin-line rowlink" title="Fonte: Income / Renda"><span>' + esc(it.label) + '</span>' + valorHtml + '</div>' + subHtml;
+      return '<div class="fin-line rowlink" title="Fonte: ' + (it.dataStatus === 'PROVISIONAL_ORDER' ? 'Pedidos (Order.all) — provisório' : 'Income / Renda') + '"><span>' + esc(it.label) + '</span>' + valorHtml + '</div>' + subHtml;
     };
-    var totalStatusTag = sellerCharges.totalStatus === 'PARCIAL' ? ' <span class="tag warn">PARCIAL — existem componentes ainda não confirmados</span>' : (sellerCharges.totalStatus === 'SEM_DADOS' ? ' <span class="tag warn">aguardando Income</span>' : '');
+    // Nível 2 (fallback Order.all, sem Income): a seção NUNCA fica vazia, mas também nunca inventa
+    // subcategorias que o Order.all não tem — mostra só comissão + serviço + total, com o aviso
+    // explícito pedido: "Detalhamento completo disponível após liberação da Renda Shopee."
+    var itemsParaExibir = sellerCharges.totalStatus === 'PROVISORIO' || sellerCharges.totalStatus === 'SEM_DADOS' ?
+      sellerCharges.items.filter(function (it) { return it.key === 'comissao' || it.key === 'servico'; }) :
+      sellerCharges.items;
+    var totalStatusTag = sellerCharges.totalStatus === 'PROVISORIO' ? ' <span class="tag warn">PROVISÓRIO — aguardando liberação da Renda Shopee</span>' : (sellerCharges.totalStatus === 'PARCIAL' ? ' <span class="tag warn">PARCIAL — existem componentes ainda não confirmados</span>' : (sellerCharges.totalStatus === 'SEM_DADOS' ? ' <span class="tag warn">aguardando Income</span>' : ''));
     var totalValorHtml = sellerCharges.totalC == null ? '<b>—</b>' : '<b class="' + (sellerCharges.totalC < 0 ? 'neg' : sellerCharges.totalC > 0 ? 'pos' : '') + '">' + brlC(sellerCharges.totalC) + '</b>';
     // Aviso discreto + [Diagnóstico] SÓ quando a seção não está COMPLETA — nunca polui a ficha
     // quando o Income já resolveu tudo (§ "melhorar a mensagem na ficha").
-    var naoLocalizadoAviso = sellerCharges.totalStatus !== 'COMPLETO' ?
-      '<div class="footnote" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">DADOS FINANCEIROS NÃO LOCALIZADOS NO INCOME <button class="link-btn" data-selldiag="' + esc(orderId) + '">Diagnóstico</button></div>' : '';
+    var naoLocalizadoAviso = sellerCharges.totalStatus === 'PROVISORIO' ?
+      '<div class="footnote" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">Detalhamento completo disponível após liberação da Renda Shopee. <button class="link-btn" data-selldiag="' + esc(orderId) + '">Diagnóstico</button></div>' :
+      (sellerCharges.totalStatus !== 'COMPLETO' ?
+      '<div class="footnote" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">DADOS FINANCEIROS NÃO LOCALIZADOS NO INCOME <button class="link-btn" data-selldiag="' + esc(orderId) + '">Diagnóstico</button></div>' : '');
     var bloco3Taxas = '<div class="panel"><div class="ph"><h3>3. Taxas Shopee Descontadas do Vendedor</h3></div><div class="pb">' +
       naoLocalizadoAviso +
-      sellerCharges.items.map(sellerChargeLine).join('') +
+      itemsParaExibir.map(sellerChargeLine).join('') +
       '<div class="fin-line total" style="margin-top:2px"><span>TOTAL DESCONTADO DA LOJA' + totalStatusTag + '</span>' + totalValorHtml + '</div>' +
       '</div></div>';
     // 4. ENVIO (§27-39): só aparece quando o impacto líquido é diferente de zero.
@@ -1989,8 +2018,10 @@
   // Pedido×Income parou (nunca "Income ainda não apareceu" sem prova).
   function openSellerChargesDiag(orderId) {
     var a = auditIncomeOrder(orderId);
+    var sc = resolveSellerCharges(orderId);
     var o = document.createElement('div'); o.className = 'overlay';
     var rows = [
+      ['Fonte atual das taxas', sc.totalStatus === 'PROVISORIO' ? 'Provisória (Order) — aguardando liberação da Renda Shopee' : (sc.found ? 'Confirmada (Income)' : (sc.totalStatus === 'SEM_DADOS' ? 'Sem dados (nem Income, nem Order)' : 'Parcial'))],
       ['ID do pedido (original)', a.orderIdOriginal],
       ['ID do pedido (normalizado)', a.orderIdNormalized],
       ['Status do pedido', a.pedidoStatus || '—'],
@@ -6890,8 +6921,8 @@
           // coin cashback, reembolso) não existem em comp.taxaRows — mesma fonte da linha da DRE
           // (mapTaxasLoja em caixaDreDia), nunca um cálculo novo.
           var sc = resolveSellerCharges(o.id);
-          var it = sc.found && sc.items.find(function (x) { return x.label === label; });
-          if (it && it.valor) { var catIt = it.key === 'comissao' ? 'COMMISSION' : it.key.toUpperCase(); rows.push({ orderId: o.id, valor: it.valor, key: feKey(opId, 'INCOME', catIt, o.id) }); }
+          var it = sc.items.find(function (x) { return x.label === label; });
+          if (it && it.valor) { var srcIt = it.key === 'servico' ? 'SERVICE_FEE' : 'INCOME'; var catIt = it.key === 'comissao' ? 'COMMISSION' : (it.key === 'servico' ? 'TOTAL' : it.key.toUpperCase()); rows.push({ orderId: o.id, valor: it.valor, key: feKey(opId, srcIt, catIt, o.id) }); }
         }
       }
     });
@@ -7409,43 +7440,33 @@
         valor: r2(liquidoC / 100), competencia: dateKey, vencimento: dateKey, financialAccountId: recebAcc ? recebAcc.id : null, referencia: o.id,
         __autoBaixa: jaLiquidado ? { valorRecebido: r2(liquidoC / 100), financialAccountId: walletAcc ? walletAcc.id : null, date: dateKey } : null,
       });
-      // PROMPT DEFINITIVO "Refazer o Caixa" §13/§29/§46: Contas a Pagar precisa nascer da MESMA lista
-      // fixa de encargos da loja que a Ficha mostra em "TOTAL DESCONTADO DA LOJA" — não só das 6 taxas
-      // de gTaxas. resolveSellerCharges() já resolve pai×filhos da Taxa de Serviço sem duplicar; cada
-      // item nonzero vira uma linha de AP, já baixada automaticamente (Fase 5) como "retido pela
-      // Shopee". Sem Income cruzado (sellerCharges.found=false), cai no fallback antigo (gTaxas), que
-      // é exatamente o que já existia pra esse cenário — nenhum comportamento aprovado é removido.
+      // PROMPT "ALTERAÇÃO DE REGRA — MOTOR DE TAXAS SHOPEE COM FALLBACK E CONCILIAÇÃO AUTOMÁTICA":
+      // Contas a Pagar nasce de UMA ÚNICA lista (sellerCharges.items), independente de Income ter
+      // sido encontrado ou não — nunca mais um branch separado lendo comp.gTaxas. Quando o pedido está
+      // provisório (Order.all), só comissão+serviço têm knownContribution != 0 (os outros 10 campos
+      // ficam SOURCE_NOT_FOUND, contribution 0, e são pulados abaixo) — exatamente as "sem
+      // subcategorias" pedidas. O sourceEventKey (feKey(opId, source, cat, orderId)) é IDÊNTICO ao já
+      // gerado antes para os mesmos campos comissão/serviço, então quando o Income chega depois e o
+      // pedido passa de PROVISIONAL_ORDER para KNOWN_VALUE, cpUpsertBySourceKey ATUALIZA o mesmo
+      // registro (nunca duplica — upsert, não insert) e o sufixo do histórico abaixo muda de
+      // "(Provisório — Order)" para "(Confirmado — Income)", registrando a transição no histórico do
+      // título de Contas a Pagar (mesmo mecanismo de auditoria já usado por todo cpPushHistory).
       var sellerCharges = resolveSellerCharges(o.id);
-      if (sellerCharges.found) {
-        sellerCharges.items.forEach(function (it) {
-          if (!it.valor) return;
-          if (it.key === 'servico') {
-            var sf = sellerCharges.serviceFee;
-            if (sf.children && sf.children.length) {
-              sf.children.forEach(function (c) { if (c.valor) apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', c.key.toUpperCase(), c.label + ' — Pedido ' + o.id, c.valor, recebAcc ? recebAcc.id : null)); });
-            } else {
-              apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', 'TOTAL', it.label + ' — Pedido ' + o.id, it.valor, recebAcc ? recebAcc.id : null));
-            }
-            return;
+      var origemSufixo = function (it) { return it.dataStatus === 'PROVISIONAL_ORDER' ? ' (Provisório — Order)' : ' (Confirmado — Income)'; };
+      sellerCharges.items.forEach(function (it) {
+        if (!it.knownContribution) return;
+        if (it.key === 'servico') {
+          var sf = sellerCharges.serviceFee;
+          if (sf.children && sf.children.length) {
+            sf.children.forEach(function (c) { if (c.valor) apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', c.key.toUpperCase(), c.label + ' — Pedido ' + o.id + ' (Confirmado — Income)', c.valor, recebAcc ? recebAcc.id : null)); });
+          } else {
+            apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', 'TOTAL', it.label + ' — Pedido ' + o.id + origemSufixo(it), it.knownContribution, recebAcc ? recebAcc.id : null));
           }
-          var cat = it.key === 'comissao' ? 'COMMISSION' : it.key.toUpperCase();
-          apPlan.push(apRow(opId, o.id, 'INCOME', cat, it.label + ' — Pedido ' + o.id, it.valor, recebAcc ? recebAcc.id : null));
-        });
-      } else {
-        comp.gTaxas.forEach(function (row) {
-          if (!row.valor) return;
-          if (row.fieldKey === 'servico') {
-            if (row.children && row.children.length) {
-              row.children.forEach(function (c) { if (c.valor) apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', c.key.toUpperCase(), c.label + ' — Pedido ' + o.id, c.valor, recebAcc ? recebAcc.id : null)); });
-            } else {
-              apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', 'TOTAL', row.label + ' — Pedido ' + o.id, row.valor, recebAcc ? recebAcc.id : null));
-            }
-            return;
-          }
-          var cat = row.fieldKey === 'comissao' ? 'COMMISSION' : row.fieldKey.toUpperCase();
-          apPlan.push(apRow(opId, o.id, 'INCOME', cat, row.label + ' — Pedido ' + o.id, row.valor, recebAcc ? recebAcc.id : null));
-        });
-      }
+          return;
+        }
+        var cat = it.key === 'comissao' ? 'COMMISSION' : it.key.toUpperCase();
+        apPlan.push(apRow(opId, o.id, 'INCOME', cat, it.label + ' — Pedido ' + o.id + origemSufixo(it), it.valor, recebAcc ? recebAcc.id : null));
+      });
     });
     // ---- Fase 5c — Taxa de Antecipação do Acelera (descontada no resgate, saída = Carteira Shopee) ----
     if (ac.resgatesN && ac.taxaAcelera) {
@@ -8586,9 +8607,16 @@
     var full;
     if (idx >= 0) {
       full = contasPagar[idx];
+      // PROMPT "ALTERAÇÃO DE REGRA — MOTOR DE TAXAS SHOPEE COM FALLBACK E CONCILIAÇÃO AUTOMÁTICA":
+      // não-duplicação exigida (Order provisório → Income confirmado nunca soma, sempre substitui) já
+      // é garantida pelo upsert por sourceEventKey acima; aqui só registramos a transição de fonte
+      // no histórico, quando o título já existia como provisório e o novo valor vem confirmado.
+      var eraProvisorio = /\(Provisório — Order\)/.test(full.historico || '');
+      var agoraConfirmado = /\(Confirmado — Income\)/.test(rec.historico || '');
       Object.keys(rec).forEach(function (k) { if (k !== 'id' && k !== 'createdAt' && k !== 'history') full[k] = rec[k]; });
       full.updatedAt = now;
-      cpPushHistory(full, 'ATUALIZACAO_AUTOMATICA', 'Atualizado pelo fechamento de caixa.');
+      if (eraProvisorio && agoraConfirmado) cpPushHistory(full, 'TAXA_CONFIRMADA', 'Taxa atualizada da fonte Order para Income (valor provisório substituído pelo valor confirmado, sem duplicar).');
+      else cpPushHistory(full, 'ATUALIZACAO_AUTOMATICA', 'Atualizado pelo fechamento de caixa.');
     } else {
       full = Object.assign({ id: cpUid('CP'), createdAt: now, history: [] }, rec, { updatedAt: now });
       cpPushHistory(full, 'CRIACAO_AUTOMATICA', 'Gerado automaticamente pelo fechamento de caixa.');
