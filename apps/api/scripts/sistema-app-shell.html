@@ -203,6 +203,22 @@
   /* prompt "Refazer a tela Caixa": fluxo do dinheiro em sequência única, sem cards soltos — seta
      puramente visual entre passos, nunca layout fixo que possa estourar a tela. */
   .cx-flow-arrow{text-align:center;color:var(--muted);font-size:15px;padding:2px 0;line-height:1}
+  /* prompt "Reestruturação do Caixa": blocos empilhados SEM setas — cada etapa do fluxo do dinheiro
+     é um bloco com divisor fino, nunca "↓" entre eles. cx-block-total destaca os totais/resultados
+     intermediários (Resultado após taxas/Disponível na carteira/Diferença) com fundo sutil. */
+  .cx-block{padding:11px 2px}
+  .cx-block+.cx-block{border-top:1px solid var(--line)}
+  .cx-block-total{background:var(--bg2,#f7f8fa);margin:0 -16px;padding:11px 16px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+  .cx-block-total+.cx-block-total{border-top:none}
+  .cx-block .cxl{font-size:11px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;color:var(--muted)}
+  .cx-block .cxv{font-size:19px;font-weight:800;margin-top:3px;font-variant-numeric:tabular-nums}
+  .cx-block .cxv.neg{color:var(--err)}
+  .cx-block .cxv.pos{color:var(--ok)}
+  .cx-block .cxsub{font-size:11.5px;color:var(--muted);margin-top:2px}
+  .cx-block-row{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .cx-block-child{padding:3px 0 3px 12px;font-size:12.5px;color:var(--ink)}
+  .cx-block-child .cxl{color:var(--muted)}
+  .cx-block-child .cxv{font-weight:600;font-size:12.5px}
   .callout{border-radius:12px;padding:14px 16px 15px;margin-bottom:16px;border-left:4px solid var(--info);background:var(--info-bg)}
   .callout .ct{font-weight:800;font-size:13.5px;margin-bottom:5px;color:#1b4c99}
   .callout .cbody{font-size:13px;line-height:1.5;color:var(--ink)}

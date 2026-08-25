@@ -203,6 +203,22 @@
   /* prompt "Refazer a tela Caixa": fluxo do dinheiro em sequência única, sem cards soltos — seta
      puramente visual entre passos, nunca layout fixo que possa estourar a tela. */
   .cx-flow-arrow{text-align:center;color:var(--muted);font-size:15px;padding:2px 0;line-height:1}
+  /* prompt "Reestruturação do Caixa": blocos empilhados SEM setas — cada etapa do fluxo do dinheiro
+     é um bloco com divisor fino, nunca "↓" entre eles. cx-block-total destaca os totais/resultados
+     intermediários (Resultado após taxas/Disponível na carteira/Diferença) com fundo sutil. */
+  .cx-block{padding:11px 2px}
+  .cx-block+.cx-block{border-top:1px solid var(--line)}
+  .cx-block-total{background:var(--bg2,#f7f8fa);margin:0 -16px;padding:11px 16px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+  .cx-block-total+.cx-block-total{border-top:none}
+  .cx-block .cxl{font-size:11px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;color:var(--muted)}
+  .cx-block .cxv{font-size:19px;font-weight:800;margin-top:3px;font-variant-numeric:tabular-nums}
+  .cx-block .cxv.neg{color:var(--err)}
+  .cx-block .cxv.pos{color:var(--ok)}
+  .cx-block .cxsub{font-size:11.5px;color:var(--muted);margin-top:2px}
+  .cx-block-row{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .cx-block-child{padding:3px 0 3px 12px;font-size:12.5px;color:var(--ink)}
+  .cx-block-child .cxl{color:var(--muted)}
+  .cx-block-child .cxv{font-weight:600;font-size:12.5px}
   .callout{border-radius:12px;padding:14px 16px 15px;margin-bottom:16px;border-left:4px solid var(--info);background:var(--info-bg)}
   .callout .ct{font-weight:800;font-size:13.5px;margin-bottom:5px;color:#1b4c99}
   .callout .cbody{font-size:13px;line-height:1.5;color:var(--ink)}
@@ -4363,12 +4379,21 @@ buffer/index.js:
       Object.keys(groups).forEach(function (id) {
         var g = groups[id]; var rep = g.find(function (r) { return r.orderStatus; }) || g[0]; itemsSeen += g.length;
         var items = g.map(function (r) { var qty = r.quantity || 1; var subtotal = r.productSubtotal != null ? num(r.productSubtotal) : num(r.agreedPrice) * qty; return { sku: r.sku, productName: r.productName, variationName: r.variationName, qty: qty, originalPrice: num(r.originalPrice), agreedPrice: num(r.agreedPrice), subtotal: subtotal }; });
+        var prev = byId[id] || null;
         var toIso = function (d) { return d ? new Date(d).toISOString() : null; };
-        var next = { id: id, operationId: (byId[id] && byId[id].operationId) || opId, orderStatus: rep.orderStatus, normalizedStatus: S.pedidos.normalizeStatus(rep.orderStatus), tracking: rep.trackingNumber || (byId[id] && byId[id].tracking) || null, createdAt: toIso(rep.orderCreatedAt), returnRefundStatus: rep.returnRefundStatus, cancelReason: rep.cancelReason, city: rep.city, uf: rep.uf, recipientName: rep.recipientName, buyerUsername: rep.buyerUsername, shippingOption: rep.shippingOption, shippingMethod: rep.shippingMethod, isFbs: /^\s*(yes|sim|true)\s*$/i.test(rep.isFbs || '') || rep.shippingOption === 'Full', totalAmount: num(rep.totalAmount), grandTotal: num(rep.grandTotal), commissionNet: num(rep.commissionNet), serviceFeeNet: num(rep.serviceFeeNet), transactionFee: num(rep.transactionFee), reverseShippingFee: num(rep.reverseShippingFee), estimatedShipping: num(rep.estimatedShipping), buyerPaidShipping: num(rep.buyerPaidShipping), unitsTotal: rep.unitsTotal || items.reduce(function (s, i) { return s + i.qty; }, 0), items: items,
+        // Campos Shopee que podem vir vazios/"-" numa planilha mais recente (ex.: export filtrado por
+        // status, ou coluna ainda não preenchida no momento da extração) NUNCA apagam um valor real já
+        // conhecido — mesma regra aplicada ao BR/rastreio: novo vazio preserva o antigo, novo preenchido
+        // sempre atualiza. Datas de progresso do pedido (pago/prazo/enviado/entregue/concluído/cancelado)
+        // são as mais expostas a isso, pois só passam a existir na planilha depois que o evento ocorre.
+        function keepStr(v, field) { var t = (v != null && String(v).trim() !== '') ? v : null; return t != null ? t : (prev ? (prev[field] != null ? prev[field] : null) : null); }
+        function keepDate(d, field) { var t = toIso(d); return t != null ? t : (prev ? (prev[field] != null ? prev[field] : null) : null); }
+        var next = { id: id, operationId: (prev && prev.operationId) || opId, orderStatus: rep.orderStatus, normalizedStatus: S.pedidos.normalizeStatus(rep.orderStatus), tracking: keepStr(rep.trackingNumber, 'tracking'), createdAt: toIso(rep.orderCreatedAt), returnRefundStatus: keepStr(rep.returnRefundStatus, 'returnRefundStatus'), cancelReason: keepStr(rep.cancelReason, 'cancelReason'), city: keepStr(rep.city, 'city'), uf: keepStr(rep.uf, 'uf'), recipientName: keepStr(rep.recipientName, 'recipientName'), buyerUsername: keepStr(rep.buyerUsername, 'buyerUsername'), shippingOption: keepStr(rep.shippingOption, 'shippingOption'), shippingMethod: keepStr(rep.shippingMethod, 'shippingMethod'), isFbs: /^\s*(yes|sim|true)\s*$/i.test(rep.isFbs || '') || rep.shippingOption === 'Full', totalAmount: num(rep.totalAmount), grandTotal: num(rep.grandTotal), commissionNet: num(rep.commissionNet), serviceFeeNet: num(rep.serviceFeeNet), transactionFee: num(rep.transactionFee), reverseShippingFee: num(rep.reverseShippingFee), estimatedShipping: num(rep.estimatedShipping), buyerPaidShipping: num(rep.buyerPaidShipping), unitsTotal: rep.unitsTotal || items.reduce(function (s, i) { return s + i.qty; }, 0), items: items,
           // §9-33 do prompt "Alterações — Sistema Marketplace Líder": pagamento/prazo/envio efetivo,
-          // usados no Dashboard (pedidos feitos × pagos) e na aba Tempo de Envio.
-          paidAt: toIso(rep.paidAt), shipByDate: toIso(rep.shipByDate), shippedAt: toIso(rep.shippedAt), deliveredAt: toIso(rep.deliveredAt), completedAt: toIso(rep.completedAt), cancelledAt: toIso(rep.cancelledAt) };
-        var ex = byId[id];
+          // usados no Dashboard (pedidos feitos × pagos), no Caixa (Venda = pedidos PAGOS do dia) e na
+          // aba Tempo de Envio — por isso paidAt em especial nunca pode ser apagado por reimportação.
+          paidAt: keepDate(rep.paidAt, 'paidAt'), shipByDate: keepDate(rep.shipByDate, 'shipByDate'), shippedAt: keepDate(rep.shippedAt, 'shippedAt'), deliveredAt: keepDate(rep.deliveredAt, 'deliveredAt'), completedAt: keepDate(rep.completedAt, 'completedAt'), cancelledAt: keepDate(rep.cancelledAt, 'cancelledAt') };
+        var ex = prev;
         var nowIso = new Date().toISOString();
         if (!ex) { novo++; next.statusHistory = [{ status: next.normalizedStatus, at: next.createdAt || nowIso, detectedAt: nowIso }]; byId[id] = next; }
         else {
@@ -11722,10 +11747,10 @@ buffer/index.js:
     // já aparecem nele, na ordem exigida — nunca repetidos antes num card.
     var diferencaOk = Math.abs(fluxo.diferenca) <= 0.01;
 
-    // ---- FLUXO DO DINHEIRO — sequência única, sem cards soltos: Venda → Descontos Shopee → Líquido
-    // Shopee → Taxa de Antecipação → Recebido na Carteira → Créditos/Débitos → Transferido ao Banco →
-    // Diferença. Cada seta (↓) é só apresentação; os números são os mesmos de dre/ac/fluxo. ----
-    function arrow() { return '<div class="cx-flow-arrow">↓</div>'; }
+    // ---- FLUXO DO DINHEIRO — prompt "Reestruturação do Caixa": blocos empilhados, SEM setas — cada
+    // etapa (Venda → Taxas Shopee → Resultado após taxas → Acelera → Disponível na carteira →
+    // créditos/débitos → transferido ao banco → diferença) é um .cx-block com divisor fino; os números
+    // continuam vindo só de dre/ac/fluxo, nada é recalculado aqui. ----
     var vendaSub = dre.n ? nn(dre.n) + ' pedido(s) pago(s)' : 'nenhum pedido pago neste dia';
 
     // Comissão/Taxa de Serviço aparecem DIRETO (sem precisar clicar) — só os FILHOS reais da Taxa de
@@ -11746,57 +11771,57 @@ buffer/index.js:
     }).join('');
     var verResgate = ac.resgatesN ? ('<details class="cx-collapse" style="margin-top:4px"><summary style="font-size:12px;padding:6px 12px">Ver resgate</summary><div class="pb"><div class="footnote" style="margin-bottom:6px">' + nn(ac.resgatesN) + ' resgate(s) · ' + nn(ac.pedidosAceleraN) + ' pedido(s) antecipado(s)</div><div class="table-wrap"><table class="report"><thead><tr><th>ID Resgate</th><th>Pedidos</th><th>Bruto</th><th>Taxa</th><th>Líquido</th></tr></thead><tbody>' + resgateRows + '</tbody></table></div>' + resgateDetails + '</div></details>') : '';
 
-    var fluxoDinheiro = '<div class="cx-section"><h4>Fluxo do dinheiro</h4>' +
-      '<div class="cx-kv" style="font-size:15px;font-weight:800"><span class="cxl">Valor da Venda</span><span class="cxv">' + brlC(valorVendaC) + '</span></div>' +
-      '<div class="footnote" style="margin:-2px 0 6px">' + vendaSub + '</div>' +
-      arrow() +
-      '<div class="cx-kv" style="font-weight:700"><span class="cxl">Taxas Shopee</span><span class="cxv neg">' + brlC(taxasC) + '</span></div>' +
-      '<div class="pb" style="padding:4px 0 0 8px">' + descontosLinhas + '</div>' +
-      arrow() +
-      '<div class="cx-kv" style="font-size:15px;font-weight:800"><span class="cxl">Líquido após taxas</span><span class="cxv">' + brlC(liquidoReceberC) + '</span></div>' +
-      arrow() +
-      '<div class="footnote" style="margin:0 0 4px">A Shopee Acelera antecipa recebíveis já existentes (de vendas de qualquer dia, não só as de hoje) — por isso o valor antecipado abaixo não é necessariamente o mesmo do líquido após taxas acima.</div>' +
-      '<div class="cx-kv"><span class="cxl">Valor Antecipado</span><span class="cxv">' + brlC(valorAntecipadoC) + '</span></div>' +
-      '<div class="cx-kv"><span class="cxl">Taxa de Antecipação</span><span class="cxv' + (taxaAceleraC ? ' neg' : '') + '">' + brlC(taxaAceleraC) + '</span></div>' +
-      verResgate +
-      arrow() +
-      '<div class="cx-kv" style="font-size:15px;font-weight:800"><span class="cxl">Líquido recebido</span><span class="cxv">' + brlC(liquidoCarteiraC) + '</span></div>' +
-      arrow() +
-      '<div class="cx-kv"><span class="cxl">Créditos da Carteira</span><span class="cxv pos">+' + brl(fluxo.outrosCreditos) + '</span></div>' +
-      '<div class="cx-kv"><span class="cxl">Débitos da Carteira</span><span class="cxv neg">-' + brl(fluxo.descontos) + '</span></div>' +
-      arrow() +
-      '<div class="cx-kv" style="font-weight:700"><span class="cxl">Disponível para transferência</span><span class="cxv">' + brl(fluxo.disponivel) + '</span></div>' +
-      arrow() +
-      '<div class="cx-kv" style="font-weight:700"><span class="cxl">Transferido para o Banco</span><span class="cxv">' + brl(fluxo.transferido) + '</span></div>' +
-      arrow() +
-      '<div class="cx-kv" style="font-size:16px;font-weight:800"><span class="cxl">Diferença</span><span class="cxv ' + (diferencaOk ? 'pos' : 'neg') + '">' + brl(fluxo.diferenca) + '</span></div>' +
-      '<div style="margin-top:6px">' + (diferencaOk ? '<span class="tag ok">✓ Caixa conferido</span>' : '<span class="tag warn">⚠ Caixa com diferença</span> <button class="btn-sm" id="cx-ver-nao-conciliados" style="margin-left:6px">Ver movimentos não conciliados</button>') + '</div>' +
-      '</div>';
-
-    // ---- MOVIMENTAÇÕES DA CARTEIRA — UMA tabela só (nunca cards por lançamento), tudo que somou ou
-    // diminuiu depois do recebimento; reclassificável linha a linha (openWalletTx, já aprovado) ----
+    // ---- MOVIMENTAÇÕES DA CARTEIRA — separadas em Créditos/Débitos (nunca misturadas com as Taxas
+    // Shopee, que vêm do Income) — cada lista é reclassificável linha a linha (openWalletTx, já
+    // aprovado). O bloco resumido do fluxo (abaixo) só mostra os dois subtotais; o detalhe completo
+    // (Data/Tipo/Descrição/Pedido/Natureza/Valor/Ação) mora nas seções próprias mais abaixo. ----
     var movTodosFiltrados = movPost.todos.filter(function (t) { return caixaMovCategoria(t, ac) !== 'TRANSFERENCIAS_BANCARIAS'; }).slice().sort(function (a, b) { return (a.date || '').localeCompare(b.date || ''); });
-    // PROMPT "Refazer o Caixa" §6-7/§36-38: cada movimento mostra sua Natureza (manual, quando
-    // classificada — senão "—") e permite [Classificar]/[Alterar] direto na linha.
-    var movRows = movTodosFiltrados.map(function (t) {
+    var movCreditos = movTodosFiltrados.filter(function (t) { return t.amount > 0; });
+    var movDebitos = movTodosFiltrados.filter(function (t) { return t.amount < 0; });
+    function movRowHtml(t) {
       var cat = caixaMovCategoria(t, ac);
       var mcls = wgetCls(t.id) || {};
       var natTag = mcls.natureza ? '<span class="tag info">' + esc(NATUREZA[mcls.natureza] || mcls.natureza) + '</span>' : '<span class="footnote" style="margin:0">—</span>';
-      return '<tr><td class="nowrap">' + dbr(t.date) + '</td><td>' + esc(CAIXA_MOV_CAT_LABEL[cat]) + '</td><td class="cell-text">' + esc((t.desc || t.tipo || '—').slice(0, 60)) + '</td><td class="mono">' + esc(wOrderId(t) || '—') + '</td><td>' + natTag + '</td><td class="nowrap pos">' + (t.amount > 0 ? brl(t.amount) : '—') + '</td><td class="nowrap neg">' + (t.amount < 0 ? '-' + brl(Math.abs(t.amount)) : '—') + '</td><td><button class="btn-sm" data-wtx="' + esc(t.id) + '">' + (mcls.natureza ? 'Alterar' : 'Classificar') + '</button></td></tr>';
-    }).join('');
-    var movimentacoes = '<div class="cx-section"><h4>Movimentações da Carteira' + h4sub(movTodosFiltrados.length ? nn(movTodosFiltrados.length) + ' lançamento(s) — clique para classificar' : null) + '</h4>' +
-      (movRows ? '<div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Pedido</th><th>Natureza</th><th>Entrada</th><th>Saída</th><th>Ação</th></tr></thead><tbody>' + movRows + '</tbody></table></div>' : '<div class="footnote">Nenhuma movimentação além do recebimento do Acelera neste dia.</div>') +
-      '<div class="cx-kv" style="border-top:1px solid var(--line);margin-top:8px;padding-top:8px;font-weight:700"><span class="cxl">Resultado das movimentações</span><span class="cxv">' + brl(r2(fluxo.outrosCreditos - fluxo.descontos)) + '</span></div>' +
+      return '<tr><td class="nowrap">' + dbr(t.date) + '</td><td>' + esc(CAIXA_MOV_CAT_LABEL[cat]) + '</td><td class="cell-text">' + esc((t.desc || t.tipo || '—').slice(0, 60)) + '</td><td class="mono">' + esc(wOrderId(t) || '—') + '</td><td>' + natTag + '</td><td class="nowrap ' + (t.amount > 0 ? 'pos' : 'neg') + '">' + (t.amount > 0 ? '+' : '-') + brl(Math.abs(t.amount)) + '</td><td><button class="btn-sm" data-wtx="' + esc(t.id) + '">' + (mcls.natureza ? 'Alterar' : 'Classificar') + '</button></td></tr>';
+    }
+    function movSectionHtml(titulo, lista, subtotal) {
+      var rows = lista.map(movRowHtml).join('');
+      return '<div class="cx-section"><h4>' + esc(titulo) + h4sub(lista.length ? nn(lista.length) + ' lançamento(s) — clique para classificar' : null) + '</h4>' +
+        (rows ? '<div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Pedido</th><th>Natureza</th><th>Valor</th><th>Ação</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<div class="footnote">Nenhum lançamento neste dia.</div>') +
+        '<div class="cx-kv" style="border-top:1px solid var(--line);margin-top:8px;padding-top:8px;font-weight:700"><span class="cxl">Total</span><span class="cxv">' + brl(subtotal) + '</span></div>' +
+        '</div>';
+    }
+    var creditosSection = movSectionHtml('Créditos da Carteira', movCreditos, fluxo.outrosCreditos);
+    var debitosSection = movSectionHtml('Débitos da Carteira', movDebitos, -fluxo.descontos);
+
+    // ---- FLUXO DO DINHEIRO — blocos empilhados, sem setas: cada etapa é um número, não uma animação.
+    var fluxoDinheiro = '<div class="cx-section"><h4>Fluxo do dinheiro</h4>' +
+      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">1. Valor da Venda</span><span class="cxv">' + brlC(valorVendaC) + '</span></div><div class="cxsub">' + vendaSub + '</div></div>' +
+      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">(-) 2. Taxas Shopee</span><span class="cxv neg">' + brlC(taxasC) + '</span></div><div class="pb" style="padding:4px 0 0 8px">' + descontosLinhas + '</div></div>' +
+      '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">3. Resultado após Taxas</span><span class="cxv">' + brlC(liquidoReceberC) + '</span></div></div>' +
+      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">(-) Shopee Acelera</span><span class="cxv' + (taxaAceleraC ? ' neg' : '') + '">' + brlC(taxaAceleraC) + '</span></div>' +
+      '<div class="cxsub">Antecipa recebíveis já existentes (de vendas de qualquer dia, não só as de hoje) — o valor antecipado não é necessariamente o mesmo do resultado após taxas acima.</div>' +
+      '<div class="cx-block-child cx-block-row"><span class="cxl">Valor Antecipado</span><span class="cxv">' + brlC(valorAntecipadoC) + '</span></div>' +
+      '<div class="cx-block-child cx-block-row"><span class="cxl">Taxa de Antecipação</span><span class="cxv' + (taxaAceleraC ? ' neg' : '') + '">' + brlC(taxaAceleraC) + '</span></div>' +
+      verResgate + '</div>' +
+      '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">4. Valor Disponível na Carteira</span><span class="cxv">' + brlC(liquidoCarteiraC) + '</span></div></div>' +
+      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">(+) Créditos da Carteira</span><span class="cxv pos">+' + brl(fluxo.outrosCreditos) + '</span></div>' +
+      '<div class="cx-block-row"><span class="cxl">(-) Débitos da Carteira</span><span class="cxv neg">-' + brl(fluxo.descontos) + '</span></div></div>' +
+      '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl">Disponível para Transferência</span><span class="cxv">' + brl(fluxo.disponivel) + '</span></div></div>' +
+      '<div class="cx-block"><div class="cx-block-row"><span class="cxl">5. Transferido para o Banco</span><span class="cxv">' + brl(fluxo.transferido) + '</span></div></div>' +
+      '<div class="cx-block cx-block-total"><div class="cx-block-row"><span class="cxl" style="font-size:12px">6. Diferença Final</span><span class="cxv ' + (diferencaOk ? 'pos' : 'neg') + '" style="font-size:20px">' + brl(fluxo.diferenca) + '</span></div>' +
+      '<div style="margin-top:6px">' + (diferencaOk ? '<span class="tag ok">✓ Caixa conferido</span>' : '<span class="tag warn">⚠ Caixa com diferença</span> <button class="btn-sm" id="cx-ver-nao-conciliados" style="margin-left:6px">Ver movimentos não conciliados</button>') + '</div></div>' +
       '</div>';
 
-    // ---- DRE do dia — compacta, sem dominar a tela: Venda/Taxas/Custo/Lucro/Margem + "Ver DRE completa" ----
+    // ---- DRE do dia — simples, na ordem pedida: Venda / (-) Taxas / (-) Acelera / (-) Custos / Resultado.
+    // Sem informação duplicada — os mesmos números do fluxo acima, só na forma de demonstrativo. ----
     var dreResumo = '<div class="cx-section"><h4>DRE do dia' + h4sub(dre.n ? (dre.lucro != null ? brlC(dre.lucro) : 'aguardando custo') : null) + '</h4>' +
       (dre.n ? (
         '<div class="cx-kv"><span class="cxl">Venda</span><span class="cxv">' + brlC(dre.receitaBruta) + '</span></div>' +
-        '<div class="cx-kv"><span class="cxl">Taxas Shopee</span><span class="cxv neg">' + brlC(dre.taxasCobradas) + '</span></div>' +
-        (dre.custoTotal != null ? ('<div class="cx-kv"><span class="cxl">Custo do produto</span><span class="cxv neg">' + brlC(-dre.custoTotal) + '</span></div>') : '<div class="cx-kv"><span class="cxl">Custo do produto</span><span class="cxv">não disponível</span></div>') +
-        (dre.temAcelera ? ('<div class="cx-kv"><span class="cxl">Taxa Acelera</span><span class="cxv neg">' + brlC(dre.acTaxa) + '</span></div>') : '') +
-        '<div class="cx-kv" style="border-top:1px solid var(--line);margin-top:4px;padding-top:8px"><span class="cxl" style="font-weight:800">Lucro</span><span class="cxv ' + (dre.lucro != null && dre.lucro < 0 ? 'neg' : 'pos') + '" style="font-size:16px">' + (dre.lucro != null ? brlC(dre.lucro) : 'aguardando custo') + '</span></div>' +
+        '<div class="cx-kv"><span class="cxl">(-) Taxas Shopee</span><span class="cxv neg">' + brlC(dre.taxasCobradas) + '</span></div>' +
+        (dre.temAcelera ? ('<div class="cx-kv"><span class="cxl">(-) Acelera</span><span class="cxv neg">' + brlC(dre.acTaxa) + '</span></div>') : '') +
+        (dre.custoTotal != null ? ('<div class="cx-kv"><span class="cxl">(-) Custos do Produto</span><span class="cxv neg">' + brlC(-dre.custoTotal) + '</span></div>') : '<div class="cx-kv"><span class="cxl">(-) Custos do Produto</span><span class="cxv">não disponível</span></div>') +
+        '<div class="cx-kv" style="border-top:1px solid var(--line);margin-top:4px;padding-top:8px"><span class="cxl" style="font-weight:800">Resultado</span><span class="cxv ' + (dre.lucro != null && dre.lucro < 0 ? 'neg' : 'pos') + '" style="font-size:16px">' + (dre.lucro != null ? brlC(dre.lucro) : 'aguardando custo') + '</span></div>' +
         (dre.margem != null ? ('<div class="cx-kv"><span class="cxl">Margem</span><span class="cxv">' + pct(dre.margem) + '</span></div>') : '') +
         '<details class="cx-collapse"><summary>Ver DRE completa</summary><div class="pb">' + caixaDreBlock(dre, dateKey) + '</div></details>'
       ) : '<div class="footnote">Nenhum pedido pago neste dia.</div>') +
@@ -11845,6 +11870,23 @@ buffer/index.js:
     }
     var conferencias = '<div class="cx-section"><h4>Conferências' + h4sub((pend.total + pendCart.total) ? nn(pend.total + pendCart.total) + ' pendência(s)' : '✓ tudo identificado') + '</h4>' + pedidosDetails + expedicaoDetails + pendenciasDetails + auditoriaDetails + '</div>';
 
+    // ---- LANÇAMENTOS FINANCEIROS — visão única de tudo que impacta o Caixa (Taxas Shopee do Income +
+    // créditos/débitos da Carteira), com filtros por Tipo/Natureza/Pedido. Nunca uma terceira fonte de
+    // valor: cada linha reaproveita exatamente os mesmos números já mostrados acima. ----
+    var lancTaxas = dre.linhasTaxasLoja.map(function (l) { return { data: dateKey, tipo: 'TAXA', natureza: '', pedido: '', desc: l.label, valor: l.valor }; });
+    var lancCarteira = movTodosFiltrados.map(function (t) { var mcls = wgetCls(t.id) || {}; return { data: t.date, tipo: t.amount > 0 ? 'CREDITO' : 'DEBITO', natureza: mcls.natureza || '', pedido: wOrderId(t) || '', desc: (t.desc || t.tipo || '—'), valor: t.amount }; });
+    var lancTodos = lancTaxas.concat(lancCarteira).sort(function (a, b) { return (a.data || '').localeCompare(b.data || ''); });
+    var LANC_TIPO_LABEL = { TAXA: 'Taxa Shopee', CREDITO: 'Crédito Carteira', DEBITO: 'Débito Carteira' };
+    var lancRows = lancTodos.map(function (l) {
+      return '<tr data-lftipo="' + esc(l.tipo) + '" data-lfnat="' + esc(l.natureza) + '" data-lfped="' + esc(l.pedido) + '"><td class="nowrap">' + dbr(l.data) + '</td><td>' + esc(LANC_TIPO_LABEL[l.tipo]) + '</td><td class="cell-text">' + esc(String(l.desc).slice(0, 60)) + '</td><td class="mono">' + esc(l.pedido || '—') + '</td><td>' + (l.natureza ? esc(NATUREZA[l.natureza] || l.natureza) : '<span class="footnote" style="margin:0">—</span>') + '</td><td class="nowrap ' + (l.valor < 0 ? 'neg' : l.valor > 0 ? 'pos' : '') + '">' + brl(l.valor) + '</td></tr>';
+    }).join('');
+    var lancamentosFinanceiros = '<div class="cx-section"><details class="cx-collapse"><summary>Lançamentos financeiros<span class="footnote" style="margin:0">' + nn(lancTodos.length) + ' lançamento(s)</span></summary><div class="pb">' +
+      '<div class="toolbar2" style="margin-bottom:10px"><select class="select sm" id="lf-tipo"><option value="">Todos os tipos</option><option value="TAXA">Taxa Shopee</option><option value="CREDITO">Crédito Carteira</option><option value="DEBITO">Débito Carteira</option></select>' +
+      '<select class="select sm" id="lf-nat"><option value="">Todas as naturezas</option>' + Object.keys(NATUREZA).map(function (k) { return '<option value="' + k + '">' + esc(NATUREZA[k]) + '</option>'; }).join('') + '<option value="__none">Não classificado</option></select>' +
+      '<input class="input sm" id="lf-ped" placeholder="Buscar pedido" style="width:160px"></div>' +
+      (lancRows ? '<div class="table-wrap"><table class="report" id="lf-table"><thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th><th>Pedido</th><th>Natureza</th><th>Valor</th></tr></thead><tbody>' + lancRows + '</tbody></table></div>' : '<div class="footnote">Nenhum lançamento neste dia.</div>') +
+      '</div></details></div>';
+
     // ---- Resumo da integração financeira — o que será gerado/atualizado em Contas a Receber/Contas a
     // Pagar/Transferências ao fechar. Mesmo plano puro usado na aplicação real (caixaMontarIntegracaoFinanceira). ----
     var planoFin = caixaMontarIntegracaoFinanceira(dateKey);
@@ -11870,7 +11912,7 @@ buffer/index.js:
 
     var transfManualBtn = '<div style="margin:6px 0 0"><button class="btn-sm" id="bt-abrir-manual">+ Adicionar transferência não encontrada</button></div>';
 
-    return header + fluxoDinheiro + movimentacoes + dreResumo + conferencias + integracaoResumo + transfManualBtn + footer;
+    return header + fluxoDinheiro + creditosSection + debitosSection + dreResumo + lancamentosFinanceiros + conferencias + integracaoResumo + transfManualBtn + footer;
   }
   function bindCaixaFechamentoBody(dateKey) {
     var dateSel = document.getElementById('cx-date-sel'); if (dateSel) dateSel.onchange = function () { caixaAbrirDia(dateSel.value); };
@@ -11908,6 +11950,22 @@ buffer/index.js:
     var verNaoConc = document.getElementById('cx-ver-nao-conciliados'); if (verNaoConc) verNaoConc.onclick = function () {
       var d = document.getElementById('cx-pendencias-details'); if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
     };
+    // Filtros de "Lançamentos financeiros" — só mostram/escondem linhas já renderizadas (mesmos dados,
+    // nenhum recálculo), então funcionam sem re-render.
+    function lfNorm(s) { return String(s || '').toLowerCase().trim(); }
+    function lfApplyFilters() {
+      var tipo = (document.getElementById('lf-tipo') || {}).value || '';
+      var nat = (document.getElementById('lf-nat') || {}).value || '';
+      var ped = lfNorm((document.getElementById('lf-ped') || {}).value || '');
+      document.querySelectorAll('#lf-table tbody tr').forEach(function (tr) {
+        var okTipo = !tipo || tr.dataset.lftipo === tipo;
+        var okNat = !nat || (nat === '__none' ? !tr.dataset.lfnat : tr.dataset.lfnat === nat);
+        var okPed = !ped || lfNorm(tr.dataset.lfped || '').indexOf(ped) >= 0;
+        tr.style.display = (okTipo && okNat && okPed) ? '' : 'none';
+      });
+    }
+    ['lf-tipo', 'lf-nat'].forEach(function (id) { var el = document.getElementById(id); if (el) el.onchange = lfApplyFilters; });
+    var lfPed = document.getElementById('lf-ped'); if (lfPed) lfPed.oninput = lfApplyFilters;
   }
   // Modal de transferência manual — só aberto sob demanda (nunca formulário permanente no fechamento).
   function openTransferenciaManualModal(dateKey, onSaved) {
