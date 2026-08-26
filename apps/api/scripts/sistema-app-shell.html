@@ -63,7 +63,34 @@
   .seg button{background:#fff;border:none;padding:6px 10px;font-size:12px;font-weight:600;color:var(--muted)}
   .seg button.on{background:var(--brand-2);color:#fff}
   .selbanner{background:var(--info-bg);border:1px solid #cfe0fb;color:#1b4c99;border-radius:10px;padding:8px 14px;font-size:12.5px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-  .table-wrap{overflow-x:auto}
+  /* PROMPT "OTIMIZAÇÃO COMPLETA DE UX/UI DESKTOP" §2/§4: toda tabela larga precisa deixar claro que dá
+     para rolar horizontalmente — a auditoria visual (Playwright, 1920/1440/1366) confirmou que colunas
+     essenciais (inclusive o botão de ação) ficavam fora da área visível sem NENHUM indício de scroll em
+     Pedidos, Movimentações da Carteira, Produtos e no modal Gerenciar Bancos. Sombra nas bordas
+     (aparece só quando há mais conteúdo pra cada lado, técnica padrão de "scroll shadow" via
+     background-attachment) + scrollbar sempre visível e com contraste — sem JS, sem mudar layout. */
+  .table-wrap{
+    overflow-x:auto;
+    /* Dentro de um flex column (drawers/modais, .dbd{flex:1}) um bloco sem width explícita pode
+       assumir a largura intrínseca do conteúdo (a tabela) em vez de respeitar o espaço disponível do
+       pai — aí quem rola na horizontal vira o modal inteiro (cortando cabeçalho/rodapé), não só a
+       tabela. width:100% resolve porque passa a calcular contra o container, não contra o conteúdo. */
+    width:100%; max-width:100%;
+    background:
+      linear-gradient(to right, var(--panel) 30%, rgba(255,255,255,0)) 0 0,
+      linear-gradient(to left, var(--panel) 30%, rgba(255,255,255,0)) 100% 0,
+      linear-gradient(to right, rgba(16,26,51,.14), rgba(16,26,51,0)) 0 0,
+      linear-gradient(to left, rgba(16,26,51,.14), rgba(16,26,51,0)) 100% 0;
+    background-repeat:no-repeat;
+    background-color:var(--panel);
+    background-size:32px 100%, 32px 100%, 12px 100%, 12px 100%;
+    background-attachment:local, local, scroll, scroll;
+  }
+  .table-wrap::-webkit-scrollbar{height:10px}
+  .table-wrap::-webkit-scrollbar-track{background:var(--bg)}
+  .table-wrap::-webkit-scrollbar-thumb{background:#b7c0d6;border-radius:6px}
+  .table-wrap::-webkit-scrollbar-thumb:hover{background:var(--brand-2)}
+  .table-wrap{scrollbar-color:#b7c0d6 var(--bg);scrollbar-width:thin}
   table{border-collapse:collapse;width:100%;font-size:13px}
   th{text-align:left;padding:10px 14px;color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;border-bottom:1px solid var(--line);white-space:nowrap;background:#fbfcfe}
   td{padding:11px 14px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle}
