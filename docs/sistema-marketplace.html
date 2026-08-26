@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build ac37469 · 2026-08-26 16:48 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 6323af1 · 2026-08-26 17:45 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -3643,6 +3643,13 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         sellerDiscount1: nthDec(dr.headerNames, dr.values, "Desconto do vendedor", 0),
         sellerDiscount2: nthDec(dr.headerNames, dr.values, "Desconto do vendedor", 1),
         weightSku: dec(acc, ["Peso total SKU"]),
+        pixAdjustment: dec(acc, ["Ajuste por pagamento via PIX"]),
+        coupon: dec(acc, ["Cupom"]),
+        couponIncentive: dec(acc, ["Incentivo de cupom"]),
+        commercialActionIncentive: dec(acc, ["Incentivo Shopee para a\xE7\xE3o comercial"]),
+        commercialActionAdjustment: dec(acc, ["Ajuste por participa\xE7\xE3o em a\xE7\xE3o comercial"]),
+        levemaisShopeeDiscount: dec(acc, ["Desconto Shopee da Leve Mais por Menos"]),
+        levemaisSellerDiscount: dec(acc, ["Desconto da Leve Mais por Menos do vendedor"]),
         rawPayload: raw
       });
     }
@@ -4482,6 +4489,13 @@ buffer/index.js:
         function keepStr(v, field) { var t = (v != null && String(v).trim() !== '') ? v : null; return t != null ? t : (prev ? (prev[field] != null ? prev[field] : null) : null); }
         function keepDate(d, field) { var t = toIso(d); return t != null ? t : (prev ? (prev[field] != null ? prev[field] : null) : null); }
         var next = { id: id, operationId: (prev && prev.operationId) || opId, orderStatus: rep.orderStatus, normalizedStatus: S.pedidos.normalizeStatus(rep.orderStatus), tracking: keepStr(rep.trackingNumber, 'tracking'), createdAt: toIso(rep.orderCreatedAt), returnRefundStatus: keepStr(rep.returnRefundStatus, 'returnRefundStatus'), cancelReason: keepStr(rep.cancelReason, 'cancelReason'), city: keepStr(rep.city, 'city'), uf: keepStr(rep.uf, 'uf'), recipientName: keepStr(rep.recipientName, 'recipientName'), buyerUsername: keepStr(rep.buyerUsername, 'buyerUsername'), shippingOption: keepStr(rep.shippingOption, 'shippingOption'), shippingMethod: keepStr(rep.shippingMethod, 'shippingMethod'), isFbs: /^\s*(yes|sim|true)\s*$/i.test(rep.isFbs || '') || rep.shippingOption === 'Full', totalAmount: num(rep.totalAmount), grandTotal: num(rep.grandTotal), commissionNet: num(rep.commissionNet), serviceFeeNet: num(rep.serviceFeeNet), transactionFee: num(rep.transactionFee), reverseShippingFee: num(rep.reverseShippingFee), estimatedShipping: num(rep.estimatedShipping), buyerPaidShipping: num(rep.buyerPaidShipping), unitsTotal: rep.unitsTotal || items.reduce(function (s, i) { return s + i.qty; }, 0), items: items,
+          // PROMPT "Correção da composição financeira por pedido": Ajustes do pedido, direto do
+          // Order.all (nível pedido — repetem idênticos em toda linha de um pedido multi-item, mesmo
+          // padrão de totalAmount/grandTotal). Usados como fallback PROVISÓRIO de "Receita Ajustada"
+          // quando o Income ainda não cobre o pedido (pedidoComposicaoFinanceira prioriza sempre o
+          // Income, que já reflete os MESMOS valores — validado empiricamente, 1.025/1.025 pedidos
+          // reais com Income — mas o Order.all garante o dado mesmo antes do Income chegar).
+          pixAdjustment: num(rep.pixAdjustment), coupon: num(rep.coupon), couponIncentive: num(rep.couponIncentive), commercialActionIncentive: num(rep.commercialActionIncentive), commercialActionAdjustment: num(rep.commercialActionAdjustment), levemaisShopeeDiscount: num(rep.levemaisShopeeDiscount), levemaisSellerDiscount: num(rep.levemaisSellerDiscount),
           // §9-33 do prompt "Alterações — Sistema Marketplace Líder": pagamento/prazo/envio efetivo,
           // usados no Dashboard (pedidos feitos × pagos), no Caixa (Venda = pedidos PAGOS do dia) e na
           // aba Tempo de Envio — por isso paidAt em especial nunca pode ser apagado por reimportação.
@@ -5453,6 +5467,16 @@ buffer/index.js:
       addTaxa('Taxa de transação (aproximado — sem Income cruzado)', -Math.round((ord.transactionFee || 0) * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'transacao');
       var freteAprox = -Math.round((ord.reverseShippingFee || 0) * 100);
       if (freteAprox) addTaxa('Subtotal de Envio (aproximado — sem Income cruzado)', freteAprox, [], 'Pedidos — sem Income cruzado para este pedido', 'envioSubtotal');
+      // PROMPT "Correção da composição financeira por pedido" §4: sem Income ainda, os AJUSTES do
+      // pedido (nunca as taxas) continuam vindo do Order.all — mesmos fieldKey ('cupom'/'pix'/
+      // 'incentivoCupom'/'incentivoAcaoComercial') usados quando o Income já existe, então caem nos
+      // MESMOS grupos (gDescontos/gCreditos) sem duplicar lógica de classificação. Valor validado
+      // empiricamente idêntico ao que o Income mostra para o mesmo pedido (1.025/1.025 casos reais) —
+      // por isso é seguro usá-lo como o próprio valor provisório, não uma estimativa por fora.
+      if (ord.coupon) addTaxa('Cupom (Order.all — provisório, sem Income cruzado)', -Math.round(ord.coupon * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'cupom');
+      if (ord.pixAdjustment) addTaxa('Ajuste por pagamento via PIX (Order.all — provisório, sem Income cruzado)', -Math.round(ord.pixAdjustment * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'pix');
+      if (ord.couponIncentive) addTaxa('Incentivo de cupom (Order.all — provisório, sem Income cruzado)', Math.round(ord.couponIncentive * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'incentivoCupom');
+      if (ord.commercialActionIncentive) addTaxa('Incentivo Shopee para ação comercial (Order.all — provisório, sem Income cruzado)', Math.round(ord.commercialActionIncentive * 100), [], 'Pedidos — sem Income cruzado para este pedido', 'incentivoAcaoComercial');
     }
     adjRows.forEach(function (a) { addTaxa(a.desc || 'Ajuste (Adjustment)', a.valor, [], 'Adjustment', 'ajusteGenerico'); });
     // Valores de referência da fonte — NUNCA somados na composição/DRE (§13/§20/§109): comissão e
@@ -5495,7 +5519,18 @@ buffer/index.js:
     // ainda não cobre este pedido, ou o cruzamento apontou um caso que precisa de auditoria — motivo em
     // incomeResolve.status: NOT_IN_INCOME/WRONG_OPERATION/DUPLICATE_ORDER_ROWS/INVALID_ORDER_ID).
     var statusFinanceiro = mrRow ? (pendencia ? 'DIVERGENCIA' : 'CONFIRMADO') : 'PROVISORIO';
-    return { orderId: orderId, operationId: opIdOrd, temIncome: !!mrRow, mrRow: mrRow, incomeResolve: incomeResolve, statusFinanceiro: statusFinanceiro, ord: ord, svcRows: svcRows, svcResolve: svcResolve, serviceFee: serviceFee, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gEnvio: gEnvio, gOutros: gOutros, envio: envio, auditoriaFonte: auditoriaFonte, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), envioC: somaGrupo(gEnvio), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, taxasSomaSemAjusteC: taxasSomaSemAjusteC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia };
+    // PROMPT "Correção da composição financeira por pedido": nova regra oficial — Venda Bruta (Order.
+    // all) → Ajustes do pedido (gDescontos+gCreditos: cupom/PIX/reembolso/vouchers/cashback/incentivo
+    // de cupom/ação comercial) → = Receita Ajustada → Taxas Shopee (gTaxas+gEnvio+gOutros: comissão/
+    // serviço/transação/afiliados/envio/demais) → = Renda Final Shopee. Nunca um cálculo novo: usa os
+    // MESMOS grupos já classificados acima por finClassifica()/FIN_NATUREZA_MAP — só nomeia os dois
+    // subtotais intermediários que faltavam entre Venda e Lucro (que já existia como resultadoC).
+    // rendaFinalShopeeC == receitaC + taxasSomaC (== resultadoC + custoProdC quando o custo é
+    // conhecido) — o mesmo "Pagamento Liberado" que já fecha empiricamente com mrRow.liberado.
+    var ajustesC = somaGrupo(gDescontos) + somaGrupo(gCreditos);
+    var receitaAjustadaC = receitaC != null ? receitaC + ajustesC : null;
+    var rendaFinalShopeeC = receitaC != null ? receitaC + taxasSomaC : null;
+    return { orderId: orderId, operationId: opIdOrd, temIncome: !!mrRow, mrRow: mrRow, incomeResolve: incomeResolve, statusFinanceiro: statusFinanceiro, ord: ord, svcRows: svcRows, svcResolve: svcResolve, serviceFee: serviceFee, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gEnvio: gEnvio, gOutros: gOutros, envio: envio, auditoriaFonte: auditoriaFonte, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), envioC: somaGrupo(gEnvio), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, taxasSomaSemAjusteC: taxasSomaSemAjusteC, ajustesC: ajustesC, receitaAjustadaC: receitaAjustadaC, rendaFinalShopeeC: rendaFinalShopeeC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia };
   }
   // resolveSellerCharges(orderId) — PROMPT DEFINITIVO "FICHA DO PEDIDO — TAXAS SHOPEE + CUSTOS DA
   // LOJA + CABEÇALHO + RESULTADO": lista ÚNICA, FIXA e EXAUSTIVA de tudo que a Shopee efetivamente
@@ -5875,14 +5910,18 @@ buffer/index.js:
     // 7. CONCILIAÇÃO DO PAGAMENTO — equação explícita, substitui "Total (todos os grupos)". Usa
     // exatamente os mesmos grupos já somados (taxasSomaSemAjusteC == gDescontos+gEnvio+gTaxas+
     // gCreditos, validado empiricamente contra 1.662 pedidos reais) — nenhuma conta nova.
+    // PROMPT "Correção da composição financeira por pedido" §5: o valor bruto da venda nunca muda —
+    // a linha inicial precisa ser receitaC (Order.all, Preço Acordado × Qtd), NUNCA mrRow.preco
+    // ("Preço do produto" do Income — um campo diferente, usado só para a reconciliação interna do
+    // Income, nunca como "quanto foi vendido" — mesma regra já documentada em receitaC acima).
     var pagamentoLiberadoC = mrRow ? mrRow.liberado : (receitaC != null ? receitaC + taxasSomaC : null);
     var bloco7Conciliacao = mrRow ? '<div class="panel"><div class="ph"><h3>7. Conciliação do Pagamento</h3></div><div class="pb">' +
-      fLine('Preço do produto', mrRow.preco) +
-      (somaGrupo(gDescontos) ? fLine('Ajustes / reduções do pedido', somaGrupo(gDescontos)) : '') +
+      fLine('Venda Bruta', receitaC) +
+      (somaGrupo(gDescontos) + somaGrupo(gCreditos) ? fLine('Ajustes do pedido', somaGrupo(gDescontos) + somaGrupo(gCreditos)) : '') +
+      (receitaC != null ? '<div class="fin-line" style="margin-top:2px"><span>= Receita Ajustada</span><b>' + brlC(receitaC + somaGrupo(gDescontos) + somaGrupo(gCreditos)) + '</b></div>' : '') +
       (envio && envio.subtotalC ? fLine('Subtotal de envio', envio.subtotalC) : '') +
       fLine('Taxas Shopee', somaGrupo(gTaxas)) +
-      (somaGrupo(gCreditos) ? fLine('Créditos', somaGrupo(gCreditos)) : '') +
-      '<div class="fin-line total"><span>= Pagamento Liberado Shopee</span><b>' + brlC(pagamentoLiberadoC) + '</b></div>' +
+      '<div class="fin-line total"><span>= Renda Final Shopee</span><b>' + brlC(pagamentoLiberadoC) + '</b></div>' +
       '<div style="margin-top:4px">' + taxasConf + '</div>' +
       '</div></div>' : '<div class="panel"><div class="ph"><h3>7. Conciliação do Pagamento</h3></div><div class="pb"><span class="tag warn">🟡 Composição preliminar — aguardando Income</span><div class="footnote" style="margin-top:6px">' + (comp.incomeResolve.status === 'NOT_IN_INCOME' ? 'Este pedido ainda não aparece no relatório Income importado.' : INCOME_STATUS_TXT[comp.incomeResolve.status] || '') + '</div></div></div>';
     // Diagnóstico de cruzamento Income (PROMPT "Correção definitiva — Pedidos deve buscar as taxas
@@ -6015,8 +6054,17 @@ buffer/index.js:
     // soma exibida no fim do bloco 3 acima, nunca um segundo cálculo. Sem Income cruzado, totalC já
     // reflete só o que é conhecido (ex.: Taxa de serviço via Service Fee Details/estimativa) e carrega
     // sellerCharges.totalStatus (PARCIAL/SEM_DADOS) — nunca mais um cálculo paralelo via gTaxas aqui.
+    // PROMPT "Correção da composição financeira por pedido": faltava o degrau AJUSTES DO PEDIDO
+    // (cupom/PIX/reembolso/vouchers/cashback/incentivo de cupom/ação comercial — comp.ajustesC, MESMA
+    // fonte de comp.gDescontos/gCreditos já usada nos blocos 5/6 abaixo) entre Venda e Taxas — sem ele,
+    // "Pagamento previsto"/"Lucro atual" ficavam sistematicamente inflados em pedidos com ajustes reais
+    // (confirmado com dados reais: pedido com R$14,91 de Cupom+PIX mostrava R$14,91 de lucro a mais do
+    // que a Shopee realmente paga). Nunca dois motores: ajustesC vem de pedidoComposicaoFinanceira(),
+    // taxasShopeeC continua vindo de resolveSellerCharges() — só a SOMA final passou a incluir os dois.
+    var ajustesC = comp.ajustesC;
+    var receitaAjustadaC = (receitaC != null && ajustesC != null) ? receitaC + ajustesC : null;
     var taxasShopeeC = sellerCharges.totalC;
-    var pagamentoPrevistoC = (receitaC != null && taxasShopeeC != null) ? receitaC + taxasShopeeC : null;
+    var pagamentoPrevistoC = (receitaAjustadaC != null && taxasShopeeC != null) ? receitaAjustadaC + taxasShopeeC : null;
     var lucroAtualSimplesC = (pagamentoPrevistoC != null && custoProdC != null) ? (pagamentoPrevistoC - custoProdC) : null;
     var margemAtualSimplesPct = (lucroAtualSimplesC != null && receitaC) ? r2(lucroAtualSimplesC / receitaC * 100) : null;
     // BUG 2 (Fase final de ajuste gerencial): venda/taxas/custo continuam calculados normalmente
@@ -6027,11 +6075,16 @@ buffer/index.js:
     var margemHtmlCancelavel = cancelado ? 'Indisponível' : (margemAtualSimplesPct != null ? pct(margemAtualSimplesPct) : '—');
     var avisoCanceladoBlock = cancelado ? callout('warn', 'Pedido cancelado — resultado não realizado.', 'Venda, Lucro e Margem abaixo não representam dinheiro ganho — a venda nunca se concretizou.') : '';
 
-    // RESULTADO DO PEDIDO (§24-27): só os 5 campos pedidos — Venda/Taxas Shopee/Custo do
-    // produto/Lucro atual/Margem atual — mesma fórmula e mesmas variáveis do cabeçalho acima.
+    // RESULTADO DO PEDIDO (§24-27, + degrau de Ajustes do prompt "Correção da composição financeira
+    // por pedido"): Venda Bruta → Ajustes do pedido → = Receita Ajustada → Taxas Shopee → = Renda
+    // Final Shopee → Custo do produto → Lucro atual/Margem atual — mesma fórmula e mesmas variáveis
+    // do cabeçalho acima, nenhum novo cálculo.
     var resultadoBlock = '<div class="panel"><div class="ph"><h3>Resultado do Pedido</h3></div><div class="pb">' +
-      '<div class="fin-line"><span>Venda</span><span>' + vendaHtmlCancelavel + '</span></div>' +
+      '<div class="fin-line"><span>Venda Bruta</span><span>' + vendaHtmlCancelavel + '</span></div>' +
+      fLine('Ajustes do pedido', ajustesC) +
+      (receitaAjustadaC != null ? '<div class="fin-line" style="margin-top:2px"><span>= Receita Ajustada</span><b>' + brlC(receitaAjustadaC) + '</b></div>' : '') +
       fLine('Taxas Shopee', taxasShopeeC) +
+      (pagamentoPrevistoC != null ? '<div class="fin-line" style="margin-top:2px"><span>= Renda Final Shopee</span><b>' + brlC(pagamentoPrevistoC) + '</b></div>' : '') +
       fLine('Custo do produto', custoProdC != null ? -custoProdC : null) +
       '<div class="fin-line total"><span>Lucro atual</span><span class="' + (lucroAtualSimplesC != null && lucroAtualSimplesC < 0 && !cancelado ? 'neg' : 'pos') + '">' + lucroHtmlCancelavel + '</span></div>' +
       '<div class="fin-line"><span>Margem atual</span><span>' + margemHtmlCancelavel + '</span></div>' +
@@ -6067,16 +6120,20 @@ buffer/index.js:
         '</div></div>';
     }
 
-    // 7 blocos (Parte 2 da correção): 1.Resumo Financeiro (5 números) → 2.Produto e Venda →
+    // 7 blocos (Parte 2 da correção): 1.Resumo Financeiro → 2.Produto e Venda →
     // 3.Taxas Shopee Descontadas do Vendedor → 4.Envio → 5.Ajustes que Afetaram o Repasse →
     // 6.Créditos/Compensações → 7.Conciliação do Pagamento — depois Eventos do Pedido → Resultado.
-    // Cabeçalho (§1-7): Valor da venda | Taxas | Pagamento previsto | Custo do produto | Lucro atual.
+    // Cabeçalho (§1-7 + degrau de Ajustes do prompt "Correção da composição financeira por pedido"):
+    // Valor da venda | Ajustes do pedido | Receita ajustada | Taxas | Renda Final Shopee | Custo do
+    // produto | Lucro atual.
     var heroBlock = '<div class="panel"><div class="ph"><h3>1. Resumo Financeiro</h3></div><div class="pb" style="padding-top:0">' +
       avisoCanceladoBlock +
       '<div class="kstrip">' +
       '<div class="kc"><div class="kl">Valor da venda</div><div class="kv" style="font-size:18px">' + vendaHtmlCancelavel + '</div></div>' +
+      '<div class="kc"><div class="kl">Ajustes do pedido</div><div class="kv" style="font-size:18px">' + (ajustesC != null ? brlC(ajustesC) : '—') + '</div></div>' +
+      '<div class="kc"><div class="kl">Receita ajustada</div><div class="kv" style="font-size:18px">' + (receitaAjustadaC != null ? brlC(receitaAjustadaC) : '—') + '</div></div>' +
       '<div class="kc"><div class="kl">Taxas</div><div class="kv" style="font-size:18px">' + (taxasShopeeC != null ? brlC(taxasShopeeC) : '—') + '</div></div>' +
-      '<div class="kc"><div class="kl">Pagamento previsto</div><div class="kv" style="font-size:18px">' + (pagamentoPrevistoC != null ? brlC(pagamentoPrevistoC) : '—') + '</div></div>' +
+      '<div class="kc"><div class="kl">Renda Final Shopee</div><div class="kv" style="font-size:18px">' + (pagamentoPrevistoC != null ? brlC(pagamentoPrevistoC) : '—') + '</div></div>' +
       '<div class="kc"><div class="kl">Custo do produto</div><div class="kv" style="font-size:18px">' + (custoProdC != null ? brlC(-custoProdC) : (custoPendente ? '<span class="tag warn">pendente</span>' : '—')) + '</div></div>' +
       '<div class="kc"><div class="kl">Lucro atual</div><div class="kv" style="font-size:18px;color:' + (lucroAtualSimplesC != null && lucroAtualSimplesC < 0 && !cancelado ? 'var(--err)' : 'var(--ok)') + '">' + lucroHtmlCancelavel + '</div></div>' +
       '</div></div></div>';
@@ -9638,7 +9695,15 @@ buffer/index.js:
   // §37: "Participação em ação comercial" entra como componente próprio da Taxa de Serviço, com
   // origem real na fonte (incentivo + ajuste, colunas 21/46 do Income) — soma automaticamente junto
   // com os demais campos por já estar no array agregado por mrPeriodEngine().
-  var MR_FIELDS = ['preco', 'liberado', 'reembolso', 'pix', 'cupom', 'comissao', 'servico', 'transacao', 'afiliado', 'freteParceiro', 'descontoFrete', 'envioReverso', 'incentivoAcaoComercial', 'ajusteAcaoComercial'];
+  // PROMPT "Correção da composição financeira por pedido": lista precisa incluir TODO campo real do
+  // Income classificado como taxa/desconto/crédito do vendedor em FIN_NATUREZA_MAP (a mesma
+  // classificação usada por pedidoComposicaoFinanceira/gTaxas/gDescontos/gCreditos) — faltavam
+  // taxaDevolucaoFacil/taxaRecargaAutomatica (taxas reais) e voucherSeller/voucherCompartilhado/
+  // coinCashbackSeller/coinCashbackCompartilhado/incentivoCupom (descontos/créditos reais): antes
+  // deste ajuste, um pedido real com Incentivo de cupom de R$141,32 simplesmente desaparecia da soma
+  // de Taxas/Descontos/Receita Líquida da Minha Renda (confirmado com dados reais — 15/1.025 pedidos
+  // de uma amostra tinham Incentivo de cupom != 0).
+  var MR_FIELDS = ['preco', 'liberado', 'reembolso', 'pix', 'cupom', 'comissao', 'servico', 'transacao', 'afiliado', 'freteParceiro', 'descontoFrete', 'envioReverso', 'incentivoAcaoComercial', 'ajusteAcaoComercial', 'taxaDevolucaoFacil', 'taxaRecargaAutomatica', 'voucherSeller', 'voucherCompartilhado', 'coinCashbackSeller', 'coinCashbackCompartilhado', 'incentivoCupom'];
   function mrPeriodEngine(range) {
     var within = mrRange(range);
     var e = mrEngine(); var mrByOrder = {}; e.orders.forEach(function (r) { mrByOrder[r.orderId] = r; });
@@ -9710,9 +9775,15 @@ buffer/index.js:
     // de Taxas Shopee — testado contra o arquivo real: sem esses dois campos a conferência com o
     // Pagamento Liberado tinha um resíduo de ~8,5% do liberado; com eles, cai para ~0,2% (§18 nunca
     // soma total + componente — aqui os dois campos SÃO o componente, somados uma única vez aqui).
-    var taxasShopeeTotal = t.comissao + t.servico + t.transacao + t.freteParceiro + t.descontoFrete + t.envioReverso + t.incentivoAcaoComercial + t.ajusteAcaoComercial;
-    var descontosComerciais = t.cupom + t.pix;
-    var receitaLiquida = t.preco + descontosComerciais + taxasShopeeTotal + t.afiliado + t.reembolso; // deve ≈ t.liberado
+    // PROMPT "Correção da composição financeira por pedido": mesma classificação de FIN_NATUREZA_MAP
+    // usada por gTaxas (taxas reais cobradas pelo vendedor) — agora inclui taxaDevolucaoFacil e
+    // taxaRecargaAutomatica, que antes ficavam de fora da soma (nunca somados em lugar nenhum).
+    var taxasShopeeTotal = t.comissao + t.servico + t.transacao + t.freteParceiro + t.descontoFrete + t.envioReverso + t.incentivoAcaoComercial + t.ajusteAcaoComercial + t.taxaDevolucaoFacil + t.taxaRecargaAutomatica;
+    // Mesma classificação de gDescontos+gCreditos: cupom/pix (descontos) + vouchers/cashback/incentivo
+    // de cupom (créditos) + reembolso (agora dentro deste subtotal, não mais somado à parte em
+    // receitaLiquida — evita contar reembolso duas vezes).
+    var descontosComerciais = t.cupom + t.pix + t.voucherSeller + t.voucherCompartilhado + t.coinCashbackSeller + t.coinCashbackCompartilhado + t.incentivoCupom + t.reembolso;
+    var receitaLiquida = t.preco + descontosComerciais + taxasShopeeTotal + t.afiliado; // deve ≈ t.liberado
     var custoCoveragePct = custoItemsTotal ? r2(custoItemsKnown / custoItemsTotal * 100) : 0;
     return {
       range: within, n: list.length, t: t, faturamento: faturamento, lucro: lucro, lucroN: lucroN, pendN: pendN,
@@ -9760,8 +9831,10 @@ buffer/index.js:
     if (kind === 'taxasShopee') {
       // §39 do prompt de reorganização: precisa bater EXATAMENTE com a linha "Taxas Shopee" da DRE
       // (pe.taxasShopeeTotal + t.afiliado) — inclui ação comercial e afiliados, que faltavam aqui.
+      // PROMPT "Correção da composição financeira por pedido": + taxaDevolucaoFacil/taxaRecargaAutomatica,
+      // agora somados em taxasShopeeTotal (mrPeriodEngine) — precisam entrar aqui também.
       pe.rows.forEach(function (r) {
-        var v = r.comissao + r.servico + r.transacao + r.freteParceiro + r.descontoFrete + r.envioReverso + (r.incentivoAcaoComercial || 0) + (r.ajusteAcaoComercial || 0) + r.afiliado; if (!v) return;
+        var v = r.comissao + r.servico + r.transacao + r.freteParceiro + r.descontoFrete + r.envioReverso + (r.incentivoAcaoComercial || 0) + (r.ajusteAcaoComercial || 0) + r.afiliado + (r.taxaDevolucaoFacil || 0) + (r.taxaRecargaAutomatica || 0); if (!v) return;
         var sk = e.skuByOrder[r.orderId];
         rows.push({ orderId: r.orderId, data: r.dataConclusao || r.dataCriacao, sku: sk && sk[0] ? sk[0].sku : '—', produto: sk && sk[0] ? sk[0].produto : (r.produto || '—'), descricao: 'comissão+serviço+transação+frete parceiro+ajuste de frete+envio reverso+ação comercial+afiliados', valor: v });
       });
@@ -9916,7 +9989,11 @@ buffer/index.js:
     // crédito×débito de ação comercial/PIX/desconto de frete como informação adicional (split),
     // nunca troca o número oficial da linha "Taxas Shopee".
     var split = mrSplitPorNatureza(pe);
-    var descComerciais = t.cupom + t.pix;
+    // PROMPT "Correção da composição financeira por pedido": pe.descontosComerciais já inclui
+    // cupom+pix+vouchers+cashback+incentivo de cupom+reembolso (mesma classificação de gDescontos+
+    // gCreditos) — aqui "Devoluções e Reembolsos" continua como linha própria da cascata (abaixo),
+    // então o reembolso é subtraído de volta para não contar duas vezes.
+    var descComerciais = pe.descontosComerciais - t.reembolso;
     var taxasShopee = pe.taxasShopeeTotal + t.afiliado;
     var devolucoes = t.reembolso;
     var outrosAj = pe.adjTot;
@@ -9944,7 +10021,7 @@ buffer/index.js:
     // ambíguos por sinal — não recalcula a linha, só explica sua composição.
     var splitNote = (split.creditos !== 0 || split.debitosSignAware !== 0) ? '<div class="fin-line" style="padding-left:14px"><span class="footnote" style="margin:0">↳ dos quais, ação comercial/PIX/desconto de frete: débito real ' + brlC(split.debitosSignAware) + ' · crédito/subsídio Shopee ' + brlC(split.creditos) + '</span></div>' : '';
     var cascata = line('Receita Bruta (Faturamento)', receitaBruta, { note: nn(pe.n) + ' pedidos pagos no período (Pedidos, preço acordado × qtd)', drill: 'faturamento' }) +
-      line('Descontos Comerciais do Vendedor', descComerciais, { op: '−', note: 'cupom (financiado pelo vendedor) + PIX', warn: mrParcial }) +
+      line('Descontos Comerciais do Vendedor', descComerciais, { op: '−', note: 'cupom + PIX + vouchers/cashback subsidiados pelo vendedor + incentivo de cupom', warn: mrParcial }) +
       line('Taxas Shopee', taxasShopee, { op: '−', note: taxasNote, drill: 'taxasShopee', warn: mrParcial }) + splitNote +
       line('Devoluções e Reembolsos', devolucoes, { op: '−', drill: 'reembolso', warn: mrParcial }) +
       line('Outros Ajustes/Descontos', outrosAj, { op: '−', note: 'aba Adjustment — total importado, sem data confiável para restringir ao período', drill: 'adjustes' }) +
@@ -10018,7 +10095,9 @@ buffer/index.js:
       ['Custo do produto', pe.custoProd, pe.custoItemsKnown ? pe.custoProdN : 0],
       ['Devoluções', Math.abs(t.reembolso), afetados('reembolso')],
       ['Ajustes (Adjustment)', Math.abs(pe.adjTot), mrAdj.length],
-      ['Outros (cupom + PIX)', Math.abs(t.cupom + t.pix), pe.rows.filter(function (r) { return (r.cupom || 0) + (r.pix || 0) !== 0; }).length],
+      // PROMPT "Correção da composição financeira por pedido": inclui vouchers/cashback/incentivo de
+      // cupom (antes ficavam fora desta soma, mesmo já contando no total geral de descontos).
+      ['Outros (cupom + PIX + vouchers/cashback + incentivo de cupom)', Math.abs(t.cupom + t.pix + t.voucherSeller + t.voucherCompartilhado + t.coinCashbackSeller + t.coinCashbackCompartilhado + t.incentivoCupom), pe.rows.filter(function (r) { return (r.cupom || 0) + (r.pix || 0) + (r.voucherSeller || 0) + (r.voucherCompartilhado || 0) + (r.coinCashbackSeller || 0) + (r.coinCashbackCompartilhado || 0) + (r.incentivoCupom || 0) !== 0; }).length],
     ].filter(function (r) { return r[1] > 0; }).sort(function (a, b) { return b[1] - a[1]; });
     if (!linhas.length) return '';
     var rows = linhas.map(function (r) { return '<tr><td class="cell-text">' + esc(r[0]) + '</td><td class="nowrap">' + brlC(r[1]) + '</td><td>' + pct(pe.faturamento ? r2(r[1] / pe.faturamento * 100) : 0) + '</td><td>' + nn(r[2]) + '</td></tr>'; }).join('');
@@ -10041,6 +10120,7 @@ buffer/index.js:
       ['Vendas (preço do produto)', t.preco, 'preco'],
       ['Desconto de frete recebido da Shopee', t.descontoFrete > 0 ? t.descontoFrete : 0, 'descontoFrete'],
       ['Ação comercial (incentivo)', t.incentivoAcaoComercial > 0 ? t.incentivoAcaoComercial : 0, 'incentivoAcaoComercial'],
+      ['Incentivo de cupom', t.incentivoCupom > 0 ? t.incentivoCupom : 0, 'incentivoCupom'],
       ['Ajustes positivos / créditos', adjPos, 'adjustes'],
     ]);
     var saidas = grp('SAÍDAS', [
@@ -10068,7 +10148,7 @@ buffer/index.js:
     pedidosPagos.forEach(function (o) { var f = orderFinance(o); var v = Math.round(f.revenue * 100); if (mrByOrderF[o.id]) fatConciliado += v; else fatNaoConciliado += v; });
     var adjPos = mrAdj.filter(function (a) { return a.valor > 0; }).reduce(function (s, a) { return s + a.valor; }, 0);
     var recuperacoes = adjPos + (t.descontoFrete > 0 ? t.descontoFrete : 0);
-    var outrosCustos = Math.abs(t.afiliado) + Math.abs(t.cupom + t.pix) + Math.abs(t.envioReverso) + Math.abs(mrAdj.filter(function (a) { return a.valor < 0; }).reduce(function (s, a) { return s + a.valor; }, 0));
+    var outrosCustos = Math.abs(t.afiliado) + Math.abs(t.cupom + t.pix + t.voucherSeller + t.voucherCompartilhado + t.coinCashbackSeller + t.coinCashbackCompartilhado + t.incentivoCupom) + Math.abs(t.envioReverso) + Math.abs(mrAdj.filter(function (a) { return a.valor < 0; }).reduce(function (s, a) { return s + a.valor; }, 0));
     var temLucro = pe.lucroN > 0;
     var margem = (temLucro && pe.faturamento) ? r2(pe.lucro / pe.faturamento * 100) : null;
     var pctConciliado = pe.n ? r2(t.nMR / pe.n * 100) : 0;
@@ -10159,7 +10239,12 @@ buffer/index.js:
     return function (o) {
       var mrRow = mrByOrder[o.id]; var f = orderFinance(o); var custoProdC = f.costPending ? null : Math.round((f.productCostTotal || 0) * 100);
       if (custoProdC == null) return { known: false };
-      if (mrRow) { var taxasSomaC = mrRow.comissao + mrRow.servico + mrRow.transacao + mrRow.freteParceiro + mrRow.descontoFrete + mrRow.envioReverso + mrRow.cupom + mrRow.pix + mrRow.reembolso + mrRow.afiliado; return { known: true, receita: mrRow.preco, lucro: mrRow.preco + taxasSomaC - custoProdC }; }
+      // PROMPT "Correção da composição financeira por pedido": lista completa — antes faltavam
+      // taxaDevolucaoFacil/taxaRecargaAutomatica/voucherSeller/voucherCompartilhado/coinCashbackSeller/
+      // coinCashbackCompartilhado/incentivoAcaoComercial/incentivoCupom (mesmos campos que
+      // pedidoComposicaoFinanceira já soma via gTaxas/gDescontos/gCreditos) — um pedido real com
+      // Incentivo de cupom, por exemplo, tinha esse valor simplesmente ignorado no lucro por pedido.
+      if (mrRow) { var taxasSomaC = mrRow.comissao + mrRow.servico + mrRow.transacao + mrRow.freteParceiro + mrRow.descontoFrete + mrRow.envioReverso + mrRow.cupom + mrRow.pix + mrRow.reembolso + mrRow.afiliado + mrRow.taxaDevolucaoFacil + mrRow.taxaRecargaAutomatica + mrRow.voucherSeller + mrRow.voucherCompartilhado + mrRow.coinCashbackSeller + mrRow.coinCashbackCompartilhado + mrRow.incentivoAcaoComercial + mrRow.incentivoCupom; return { known: true, receita: mrRow.preco, lucro: mrRow.preco + taxasSomaC - custoProdC }; }
       return { known: true, receita: Math.round(f.revenue * 100), lucro: Math.round((f.estimatedResult || 0) * 100) };
     };
   }

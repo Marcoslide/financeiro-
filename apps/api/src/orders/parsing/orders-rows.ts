@@ -72,6 +72,19 @@ export interface OrderItemRow {
   sellerDiscount2: string | null;
   weightSku: string | null;
 
+  // Ajustes do pedido (PROMPT "Correção da composição financeira por pedido"): descontos/incentivos
+  // aplicados pela própria Shopee no pedido, já presentes no Order.all — usados como Venda Bruta →
+  // Ajustes → Receita Ajustada (nunca confundidos com as Taxas Shopee, que vêm do Income). Repetem-se
+  // idênticos em toda linha de um pedido multi-item (mesmo padrão de totalAmount/grandTotal — nível
+  // pedido, não nível item), confirmado com dados reais antes de adicionar estes campos.
+  pixAdjustment: string | null;
+  coupon: string | null;
+  couponIncentive: string | null;
+  commercialActionIncentive: string | null;
+  commercialActionAdjustment: string | null;
+  levemaisShopeeDiscount: string | null;
+  levemaisSellerDiscount: string | null;
+
   rawPayload: Record<string, string>;
 }
 
@@ -234,6 +247,14 @@ export function parseOrders(buffer: Buffer, filename: string): ParsedOrders {
       sellerDiscount1: nthDec(dr.headerNames, dr.values, 'Desconto do vendedor', 0),
       sellerDiscount2: nthDec(dr.headerNames, dr.values, 'Desconto do vendedor', 1),
       weightSku: dec(acc, ['Peso total SKU']),
+
+      pixAdjustment: dec(acc, ['Ajuste por pagamento via PIX']),
+      coupon: dec(acc, ['Cupom']),
+      couponIncentive: dec(acc, ['Incentivo de cupom']),
+      commercialActionIncentive: dec(acc, ['Incentivo Shopee para ação comercial']),
+      commercialActionAdjustment: dec(acc, ['Ajuste por participação em ação comercial']),
+      levemaisShopeeDiscount: dec(acc, ['Desconto Shopee da Leve Mais por Menos']),
+      levemaisSellerDiscount: dec(acc, ['Desconto da Leve Mais por Menos do vendedor']),
 
       rawPayload: raw,
     });
