@@ -141,7 +141,11 @@
   .bulkbar b{font-size:14px}.bulkbar .spacer{flex:1}
   .bulkbar .btn-sm{background:rgba(255,255,255,.1);border-color:transparent;color:#fff}
   .bulkbar .btn-sm:hover{background:rgba(255,255,255,.2)}.bulkbar .btn-sm.primary{background:#fff;color:var(--brand)}
-  .overlay{position:fixed;inset:0;background:rgba(16,26,51,.45);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px}
+  /* PROMPT "Fase de correção geral pós-auditoria E2E" §Fase 5.1: modais de diagnóstico (.overlay) são
+     frequentemente abertos POR DENTRO de uma Ficha/editor já aberto (.drawer, z-index:60) — com
+     .overlay em 50 (< 60) o diagnóstico renderizava ATRÁS do painel que o abriu. .overlay agora fica
+     acima de .drawer (mas abaixo do .toast, que precisa ficar sempre visível por cima de tudo). */
+  .overlay{position:fixed;inset:0;background:rgba(16,26,51,.45);display:flex;align-items:center;justify-content:center;z-index:65;padding:20px}
   .modal{background:#fff;border-radius:14px;width:520px;max-width:96vw;box-shadow:0 30px 80px rgba(0,0,0,.4)}
   .modal .mh{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
   .modal .mh h3{margin:0;font-size:16px}.modal .mbd{padding:20px}
