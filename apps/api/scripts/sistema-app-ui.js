@@ -297,7 +297,7 @@
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id', bankaccounts: 'id', companies: 'id', operations: 'id', cpheader: 'id', cpitems: 'id', cppayments: 'id', cpattach: 'id', cpcategories: 'id', cpaccounting: 'id', cpcostcenters: 'id', cpsuppliers: 'id', cpsupplylinks: 'id', pricingopconfig: 'id', pricingfamilyrules: 'id', financialaccounts: 'id', financialevents: 'id', crheader: 'id', crreceipts: 'id', financialtransfers: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id', bankaccounts: 'id', companies: 'id', operations: 'id', cpheader: 'id', cpitems: 'id', cppayments: 'id', cpattach: 'id', cpcategories: 'id', cpaccounting: 'id', cpcostcenters: 'id', cpsuppliers: 'id', cpsupplylinks: 'id', pricingopconfig: 'id', pricingfamilyrules: 'id', financialaccounts: 'id', financialevents: 'id', crheader: 'id', crreceipts: 'id', financialtransfers: 'id', fatorfuncionarios: 'id', fatorcustosfixos: 'id', fatorcustosvariaveis: 'id', fatorpedidosnapshots: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -2291,6 +2291,54 @@
       '</div></div>' +
       '<div class="footnote" style="padding:8px 0">Fontes usadas: Pedidos' + (mrRow ? ' · Minha Renda' : '') + (svcRows.length ? ' · Service Fee Details' : '') + (adjRows.length ? ' · Adjustment' : '') + (acRows.length ? ' · Shopee Acelera' : '') + (affRow ? ' · Afiliados' : '') + (wtx.length ? ' · Saldo da Carteira' : '') + (occs.length ? ' · Devoluções' : '') + '.</div>';
 
+    // ---- FATOR DE CUSTO / ANÁLISE DE RENTABILIDADE (PROMPT "Implementação do Fator de Custo dentro
+    // do módulo Caixa") — camada ADITIVA: reaproveita 100% de pedidoComposicaoFinanceira() (Venda
+    // Bruta/Taxas Marketplace/Custo do Produto — nunca recalculados) e só ACRESCENTA hora homem/
+    // custos fixos absorvidos/custos variáveis industriais/impostos, rateados pelo tempo de produção
+    // real de cada família (nunca distribuído igual entre produtos). Nunca substitui "Resultado do
+    // Pedido" acima (regra financeira Shopee, já aprovada) — é uma segunda lente, de rentabilidade
+    // operacional real, claramente rotulada como tal. §4 do prompt: todo campo aparece mesmo zerado.
+    var fatorCustoBlock = '';
+    if (!cancelado) {
+      var fc = fatorCustoPedido(orderId);
+      var fcLine = function (label, v, opts) { opts = opts || {}; return '<div class="fin-line"><span>' + esc(label) + (opts.note ? ' <span class="footnote" style="margin:0">' + esc(opts.note) + '</span>' : '') + '</span><span class="' + (v < 0 ? 'neg' : v > 0 ? 'pos' : '') + '">' + brlC(v) + '</span></div>'; };
+      var taxasRowsHtml = (fc.taxaRows || []).filter(function (r) { return r.valor; }).map(function (r) { return '<div class="fin-line" style="padding-left:14px"><span>' + esc(r.label) + '</span><span class="' + (r.valor < 0 ? 'neg' : 'pos') + '">' + brlC(r.valor) + '</span></div>'; }).join('');
+      var itensSemTempoHtml = fc.itensSemTempo && fc.itensSemTempo.length ? '<div class="footnote" style="margin-top:6px">⚠ ' + nn(fc.itensSemTempo.length) + ' item(ns) sem tempo de produção cadastrado na família (entram com 0 minuto): ' + fc.itensSemTempo.map(function (i) { return esc(i.sku || '(sem SKU)'); }).join(', ') + '.</div>' : '';
+      var congeladoTag = fc.congelado ? '<span class="tag ok">🔒 Congelado no fechamento</span>' : '<span class="tag warn">🟡 Estimativa (dia ainda não fechado)</span>';
+      var faltaCfg = !fc.configurado.funcionarios || !fc.configurado.custosFixos || !fc.configurado.custosVariaveis || !fc.configurado.capacidadeProdutiva || !fc.configurado.imposto || !fc.configurado.tempoProducao;
+      fatorCustoBlock = '<div class="panel"><div class="ph"><h3>Análise de Rentabilidade / Fator de Custo</h3>' + congeladoTag + '</div><div class="pb">' +
+        '<div class="footnote" style="margin-bottom:8px">Camada complementar de rentabilidade real — não substitui o Resultado do Pedido (regra Shopee) acima. Taxas marketplace nunca são recalculadas: usa exatamente os valores já classificados no bloco 3.</div>' +
+        '<div class="kstrip">' +
+        '<div class="kc"><div class="kl">Valor da venda</div><div class="kv">' + brlC(fc.vendaBrutaC) + '</div></div>' +
+        '<div class="kc"><div class="kl">Taxas marketplace</div><div class="kv">' + brlC(fc.taxasMarketplaceC) + '</div></div>' +
+        '<div class="kc"><div class="kl">Custo do produto</div><div class="kv">' + brlC(-fc.custoProdutoC) + (fc.custoPendente ? ' <span class="tag warn" style="font-size:9px">pendente</span>' : '') + '</div></div>' +
+        '<div class="kc"><div class="kl">Hora homem</div><div class="kv">' + brlC(-fc.horaHomemC) + '</div></div>' +
+        '<div class="kc"><div class="kl">Custos fixos</div><div class="kv">' + brlC(-fc.custosFixosAbsorvidosC) + '</div></div>' +
+        '<div class="kc"><div class="kl">Custos variáveis</div><div class="kv">' + brlC(-fc.custosVariaveisC) + '</div></div>' +
+        '<div class="kc"><div class="kl">Impostos</div><div class="kv">' + brlC(-fc.impostoC) + '</div></div>' +
+        '</div>' +
+        '<div class="panel" style="margin-top:10px;border:2px solid ' + (fc.lucroRealC >= 0 ? 'var(--ok)' : 'var(--err)') + '"><div class="pb" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">' +
+        '<div><div class="kl">LUCRO REAL</div><div class="kv" style="font-size:22px;color:' + (fc.lucroRealC >= 0 ? 'var(--ok)' : 'var(--err)') + '">' + brlC(fc.lucroRealC) + '</div></div>' +
+        '<div><div class="kl">Margem</div><div class="kv" style="font-size:22px">' + (fc.margemRealPct != null ? pct(fc.margemRealPct) : '—') + '</div></div>' +
+        '</div></div>' +
+        '<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Ver detalhamento (receita, taxas e custos)</summary><div style="margin-top:6px">' +
+        fcLine('Valor da venda', fc.vendaBrutaC) +
+        fcLine('Total taxas marketplace', fc.taxasMarketplaceC, { note: 'comissão/serviço/transação/afiliados — mesma fonte do bloco 3 acima' }) +
+        taxasRowsHtml +
+        fcLine('Custo do produto (família)', -fc.custoProdutoC) +
+        fcLine('Hora homem/produção', -fc.horaHomemC, { note: nn(fc.tempoProducaoMin) + ' min × ' + brlC(fc.custoMinutoHomemC) + '/min' }) +
+        fcLine('Custos fixos absorvidos', -fc.custosFixosAbsorvidosC, { note: nn(fc.tempoProducaoMin) + ' min × ' + brlC(fc.custoFixoMinutoC) + '/min' }) +
+        fcLine('Custos variáveis industriais', -fc.custosVariaveisC, { note: nn(fc.tempoProducaoMin) + ' min × ' + brlC(fc.custoVariavelMinutoC) + '/min' }) +
+        fcLine('Impostos', -fc.impostoC, { note: (fc.impostoPct || 0) + '% sobre a venda' }) +
+        '<div class="fin-line total" style="margin-top:2px"><span>Lucro Real</span><b class="' + (fc.lucroRealC < 0 ? 'neg' : 'pos') + '">' + brlC(fc.lucroRealC) + '</b></div>' +
+        itensSemTempoHtml +
+        (faltaCfg ? '<div class="footnote" style="margin-top:6px">Fator ainda em ativação parcial — camada(s) sem configuração aparecem como R$ 0,00. <button class="link-btn" data-gofatorcfg="1">Configurar em Caixa → Rentabilidade Real</button></div>' : '') +
+        '</div></details>' +
+        '</div></div>';
+    } else {
+      fatorCustoBlock = '<div class="panel"><div class="ph"><h3>Análise de Rentabilidade / Fator de Custo</h3></div><div class="pb"><span class="tag warn">Não aplicável</span><div class="footnote" style="margin-top:6px">Pedido cancelado — a venda nunca se concretizou.</div></div></div>';
+    }
+
     // PROMPT "MELHORIA CAIXA — AUDITORIA FINANCEIRA, EXPLICAÇÃO DE DIVERGÊNCIAS E FLUXO SHOPEE" §7:
     // "Auditoria financeira" por pedido — Venda/Taxas Shopee/Líquido calculado/Valor antecipado/
     // Diferença/Status, mesma fonte canônica do Resultado do Pedido acima (receitaC/taxasShopeeC/
@@ -2344,6 +2392,7 @@
       precificacaoBlock +
       devReaberturaBlock +
       resultadoBlock +
+      fatorCustoBlock +
       auditoriaFinPedidoBlock +
       (ord ? '<button class="btn-sm" data-goped="' + esc(orderId) + '">Ver na lista de Pedidos</button>' : '') +
       '</div>';
@@ -2351,6 +2400,7 @@
     var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { d.remove(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
     var gd = panel.querySelector('[data-godev360]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev360; d.remove(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
     var sd = panel.querySelector('[data-selldiag]'); if (sd) sd.onclick = function () { openSellerChargesDiag(orderId); };
+    var gfc = panel.querySelector('[data-gofatorcfg]'); if (gfc) gfc.onclick = function () { d.remove(); route = 'caixa'; caixaSub = 'rentabilidade'; render(); };
     panel.querySelectorAll('[data-skucostdiag]').forEach(function (b) { b.onclick = function () { openSkuCostDiag(orderId); }; });
     var ga = panel.querySelector('[data-acped360]'); if (ga) ga.onclick = function () { d.remove(); route = 'acelera'; aceleraSub = 'antecipacoes'; render(); setTimeout(function () { openAceleraPedido(orderId); }, 60); };
     var gf = panel.querySelector('[data-affped360]'); if (gf) gf.onclick = function () { d.remove(); route = 'afiliados'; affSub = 'pedidos'; render(); setTimeout(function () { openAffPedido(orderId); }, 60); };
@@ -7253,14 +7303,17 @@
     function overlay(html, w) { var o = document.createElement('div'); o.className = 'overlay'; o.innerHTML = '<div class="modal" style="width:' + (w || 520) + 'px">' + html + '</div>'; o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o); return o; }
     function openImportModal() { var o = overlay('<div class="mh"><h3>Importar planilha da Shopee</h3><button class="x">×</button></div><div class="mbd"><div class="dz" id="dz"><div style="font-size:26px;opacity:.4">⭱</div><div class="footnote" id="dzt" style="margin-top:6px">Arraste o arquivo .xlsx ou clique para selecionar</div><input type="file" accept=".xlsx" class="hidden" id="file"></div><div class="footnote">Reimportar sincroniza nome/preço/estoque da Shopee sem duplicar; família, preço de fechamento e custo são preservados.</div><div id="ie"></div></div><div class="mf"><button class="btn-sm" id="c">Cancelar</button><button class="btn-sm primary" id="go" disabled>Importar</button></div>'); var file = null, dz = o.querySelector('#dz'), inp = o.querySelector('#file'); o.querySelector('.x').onclick = o.querySelector('#c').onclick = function () { o.remove(); }; dz.onclick = function () { inp.click(); }; dz.ondragover = function (e) { e.preventDefault(); dz.classList.add('over'); }; dz.ondragleave = function () { dz.classList.remove('over'); }; dz.ondrop = function (e) { e.preventDefault(); dz.classList.remove('over'); file = e.dataTransfer.files[0]; show(); }; inp.onchange = function () { file = inp.files[0]; show(); }; function show() { if (file) { o.querySelector('#dzt').innerHTML = '<b>' + esc(file.name) + '</b> · ' + (file.size / 1024).toFixed(0) + ' KB'; o.querySelector('#go').disabled = false; } } o.querySelector('#go').onclick = function () { file.arrayBuffer().then(function (ab) { try { var parsed = parse(ab, file.name); if (parsed.notRecognized) { o.querySelector('#ie').innerHTML = '<div class="form-err">Cabeçalho de produtos não encontrado nesta planilha.</div>'; return; } syncRows(parsed.rows, file.name).then(function (res) { o.remove(); render(); toast(res.errors ? 'Importação concluída com erros' : 'Importação concluída', res.total + ' SKUs · ' + (res.newProducts + res.newVariations) + ' novos · ' + res.updated + ' atualizados · ' + res.unchanged + ' sem alteração · ' + res.errors + ' erros', res.errors > 0); }); } catch (e) { o.querySelector('#ie').innerHTML = '<div class="form-err">' + esc(e.message || e) + '</div>'; } }); }; }
 
-    function createFamily(dto) { var cost = parseNum(dto.cost), now = new Date().toISOString(), f = { id: uuid(), name: dto.name, normalizedName: normalize(dto.name), internalCode: dto.internalCode || null, notes: dto.notes || null, status: dto.status || 'ACTIVE', currentCostAmount: cost, currentCostEffectiveFrom: cost != null ? now : null, costUpdatedAt: cost != null ? now : null, costHistory: cost != null ? [{ costAmount: cost, effectiveFrom: now, createdAt: now }] : [] }; S2.families.push(f); return afterFamChange([f]).then(function () { return f; }); }
-    function updateFamily(f, dto) { var now = new Date().toISOString(); if (dto.name != null) { f.name = dto.name; f.normalizedName = normalize(dto.name); } if (dto.internalCode !== undefined) f.internalCode = dto.internalCode || null; if (dto.notes !== undefined) f.notes = dto.notes || null; if (dto.status) f.status = dto.status; var cost = parseNum(dto.cost); if (cost != null && cost !== f.currentCostAmount) { f.currentCostAmount = cost; f.currentCostEffectiveFrom = now; f.costUpdatedAt = now; f.costHistory = (f.costHistory || []).concat([{ costAmount: cost, effectiveFrom: now, createdAt: now }]); } return afterFamChange([f]); }
+    // PROMPT "Fator de Custo": tempoProducaoMin é campo puramente aditivo (não afeta currentCostAmount
+    // nem nenhum consumidor existente de família) — usado só pelo motor fatorTempoProducaoPedido() para
+    // ratear hora homem/custos fixos/variáveis por família, nunca distribuído igual entre produtos.
+    function createFamily(dto) { var cost = parseNum(dto.cost), tempo = parseNum(dto.tempoProducaoMin), now = new Date().toISOString(), f = { id: uuid(), name: dto.name, normalizedName: normalize(dto.name), internalCode: dto.internalCode || null, notes: dto.notes || null, status: dto.status || 'ACTIVE', currentCostAmount: cost, currentCostEffectiveFrom: cost != null ? now : null, costUpdatedAt: cost != null ? now : null, costHistory: cost != null ? [{ costAmount: cost, effectiveFrom: now, createdAt: now }] : [], tempoProducaoMin: tempo }; S2.families.push(f); return afterFamChange([f]).then(function () { return f; }); }
+    function updateFamily(f, dto) { var now = new Date().toISOString(); if (dto.name != null) { f.name = dto.name; f.normalizedName = normalize(dto.name); } if (dto.internalCode !== undefined) f.internalCode = dto.internalCode || null; if (dto.notes !== undefined) f.notes = dto.notes || null; if (dto.status) f.status = dto.status; if (dto.tempoProducaoMin !== undefined) f.tempoProducaoMin = parseNum(dto.tempoProducaoMin); var cost = parseNum(dto.cost); if (cost != null && cost !== f.currentCostAmount) { f.currentCostAmount = cost; f.currentCostEffectiveFrom = now; f.costUpdatedAt = now; f.costHistory = (f.costHistory || []).concat([{ costAmount: cost, effectiveFrom: now, createdAt: now }]); } return afterFamChange([f]); }
     function renderFamilias() {
       appEl.innerHTML = head('A família é a unidade interna de custo. Vários SKUs apontam para uma família; o custo mora aqui, com histórico.') + tabsHtml('familias') + '<div class="page-head" style="margin-top:-6px"><div></div><button class="btn-sm primary" id="nf">+ Nova família</button></div><div class="panel"><div class="pb"><div class="toolbar2"><input class="input sm" id="fq" style="width:260px" placeholder="Buscar família"><select class="select sm" id="fst"><option value="">Todas</option><option value="ACTIVE">Ativas</option><option value="INACTIVE">Inativas</option><option value="NOCOST">Sem custo</option></select></div></div><div class="pb" style="padding:0" id="fl"></div></div>';
       wireTabs(); q('#nf').onclick = function () { familyEditor(null); }; q('#fq').oninput = debounce(drawFam, 180); q('#fst').onchange = drawFam; drawFam();
       function drawFam() { var qv = normalize(q('#fq').value), st = q('#fst').value, counts = {}; S2.variations.forEach(function (v) { if (v.familyId) counts[v.familyId] = (counts[v.familyId] || 0) + 1; }); var list = S2.families.filter(function (f) { return (!qv || normalize(f.name).indexOf(qv) >= 0) && (st === '' || (st === 'NOCOST' ? f.currentCostAmount == null : f.status === st)); }).sort(function (a, b) { return a.name.localeCompare(b.name); }); q('#fl').innerHTML = list.length ? '<div class="table-wrap"><table><thead><tr><th>Família</th><th>Código</th><th>Custo atual</th><th>SKUs vinculados</th><th>Status</th><th>Custo atualizado</th><th></th></tr></thead><tbody>' + list.map(function (f) { return '<tr><td><b>' + esc(f.name) + '</b></td><td class="mono">' + esc(f.internalCode || '—') + '</td><td>' + (f.currentCostAmount != null ? brl(f.currentCostAmount) : '<span class="badge b-warn">não informado</span>') + '</td><td>' + (counts[f.id] || 0) + '</td><td><span class="badge ' + (f.status === 'ACTIVE' ? 'b-ok' : 'b-neutral') + '">' + (f.status === 'ACTIVE' ? 'Ativa' : 'Inativa') + '</span></td><td class="footnote" style="margin:0">' + (f.costUpdatedAt ? new Date(f.costUpdatedAt).toLocaleString('pt-BR') : '—') + '</td><td><button class="btn-sm" data-fam="' + f.id + '">Editar</button></td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="empty"><div class="ico">⁘</div><p>Nenhuma família. Crie a primeira para atribuir custo.</p></div>'; appEl.querySelectorAll('[data-fam]').forEach(function (b) { b.onclick = function () { familyEditor(S2.families.find(function (x) { return x.id === b.dataset.fam; })); }; }); }
     }
-    function familyEditor(fam, onSaved) { var o = overlay('<div class="mh"><h3>' + (fam ? 'Editar família' : 'Nova família') + '</h3><button class="x">×</button></div><div class="mbd" style="max-height:72vh;overflow:auto"><div id="fe"></div><label class="fld">Nome *</label><input class="input" id="fn" value="' + esc(fam ? fam.name : '') + '"><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><div><label class="fld">Código interno</label><input class="input" id="fc" value="' + esc(fam && fam.internalCode || '') + '"></div><div><label class="fld">Custo (R$)</label><input class="input" id="fcost" value="' + (fam && fam.currentCostAmount != null ? fam.currentCostAmount : '') + '" placeholder="0,00"></div></div><label class="fld">Observações</label><input class="input" id="fnotes" value="' + esc(fam && fam.notes || '') + '"><label class="fld">Status</label><select class="select" id="fss" style="width:100%"><option value="ACTIVE"' + (!fam || fam.status === 'ACTIVE' ? ' selected' : '') + '>Ativa</option><option value="INACTIVE"' + (fam && fam.status === 'INACTIVE' ? ' selected' : '') + '>Inativa</option></select><div class="footnote">Ao alterar o custo, o valor anterior é preservado no histórico e passa a valer para todos os SKUs vinculados.</div>' + (fam && fam.costHistory && fam.costHistory.length ? '<label class="fld">Histórico de custo</label><div class="table-wrap" style="border:1px solid var(--line);border-radius:10px"><table><thead><tr><th>Custo</th><th>Vigente a partir de</th></tr></thead><tbody>' + fam.costHistory.slice().reverse().map(function (h) { return '<tr><td>' + brl(h.costAmount) + '</td><td>' + new Date(h.effectiveFrom).toLocaleString('pt-BR') + '</td></tr>'; }).join('') + '</tbody></table></div>' : '') + '</div><div class="mf"><button class="btn-sm" id="fx">Cancelar</button><button class="btn-sm primary" id="fsv">Salvar</button></div>', 560); o.querySelector('.x').onclick = o.querySelector('#fx').onclick = function () { o.remove(); }; o.querySelector('#fsv').onclick = function () { var n = o.querySelector('#fn').value.trim(); if (!n) { o.querySelector('#fe').innerHTML = '<div class="form-err">Informe o nome.</div>'; return; } var dto = { name: n, internalCode: o.querySelector('#fc').value.trim(), cost: o.querySelector('#fcost').value, notes: o.querySelector('#fnotes').value.trim(), status: o.querySelector('#fss').value }; (fam ? updateFamily(fam, dto).then(function () { return fam; }) : createFamily(dto)).then(function (saved) { o.remove(); render(); toast(fam ? 'Família atualizada' : 'Família criada', n); if (onSaved) onSaved(saved); }); }; }
+    function familyEditor(fam, onSaved) { var o = overlay('<div class="mh"><h3>' + (fam ? 'Editar família' : 'Nova família') + '</h3><button class="x">×</button></div><div class="mbd" style="max-height:72vh;overflow:auto"><div id="fe"></div><label class="fld">Nome *</label><input class="input" id="fn" value="' + esc(fam ? fam.name : '') + '"><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><div><label class="fld">Código interno</label><input class="input" id="fc" value="' + esc(fam && fam.internalCode || '') + '"></div><div><label class="fld">Custo (R$)</label><input class="input" id="fcost" value="' + (fam && fam.currentCostAmount != null ? fam.currentCostAmount : '') + '" placeholder="0,00"></div></div><label class="fld">Tempo de produção (min) <span class="footnote" style="margin:0">— usado pelo Fator de Custo (Caixa) para ratear hora homem/custos fixos/variáveis; opcional</span></label><input class="input" id="ftempo" value="' + (fam && fam.tempoProducaoMin != null ? fam.tempoProducaoMin : '') + '" placeholder="0"><label class="fld">Observações</label><input class="input" id="fnotes" value="' + esc(fam && fam.notes || '') + '"><label class="fld">Status</label><select class="select" id="fss" style="width:100%"><option value="ACTIVE"' + (!fam || fam.status === 'ACTIVE' ? ' selected' : '') + '>Ativa</option><option value="INACTIVE"' + (fam && fam.status === 'INACTIVE' ? ' selected' : '') + '>Inativa</option></select><div class="footnote">Ao alterar o custo, o valor anterior é preservado no histórico e passa a valer para todos os SKUs vinculados.</div>' + (fam && fam.costHistory && fam.costHistory.length ? '<label class="fld">Histórico de custo</label><div class="table-wrap" style="border:1px solid var(--line);border-radius:10px"><table><thead><tr><th>Custo</th><th>Vigente a partir de</th></tr></thead><tbody>' + fam.costHistory.slice().reverse().map(function (h) { return '<tr><td>' + brl(h.costAmount) + '</td><td>' + new Date(h.effectiveFrom).toLocaleString('pt-BR') + '</td></tr>'; }).join('') + '</tbody></table></div>' : '') + '</div><div class="mf"><button class="btn-sm" id="fx">Cancelar</button><button class="btn-sm primary" id="fsv">Salvar</button></div>', 560); o.querySelector('.x').onclick = o.querySelector('#fx').onclick = function () { o.remove(); }; o.querySelector('#fsv').onclick = function () { var n = o.querySelector('#fn').value.trim(); if (!n) { o.querySelector('#fe').innerHTML = '<div class="form-err">Informe o nome.</div>'; return; } var dto = { name: n, internalCode: o.querySelector('#fc').value.trim(), cost: o.querySelector('#fcost').value, tempoProducaoMin: o.querySelector('#ftempo').value, notes: o.querySelector('#fnotes').value.trim(), status: o.querySelector('#fss').value }; (fam ? updateFamily(fam, dto).then(function () { return fam; }) : createFamily(dto)).then(function (saved) { o.remove(); render(); toast(fam ? 'Família atualizada' : 'Família criada', n); if (onSaved) onSaved(saved); }); }; }
     // §16/§17 do prompt "custo de Produtos não chega em Pedidos": auditoria determinística de variações
     // órfãs (sem familyId) em produtos que JÁ têm família cadastrada em outras variações do mesmo
     // produto. Nunca cruza por nome/descrição — só agrupa por productId real. Divide em dois grupos:
@@ -7537,7 +7590,19 @@
     var custoCompleto = pagas.length > 0 && custoConhecidoN === pagas.length;
     var lucro = custoCompleto ? receitaLiquida - custoTotal + acTaxa : null;
     var margem = (receitaBruta && lucro != null) ? r2(lucro / receitaBruta * 100) : null;
-    return { n: pagas.length, comIncomeN: comIncomeN, comSvcDetailsN: comSvcDetailsN, receitaBruta: receitaBruta, descComerciais: descComerciais, linhasReducoes: linhasReducoes, envioTotal: envioTotal, taxasCobradas: taxasCobradas, linhasTaxas: linhasTaxas, taxasLojaC: taxasLojaC, linhasTaxasLoja: linhasTaxasLoja, taxasPendentesN: taxasPendentesN, linhasSvcChildren: linhasSvcChildren, creditos: creditos, linhasCreditos: linhasCreditos, outros: outros, linhasOutros: linhasOutros, devolucoesFallbackC: devolucoesFallbackC, devolucoesFallbackN: devolucoesFallbackN, devolucoesFallbackOrigem: devolucoesFallbackOrigem, receitaLiquida: receitaLiquida, custoTotal: custoConhecidoN ? custoTotal : null, custoConhecidoN: custoConhecidoN, custoCompleto: custoCompleto, acTaxa: acTaxa, temAcelera: !!ac.resgatesN, eventosPosteriores: eventosPosteriores, lucro: lucro, margem: margem, precComFamiliaN: precComFamiliaN, margemProjetadaDia: margemProjetadaDia, margemRealizadaDia: margemRealizadaDia, pedidosAbaixoRecomendado: pedidosAbaixoRecomendado, impactoAbaixoRecomendadoC: impactoAbaixoRecomendadoC };
+    // PROMPT "Implementação do Fator de Custo dentro do módulo Caixa" §6 "DRE": preparar os MESMOS
+    // campos do Fator para uso na DRE — seção ADITIVA, nunca substitui nem realimenta as linhas acima
+    // (receitaLiquida/lucro/margem da DRE existente continuam exatamente como já estavam calculadas).
+    // Reaproveita fatorCustoPedido() por pedido (usa snapshot congelado quando o dia já foi fechado).
+    var fatorCusto = { vendaBrutaC: 0, taxasMarketplaceC: 0, custoProdutoC: 0, horaHomemC: 0, custosFixosAbsorvidosC: 0, custosVariaveisC: 0, impostoC: 0, lucroRealC: 0 };
+    pagas.forEach(function (o) {
+      var fc = fatorCustoPedido(o.id);
+      fatorCusto.vendaBrutaC += fc.vendaBrutaC; fatorCusto.taxasMarketplaceC += fc.taxasMarketplaceC; fatorCusto.custoProdutoC += fc.custoProdutoC;
+      fatorCusto.horaHomemC += fc.horaHomemC; fatorCusto.custosFixosAbsorvidosC += fc.custosFixosAbsorvidosC; fatorCusto.custosVariaveisC += fc.custosVariaveisC;
+      fatorCusto.impostoC += fc.impostoC; fatorCusto.lucroRealC += fc.lucroRealC;
+    });
+    fatorCusto.margemRealPct = fatorCusto.vendaBrutaC ? r2(fatorCusto.lucroRealC / fatorCusto.vendaBrutaC * 100) : null;
+    return { n: pagas.length, comIncomeN: comIncomeN, comSvcDetailsN: comSvcDetailsN, receitaBruta: receitaBruta, descComerciais: descComerciais, linhasReducoes: linhasReducoes, envioTotal: envioTotal, taxasCobradas: taxasCobradas, linhasTaxas: linhasTaxas, taxasLojaC: taxasLojaC, linhasTaxasLoja: linhasTaxasLoja, taxasPendentesN: taxasPendentesN, linhasSvcChildren: linhasSvcChildren, creditos: creditos, linhasCreditos: linhasCreditos, outros: outros, linhasOutros: linhasOutros, devolucoesFallbackC: devolucoesFallbackC, devolucoesFallbackN: devolucoesFallbackN, devolucoesFallbackOrigem: devolucoesFallbackOrigem, receitaLiquida: receitaLiquida, custoTotal: custoConhecidoN ? custoTotal : null, custoConhecidoN: custoConhecidoN, custoCompleto: custoCompleto, acTaxa: acTaxa, temAcelera: !!ac.resgatesN, eventosPosteriores: eventosPosteriores, lucro: lucro, margem: margem, precComFamiliaN: precComFamiliaN, margemProjetadaDia: margemProjetadaDia, margemRealizadaDia: margemRealizadaDia, pedidosAbaixoRecomendado: pedidosAbaixoRecomendado, impactoAbaixoRecomendadoC: impactoAbaixoRecomendadoC, fatorCusto: fatorCusto };
   }
   // Conta colunas do Income com valor real ainda sem destino — lê mrRenda DIRETO (dado bruto já
   // marcado por linha durante a importação), nunca mrEngine()/mrCamposNaoClassificados() (Minha Renda).
@@ -8310,9 +8375,24 @@
     rec.justificativa = justificativa || null;
     rec.history = (rec.history || []).concat([{ at: at, user: rec.closedBy, status: status, justificativa: justificativa || null, pendTotal: pend.total }]);
     caixaClose[dateKey] = rec;
+    // PROMPT "Implementação do Fator de Custo dentro do módulo Caixa" §7 "Regras de Histórico": o
+    // custo aplicado no pedido deve ser CONGELADO no momento do fechamento — pedidos antigos não podem
+    // mudar se a config (funcionários/custos fixos/variáveis/imposto) mudar depois. Gera/atualiza, para
+    // cada pedido vendido neste dia (mesma população de vendas.pedidos), um snapshot imutável em
+    // fatorpedidosnapshots — sempre recalculado com fatorCustoPedidoLive() (config atual), nunca a
+    // partir de um snapshot antigo, para que reabrir+fechar de novo capture uma config atualizada
+    // (mesmo comportamento já aplicado a rec.snapshot acima).
+    var now = at;
+    var fatorSnapsNovos = vendas.pedidos.map(function (o) {
+      var live = fatorCustoPedidoLive(o.id);
+      return Object.assign({}, live, { id: o.id, congelado: undefined, dateKey: dateKey, congeladoEm: now });
+    });
+    fatorSnapsNovos.forEach(function (s) { delete s.congelado; });
+    var fatorIds = {}; fatorSnapsNovos.forEach(function (s) { fatorIds[s.orderId] = true; });
+    fatorPedidoSnapshots = fatorPedidoSnapshots.filter(function (s) { return !fatorIds[s.orderId]; }).concat(fatorSnapsNovos);
     // Fase 8: a integração financeira (AR/AP/transferências) roda SEMPRE que o dia é fechado (normal
     // ou com ressalva) — idempotente, nunca duplica ao rodar de novo pro mesmo dia.
-    return caixaAplicarIntegracaoFinanceira(dateKey).then(function () { return putMany('caixafechamentos', [rec]); });
+    return caixaAplicarIntegracaoFinanceira(dateKey).then(function () { return putMany('caixafechamentos', [rec]); }).then(function () { return putMany('fatorpedidosnapshots', fatorSnapsNovos); });
   }
   // PROMPT "REESTRUTURAÇÃO PROFISSIONAL DO CAIXA" §1: "Reabrir caixa" — volta o status para ABERTO
   // (permitindo reclassificar/fechar de novo mais tarde), mas NUNCA apaga o snapshot nem os títulos
@@ -8975,7 +9055,23 @@
         (dre.custoTotal != null ? ('<div class="cx-kv"><span class="cxl">(-) Custos do Produto</span><span class="cxv neg">' + brlC(-dre.custoTotal) + '</span></div>') : '<div class="cx-kv"><span class="cxl">(-) Custos do Produto</span><span class="cxv">não disponível</span></div>') +
         '<div class="cx-kv" style="border-top:1px solid var(--line);margin-top:4px;padding-top:8px"><span class="cxl" style="font-weight:800">Lucro Operacional</span><span class="cxv ' + (dre.lucro != null && dre.lucro < 0 ? 'neg' : 'pos') + '" style="font-size:16px">' + (dre.lucro != null ? brlC(dre.lucro) : 'aguardando custo') + '</span></div>' +
         (dre.margem != null ? ('<div class="cx-kv"><span class="cxl">Margem</span><span class="cxv">' + pct(dre.margem) + '</span></div>') : '') +
-        '<details class="cx-collapse"><summary>Ver DRE completa</summary><div class="pb">' + caixaDreBlock(dre, dateKey) + '</div></details>'
+        '<details class="cx-collapse"><summary>Ver DRE completa</summary><div class="pb">' + caixaDreBlock(dre, dateKey) + '</div></details>' +
+        // PROMPT "Implementação do Fator de Custo dentro do módulo Caixa" §6: seção ADITIVA — não
+        // substitui a DRE Operacional acima nem seu Lucro Operacional; usa dre.fatorCusto (mesmos
+        // pedidos, mesmo fatorCustoPedido() da Ficha/Rentabilidade Real, usa snapshot congelado
+        // quando o dia já foi fechado).
+        '<details class="cx-collapse"><summary>Ver Rentabilidade Real (Fator de Custo)</summary><div class="pb">' +
+        '<div class="cx-kv"><span class="cxl">Venda Bruta</span><span class="cxv">' + brlC(dre.fatorCusto.vendaBrutaC) + '</span></div>' +
+        '<div class="cx-kv"><span class="cxl">(-) Taxas Marketplace</span><span class="cxv neg">' + brlC(dre.fatorCusto.taxasMarketplaceC) + '</span></div>' +
+        '<div class="cx-kv"><span class="cxl">(-) Custo do Produto</span><span class="cxv neg">' + brlC(-dre.fatorCusto.custoProdutoC) + '</span></div>' +
+        '<div class="cx-kv"><span class="cxl">(-) Hora Homem</span><span class="cxv neg">' + brlC(-dre.fatorCusto.horaHomemC) + '</span></div>' +
+        '<div class="cx-kv"><span class="cxl">(-) Custos Fixos Absorvidos</span><span class="cxv neg">' + brlC(-dre.fatorCusto.custosFixosAbsorvidosC) + '</span></div>' +
+        '<div class="cx-kv"><span class="cxl">(-) Custos Variáveis Industriais</span><span class="cxv neg">' + brlC(-dre.fatorCusto.custosVariaveisC) + '</span></div>' +
+        '<div class="cx-kv"><span class="cxl">(-) Impostos</span><span class="cxv neg">' + brlC(-dre.fatorCusto.impostoC) + '</span></div>' +
+        '<div class="cx-kv" style="border-top:1px solid var(--line);margin-top:4px;padding-top:8px"><span class="cxl" style="font-weight:800">Lucro Real</span><span class="cxv ' + (dre.fatorCusto.lucroRealC < 0 ? 'neg' : 'pos') + '" style="font-size:16px">' + brlC(dre.fatorCusto.lucroRealC) + '</span></div>' +
+        (dre.fatorCusto.margemRealPct != null ? ('<div class="cx-kv"><span class="cxl">Margem Real</span><span class="cxv">' + pct(dre.fatorCusto.margemRealPct) + '</span></div>') : '') +
+        '<div class="footnote" style="margin-top:6px">Camada complementar — não substitui o Lucro Operacional acima (regra Shopee). <button class="link-btn" data-gorentabilidade="1">Ver detalhamento em Caixa → Rentabilidade Real</button></div>' +
+        '</div></details>'
       ) : '<div class="footnote">Nenhum pedido pago neste dia.</div>') +
       '</div>';
 
@@ -9068,6 +9164,7 @@
   }
   function bindCaixaFechamentoBody(dateKey) {
     var dateSel = document.getElementById('cx-date-sel'); if (dateSel) dateSel.onchange = function () { caixaAbrirDia(dateSel.value); };
+    var gr = document.querySelector('[data-gorentabilidade]'); if (gr) gr.onclick = function () { caixaSub = 'rentabilidade'; caixaFechamentoDate = dateKey; render(); };
     var reabrirBtn = document.getElementById('caixa-reabrir'); if (reabrirBtn) reabrirBtn.onclick = function () {
       if (!confirm('Reabrir o fechamento de ' + dbr(dateKey) + '? O dia volta para "Em conferência" — nada já lançado em Contas a Pagar/Receber é apagado, e o histórico de aberturas/fechamentos fica registrado.')) return;
       caixaReabrirDia(dateKey).then(function () { toast('Caixa reaberto', dbr(dateKey)); render(); });
@@ -9343,16 +9440,150 @@
     target.innerHTML = html;
     setTimeout(function () { window.print(); }, 30);
   }
+  // ============================================================ CAIXA · RENTABILIDADE REAL (Fator de Custo)
+  // PROMPT "Implementação do Fator de Custo dentro do módulo Caixa" §5: nova visão dentro do Caixa —
+  // NÃO substitui o Fechamento. Consolida a MESMA população de pedidos que caixaDayVendas(dateKey) já
+  // usa (pedidos pagos no dia), somando pedido a pedido o que fatorCustoPedido() já calcula — nenhuma
+  // taxa/conciliação/movimentação/saldo/Acelera/repasse é recalculado aqui.
+  function caixaFatorCustoDia(dateKey) {
+    var v = caixaDayVendas(dateKey);
+    var agg = { n: v.pedidos.length, vendaBrutaC: 0, taxasMarketplaceC: 0, custoProdutoC: 0, horaHomemC: 0, custosFixosAbsorvidosC: 0, custosVariaveisC: 0, impostoC: 0, lucroRealC: 0, custoPendenteN: 0, itens: [] };
+    v.pedidos.forEach(function (o) {
+      var fc = fatorCustoPedido(o.id);
+      agg.vendaBrutaC += fc.vendaBrutaC; agg.taxasMarketplaceC += fc.taxasMarketplaceC; agg.custoProdutoC += fc.custoProdutoC;
+      agg.horaHomemC += fc.horaHomemC; agg.custosFixosAbsorvidosC += fc.custosFixosAbsorvidosC; agg.custosVariaveisC += fc.custosVariaveisC;
+      agg.impostoC += fc.impostoC; agg.lucroRealC += fc.lucroRealC;
+      if (fc.custoPendente) agg.custoPendenteN++;
+      agg.itens.push({ orderId: o.id, fc: fc });
+    });
+    agg.margemRealPct = agg.vendaBrutaC ? r2(agg.lucroRealC / agg.vendaBrutaC * 100) : null;
+    return agg;
+  }
+  function caixaRentabilidadeView() {
+    var days = caixaDiasComMovimento();
+    var opId = opActiveOrNull();
+    if (!days.length) return secHead('CAIXA', 'Rentabilidade Real', 'Camada de análise de custo/lucro real — complementar ao Fechamento, nunca o substitui.') + emptyBox('Nenhum movimento (pedido pago) encontrado ainda.') + caixaFatorCustoConfigPanel(opId);
+    var dateKey = caixaFechamentoDate && days.indexOf(caixaFechamentoDate) >= 0 ? caixaFechamentoDate : days[0];
+    caixaFechamentoDate = dateKey;
+    var agg = caixaFatorCustoDia(dateKey);
+    var dateOptions = days.slice(0, 120).map(function (dk) { return '<option value="' + esc(dk) + '"' + (dk === dateKey ? ' selected' : '') + '>' + dbr(dk) + '</option>'; }).join('');
+    var head = '<div class="page-head"><div><h2>Rentabilidade Real</h2><p>Depois de taxas do marketplace, custo do produto e custos internos de operação (hora homem, custos fixos e variáveis, impostos) — quanto sobrou de verdade. Camada complementar: não substitui o Fechamento nem recalcula taxas Shopee.</p></div><select class="select sm" id="rent-date">' + dateOptions + '</select></div>';
+    var cfg = fatorConfigForOp(opId);
+    var faltaCfg = !fatorFuncionariosAtivos(opId).length || !fatorCustosFixosAtivos(opId).length || !fatorCustosVariaveisAtivos(opId).length || !cfg.capacidadeProdutivaMin || !cfg.impostoPct;
+    var cards = '<div class="cards6">' +
+      fcard('Venda Bruta', brlC(agg.vendaBrutaC), 'blue', nn(agg.n) + ' pedido(s)') +
+      fcard('Taxas Marketplace', brlC(agg.taxasMarketplaceC), 'red') +
+      fcard('Custos Produto', brlC(-agg.custoProdutoC), 'amber', agg.custoPendenteN ? nn(agg.custoPendenteN) + ' pendente(s)' : '') +
+      fcard('Hora Homem', brlC(-agg.horaHomemC), '') +
+      fcard('Custos Fixos', brlC(-agg.custosFixosAbsorvidosC), '') +
+      fcard('Custos Variáveis', brlC(-agg.custosVariaveisC), '') +
+      '</div><div class="cards6">' +
+      fcard('Impostos', brlC(-agg.impostoC), '') +
+      fcard('Lucro Real', brlC(agg.lucroRealC), agg.lucroRealC >= 0 ? 'green' : 'red') +
+      fcard('Margem Real', agg.margemRealPct != null ? pct(agg.margemRealPct) : '—', agg.margemRealPct != null && agg.margemRealPct < 0 ? 'red' : '') +
+      '</div>';
+    var configBox = faltaCfg ? callout('warn', 'Fator de Custo em ativação parcial', 'Camada(s) ainda sem configuração entram como R$ 0,00 no cálculo — configure abaixo para ativar gradualmente.') : '';
+    var tableRows = agg.itens.map(function (it) { return '<tr class="rowlink" data-rentped="' + esc(it.orderId) + '"><td class="mono">' + esc(it.orderId) + '</td><td class="nowrap">' + brlC(it.fc.vendaBrutaC) + '</td><td class="nowrap neg">' + brlC(it.fc.taxasMarketplaceC) + '</td><td class="nowrap neg">' + brlC(-it.fc.custoProdutoC) + '</td><td class="nowrap neg">' + brlC(-(it.fc.horaHomemC + it.fc.custosFixosAbsorvidosC + it.fc.custosVariaveisC + it.fc.impostoC)) + '</td><td class="nowrap ' + (it.fc.lucroRealC < 0 ? 'neg' : 'pos') + '"><b>' + brlC(it.fc.lucroRealC) + '</b></td><td>' + (it.fc.margemRealPct != null ? pct(it.fc.margemRealPct) : '—') + '</td><td>' + (it.fc.congelado ? '🔒' : '🟡') + '</td></tr>'; }).join('');
+    var table = agg.itens.length ? '<div class="panel"><div class="ph"><h3>Lucro real por pedido</h3><span class="footnote" style="margin:0">clique num pedido para abrir a Ficha</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Venda</th><th>Taxas</th><th>Custo Produto</th><th>Custos Internos</th><th>Lucro Real</th><th>Margem</th><th></th></tr></thead><tbody>' + tableRows + '</tbody></table></div></div>' : '';
+    return head + cards + configBox + table + caixaFatorCustoConfigPanel(opId);
+  }
+  function caixaFatorCustoConfigPanel(opId) {
+    var cfg = fatorConfigForOp(opId);
+    var func = fatorFuncionarios.filter(function (f) { return !opId || opId === OP_ALL || f.operationId === opId; });
+    var fixos = fatorCustosFixos.filter(function (f) { return !opId || opId === OP_ALL || f.operationId === opId; });
+    var vars = fatorCustosVariaveis.filter(function (f) { return !opId || opId === OP_ALL || f.operationId === opId; });
+    function itemRow(kind, f) { return '<tr><td>' + esc(f.nome) + '</td><td class="nowrap">' + brl(f.valorMensal) + '</td><td><span class="badge ' + (f.ativo ? 'b-ok' : 'b-neutral') + '">' + (f.ativo ? 'Ativo' : 'Inativo') + '</span></td><td><button class="btn-sm" data-fcedit="' + kind + ':' + f.id + '">Editar</button> <button class="btn-sm" data-fcdel="' + kind + ':' + f.id + '">Remover</button></td></tr>'; }
+    function funcRow(f) { return '<tr><td>' + esc(f.nome) + (f.cargo ? ' <span class="footnote" style="margin:0">(' + esc(f.cargo) + ')</span>' : '') + '</td><td class="nowrap">' + brl(f.salario) + '</td><td>' + (f.encargosPct || 0) + '%</td><td class="nowrap">' + brl(f.beneficios || 0) + '</td><td>' + (f.horasMes || 0) + 'h</td><td>' + (f.perdaProdutividadePct || 0) + '%</td><td><span class="badge ' + (f.ativo ? 'b-ok' : 'b-neutral') + '">' + (f.ativo ? 'Ativo' : 'Inativo') + '</span></td><td><button class="btn-sm" data-fcedit="func:' + f.id + '">Editar</button> <button class="btn-sm" data-fcdel="func:' + f.id + '">Remover</button></td></tr>'; }
+    var custoMinHomemC = fatorCustoMinutoHomemC(opId), custoMinFixoC = fatorCustoFixoMinutoC(opId), custoMinVarC = fatorCustoVariavelMinutoC(opId);
+    return '<details class="panel" style="padding:0;margin-top:14px"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">⚙️ Configurar Fator de Custo</summary><div class="pb">' +
+      '<div class="footnote" style="margin-bottom:10px">Ativação gradual: cada camada some quando não configurada, sem quebrar o cálculo — os pedidos continuam mostrando as demais camadas normalmente.</div>' +
+      '<h4 style="margin:0 0 6px">Capacidade produtiva e imposto</h4>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:end;margin-bottom:14px">' +
+      '<div><label class="fld">Capacidade produtiva (minutos/mês)</label><input class="input" id="fc-cap" value="' + (cfg.capacidadeProdutivaMin || '') + '" placeholder="0"></div>' +
+      '<div><label class="fld">Imposto (% sobre a venda)</label><input class="input" id="fc-imp" value="' + (cfg.impostoPct || '') + '" placeholder="0,00"></div>' +
+      '<button class="btn-sm primary" id="fc-cfg-save">Salvar</button>' +
+      '</div>' +
+      '<div class="footnote" style="margin-bottom:14px">Custo minuto homem atual: <b>' + brlC(custoMinHomemC) + '</b> · Custo fixo/minuto: <b>' + brlC(custoMinFixoC) + '</b> · Custo variável/minuto: <b>' + brlC(custoMinVarC) + '</b></div>' +
+      '<h4 style="margin:0 0 6px">Funcionários produtivos</h4>' +
+      (func.length ? '<div class="table-wrap"><table class="report"><thead><tr><th>Nome</th><th>Salário</th><th>Encargos</th><th>Benefícios</th><th>Jornada/mês</th><th>Perda produtividade</th><th>Status</th><th></th></tr></thead><tbody>' + func.map(funcRow).join('') + '</tbody></table></div>' : '<div class="footnote">Nenhum funcionário cadastrado — Hora Homem fica R$ 0,00.</div>') +
+      '<button class="btn-sm" id="fc-func-new" style="margin-top:8px">+ Novo funcionário</button>' +
+      '<h4 style="margin:16px 0 6px">Custos fixos (aluguel, administrativo, marketing, RH, sistemas...)</h4>' +
+      (fixos.length ? '<div class="table-wrap"><table class="report"><thead><tr><th>Nome</th><th>Valor mensal</th><th>Status</th><th></th></tr></thead><tbody>' + fixos.map(function (f) { return itemRow('fixo', f); }).join('') + '</tbody></table></div>' : '<div class="footnote">Nenhum custo fixo cadastrado — Custos Fixos Absorvidos fica R$ 0,00.</div>') +
+      '<button class="btn-sm" id="fc-fixo-new" style="margin-top:8px">+ Novo custo fixo</button>' +
+      '<h4 style="margin:16px 0 6px">Custos variáveis industriais (manutenção, consumíveis, ferramentas...)</h4>' +
+      (vars.length ? '<div class="table-wrap"><table class="report"><thead><tr><th>Nome</th><th>Valor mensal</th><th>Status</th><th></th></tr></thead><tbody>' + vars.map(function (f) { return itemRow('var', f); }).join('') + '</tbody></table></div>' : '<div class="footnote">Nenhum custo variável cadastrado — Custos Variáveis fica R$ 0,00.</div>') +
+      '<button class="btn-sm" id="fc-var-new" style="margin-top:8px">+ Novo custo variável</button>' +
+      '</div></details>';
+  }
+  function bindCaixaRentabilidadeView() {
+    var opId = opActiveOrNull();
+    var ds = document.getElementById('rent-date'); if (ds) ds.onchange = function () { caixaFechamentoDate = ds.value; render(); };
+    document.querySelectorAll('[data-rentped]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.rentped); }; });
+    var cfgSave = document.getElementById('fc-cfg-save'); if (cfgSave) cfgSave.onclick = function () {
+      fatorConfigSave(opId, { capacidadeProdutivaMin: document.getElementById('fc-cap').value, impostoPct: document.getElementById('fc-imp').value }).then(function () { toast('Configuração salva', ''); render(); });
+    };
+    var fn = document.getElementById('fc-func-new'); if (fn) fn.onclick = function () { openFatorFuncionarioEditor(opId, null); };
+    var fxn = document.getElementById('fc-fixo-new'); if (fxn) fxn.onclick = function () { openFatorCustoItemEditor('fixo', opId, null); };
+    var vrn = document.getElementById('fc-var-new'); if (vrn) vrn.onclick = function () { openFatorCustoItemEditor('var', opId, null); };
+    document.querySelectorAll('[data-fcedit]').forEach(function (b) { b.onclick = function () {
+      var parts = b.dataset.fcedit.split(':'); var kind = parts[0], id = parts[1];
+      if (kind === 'func') openFatorFuncionarioEditor(opId, fatorFuncionarios.find(function (x) { return x.id === id; }));
+      else openFatorCustoItemEditor(kind, opId, (kind === 'fixo' ? fatorCustosFixos : fatorCustosVariaveis).find(function (x) { return x.id === id; }));
+    }; });
+    document.querySelectorAll('[data-fcdel]').forEach(function (b) { b.onclick = function () {
+      var parts = b.dataset.fcdel.split(':'); var kind = parts[0], id = parts[1];
+      if (!confirm('Remover este item?')) return;
+      var p = kind === 'func' ? fatorFuncionarioRemove(id) : kind === 'fixo' ? fatorCustoFixoRemove(id) : fatorCustoVariavelRemove(id);
+      p.then(function () { render(); toast('Removido', ''); });
+    }; });
+  }
+  function openFatorFuncionarioEditor(opId, f) {
+    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:520px"><div class="mh"><h3>' + (f ? 'Editar funcionário' : 'Novo funcionário produtivo') + '</h3><button class="x">×</button></div><div class="mbd">' +
+      '<label class="fld">Nome *</label><input class="input" id="ff-nome" style="width:100%" value="' + esc(f ? f.nome : '') + '">' +
+      '<label class="fld">Cargo</label><input class="input" id="ff-cargo" style="width:100%" value="' + esc(f && f.cargo || '') + '">' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
+      '<div><label class="fld">Salário (R$)</label><input class="input" id="ff-salario" value="' + (f && f.salario != null ? f.salario : '') + '" placeholder="0,00"></div>' +
+      '<div><label class="fld">Encargos (%)</label><input class="input" id="ff-encargos" value="' + (f && f.encargosPct != null ? f.encargosPct : '') + '" placeholder="0"></div>' +
+      '<div><label class="fld">Benefícios (R$/mês)</label><input class="input" id="ff-beneficios" value="' + (f && f.beneficios != null ? f.beneficios : '') + '" placeholder="0,00"></div>' +
+      '<div><label class="fld">Jornada mensal (horas)</label><input class="input" id="ff-horas" value="' + (f && f.horasMes != null ? f.horasMes : 220) + '" placeholder="220"></div>' +
+      '<div><label class="fld">Perda de produtividade (%)</label><input class="input" id="ff-perda" value="' + (f && f.perdaProdutividadePct != null ? f.perdaProdutividadePct : '') + '" placeholder="0"></div>' +
+      '<div><label class="fld"><input type="checkbox" id="ff-ativo"' + (!f || f.ativo ? ' checked' : '') + '> Ativo</label></div>' +
+      '</div></div><div class="mf"><button class="btn-sm" id="ff-x">Cancelar</button><button class="btn-sm primary" id="ff-ok">Salvar</button></div></div>';
+    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
+    o.querySelector('.x').onclick = o.querySelector('#ff-x').onclick = function () { o.remove(); };
+    o.querySelector('#ff-ok').onclick = function () {
+      var nome = o.querySelector('#ff-nome').value.trim(); if (!nome) { toast('Informe o nome', '', true); return; }
+      var dto = { nome: nome, cargo: o.querySelector('#ff-cargo').value.trim(), salario: o.querySelector('#ff-salario').value, encargosPct: o.querySelector('#ff-encargos').value, beneficios: o.querySelector('#ff-beneficios').value, horasMes: o.querySelector('#ff-horas').value, perdaProdutividadePct: o.querySelector('#ff-perda').value, ativo: o.querySelector('#ff-ativo').checked };
+      fatorFuncionarioSave(opId, dto, f ? f.id : null).then(function () { o.remove(); toast('Funcionário salvo', nome); render(); });
+    };
+  }
+  function openFatorCustoItemEditor(kind, opId, f) {
+    var titulo = kind === 'fixo' ? (f ? 'Editar custo fixo' : 'Novo custo fixo') : (f ? 'Editar custo variável' : 'Novo custo variável');
+    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:420px"><div class="mh"><h3>' + esc(titulo) + '</h3><button class="x">×</button></div><div class="mbd">' +
+      '<label class="fld">Nome *</label><input class="input" id="fcv-nome" style="width:100%" value="' + esc(f ? f.nome : '') + '" placeholder="' + (kind === 'fixo' ? 'Ex.: Aluguel' : 'Ex.: Manutenção de máquinas') + '">' +
+      '<label class="fld">Valor mensal (R$)</label><input class="input" id="fcv-valor" style="width:100%" value="' + (f && f.valorMensal != null ? f.valorMensal : '') + '" placeholder="0,00">' +
+      '<label class="fld"><input type="checkbox" id="fcv-ativo"' + (!f || f.ativo ? ' checked' : '') + '> Ativo</label>' +
+      '</div><div class="mf"><button class="btn-sm" id="fcv-x">Cancelar</button><button class="btn-sm primary" id="fcv-ok">Salvar</button></div></div>';
+    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
+    o.querySelector('.x').onclick = o.querySelector('#fcv-x').onclick = function () { o.remove(); };
+    o.querySelector('#fcv-ok').onclick = function () {
+      var nome = o.querySelector('#fcv-nome').value.trim(); if (!nome) { toast('Informe o nome', '', true); return; }
+      var dto = { nome: nome, valorMensal: o.querySelector('#fcv-valor').value, ativo: o.querySelector('#fcv-ativo').checked };
+      var p = kind === 'fixo' ? fatorCustoFixoSave(opId, dto, f ? f.id : null) : fatorCustoVariavelSave(opId, dto, f ? f.id : null);
+      p.then(function () { o.remove(); toast('Custo salvo', nome); render(); });
+    };
+  }
   function renderCaixa() {
     // §87: sem subaba própria "Pendências da Carteira" — os créditos/débitos/pendências da Carteira
     // vivem dentro do Fechamento do Dia (bloco "3. Movimentos da Carteira").
-    app.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0">' + [['fechamento', 'Fechamento'], ['dashboard', 'Visão Geral'], ['historico', 'Histórico']].map(function (t) { return '<div class="subtab' + (caixaSub === t[0] ? ' active' : '') + '" data-caixasub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm" id="caixa-bancos">Gerenciar bancos</button></div><div id="caixabody" style="margin-top:14px"></div>';
+    app.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0">' + [['fechamento', 'Fechamento'], ['dashboard', 'Visão Geral'], ['rentabilidade', 'Rentabilidade Real'], ['historico', 'Histórico']].map(function (t) { return '<div class="subtab' + (caixaSub === t[0] ? ' active' : '') + '" data-caixasub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm" id="caixa-bancos">Gerenciar bancos</button></div><div id="caixabody" style="margin-top:14px"></div>';
     var body = document.getElementById('caixabody');
-    body.innerHTML = caixaSub === 'fechamento' ? caixaFechamentoView() : caixaSub === 'historico' ? caixaHistoricoView() : caixaDashboardView();
+    body.innerHTML = caixaSub === 'fechamento' ? caixaFechamentoView() : caixaSub === 'historico' ? caixaHistoricoView() : caixaSub === 'rentabilidade' ? caixaRentabilidadeView() : caixaDashboardView();
     app.querySelectorAll('[data-caixasub]').forEach(function (t) { t.onclick = function () { caixaSub = t.dataset.caixasub; render(); }; });
     var gb = document.getElementById('caixa-bancos'); if (gb) gb.onclick = function () { openGerenciarBancos(function () { render(); }); };
     if (caixaSub === 'fechamento') bindCaixaFechamentoView();
     else if (caixaSub === 'historico') bindCaixaHistoricoView();
+    else if (caixaSub === 'rentabilidade') bindCaixaRentabilidadeView();
     else bindCaixaDashboardView();
   }
 
@@ -9465,6 +9696,139 @@
   function pontoEquilibrioSave(opId, dto) { pontoEquilibrioCfg[opId] = Object.assign({}, pontoEquilibrioCfgForOp(opId), dto); return putMany('settings', [{ id: 'pontoEquilibrioCfg', data: pontoEquilibrioCfg }]); }
   function metaLucroCfgForOp(opId) { return metaLucroCfg[opId] || { metaMensalC: 0 }; }
   function metaLucroSave(opId, dto) { metaLucroCfg[opId] = Object.assign({}, metaLucroCfgForOp(opId), dto); return putMany('settings', [{ id: 'metaLucroCfg', data: metaLucroCfg }]); }
+
+  // ============================================================ FATOR DE CUSTO — RENTABILIDADE REAL
+  // PROMPT "IMPLEMENTAÇÃO DO FATOR DE CUSTO DENTRO DO MÓDULO CAIXA": camada aditiva de rentabilidade
+  // real por pedido — NUNCA recalcula taxas Shopee/regras de conciliação/movimentações/saldo da
+  // Carteira/Acelera/repasse já existentes (essas continuam vindo de pedidoComposicaoFinanceira(), a
+  // MESMA fonte que Ficha/Caixa/Minha Renda/Dashboard/Precificação já usam). O Fator só ACRESCENTA:
+  // custo do produto (já existente, family.currentCostAmount) + hora homem + custos fixos absorvidos +
+  // custos variáveis industriais + imposto configurável, todos rateados pelo TEMPO DE PRODUÇÃO real de
+  // cada família — nunca distribuídos igualmente entre produtos (regra central do prompt).
+  var fatorFuncionarios = [], fatorCustosFixos = [], fatorCustosVariaveis = [], fatorPedidoSnapshots = [];
+  var fatorConfig = {}; // { [operationId]: { capacidadeProdutivaMin, impostoPct } } — mesmo padrão settings de pontoEquilibrioCfg
+  function fatorConfigForOp(opId) { return fatorConfig[opId] || { capacidadeProdutivaMin: 0, impostoPct: 0 }; }
+  function fatorConfigSave(opId, dto) {
+    var atual = fatorConfigForOp(opId);
+    var parsed = { capacidadeProdutivaMin: dto.capacidadeProdutivaMin !== undefined ? (cpParseNum(dto.capacidadeProdutivaMin) || 0) : atual.capacidadeProdutivaMin, impostoPct: dto.impostoPct !== undefined ? (cpParseNum(dto.impostoPct) || 0) : atual.impostoPct };
+    fatorConfig[opId] = Object.assign({}, atual, parsed);
+    return putMany('settings', [{ id: 'fatorConfig', data: fatorConfig }]);
+  }
+  function fatorUid() { return 'FATOR-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8); }
+  // Funcionários produtivos — cada um contribui custo mensal (salário + encargos + benefícios) e
+  // minutos produtivos mensais (jornada × (1 − perda de produtividade)); a soma dos dois forma o
+  // "custo minuto homem" único aplicado a toda a operação (bloco "Hora Homem/Produção" do prompt).
+  function fatorFuncionarioSave(opId, dto, id) {
+    var rec = id ? fatorFuncionarios.find(function (f) { return f.id === id; }) : null;
+    if (!rec) { rec = { id: fatorUid(), operationId: opId }; fatorFuncionarios.push(rec); }
+    Object.assign(rec, { nome: dto.nome, cargo: dto.cargo || '', salario: cpParseNum(dto.salario) || 0, encargosPct: cpParseNum(dto.encargosPct) || 0, beneficios: cpParseNum(dto.beneficios) || 0, horasMes: cpParseNum(dto.horasMes) || 220, perdaProdutividadePct: cpParseNum(dto.perdaProdutividadePct) || 0, ativo: dto.ativo !== false, updatedAt: new Date().toISOString() });
+    return putMany('fatorfuncionarios', [rec]).then(function () { return rec; });
+  }
+  function fatorFuncionarioRemove(id) { fatorFuncionarios = fatorFuncionarios.filter(function (f) { return f.id !== id; }); return delOne('fatorfuncionarios', id); }
+  function fatorCustoItemSave(store, arr, opId, dto, id) {
+    var rec = id ? arr.find(function (x) { return x.id === id; }) : null;
+    if (!rec) { rec = { id: fatorUid(), operationId: opId }; arr.push(rec); }
+    Object.assign(rec, { nome: dto.nome, valorMensal: cpParseNum(dto.valorMensal) || 0, ativo: dto.ativo !== false, updatedAt: new Date().toISOString() });
+    return putMany(store, [rec]).then(function () { return rec; });
+  }
+  function fatorCustoFixoSave(opId, dto, id) { return fatorCustoItemSave('fatorcustosfixos', fatorCustosFixos, opId, dto, id); }
+  function fatorCustoFixoRemove(id) { fatorCustosFixos = fatorCustosFixos.filter(function (x) { return x.id !== id; }); return delOne('fatorcustosfixos', id); }
+  function fatorCustoVariavelSave(opId, dto, id) { return fatorCustoItemSave('fatorcustosvariaveis', fatorCustosVariaveis, opId, dto, id); }
+  function fatorCustoVariavelRemove(id) { fatorCustosVariaveis = fatorCustosVariaveis.filter(function (x) { return x.id !== id; }); return delOne('fatorcustosvariaveis', id); }
+
+  function fatorFuncionariosAtivos(opId) { return fatorFuncionarios.filter(function (f) { return f.ativo && (!opId || opId === OP_ALL || f.operationId === opId); }); }
+  function fatorCustosFixosAtivos(opId) { return fatorCustosFixos.filter(function (f) { return f.ativo && (!opId || opId === OP_ALL || f.operationId === opId); }); }
+  function fatorCustosVariaveisAtivos(opId) { return fatorCustosVariaveis.filter(function (f) { return f.ativo && (!opId || opId === OP_ALL || f.operationId === opId); }); }
+
+  // Custo minuto homem = custo mensal total dos funcionários produtivos ÷ minutos produtivos totais
+  // (regra do prompt: "Custo total funcionário ÷ minutos produtivos"). Sem funcionário cadastrado ou
+  // sem minutos produtivos > 0, resultado é 0 — nunca div/0, nunca R$ escondido.
+  function fatorCustoMinutoHomemC(opId) {
+    var ativos = fatorFuncionariosAtivos(opId);
+    var custoMensalC = 0, minutosProdutivos = 0;
+    ativos.forEach(function (f) {
+      var custoFunc = (f.salario || 0) * (1 + (f.encargosPct || 0) / 100) + (f.beneficios || 0);
+      custoMensalC += Math.round(custoFunc * 100);
+      var minutosBrutos = (f.horasMes || 0) * 60;
+      minutosProdutivos += minutosBrutos * (1 - (f.perdaProdutividadePct || 0) / 100);
+    });
+    if (!minutosProdutivos) return 0;
+    return Math.round(custoMensalC / minutosProdutivos);
+  }
+  // Custo fixo/variável por minuto = total mensal cadastrado ÷ capacidade produtiva (minutos
+  // disponíveis por mês da operação — configurável à parte da soma de funcionários, já que pode
+  // refletir capacidade de máquina/estrutura, não só mão de obra).
+  function fatorCustoFixoMinutoC(opId) {
+    var cfg = fatorConfigForOp(opId); if (!cfg.capacidadeProdutivaMin) return 0;
+    var totalC = fatorCustosFixosAtivos(opId).reduce(function (s, f) { return s + Math.round((f.valorMensal || 0) * 100); }, 0);
+    return Math.round(totalC / cfg.capacidadeProdutivaMin);
+  }
+  function fatorCustoVariavelMinutoC(opId) {
+    var cfg = fatorConfigForOp(opId); if (!cfg.capacidadeProdutivaMin) return 0;
+    var totalC = fatorCustosVariaveisAtivos(opId).reduce(function (s, f) { return s + Math.round((f.valorMensal || 0) * 100); }, 0);
+    return Math.round(totalC / cfg.capacidadeProdutivaMin);
+  }
+  // Tempo de produção do pedido: soma, item a item, o tempoProducaoMin da FAMÍLIA resolvida (mesmo
+  // cruzamento SKU→família de resolveSkuCost/skuFamById — nenhuma origem nova) × quantidade. Item
+  // sem família ou sem tempo cadastrado soma 0 e entra em `itensSemTempo` (motivo visível, nunca
+  // escondido — mesma filosofia de resolveSkuCost).
+  function fatorTempoProducaoPedido(ord) {
+    var minutos = 0, itensSemTempo = [];
+    (ord && ord.items || []).forEach(function (it) {
+      var r = it.sku ? resolveSkuCost(it.sku) : { found: false, motivo: 'SKU_NAO_LOCALIZADO' };
+      var fam = r.familyId ? skuFamById[r.familyId] : null;
+      var tempoUnit = fam && fam.tempoProducaoMin != null ? Number(fam.tempoProducaoMin) : null;
+      if (tempoUnit != null && tempoUnit > 0) minutos += tempoUnit * (it.qty || 1);
+      else itensSemTempo.push({ sku: it.sku, produto: it.productName, motivo: !fam ? (r.motivo || 'SEM_FAMILIA') : 'FAMILIA_SEM_TEMPO_CADASTRADO' });
+    });
+    return { minutos: minutos, itensSemTempo: itensSemTempo, completo: !itensSemTempo.length };
+  }
+  // Motor principal — pedido a pedido. Reaproveita 100% pedidoComposicaoFinanceira() para Venda
+  // Bruta/Taxas Marketplace/Custo do Produto (nunca recalcula) e só ACRESCENTA as camadas novas. Se
+  // existir snapshot congelado (fechamento do dia deste pedido já ocorreu — §7 "Regras de Histórico"
+  // do prompt), usa o snapshot; senão calcula ao vivo com a config atual, marcado como estimativa.
+  function fatorSnapshotPedido(orderId) { return fatorPedidoSnapshots.find(function (s) { return s.orderId === orderId; }) || null; }
+  function fatorCustoPedido(orderId) {
+    var snap = fatorSnapshotPedido(orderId);
+    if (snap) return Object.assign({}, snap, { congelado: true });
+    return fatorCustoPedidoLive(orderId);
+  }
+  // Cálculo SEMPRE ao vivo com a config atual — usado por fatorCustoPedido() quando ainda não há
+  // snapshot, e por caixaCloseDay() para GERAR o snapshot do dia (nunca lê um snapshot antigo para
+  // decidir o novo — reabrir e fechar de novo recalcula com a config do momento, mesmo comportamento
+  // já aplicado a rec.snapshot do Fechamento).
+  function fatorCustoPedidoLive(orderId) {
+    var comp = pedidoComposicaoFinanceira(orderId);
+    var ord = comp.ord;
+    var opId = comp.operationId || opActiveOrNull() || null;
+    var tempo = fatorTempoProducaoPedido(ord);
+    var custoMinutoHomemC = fatorCustoMinutoHomemC(opId);
+    var custoFixoMinutoC = fatorCustoFixoMinutoC(opId);
+    var custoVariavelMinutoC = fatorCustoVariavelMinutoC(opId);
+    var cfg = fatorConfigForOp(opId);
+    var vendaBrutaC = comp.vendaBrutaC || 0;
+    var taxasMarketplaceC = comp.taxasShopeeC || 0; // já negativo (débito do vendedor) — nunca recalculado
+    var custoProdutoC = comp.custoPendente ? 0 : (comp.custoProdutoC || 0);
+    var horaHomemC = Math.round(custoMinutoHomemC * tempo.minutos);
+    var custosFixosAbsorvidosC = Math.round(custoFixoMinutoC * tempo.minutos);
+    var custosVariaveisC = Math.round(custoVariavelMinutoC * tempo.minutos);
+    var impostoC = Math.round(vendaBrutaC * (cfg.impostoPct || 0) / 100);
+    var lucroRealC = vendaBrutaC + taxasMarketplaceC - custoProdutoC - horaHomemC - custosFixosAbsorvidosC - custosVariaveisC - impostoC;
+    var margemRealPct = vendaBrutaC ? r2(lucroRealC / vendaBrutaC * 100) : null;
+    return {
+      orderId: orderId, congelado: false, operationId: opId,
+      vendaBrutaC: vendaBrutaC, taxasMarketplaceC: taxasMarketplaceC, taxaRows: comp.gTaxas,
+      custoProdutoC: custoProdutoC, custoPendente: comp.custoPendente,
+      tempoProducaoMin: tempo.minutos, tempoCompleto: tempo.completo, itensSemTempo: tempo.itensSemTempo,
+      custoMinutoHomemC: custoMinutoHomemC, horaHomemC: horaHomemC,
+      custoFixoMinutoC: custoFixoMinutoC, custosFixosAbsorvidosC: custosFixosAbsorvidosC,
+      custoVariavelMinutoC: custoVariavelMinutoC, custosVariaveisC: custosVariaveisC,
+      impostoPct: cfg.impostoPct || 0, impostoC: impostoC,
+      lucroRealC: lucroRealC, margemRealPct: margemRealPct,
+      configurado: { funcionarios: !!fatorFuncionariosAtivos(opId).length, custosFixos: !!fatorCustosFixosAtivos(opId).length, custosVariaveis: !!fatorCustosVariaveisAtivos(opId).length, capacidadeProdutiva: !!cfg.capacidadeProdutivaMin, imposto: !!cfg.impostoPct, tempoProducao: tempo.completo },
+    };
+  }
+
   var cpSub = 'lista'; // lista | categorias | planocontas | centroscusto | fornecedores | dre
   var cpSel = new Set(), cpPage = 1, cpPageSize = 30;
   var cpFiltrosAbertos = false; // toggle "+ Filtros" (filtros avançados só aparecem quando expandido)
@@ -11999,14 +12363,14 @@
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; pricingOpConfig = []; pricingFamilyRules = []; pontoEquilibrioCfg = {}; metaLucroCfg = {}; financialAccounts = []; financialEvents = []; contasReceber = []; crReceipts = []; financialTransfers = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; pricingOpConfig = []; pricingFamilyRules = []; pontoEquilibrioCfg = {}; metaLucroCfg = {}; financialAccounts = []; financialEvents = []; contasReceber = []; crReceipts = []; financialTransfers = []; fatorFuncionarios = []; fatorCustosFixos = []; fatorCustosVariaveis = []; fatorPedidoSnapshots = []; fatorConfig = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
   var opSelBtn = document.getElementById('op-selector'); if (opSelBtn) opSelBtn.onclick = function () { openOperationSelector(); };
 
   // Abre o banco; se falhar (corrompido/bloqueado/privado), ativa o modo em memória e SEGUE —
   // o sistema sempre carrega e Produtos sempre abre (só não salva). Nunca dead-end / tela branca.
   openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers'), getAll('bankaccounts'), getAll('companies'), getAll('operations'), getAll('cpheader'), getAll('cpitems'), getAll('cppayments'), getAll('cpattach'), getAll('cpcategories'), getAll('cpaccounting'), getAll('cpcostcenters'), getAll('cpsuppliers'), getAll('cpsupplylinks'), getAll('pricingopconfig'), getAll('pricingfamilyrules'), getAll('financialaccounts'), getAll('financialevents'), getAll('crheader'), getAll('crreceipts'), getAll('financialtransfers')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers'), getAll('bankaccounts'), getAll('companies'), getAll('operations'), getAll('cpheader'), getAll('cpitems'), getAll('cppayments'), getAll('cpattach'), getAll('cpcategories'), getAll('cpaccounting'), getAll('cpcostcenters'), getAll('cpsuppliers'), getAll('cpsupplylinks'), getAll('pricingopconfig'), getAll('pricingfamilyrules'), getAll('financialaccounts'), getAll('financialevents'), getAll('crheader'), getAll('crreceipts'), getAll('financialtransfers'), getAll('fatorfuncionarios'), getAll('fatorcustosfixos'), getAll('fatorcustosvariaveis'), getAll('fatorpedidosnapshots')]);
   }).then(function (r) {
     orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
     wallet = r[5] || [];
@@ -12034,6 +12398,8 @@
     cpCategories = r[30] || []; cpAccounting = r[31] || []; cpCostCenters = r[32] || []; cpSuppliers = r[33] || []; cpSupplyLinks = r[34] || [];
     pricingOpConfig = r[35] || []; pricingFamilyRules = r[36] || [];
     financialAccounts = r[37] || []; financialEvents = r[38] || []; contasReceber = r[39] || []; crReceipts = r[40] || []; financialTransfers = r[41] || [];
+    fatorFuncionarios = r[42] || []; fatorCustosFixos = r[43] || []; fatorCustosVariaveis = r[44] || []; fatorPedidoSnapshots = r[45] || [];
+    var fatorCfgRow = settings.filter(function (x) { return x.id === 'fatorConfig'; })[0]; if (fatorCfgRow && fatorCfgRow.data) fatorConfig = fatorCfgRow.data;
     var activeSetting = settings.filter(function (x) { return x.id === 'activeOperationId'; })[0];
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
     plans = (r[4] || []).map(function (p) { if (PLAN_MIGR[p.status]) p.status = PLAN_MIGR[p.status]; if (p.scopeSkus == null && p.relatedSkus) p.scopeSkus = p.relatedSkus; if (p.indicatorKind == null) p.indicatorKind = 'liquido'; return p; });
