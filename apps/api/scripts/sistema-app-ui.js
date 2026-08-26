@@ -913,19 +913,52 @@
     orders.forEach(function (o) { if (o.isFbs && fullConfirmadoEnvio(o)) set[o.id] = pedidoExpedidoInfo(o); });
     return set;
   }
-  // Status de conciliação financeira de um pedido, cruzando Minha Renda × Acelera × Carteira × Devolução.
-  // Usado na fila de Expedição e na Ficha Financeira 360º (mesma definição nos dois lugares).
+  // Status de conciliação financeira de um pedido — cruza Expedição × Venda × Taxas (Income/
+  // resolveSellerCharges) × Recebimento real (Carteira, via walletOrigin — a MESMA função que o
+  // funil "Foi recebido" do Dashboard já usa, nunca uma segunda definição de "recebeu de verdade") ×
+  // Valor compatível. Usado na fila de Expedição e na Ficha Financeira 360º (mesma definição nos dois
+  // lugares).
+  // BUG 3 (Fase final de ajuste gerencial, pós-auditoria de consistência): a regra antiga considerava
+  // "Conciliado" qualquer pedido com QUALQUER lançamento na Carteira citando o ID — inclusive um
+  // ajuste de centavos (de -R$0,01 a -R$64,82, nos 11 casos reais auditados), sem nunca checar se era
+  // de fato o crédito principal (walletOrigin().confidence==='alta') nem se o pedido tinha sido
+  // expedido. Isso fazia o próprio Dashboard mostrar 0 em "Foi recebido" (checagem rigorosa) contra 18
+  // em "Foi conciliado" (checagem frouxa) para os MESMOS pedidos. Regra nova — 🟢 Conciliado só quando
+  // TODOS os critérios batem ao mesmo tempo: Expedido, Venda localizada, Taxas localizadas (fonte
+  // real via Income, nunca estimativa de Pedidos), Recebimento real identificado E Valor compatível.
   function pedidoConciliacaoStatus(orderId) {
+    var o = orders.find(function (x) { return x.id === orderId; });
+    var hasDevol = occ.some(function (x) { return !x.isDemo && x.orderId === orderId; });
+    if (!o) return { code: 'AGUARDANDO', label: '⚪ Pedido não encontrado', hasRenda: false, hasAcelera: null, hasWallet: false, hasDevol: hasDevol };
+    // Pedido cancelado nunca "concilia" nem "diverge" — não existe o fluxo Venda→Taxas→Recebimento
+    // pra conferir (ver Bug 2/Ficha do Pedido). Estado próprio, nunca confundido com pendência real.
+    if (o.normalizedStatus === 'CANCELADO') return { code: 'NAO_APLICAVEL', label: '⚪ Cancelado — não aplicável', hasRenda: false, hasAcelera: null, hasWallet: false, hasDevol: hasDevol };
+    if (!mrRenda.length && !acelera.length && !wallet.length) return { code: 'AGUARDANDO', label: '⚪ Aguardando informações', hasRenda: false, hasAcelera: null, hasWallet: false, hasDevol: hasDevol };
+
+    var vendaLocalizada = true; // Order.all é a própria fonte de origem do pedido — sempre localizada
+    var expedido = pedIsExpedido(orderId);
+    var taxasLocalizadas = resolveSellerCharges(orderId).totalStatus === 'COMPLETO';
     var hasRenda = mrRenda.some(function (r) { return r.orderId === orderId && r.ver === 'Order'; });
     var accEng = acelera.length ? acelera.some(function (r) { return r.pedido === orderId; }) : null;
-    var hasWallet = wallet.some(function (t) { return t.orderId === orderId; });
-    var hasDevol = occ.some(function (o) { return !o.isDemo && o.orderId === orderId; });
-    var found = [hasRenda, accEng, hasWallet].filter(function (x) { return x === true; }).length;
-    var expected = 1 + (acelera.length ? 1 : 0) + (wallet.length ? 1 : 0); // Renda sempre esperado se módulo tem dados; Acelera/Carteira só contam se o módulo tiver algum dado importado
-    if (!mrRenda.length && !acelera.length && !wallet.length) return { code: 'AGUARDANDO', label: '⚪ Aguardando informações', hasRenda: hasRenda, hasAcelera: accEng, hasWallet: hasWallet, hasDevol: hasDevol };
-    if (found === 0) return { code: 'DIVERGENTE', label: '🔴 Divergência', hasRenda: hasRenda, hasAcelera: accEng, hasWallet: hasWallet, hasDevol: hasDevol };
-    if (expected > 0 && found >= expected) return { code: 'CONCILIADO', label: '🟢 Conciliado', hasRenda: hasRenda, hasAcelera: accEng, hasWallet: hasWallet, hasDevol: hasDevol };
-    return { code: 'PARCIAL', label: '🟡 Parcialmente conciliado', hasRenda: hasRenda, hasAcelera: accEng, hasWallet: hasWallet, hasDevol: hasDevol };
+    var wtx = wallet.filter(function (t) { return t.orderId === orderId && WALLET_ORIGEM_CATS[wEffCat(t)]; });
+    var hasWallet = wtx.length > 0;
+    var melhorOrigem = wtx.map(walletOrigin).filter(Boolean).sort(function (a, b) {
+      var rank = { alta: 2, estimativa: 1, candidato: 0 };
+      return (rank[b.confidence] || 0) - (rank[a.confidence] || 0);
+    })[0] || null;
+    var recebimentoReal = !!melhorOrigem && melhorOrigem.confidence === 'alta';
+    var valorCompativel = recebimentoReal && melhorOrigem.ok === true;
+
+    var criteriosReais = [expedido, taxasLocalizadas, recebimentoReal, valorCompativel];
+    var atendidos = criteriosReais.filter(Boolean).length;
+    var code, label;
+    if (atendidos === criteriosReais.length) { code = 'CONCILIADO'; label = '🟢 Conciliado'; }
+    else if (atendidos === 0) { code = 'DIVERGENTE'; label = '🔴 Divergente'; }
+    else { code = 'PARCIAL'; label = '🟡 Parcial'; }
+    return {
+      code: code, label: label, hasRenda: hasRenda, hasAcelera: accEng, hasWallet: hasWallet, hasDevol: hasDevol,
+      criterios: { vendaLocalizada: vendaLocalizada, expedido: expedido, taxasLocalizadas: taxasLocalizadas, recebimentoReal: recebimentoReal, valorCompativel: valorCompativel },
+    };
   }
   // REGRA DEFINITIVA (prompt de correção): a fila de Expedição vem exclusivamente de
   // Pedidos > A ENVIAR (normalizedStatus === 'A_ENVIAR'). Nunca por prazo, pagamento, "parece
@@ -1786,6 +1819,12 @@
     var wtx = wallet.filter(function (t) { return t.orderId === orderId; });
     var bip = shipBip[orderId];
     var st = pedidoConciliacaoStatus(orderId);
+    // BUG 2 (Fase final de ajuste gerencial, pós-auditoria de consistência): a Ficha mostrava "Lucro
+    // atual" positivo em pedidos Cancelados — matematicamente correto pela fórmula (Venda−Taxas−Custo),
+    // mas um lucro que nunca vai se realizar, porque a venda em si nunca vai se concretizar. Nunca
+    // recalcula venda/taxas/custo (motor intocado) — só troca o que é EXIBIDO nesses 3 campos quando
+    // o pedido está cancelado, e adiciona um aviso explícito.
+    var cancelado = ord && ord.normalizedStatus === 'CANCELADO';
 
     var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '860px'; panel.style.maxWidth = '98vw';
     d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
@@ -2064,15 +2103,22 @@
     var pagamentoPrevistoC = (receitaC != null && taxasShopeeC != null) ? receitaC + taxasShopeeC : null;
     var lucroAtualSimplesC = (pagamentoPrevistoC != null && custoProdC != null) ? (pagamentoPrevistoC - custoProdC) : null;
     var margemAtualSimplesPct = (lucroAtualSimplesC != null && receitaC) ? r2(lucroAtualSimplesC / receitaC * 100) : null;
+    // BUG 2 (Fase final de ajuste gerencial): venda/taxas/custo continuam calculados normalmente
+    // acima (nunca alterados) — só a EXIBIÇÃO de Venda/Lucro/Margem muda para um pedido Cancelado,
+    // pra nunca parecer um lucro real que nunca vai se concretizar.
+    var vendaHtmlCancelavel = cancelado ? '<span class="tag warn">Não realizada</span>' : (receitaC != null ? brlC(receitaC) : '—');
+    var lucroHtmlCancelavel = cancelado ? '<span class="tag warn">Não aplicável</span>' : (lucroAtualSimplesC != null ? brlC(lucroAtualSimplesC) : '<span class="tag warn">custo pendente</span>');
+    var margemHtmlCancelavel = cancelado ? 'Indisponível' : (margemAtualSimplesPct != null ? pct(margemAtualSimplesPct) : '—');
+    var avisoCanceladoBlock = cancelado ? callout('warn', 'Pedido cancelado — resultado não realizado.', 'Venda, Lucro e Margem abaixo não representam dinheiro ganho — a venda nunca se concretizou.') : '';
 
     // RESULTADO DO PEDIDO (§24-27): só os 5 campos pedidos — Venda/Taxas Shopee/Custo do
     // produto/Lucro atual/Margem atual — mesma fórmula e mesmas variáveis do cabeçalho acima.
     var resultadoBlock = '<div class="panel"><div class="ph"><h3>Resultado do Pedido</h3></div><div class="pb">' +
-      fLine('Venda', receitaC) +
+      '<div class="fin-line"><span>Venda</span><span>' + vendaHtmlCancelavel + '</span></div>' +
       fLine('Taxas Shopee', taxasShopeeC) +
       fLine('Custo do produto', custoProdC != null ? -custoProdC : null) +
-      '<div class="fin-line total"><span>Lucro atual</span><span class="' + (lucroAtualSimplesC != null && lucroAtualSimplesC < 0 ? 'neg' : 'pos') + '">' + (lucroAtualSimplesC != null ? brlC(lucroAtualSimplesC) : 'aguardando custo do produto') + '</span></div>' +
-      '<div class="fin-line"><span>Margem atual</span><span>' + (margemAtualSimplesPct != null ? pct(margemAtualSimplesPct) : '—') + '</span></div>' +
+      '<div class="fin-line total"><span>Lucro atual</span><span class="' + (lucroAtualSimplesC != null && lucroAtualSimplesC < 0 && !cancelado ? 'neg' : 'pos') + '">' + lucroHtmlCancelavel + '</span></div>' +
+      '<div class="fin-line"><span>Margem atual</span><span>' + margemHtmlCancelavel + '</span></div>' +
       '</div></div>' +
       '<div class="footnote" style="padding:8px 0">Fontes usadas: Pedidos' + (mrRow ? ' · Minha Renda' : '') + (svcRows.length ? ' · Service Fee Details' : '') + (adjRows.length ? ' · Adjustment' : '') + (acRows.length ? ' · Shopee Acelera' : '') + (affRow ? ' · Afiliados' : '') + (wtx.length ? ' · Saldo da Carteira' : '') + (occs.length ? ' · Devoluções' : '') + '.</div>';
 
@@ -2088,7 +2134,6 @@
       var pvPedido = acRows.reduce(function (s, r) { return { bruto: s.bruto + r.antecipado, taxa: s.taxa + r.taxa, reemb: s.reemb + (r.reembolsado || 0) }; }, { bruto: 0, taxa: 0, reemb: 0 });
       var antecipadoPedC = pvPedido.bruto;
       var diffPedC = (pagamentoPrevistoC != null) ? (pagamentoPrevistoC - antecipadoPedC) : null;
-      var cancelado = ord && ord.normalizedStatus === 'CANCELADO';
       var taxaProvisoria = sellerCharges.totalStatus && sellerCharges.totalStatus !== 'COMPLETO';
       var motivo = cancelado ? 'Pedido cancelado.' : (pvPedido.reemb > 0 ? 'Reembolso registrado no Acelera de ' + brlC(-Math.abs(pvPedido.reemb)) + '.' : (adjRows.length ? 'Ajustes posteriores aplicados ao repasse (ver seção 5 acima).' : (taxaProvisoria ? 'Taxas Shopee ainda provisórias — aguardando confirmação do Income.' : '')));
       var status, statusCls;
@@ -2111,12 +2156,13 @@
     // 6.Créditos/Compensações → 7.Conciliação do Pagamento — depois Eventos do Pedido → Resultado.
     // Cabeçalho (§1-7): Valor da venda | Taxas | Pagamento previsto | Custo do produto | Lucro atual.
     var heroBlock = '<div class="panel"><div class="ph"><h3>1. Resumo Financeiro</h3></div><div class="pb" style="padding-top:0">' +
+      avisoCanceladoBlock +
       '<div class="kstrip">' +
-      '<div class="kc"><div class="kl">Valor da venda</div><div class="kv" style="font-size:18px">' + (receitaC != null ? brlC(receitaC) : '—') + '</div></div>' +
+      '<div class="kc"><div class="kl">Valor da venda</div><div class="kv" style="font-size:18px">' + vendaHtmlCancelavel + '</div></div>' +
       '<div class="kc"><div class="kl">Taxas</div><div class="kv" style="font-size:18px">' + (taxasShopeeC != null ? brlC(taxasShopeeC) : '—') + '</div></div>' +
       '<div class="kc"><div class="kl">Pagamento previsto</div><div class="kv" style="font-size:18px">' + (pagamentoPrevistoC != null ? brlC(pagamentoPrevistoC) : '—') + '</div></div>' +
       '<div class="kc"><div class="kl">Custo do produto</div><div class="kv" style="font-size:18px">' + (custoProdC != null ? brlC(-custoProdC) : (custoPendente ? '<span class="tag warn">pendente</span>' : '—')) + '</div></div>' +
-      '<div class="kc"><div class="kl">Lucro atual</div><div class="kv" style="font-size:18px;color:' + (lucroAtualSimplesC != null && lucroAtualSimplesC < 0 ? 'var(--err)' : 'var(--ok)') + '">' + (lucroAtualSimplesC != null ? brlC(lucroAtualSimplesC) : '<span class="tag warn">custo pendente</span>') + '</div></div>' +
+      '<div class="kc"><div class="kl">Lucro atual</div><div class="kv" style="font-size:18px;color:' + (lucroAtualSimplesC != null && lucroAtualSimplesC < 0 && !cancelado ? 'var(--err)' : 'var(--ok)') + '">' + lucroHtmlCancelavel + '</div></div>' +
       '</div></div></div>';
     panel.innerHTML = '<div class="dh"><div><b>Ficha do Pedido</b> — <span class="mono">' + esc(orderId) + '</span> <span class="tag" style="margin-left:6px">' + st.label + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
       heroBlock +
@@ -7190,6 +7236,17 @@
     // detalhada (que preserva Subtotal de Envio como linha própria — frete do parceiro logístico é
     // custo real e não pode desaparecer do Lucro/Receita Líquida da DRE completa).
     var mapTaxasLoja = {}; var taxasPendentesN = 0;
+    // BUG 4 (Fase final de ajuste gerencial, pós-auditoria de consistência): quando o Income ainda não
+    // cobre um pedido, c.gDescontos nasce SEM nenhuma linha de reembolso/devolução (nunca estimada a
+    // partir de Pedidos, por desenho de resolveSellerCharges/pedidoComposicaoFinanceira — correto pra
+    // não inventar valor). Isso fazia a DRE do Caixa parecer maior do que é de verdade quando o pedido
+    // JÁ tem uma devolução conhecida em outra fonte — a DRE nunca pode ficar artificialmente maior só
+    // porque uma fonte específica ainda não chegou. Fallback (nunca sobrescreve dado real do Income, só
+    // preenche a lacuna quando ele não existe) — prioridade: 1) módulo Devolução (occ, rastreio de
+    // caso completo, mais confiável) 2) Carteira (lançamento categorizado Devolução/Cancelamento para
+    // este pedido). Guardado à parte (nunca somado a mapReducoes) pra nunca contaminar a reconciliação
+    // já validada da Quantia Total Lançada quando o Income eventualmente confirmar o mesmo pedido.
+    var devolucoesFallbackC = 0, devolucoesFallbackN = 0, devolucoesFallbackOrigem = null;
     pagas.forEach(function (o) {
       var c = pedidoComposicaoFinanceira(o.id);
       receitaBruta += (c.receitaC || 0);
@@ -7201,6 +7258,15 @@
       if (c.envio) envioTotal += c.envio.subtotalC;
       if (c.custoProdC != null) { custoTotal += c.custoProdC; custoConhecidoN++; }
       if (c.temIncome) comIncomeN++;
+      if (!c.gDescontos.some(function (r) { return r.nat === 'REEMBOLSO_DEVOLUCAO'; })) {
+        var occDev = occ.find(function (x) { return !x.isDemo && x.orderId === o.id; });
+        if (occDev && occDev.impact && occDev.impact.refundedTotal > 0) {
+          devolucoesFallbackC += -Math.round(occDev.impact.refundedTotal * 100); devolucoesFallbackN++; devolucoesFallbackOrigem = devolucoesFallbackOrigem || 'DEVOLUCAO';
+        } else {
+          var wtxDev = wallet.filter(function (t) { return t.orderId === o.id && (wEffCat(t) === 'DEVOLUCAO' || wEffCat(t) === 'CANCELAMENTO') && t.amount < 0; });
+          if (wtxDev.length) { devolucoesFallbackC += Math.round(wtxDev.reduce(function (s, t) { return s + t.amount; }, 0) * 100); devolucoesFallbackN++; devolucoesFallbackOrigem = devolucoesFallbackOrigem || 'CARTEIRA'; }
+        }
+      }
       var cmp = pricingCompareOrder((o.operationId || opActiveOrNull() || null), o.id);
       if (cmp.found && cmp.proj.familyId && cmp.proj.projCalc && cmp.proj.precoVendidoC && cmp.real.margemFinalPct != null) {
         precComFamiliaN++; precReceitaC += cmp.proj.precoVendidoC;
@@ -7222,11 +7288,18 @@
     var outros = linhasOutros.reduce(function (s, l) { return s + l.valor; }, 0);
     var ac = aceleraResultadoFechamento(dateKey); var acTaxa = ac.resgatesN ? -Math.abs(ac.taxaAcelera) : 0;
     var eventosPosteriores = (caixaClose[dateKey] && caixaClose[dateKey].eventosPosteriores) || [];
-    var receitaLiquida = receitaBruta + descComerciais + envioTotal + taxasCobradas + creditos + outros;
+    // BUG 1 (Fase final de ajuste gerencial): Receita Líquida Real = Venda Bruta − Taxas Shopee
+    // (inclui Afiliados, já que "Taxa de comissão Afiliados do Vendedor" é DEBITO_VENDEDOR e soma em
+    // taxasCobradas) − Devoluções (descComerciais já inclui a linha REEMBOLSO_DEVOLUCAO do Income
+    // quando existe; devolucoesFallbackC completa quando o Income ainda não confirmou este pedido) −
+    // Descontos comerciais (cupom/PIX/vouchers/cashback, também dentro de descComerciais) + Créditos
+    // + Envio + Ajustes (mrAdj — já entram em taxasCobradas/creditos pelo próprio sinal, nunca uma
+    // segunda subtração aqui, senão contaria duas vezes).
+    var receitaLiquida = receitaBruta + descComerciais + envioTotal + taxasCobradas + creditos + outros + devolucoesFallbackC;
     var custoCompleto = pagas.length > 0 && custoConhecidoN === pagas.length;
     var lucro = custoCompleto ? receitaLiquida - custoTotal + acTaxa : null;
     var margem = (receitaBruta && lucro != null) ? r2(lucro / receitaBruta * 100) : null;
-    return { n: pagas.length, comIncomeN: comIncomeN, comSvcDetailsN: comSvcDetailsN, receitaBruta: receitaBruta, descComerciais: descComerciais, linhasReducoes: linhasReducoes, envioTotal: envioTotal, taxasCobradas: taxasCobradas, linhasTaxas: linhasTaxas, taxasLojaC: taxasLojaC, linhasTaxasLoja: linhasTaxasLoja, taxasPendentesN: taxasPendentesN, linhasSvcChildren: linhasSvcChildren, creditos: creditos, linhasCreditos: linhasCreditos, outros: outros, linhasOutros: linhasOutros, receitaLiquida: receitaLiquida, custoTotal: custoConhecidoN ? custoTotal : null, custoConhecidoN: custoConhecidoN, custoCompleto: custoCompleto, acTaxa: acTaxa, temAcelera: !!ac.resgatesN, eventosPosteriores: eventosPosteriores, lucro: lucro, margem: margem, precComFamiliaN: precComFamiliaN, margemProjetadaDia: margemProjetadaDia, margemRealizadaDia: margemRealizadaDia, pedidosAbaixoRecomendado: pedidosAbaixoRecomendado, impactoAbaixoRecomendadoC: impactoAbaixoRecomendadoC };
+    return { n: pagas.length, comIncomeN: comIncomeN, comSvcDetailsN: comSvcDetailsN, receitaBruta: receitaBruta, descComerciais: descComerciais, linhasReducoes: linhasReducoes, envioTotal: envioTotal, taxasCobradas: taxasCobradas, linhasTaxas: linhasTaxas, taxasLojaC: taxasLojaC, linhasTaxasLoja: linhasTaxasLoja, taxasPendentesN: taxasPendentesN, linhasSvcChildren: linhasSvcChildren, creditos: creditos, linhasCreditos: linhasCreditos, outros: outros, linhasOutros: linhasOutros, devolucoesFallbackC: devolucoesFallbackC, devolucoesFallbackN: devolucoesFallbackN, devolucoesFallbackOrigem: devolucoesFallbackOrigem, receitaLiquida: receitaLiquida, custoTotal: custoConhecidoN ? custoTotal : null, custoConhecidoN: custoConhecidoN, custoCompleto: custoCompleto, acTaxa: acTaxa, temAcelera: !!ac.resgatesN, eventosPosteriores: eventosPosteriores, lucro: lucro, margem: margem, precComFamiliaN: precComFamiliaN, margemProjetadaDia: margemProjetadaDia, margemRealizadaDia: margemRealizadaDia, pedidosAbaixoRecomendado: pedidosAbaixoRecomendado, impactoAbaixoRecomendadoC: impactoAbaixoRecomendadoC };
   }
   // Conta colunas do Income com valor real ainda sem destino — lê mrRenda DIRETO (dado bruto já
   // marcado por linha durante a importação), nunca mrEngine()/mrCamposNaoClassificados() (Minha Renda).
@@ -8040,20 +8113,25 @@
   // regra de "não inventar lucro" que já vale para um único dia); dias parciais ficam contados à
   // parte, nunca silenciosamente tratados como lucro zero.
   function caixaPeriodEngine(days) {
-    var e = { totFat: 0, totTaxas: 0, totCusto: 0, custoConhecidoN: 0, totPedidosPagos: 0, totAcTaxa: 0, totAcLiquido: 0, totAcBruto: 0, totLucro: 0, diasComLucro: 0, diasComMovimento: 0, diasSemCustoCompleto: 0, totPedidosExpedidos: 0, totTransferido: 0, totPend: 0, saidasMap: {}, porDia: [] };
+    // BUG 1 (Fase final de ajuste gerencial): totReceitaLiquida soma dre.receitaLiquida — a fórmula
+    // COMPLETA já calculada por caixaDreDia (Venda Bruta − Taxas Shopee − Afiliados − Devoluções −
+    // Ajustes − Descontos comerciais + Créditos + Envio), nunca o recorte simplificado totFat+totTaxas
+    // que caixaDashboardView usava antes (ver Bug 1 do prompt de ajuste gerencial).
+    var e = { totFat: 0, totTaxas: 0, totReceitaLiquida: 0, totCusto: 0, custoConhecidoN: 0, totPedidosPagos: 0, totAcTaxa: 0, totAcLiquido: 0, totAcBruto: 0, totLucro: 0, diasComLucro: 0, diasComMovimento: 0, diasSemCustoCompleto: 0, totPedidosExpedidos: 0, totTransferido: 0, totPend: 0, totDevolucoesFallbackC: 0, diasComDevolucaoFallback: 0, saidasMap: {}, porDia: [] };
     days.forEach(function (dk) {
       var dre = caixaDreDia(dk), ac = aceleraResultadoFechamento(dk), fluxo = caixaFluxoDia(dk), exp = caixaDayExpedicao(dk), st = caixaDayStatus(dk);
       if (dre.n) e.diasComMovimento++;
-      e.totFat += dre.receitaBruta; e.totTaxas += dre.taxasCobradas; e.totPedidosPagos += dre.n;
+      e.totFat += dre.receitaBruta; e.totTaxas += dre.taxasCobradas; e.totReceitaLiquida += dre.receitaLiquida; e.totPedidosPagos += dre.n;
       if (dre.custoConhecidoN) { e.totCusto += dre.custoTotal; e.custoConhecidoN += dre.custoConhecidoN; }
       if (dre.n && !dre.custoCompleto) e.diasSemCustoCompleto++;
       if (ac.resgatesN) { e.totAcTaxa += ac.taxaAcelera; e.totAcLiquido += ac.valorLiquido; e.totAcBruto += ac.valorBruto; }
       if (dre.lucro != null) { e.totLucro += dre.lucro; e.diasComLucro++; }
       e.totPedidosExpedidos += exp.expedidos; e.totTransferido += fluxo.transferido; e.totPend += (st.pend.total + st.pendCart.total);
+      if (dre.devolucoesFallbackN) { e.totDevolucoesFallbackC += dre.devolucoesFallbackC; e.diasComDevolucaoFallback++; }
       dre.linhasTaxas.forEach(function (l) { e.saidasMap[l.label] = (e.saidasMap[l.label] || 0) + l.valor; });
       e.porDia.push({ dateKey: dk, n: dre.n, faturamento: dre.receitaBruta, taxas: dre.taxasCobradas, custo: dre.custoConhecidoN ? dre.custoTotal : null, custoCompleto: dre.custoCompleto, lucro: dre.lucro, margem: dre.margem, acRecebido: ac.resgatesN ? ac.valorLiquido : 0, transferido: fluxo.transferido, pend: st.pend.total + st.pendCart.total, status: st.status });
     });
-    e.totFat = r2(e.totFat); e.totTransferido = r2(e.totTransferido);
+    e.totFat = r2(e.totFat); e.totReceitaLiquida = r2(e.totReceitaLiquida); e.totTransferido = r2(e.totTransferido);
     e.margem = (e.totFat && e.diasSemCustoCompleto === 0 && e.diasComMovimento) ? r2(e.totLucro / e.totFat * 100) : null;
     return e;
   }
@@ -8189,12 +8267,23 @@
     // exibia o valor em centavos como se já fosse reais — 100× maior (ex.: R$42.114.066,00 em vez de
     // R$421.140,66). A mesma variável já era usada corretamente com brlC()/1̸00 em todo o resto do
     // arquivo (linhas 8594/8913/8956/11500) — nunca converter aqui de novo, só formatar certo.
+    // BUG 1 (Fase final de ajuste gerencial, pós-auditoria de consistência): "Receita Líquida" mostrava
+    // só Faturamento − Taxas Shopee (eng.totFat + eng.totTaxas) — nunca descontava Devoluções, Ajustes
+    // nem Descontos comerciais, superestimando a receita líquida real em ~20% (medido contra Minha
+    // Renda, que já desconta tudo). eng.totReceitaLiquida usa a fórmula completa já calculada por
+    // caixaDreDia (Venda Bruta − Taxas Shopee − Afiliados − Devoluções − Ajustes − Descontos
+    // comerciais + Créditos + Envio) — nunca um segundo cálculo, só a soma correta do que a DRE do dia
+    // já apura.
     var row1 = kstrip([
       { l: 'Faturamento', v: brlC(eng.totFat), cls: 'blue', s: cmp ? fmtDelta(cmp.deltaFat) + ' vs período anterior' : undefined, sHtml: !!cmp },
-      { l: 'Receita Líquida', v: brlC(eng.totFat + eng.totTaxas), cls: 'blue' },
+      { l: 'Receita Líquida Real', v: brlC(eng.totReceitaLiquida), cls: 'blue', s: 'Venda Bruta − Taxas Shopee − Afiliados − Devoluções − Ajustes − Descontos comerciais' },
       { l: 'Lucro', v: eng.diasSemCustoCompleto === 0 ? brlC(eng.totLucro) : brlC(eng.totLucro) + ' (parcial)', cls: eng.totLucro >= 0 ? 'green' : 'red', s: eng.diasSemCustoCompleto ? nn(eng.diasSemCustoCompleto) + ' dia(s) com custo pendente, não somados' : (cmp ? fmtDelta(cmp.deltaLucro) + ' vs período anterior' : undefined), sHtml: !eng.diasSemCustoCompleto && !!cmp },
       { l: 'Margem', v: margemTxt, cls: 'blue', s: cmp && cmp.deltaMargemPP != null ? (cmp.deltaMargemPP >= 0 ? '+' : '') + r2(cmp.deltaMargemPP) + ' p.p. vs período anterior' : (eng.diasSemCustoCompleto ? 'custo incompleto em ' + nn(eng.diasSemCustoCompleto) + ' dia(s)' : undefined) },
     ]);
+    // BUG 1 §"Separar da visão financeira": Recebimento (Acelera/Carteira/Banco) é o CAMINHO do
+    // dinheiro, nunca somado dentro da Receita Líquida acima — as duas linhas medem coisas diferentes
+    // (quanto a venda vale líquida vs quanto já entrou fisicamente na conta).
+    var row2Titulo = '<div class="footnote" style="margin:14px 0 4px;font-weight:700;color:var(--text)">Recebimento (separado da Receita Líquida — mede o dinheiro que já entrou, não o que a venda vale)</div>';
     var row2 = kstrip([
       { l: 'Pedidos pagos', v: nn(eng.totPedidosPagos), cls: 'blue' },
       { l: 'Pedidos expedidos', v: nn(eng.totPedidosExpedidos), cls: 'blue' },
@@ -8202,10 +8291,15 @@
       { l: 'Transferido para banco', v: brl(eng.totTransferido), cls: 'blue' },
     ]);
     var occPeriodo = occInPeriod(); var expo = sumExposure(occPeriodo);
+    // BUG 4 (Fase final de ajuste gerencial): quando não há ocorrência no módulo Devolução mas a DRE
+    // já preencheu a lacuna via fallback (Income/Carteira, ver caixaDreDia), a Receita Líquida Real
+    // acima já desconta esse valor — este card mostra isso explicitamente em vez de exibir "R$0,00"
+    // silenciosamente como se não houvesse devolução nenhuma no período.
+    var devolFallbackTxt = (!expo.confirmedLoss && eng.diasComDevolucaoFallback) ? (nn(eng.diasComDevolucaoFallback) + ' dia(s) com devolução via ' + (eng.totDevolucoesFallbackC ? 'Income/Carteira' : 'módulo Devolução') + ' (' + brlC(-eng.totDevolucoesFallbackC) + ' já descontado(s) na Receita Líquida Real acima)') : (nn(occPeriodo.length) + ' ocorrência(s) no período');
     var row3 = kstrip([
       { l: 'Taxas Shopee', v: brlC(eng.totTaxas), cls: 'red' },
       { l: 'Custo dos produtos', v: eng.custoConhecidoN ? brlC(-eng.totCusto) : '—', cls: 'amber', s: eng.custoConhecidoN + ' de ' + eng.totPedidosPagos + ' pedidos com custo conhecido' },
-      { l: 'Devoluções / perdas', v: brl(-expo.confirmedLoss), cls: expo.confirmedLoss ? 'red' : 'green', s: nn(occPeriodo.length) + ' ocorrência(s) no período' },
+      { l: 'Devoluções / perdas', v: brl(-expo.confirmedLoss), cls: expo.confirmedLoss ? 'red' : 'green', s: devolFallbackTxt },
       { l: 'Pendências financeiras', v: nn(eng.totPend), cls: eng.totPend ? 'amber' : 'green' },
     ]);
 
@@ -8269,7 +8363,7 @@
     }).join('');
     var tabelaDias = '<div class="cx-section"><h4>Resumo por dia' + h4subG(nn(days.length) + ' dia(s)') + '</h4><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Faturamento</th><th>Taxas</th><th>Custo</th><th>Lucro</th><th>Margem</th><th>Acelera</th><th>Banco</th><th>Pend.</th><th>Status</th></tr></thead><tbody>' + diaRows + '</tbody></table></div></div>';
 
-    return head + periodBar + row1 + row2 + row3 + chartsGrid + opBreakdown + conciliacao + taxasTable + melhoresPiores + tabelaDias;
+    return head + periodBar + row1 + row2Titulo + row2 + row3 + chartsGrid + opBreakdown + conciliacao + taxasTable + melhoresPiores + tabelaDias;
   }
   function h4subG(v) { return v ? ' <span class="cx-h4-sub">' + v + '</span>' : ''; }
   function bindCaixaDashboardView() {
