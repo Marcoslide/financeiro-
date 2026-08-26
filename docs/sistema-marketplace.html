@@ -339,7 +339,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 99a1e79 · 2026-08-26 00:55 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 4a43641 · 2026-08-26 01:19 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -14128,7 +14128,11 @@ buffer/index.js:
   // dedupe por sourceEventKey — REGRA DE OURO, nunca duplica); lançamentos manuais também são
   // suportados (origem MANUAL). Um recebível é liquidado quando o dinheiro é creditado na CARTEIRA
   // SHOPEE — nunca quando o Pix chega ao banco (isso é a Transferência, Fase 7, evento à parte).
-  var crSub = 'lista'; // lista | shopee
+  var crSub = 'lista'; // lista | shopee | projecao
+  // PROMPT "CONTAS A RECEBER: DASHBOARD DE PROJEÇÃO DE RECEBIMENTOS FUTUROS (VISÃO GERENCIAL)" —
+  // estado só desta aba, nunca persistido e nunca lido por nenhum outro módulo.
+  var crProjF = { search: '', produto: '', sku: '', prazo: '' };
+  var crProjPage = 1, crProjPageSize = 30;
   var crPage = 1, crPageSize = 30;
   var crF = { situacao: '', financialAccountId: '', search: '', dateBasis: 'vencimento', sort: 'vencimento', dir: 'asc' };
   // PROMPT "Reestruturar Contas a Receber + Controle Bancário" §4: PREVISTO é o estado de um título
@@ -14245,7 +14249,7 @@ buffer/index.js:
   }
   function renderContasReceber() {
     app.innerHTML = secHead('FINANCEIRO', 'Contas a Receber', 'Controle de dinheiro que a empresa tem para receber, o que já foi recebido, onde entrou e o saldo dos bancos — nasce do fechamento de Caixa (só transferências reais para banco, nunca por pedido) e de lançamentos manuais.') +
-      '<div class="subtabs">' + [['visaogeral', 'Visão Geral'], ['lista', 'Lista'], ['shopee', 'Pedidos (auditoria)']].map(function (t) { return '<div class="subtab' + (crSub === t[0] ? ' active' : '') + '" data-crtab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>' +
+      '<div class="subtabs">' + [['visaogeral', 'Visão Geral'], ['lista', 'Lista'], ['shopee', 'Pedidos (auditoria)'], ['projecao', 'Projeção de Recebimentos']].map(function (t) { return '<div class="subtab' + (crSub === t[0] ? ' active' : '') + '" data-crtab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>' +
       '<div id="crbody" style="margin-top:14px"></div>';
     crRenderBody();
     app.querySelectorAll('[data-crtab]').forEach(function (t) { t.onclick = function () { crSub = t.dataset.crtab; crPage = 1; render(); }; });
@@ -14254,7 +14258,123 @@ buffer/index.js:
     var body = document.getElementById('crbody');
     if (crSub === 'visaogeral') { body.innerHTML = renderCrVisaoGeral(); bindCrVisaoGeral(); return; }
     if (crSub === 'shopee') { body.innerHTML = renderCrShopeeDia(); bindCrShopeeDia(); return; }
+    if (crSub === 'projecao') { body.innerHTML = renderCrProjecao(); bindCrProjecao(); return; }
     body.innerHTML = renderCrLista(); bindCrLista();
+  }
+  // ==================== PROJEÇÃO DE RECEBIMENTOS FUTUROS (VISÃO GERENCIAL) ====================
+  // PROMPT "CONTAS A RECEBER: DASHBOARD DE PROJEÇÃO DE RECEBIMENTOS FUTUROS": NÃO é Contas a Receber
+  // — não cria título, não gera baixa, não movimenta saldo, não alimenta Caixa/DRE/banco. É só uma
+  // LEITURA de Pedidos com status "A Enviar" (carteira de vendas ainda em operação), mostrando quanto
+  // já foi vendido (Order.all, Preço acordado × Qtd — nunca líquido/Acelera/Carteira/Income como
+  // venda) e uma ESTIMATIVA de taxas via resolveSellerCharges() (o mesmo motor real, que já sabe
+  // devolver "provisório" quando o Income ainda não confirmou). Nenhuma escrita em nenhuma store.
+  function crProjPedidos() {
+    var op = opActiveOrNull();
+    return orders.filter(function (o) { return o.normalizedStatus === 'A_ENVIAR' && (!op || o.operationId === op); });
+  }
+  // Alíquota média histórica do Acelera — só para a SIMULAÇÃO (nunca um valor real): média ponderada
+  // taxa/antecipado de todos os resgates já importados. Sem histórico, a simulação fica indisponível
+  // (nunca inventa uma alíquota).
+  function crProjAliquotaMedia() {
+    if (!acelera.length) return null;
+    var gs = aceleraByResgate(acelera);
+    var totAntec = gs.reduce(function (s, g) { return s + g.antec; }, 0);
+    var totTaxa = gs.reduce(function (s, g) { return s + g.taxa; }, 0);
+    return totAntec > 0 ? totTaxa / totAntec : null;
+  }
+  function crProjRow(o) {
+    var f = orderFinance(o);
+    var vendaC = Math.round((f.revenue || 0) * 100);
+    var sc = resolveSellerCharges(o.id);
+    var taxasC = sc.totalC != null ? sc.totalC : 0;
+    var liquidoC = vendaC + taxasC;
+    var it0 = (o.items || [])[0] || {};
+    var produto = o.items.length > 1 ? (o.items.length + ' produtos') : (it0.productName || '—');
+    var sku = o.items.length > 1 ? '—' : (it0.sku || '—');
+    return { o: o, vendaC: vendaC, taxasC: taxasC, taxasEstimado: sc.totalStatus !== 'COMPLETO', liquidoC: liquidoC, produto: produto, sku: sku, dataVenda: o.paidAt || o.createdAt };
+  }
+  function crProjFiltrar(rows) {
+    var list = rows;
+    if (crProjF.search) { var q = cpNorm(crProjF.search); list = list.filter(function (r) { return cpNorm(r.o.id).indexOf(q) >= 0 || cpNorm(r.produto).indexOf(q) >= 0 || cpNorm(r.sku).indexOf(q) >= 0; }); }
+    if (crProjF.produto) { var qp = cpNorm(crProjF.produto); list = list.filter(function (r) { return cpNorm(r.produto).indexOf(qp) >= 0; }); }
+    if (crProjF.sku) { var qs = cpNorm(crProjF.sku); list = list.filter(function (r) { return cpNorm(r.sku).indexOf(qs) >= 0; }); }
+    if (crProjF.prazo) {
+      var hoje = cpToday();
+      var dias = crProjF.prazo === '7' ? 7 : crProjF.prazo === '15' ? 15 : crProjF.prazo === '30' ? 30 : null;
+      list = list.filter(function (r) {
+        var sd = r.o.shipByDate ? r.o.shipByDate.slice(0, 10) : null;
+        if (crProjF.prazo === 'atrasado') return sd && sd < hoje;
+        if (!sd || dias == null) return false;
+        var limite = new Date(Date.now() + dias * 864e5).toISOString().slice(0, 10);
+        return sd >= hoje && sd <= limite;
+      });
+    }
+    return list;
+  }
+  function renderCrProjecao() {
+    var todas = crProjPedidos().map(crProjRow);
+    var aviso = callout('warn', 'Isto NÃO é dinheiro recebido nem conta em aberto',
+      'É apenas uma estimativa gerencial de quanto os pedidos ainda em operação (status "A Enviar") devem gerar de caixa no futuro. Nada aqui cria título de Contas a Receber, baixa, movimentação bancária ou entrada no Caixa — assim que o pedido mudar de status, ele sai desta lista automaticamente.');
+    if (!todas.length) return aviso + emptyBox('Nenhum pedido "A Enviar" no momento — carteira de vendas futuras vazia.');
+    var list = crProjFiltrar(todas);
+    var vendaBrutaC = list.reduce(function (s, r) { return s + r.vendaC; }, 0);
+    var taxasC = list.reduce(function (s, r) { return s + r.taxasC; }, 0);
+    var liquidoC = vendaBrutaC + taxasC;
+    var aliq = crProjAliquotaMedia();
+    var simAntecC = aliq != null ? Math.round(liquidoC * (1 - aliq)) : null;
+    var cards = kstrip([
+      { l: 'Pedidos em Carteira', v: nn(list.length) },
+      { l: 'Venda Bruta Futura', v: brlC(vendaBrutaC), s: 'Order.all — Preço acordado × Qtd' },
+      { l: 'Taxas Estimadas', v: brlC(taxasC), cls: 'red' },
+      { l: 'Líquido Projetado', v: brlC(liquidoC), cls: 'blue' },
+      { l: 'Após Antecipação (simulação)', v: simAntecC != null ? brlC(simAntecC) : 'sem histórico do Acelera', s: aliq != null ? ('alíquota média ' + pct(r2(aliq * 100))) : null },
+    ]);
+    // Gráfico simples "Próximos 7/15/30 dias" — soma de venda bruta por faixa de prazo de envio
+    // (shipByDate), sem nenhuma biblioteca externa (barras em CSS puro, mesmo padrão visual do resto
+    // do sistema).
+    var hoje = cpToday();
+    function faixaVenda(minD, maxD) {
+      return list.filter(function (r) { var sd = r.o.shipByDate ? r.o.shipByDate.slice(0, 10) : null; if (!sd) return false; if (sd < hoje) return false; if (maxD != null) { var lim = new Date(Date.now() + maxD * 864e5).toISOString().slice(0, 10); if (sd > lim) return false; } if (minD != null) { var lim2 = new Date(Date.now() + minD * 864e5).toISOString().slice(0, 10); if (sd < lim2) return false; } return true; }).reduce(function (s, r) { return s + r.vendaC; }, 0);
+    }
+    var f7 = faixaVenda(0, 7), f15 = faixaVenda(0, 15), f30 = faixaVenda(0, 30);
+    var maxBar = Math.max(f7, f15, f30, 1);
+    function barRow(label, v) { return '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><span style="width:110px;font-size:12.5px;color:var(--muted)">' + esc(label) + '</span><div style="flex:1;background:var(--neutral-bg);border-radius:6px;overflow:hidden;height:18px"><div style="width:' + Math.max(2, Math.round(v / maxBar * 100)) + '%;height:100%;background:var(--brand-2)"></div></div><b style="width:110px;text-align:right;font-size:12.5px">' + brlC(v) + '</b></div>'; }
+    var graficos = '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Venda bruta futura por prazo de envio</h3></div><div class="pb">' + barRow('Próximos 7 dias', f7) + barRow('Próximos 15 dias', f15) + barRow('Próximos 30 dias', f30) + '</div></div>';
+    // Simulação de antecipação — só um número, nunca um botão de ação (não existe ação real aqui).
+    var simBlock = '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Simular Antecipação</h3><span class="footnote" style="margin:0">apenas simulação — nenhuma movimentação é criada</span></div><div class="pb">' +
+      '<div class="fin-line"><span>Valor líquido projetado</span><span>' + brlC(liquidoC) + '</span></div>' +
+      (aliq != null ? ('<div class="fin-line"><span>(-) Taxa estimada Acelera <span class="footnote" style="margin:0">(alíquota média histórica ' + pct(r2(aliq * 100)) + ')</span></span><span class="neg">-' + brlC(Math.round(liquidoC * aliq)) + '</span></div>' +
+        '<div class="fin-line total"><span>Valor aproximado após antecipação</span><b>' + brlC(simAntecC) + '</b></div>') :
+        '<div class="footnote" style="margin-top:6px">Ainda não há resgates do Shopee Acelera importados para estimar uma alíquota — importe o relatório do Acelera para habilitar esta simulação.</div>') +
+      '</div></div>';
+    // Tabela detalhada — busca/produto/SKU/prazo.
+    var temFiltro = !!(crProjF.search || crProjF.produto || crProjF.sku || crProjF.prazo);
+    var filtros = '<div class="toolbar2" style="margin-top:14px">' +
+      '<input class="input sm" id="crproj-q" style="width:220px" placeholder="Buscar pedido, produto ou SKU…" value="' + esc(crProjF.search) + '">' +
+      '<input class="input sm" id="crproj-produto" style="width:180px" placeholder="Filtrar produto…" value="' + esc(crProjF.produto) + '">' +
+      '<input class="input sm" id="crproj-sku" style="width:140px" placeholder="Filtrar SKU…" value="' + esc(crProjF.sku) + '">' +
+      '<select class="select sm" id="crproj-prazo"><option value="">Prazo: todos</option><option value="7"' + (crProjF.prazo === '7' ? ' selected' : '') + '>Próximos 7 dias</option><option value="15"' + (crProjF.prazo === '15' ? ' selected' : '') + '>Próximos 15 dias</option><option value="30"' + (crProjF.prazo === '30' ? ' selected' : '') + '>Próximos 30 dias</option><option value="atrasado"' + (crProjF.prazo === 'atrasado' ? ' selected' : '') + '>Atrasados</option></select>' +
+      (temFiltro ? '<button class="link-btn" id="crproj-clear">Limpar filtros</button>' : '') +
+      '</div>';
+    var pages = Math.max(1, Math.ceil(list.length / crProjPageSize)); if (crProjPage > pages) crProjPage = pages;
+    var slice = list.slice((crProjPage - 1) * crProjPageSize, crProjPage * crProjPageSize);
+    var rows = slice.map(function (r) {
+      var simC = aliq != null ? Math.round(r.liquidoC * (1 - aliq)) : null;
+      return '<tr class="rowlink" data-goped360="' + esc(r.o.id) + '"><td class="mono">' + esc(r.o.id) + '</td><td class="nowrap">' + (r.dataVenda ? dbr(r.dataVenda) : '—') + '</td><td class="cell-text">' + esc(r.produto) + '</td><td class="mono">' + esc(r.sku) + '</td><td><span class="pill A_ENVIAR">' + esc(S.pedidos.labels.A_ENVIAR || 'A enviar') + '</span></td><td class="nowrap">' + brlC(r.vendaC) + '</td><td class="nowrap neg">' + brlC(r.taxasC) + (r.taxasEstimado ? ' <span class="tag warn" style="font-size:9px">estimado</span>' : '') + '</td><td class="nowrap">' + brlC(r.liquidoC) + '</td><td class="nowrap">' + (simC != null ? brlC(simC) : '—') + '</td></tr>';
+    }).join('');
+    var pager = pages > 1 ? '<div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;padding:10px 14px"><button class="btn-sm" id="crproj-prev"' + (crProjPage <= 1 ? ' disabled' : '') + '>Anterior</button><span class="footnote" style="margin:0">página ' + crProjPage + ' de ' + pages + ' · ' + nn(list.length) + ' pedido(s)</span><button class="btn-sm" id="crproj-next"' + (crProjPage >= pages ? ' disabled' : '') + '>Próxima</button></div>' : '<div class="footnote" style="padding:8px 14px">' + nn(list.length) + ' pedido(s)</div>';
+    var tabela = '<div class="panel" style="margin-top:10px"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Data venda</th><th>Produto</th><th>SKU</th><th>Status atual</th><th>Valor vendido</th><th>Taxas estimadas</th><th>Líquido projetado</th><th>Simulação antecipação</th></tr></thead><tbody>' + (rows || '<tr><td colspan="9" class="empty">Nenhum pedido neste filtro.</td></tr>') + '</tbody></table></div>' + pager + '</div>';
+    return aviso + cards + graficos + simBlock + filtros + tabela;
+  }
+  function bindCrProjecao() {
+    var q = document.getElementById('crproj-q'); if (q) { var t; q.oninput = function () { clearTimeout(t); t = setTimeout(function () { var v = q.value; crProjF.search = v; crProjPage = 1; crRenderBody(); bindCrProjecao(); var el = document.getElementById('crproj-q'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
+    var pr = document.getElementById('crproj-produto'); if (pr) { var t2; pr.oninput = function () { clearTimeout(t2); t2 = setTimeout(function () { var v = pr.value; crProjF.produto = v; crProjPage = 1; crRenderBody(); bindCrProjecao(); var el = document.getElementById('crproj-produto'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
+    var sk = document.getElementById('crproj-sku'); if (sk) { var t3; sk.oninput = function () { clearTimeout(t3); t3 = setTimeout(function () { var v = sk.value; crProjF.sku = v; crProjPage = 1; crRenderBody(); bindCrProjecao(); var el = document.getElementById('crproj-sku'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
+    var pz = document.getElementById('crproj-prazo'); if (pz) pz.onchange = function () { crProjF.prazo = pz.value; crProjPage = 1; crRenderBody(); bindCrProjecao(); };
+    var clr = document.getElementById('crproj-clear'); if (clr) clr.onclick = function () { crProjF = { search: '', produto: '', sku: '', prazo: '' }; crProjPage = 1; crRenderBody(); bindCrProjecao(); };
+    var pv = document.getElementById('crproj-prev'); if (pv) pv.onclick = function () { if (crProjPage > 1) { crProjPage--; crRenderBody(); bindCrProjecao(); } };
+    var nx = document.getElementById('crproj-next'); if (nx) nx.onclick = function () { crProjPage++; crRenderBody(); bindCrProjecao(); };
+    app.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.goped360); }; });
   }
   // PROMPT "Reestruturar Contas a Receber + Controle Bancário" §2: indicadores de topo — total a
   // receber, recebido no período, em atraso, saldo dos bancos, próximos recebimentos. Nenhum cálculo
