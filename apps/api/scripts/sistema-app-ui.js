@@ -715,6 +715,19 @@
     list.forEach(function (o) { var f = orderFinance(o); agg.units += o.items.reduce(function (s, i) { return s + i.qty; }, 0); agg.revenue += f.revenue; agg.fees += f.marketplaceFeesTotal; agg.cost += f.productCostTotal; if (f.estimatedResult != null) agg.result += f.estimatedResult; else agg.costPending++; if (f._items.some(function (i) { return !i.linked; })) agg.unlinked++; agg.byStatus[o.normalizedStatus] = (agg.byStatus[o.normalizedStatus] || 0) + 1; });
     return agg;
   }
+  // BUG CRÍTICO (auditoria noturna, "Lucro zero quando custo não existe"): agg.result nasce em 0 e só
+  // soma pedidos com custo resolvido — quando NENHUM pedido do período tem custo, o card mostrava
+  // "Lucro R$0,00 / Margem 0%" como se fosse um resultado real (prejuízo/empate), quando na verdade é
+  // ausência total de dado. Mesma convenção já usada em Minha Renda ("não disponível") e no Caixa
+  // ("aguardando custo"): só existe número de lucro quando pelo menos um pedido tem custo resolvido.
+  function pedResultadoTexto(agg) {
+    var semCustoNenhum = agg.orders > 0 && agg.costPending === agg.orders;
+    if (semCustoNenhum) return { resultado: 'Custos pendentes', margem: 'Margem indisponível', cls: 'amber', sub: nn(agg.costPending) + ' pedido(s) sem custo — nenhum lucro calculável ainda' };
+    return {
+      resultado: brl(agg.result), margem: agg.revenue ? pct((agg.result / agg.revenue) * 100) : '—', cls: 'green',
+      sub: agg.costPending ? agg.costPending + ' pedido(s) c/ custo pendente (resultado parcial)' : 'custo completo',
+    };
+  }
   // §12-18: "pedidos feitos" (Data de criação) ≠ "pedidos pagos" (Hora do pagamento) — pedido sem
   // pagamento real ("-" na planilha) nunca conta como pago. As duas métricas ficam sempre visíveis
   // juntas; o toggle de base temporal só decide qual delas alimenta os cards que precisam de UMA base.
@@ -779,16 +792,28 @@
     var indicador = f.pctConciliado != null ? callout(f.pctConciliado >= 95 ? 'green' : 'warn', '% Financeiro Conciliado: ' + pct(f.pctConciliado), 'Receita total do período: <b>' + brl(f.revTotal) + '</b> · Conciliado: <b>' + brl(f.revConc) + '</b> · Pendente/não identificado: <b>' + brl(r2(f.revTotal - f.revConc)) + '</b>') : '';
     return '<div class="panel"><div class="ph"><h3>Funil operacional</h3><span class="footnote" style="margin:0">cada etapa usa a data que faz sentido para ela — venda=pagamento, expedição=bipe, Acelera=resgate, carteira=lançamento</span></div><div class="pb">' + strip + '</div></div>' + indicador;
   }
+  // BUG CRÍTICO (auditoria noturna, "Pedidos cancelados no Dashboard"): a.revenue/a.result vinham de
+  // computeOrderAgg(pedidosInPeriod()) sem excluir normalizedStatus CANCELADO — um pedido cancelado
+  // (mesmo que tenha sido pago antes do cancelamento) inflava "Venda real"/"Resultado estimado" como
+  // se fosse faturamento operacional válido. Correção: separar Vendas válidas (nunca inclui
+  // Cancelado) de Cancelamentos (contagem + valor, mostrados à parte, nunca somados no faturamento).
+  function pedidosValidos(list) { return list.filter(function (o) { return o.normalizedStatus !== 'CANCELADO'; }); }
   function renderDashboard() {
-    var a = computeOrderAgg(); var o = occInPeriod(); var exposure = sumExposure(o);
+    var list = pedidosInPeriod();
+    var a = computeOrderAgg(list); // mantém contagens totais por status (inclui Cancelados)
+    var aVenda = computeOrderAgg(pedidosValidos(list)); // faturamento/resultado só de vendas válidas
+    var resTxt = pedResultadoTexto(aVenda);
+    var cancelados = list.filter(function (o) { return o.normalizedStatus === 'CANCELADO'; });
+    var canceladosRevenue = 0; cancelados.forEach(function (o) { canceladosRevenue += orderFinance(o).revenue || 0; });
+    var o = occInPeriod(); var exposure = sumExposure(o);
     var empty = orders.length === 0 && occ.length === 0 && (!Produtos || Produtos.getData().products.length === 0);
     app.innerHTML =
       '<div class="page-head"><div><h2>Visão geral</h2><p>Panorama de vendas e devoluções — números auditáveis, sem estimativas inventadas.</p></div></div>' +
       (empty ? banner('Comece importando planilhas em <b>Produtos</b>, <b>Pedidos</b> e <b>Devolução</b>. Os módulos se conectam automaticamente (SKU→família→custo e pedido↔devolução).') : '') +
       (empty ? '' : dashboardFunilPanel()) +
-      '<div class="cards6">' + fcard('Venda real', brl(a.revenue), 'blue', nn(a.orders) + ' pedidos') + fcard('Unidades', nn(a.units), '') + fcard('Taxas marketplace', brl(a.fees), 'red') + fcard('Custo produtos', brl(a.cost), 'amber') + fcard('Resultado estimado', brl(a.result), 'green', a.costPending ? a.costPending + ' pedidos c/ custo pendente' : 'custo completo') + fcard('Margem estimada', a.revenue ? pct((a.result / a.revenue) * 100) : '—', '') + '</div>' +
-      '<div class="cards6">' + fcard('A enviar', nn(a.byStatus.A_ENVIAR || 0), 'amber') + fcard('Enviados', nn(a.byStatus.ENVIADO || 0), 'blue') + fcard('Concluídos', nn(a.byStatus.CONCLUIDO || 0), 'green') + fcard('Cancelados', nn(a.byStatus.CANCELADO || 0), 'red') + fcard('Devoluções', nn(o.length), '') + fcard('Prejuízo confirmado', brl(exposure.confirmedLoss), 'red') + '</div>' +
-      '<div class="cards6">' + fcard('SKUs sem vínculo', nn(a.unlinked) + ' pedidos', 'amber') + fcard('Custo pendente', nn(a.costPending) + ' pedidos', 'amber') + fcard('Em risco (devolução)', brl(exposure.atRisk), 'amber') + '</div>' +
+      '<div class="cards6">' + fcard('Venda válida', brl(aVenda.revenue), 'blue', nn(aVenda.orders) + ' pedidos (exclui cancelados)') + fcard('Unidades', nn(aVenda.units), '') + fcard('Taxas marketplace', brl(aVenda.fees), 'red') + fcard('Custo produtos', brl(aVenda.cost), 'amber') + fcard('Resultado estimado', resTxt.resultado, resTxt.cls, resTxt.sub) + fcard('Margem estimada', resTxt.margem, resTxt.cls === 'amber' ? 'amber' : '') + '</div>' +
+      '<div class="cards6">' + fcard('A enviar', nn(a.byStatus.A_ENVIAR || 0), 'amber') + fcard('Enviados', nn(a.byStatus.ENVIADO || 0), 'blue') + fcard('Concluídos', nn(a.byStatus.CONCLUIDO || 0), 'green') + fcard('Cancelamentos', nn(cancelados.length), 'red', cancelados.length ? brl(canceladosRevenue) + ' fora do faturamento' : 'nenhum no período') + fcard('Devoluções', nn(o.length), '') + fcard('Prejuízo confirmado', brl(exposure.confirmedLoss), 'red') + '</div>' +
+      '<div class="cards6">' + fcard('SKUs sem vínculo', nn(aVenda.unlinked) + ' pedidos', 'amber') + fcard('Custo pendente', nn(aVenda.costPending) + ' pedidos', 'amber') + fcard('Em risco (devolução)', brl(exposure.atRisk), 'amber') + '</div>' +
       panelImports();
     app.querySelectorAll('[data-dashgo]').forEach(function (b) { b.onclick = function () {
       var go = b.dataset.dashgo;
@@ -1197,23 +1222,29 @@
   }
   function pedidosDashboard() {
     var feitos = pedidosInPeriod(); var pagos = pedidosPagosInPeriod();
-    var aBase = computeOrderAgg(pedDashBasis === 'pagamento' ? pagos : feitos);
-    var aFeitos = computeOrderAgg(feitos); var aPagos = computeOrderAgg(pagos);
+    // BUG CRÍTICO (auditoria noturna, "Pedidos cancelados no Dashboard"): um pedido cancelado que
+    // tinha sido pago antes do cancelamento continuava contando em "Venda paga (real)"/Resultado
+    // estimado — Cancelado nunca é faturamento operacional, mesmo tendo passado por pagamento.
+    var pagosValidos = pedidosValidos(pagos); var feitosValidos = pedidosValidos(feitos);
+    var canceladosPagos = pagos.length - pagosValidos.length;
+    var aBase = computeOrderAgg(pedDashBasis === 'pagamento' ? pagosValidos : feitosValidos);
+    var aFeitos = computeOrderAgg(feitos); var aPagos = computeOrderAgg(pagosValidos);
     var ticket = aBase.orders ? aBase.revenue / aBase.orders : 0;
     var conversao = feitos.length ? r2(pagos.length / feitos.length * 100) : 0;
     var naoPagos = feitos.length - pagos.length;
     var expedidos = feitos.filter(function (o) { return pedIsExpedido(o.id); }).length;
     var cancelados = feitos.filter(pedidoIsRetornoCancelado).length;
-    var basisSel = '<div class="panel"><div class="pb" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b style="font-size:12.5px;color:var(--muted)">Base temporal para venda/margem:</b><select class="select sm" id="peddashbasis"><option value="criacao"' + (pedDashBasis === 'criacao' ? ' selected' : '') + '>Pela criação do pedido</option><option value="pagamento"' + (pedDashBasis === 'pagamento' ? ' selected' : '') + '>Pelo pagamento</option></select><span class="footnote">"Pedidos feitos" e "Pedidos pagos" sempre usam sua própria data — o seletor só decide a base de Venda/Margem/Ticket abaixo.</span></div></div>';
+    var resTxt = pedResultadoTexto(aBase);
+    var basisSel ='<div class="panel"><div class="pb" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b style="font-size:12.5px;color:var(--muted)">Base temporal para venda/margem:</b><select class="select sm" id="peddashbasis"><option value="criacao"' + (pedDashBasis === 'criacao' ? ' selected' : '') + '>Pela criação do pedido</option><option value="pagamento"' + (pedDashBasis === 'pagamento' ? ' selected' : '') + '>Pelo pagamento</option></select><span class="footnote">"Pedidos feitos" e "Pedidos pagos" sempre usam sua própria data — o seletor só decide a base de Venda/Margem/Ticket abaixo. Pedidos cancelados nunca entram em nenhuma dessas contagens.</span></div></div>';
     return basisSel + '<div class="cards6">' +
       fcard('Pedidos feitos', nn(aFeitos.orders), 'blue', 'pela data de criação') +
-      fcard('Pedidos pagos', nn(aPagos.orders), 'green', 'pela hora do pagamento') +
+      fcard('Pedidos pagos', nn(aPagos.orders), 'green', 'pela hora do pagamento, exclui cancelados') +
       fcard('Taxa de conversão em pagamento', pct(conversao), 'blue', 'pagos ÷ feitos') +
       fcard('Valor dos pedidos feitos', brl(aFeitos.revenue), '', 'todos, pagos ou não') +
-      fcard('Venda paga (real)', brl(aPagos.revenue), 'green', 'só pedidos efetivamente pagos') +
+      fcard('Venda paga (real)', brl(aPagos.revenue), 'green', canceladosPagos ? 'exclui ' + canceladosPagos + ' cancelado(s) pago(s)' : 'só pedidos válidos efetivamente pagos') +
       fcard('Não pagos', nn(naoPagos), naoPagos ? 'amber' : 'green') +
       '</div>' +
-      '<div class="cards6">' + fcard('Ticket médio', brl(ticket), '') + fcard('Unidades vendidas', nn(aBase.units), '') + fcard('Taxas marketplace', brl(aBase.fees), 'red') + fcard('Custo produtos', brl(aBase.cost), 'amber') + fcard('Resultado estimado', brl(aBase.result), 'green') + fcard('Margem estimada', aBase.revenue ? pct((aBase.result / aBase.revenue) * 100) : '—', '') + '</div>' +
+      '<div class="cards6">' + fcard('Ticket médio', brl(ticket), '') + fcard('Unidades vendidas', nn(aBase.units), '') + fcard('Taxas marketplace', brl(aBase.fees), 'red') + fcard('Custo produtos', brl(aBase.cost), 'amber') + fcard('Resultado estimado', resTxt.resultado, resTxt.cls, resTxt.sub) + fcard('Margem estimada', resTxt.margem, resTxt.cls === 'amber' ? 'amber' : '') + '</div>' +
       '<div class="cards6">' + fcard('A enviar', nn(aFeitos.byStatus.A_ENVIAR || 0), 'amber') + fcard('Expedidos (bipados)', nn(expedidos), 'blue') + fcard('Enviados', nn(aFeitos.byStatus.ENVIADO || 0), 'blue') + fcard('Concluídos', nn(aFeitos.byStatus.CONCLUIDO || 0), 'green') + fcard('Retornos e cancelados', nn(cancelados), 'red') + fcard('SKUs sem custo', nn(aBase.costPending) + ' pedidos', 'amber') + '</div>' +
       pedidosFullPanel(feitos) + pedidosModalidadesPanel(feitos) + topSkusPanel();
   }
@@ -8152,9 +8183,15 @@
 
     // ---- KPIs (§49-51): 3 linhas, no máximo 12 KPIs úteis — nunca empilhar cards demais.
     var margemTxt = eng.margem != null ? pct(eng.margem) : (eng.diasSemCustoCompleto ? '—' : '—');
+    // BUG CRÍTICO (auditoria noturna, "Caixa Visão Geral 100× inflado"): eng.totFat vem de
+    // dre.receitaBruta, que — apesar do nome sem sufixo "C" — é acumulado em CENTAVOS (soma direta de
+    // c.receitaC dentro de caixaDreDia, nunca dividido por 100). brl() espera REAIS; usar brl() aqui
+    // exibia o valor em centavos como se já fosse reais — 100× maior (ex.: R$42.114.066,00 em vez de
+    // R$421.140,66). A mesma variável já era usada corretamente com brlC()/1̸00 em todo o resto do
+    // arquivo (linhas 8594/8913/8956/11500) — nunca converter aqui de novo, só formatar certo.
     var row1 = kstrip([
-      { l: 'Faturamento', v: brl(eng.totFat), cls: 'blue', s: cmp ? fmtDelta(cmp.deltaFat) + ' vs período anterior' : undefined, sHtml: !!cmp },
-      { l: 'Receita Líquida', v: brlC(eng.totFat * 100 + eng.totTaxas), cls: 'blue' },
+      { l: 'Faturamento', v: brlC(eng.totFat), cls: 'blue', s: cmp ? fmtDelta(cmp.deltaFat) + ' vs período anterior' : undefined, sHtml: !!cmp },
+      { l: 'Receita Líquida', v: brlC(eng.totFat + eng.totTaxas), cls: 'blue' },
       { l: 'Lucro', v: eng.diasSemCustoCompleto === 0 ? brlC(eng.totLucro) : brlC(eng.totLucro) + ' (parcial)', cls: eng.totLucro >= 0 ? 'green' : 'red', s: eng.diasSemCustoCompleto ? nn(eng.diasSemCustoCompleto) + ' dia(s) com custo pendente, não somados' : (cmp ? fmtDelta(cmp.deltaLucro) + ' vs período anterior' : undefined), sHtml: !eng.diasSemCustoCompleto && !!cmp },
       { l: 'Margem', v: margemTxt, cls: 'blue', s: cmp && cmp.deltaMargemPP != null ? (cmp.deltaMargemPP >= 0 ? '+' : '') + r2(cmp.deltaMargemPP) + ' p.p. vs período anterior' : (eng.diasSemCustoCompleto ? 'custo incompleto em ' + nn(eng.diasSemCustoCompleto) + ' dia(s)' : undefined) },
     ]);
@@ -9261,8 +9298,19 @@
     var isNew = !draft.id;
     var id = draft.id || cpUid('CP'); var now = new Date().toISOString();
     var op = opActive(); var comp = op ? opCompany(op) : null;
-    var valor = draft.valorManualOverride ? draft.valorManual : cpValorOriginal(items, draft.freteValor, draft.outrasDespesasValor);
     var existing = contasPagar.find(function (h) { return h.id === id; });
+    // BUG CRÍTICO (auditoria noturna, "Editar Contas a Pagar zera Valor"): títulos automáticos
+    // (Caixa/Carteira, origin FECHAMENTO_CAIXA/CAIXA_MANUAL) nunca têm `items` — cpValorOriginal([],...)
+    // sempre retorna 0. O campo Valor fica desabilitado por já ter baixa, então o usuário nunca marca
+    // valorManualOverride ao editar só a Categoria — e o valor antigo (ex.: R$88,56) virava R$0,00.
+    // Regra corrigida: só recalcula a partir dos itens quando REALMENTE há itens editados; título sem
+    // itens e sem override explícito preserva o valor já existente (nunca substitui por vazio/zero
+    // sem alteração explícita do operador).
+    var valor;
+    if (draft.valorManualOverride) valor = draft.valorManual;
+    else if (items && items.length) valor = cpValorOriginal(items, draft.freteValor, draft.outrasDespesasValor);
+    else if (existing && existing.valor > 0) valor = existing.valor;
+    else valor = cpValorOriginal(items, draft.freteValor, draft.outrasDespesasValor);
     var full = Object.assign({}, existing, draft, {
       id: id, operationId: (existing && existing.operationId) || opActiveOrNull(),
       companyId: (existing && existing.companyId) || (comp ? comp.id : null),
@@ -10748,7 +10796,7 @@
         '<div style="display:flex;gap:8px"><div style="flex:1"><label class="fld">Valor *</label><input class="input" id="cr-valor" style="width:100%" value="' + (draft.valor || 0) + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div>' +
         '<div style="flex:1"><label class="fld">Competência</label><input type="date" class="input" id="cr-competencia" style="width:100%" value="' + (draft.competencia || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div>' +
         '<div style="flex:1"><label class="fld">Vencimento</label><input type="date" class="input" id="cr-vencimento" style="width:100%" value="' + (draft.vencimento || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div></div>' +
-        '<label class="fld">Conta prevista</label><select class="select" id="cr-conta-fin" style="width:100%">' + crFinAccountOptions(draft.financialAccountId).replace('Todas as contas financeiras', '— escolher —') + '</select>' +
+        '<label class="fld">Conta prevista *</label><select class="select" id="cr-conta-fin" style="width:100%">' + crFinAccountOptions(draft.financialAccountId).replace('Todas as contas financeiras', '— escolher —') + '</select>' +
         '<label class="fld">Referência</label><input class="input" id="cr-referencia" style="width:100%" value="' + esc(draft.referencia || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '>' +
         '<label class="fld">Observação</label><input class="input" id="cr-obs" style="width:100%" value="' + esc(draft.observacao || '') + '">' +
         (!isNew ? ('<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)"><div class="prow"><span>Recebido</span><b>' + brl(crRecebidoTotal(h)) + '</b></div><div class="prow"><span>Saldo</span><b>' + brl(saldo) + '</b></div></div>') : '') +
@@ -10767,13 +10815,21 @@
         // PROMPT "Correção da Base Financeira" §1/§7: categoria financeira obrigatória em todo
         // lançamento — mesma exigência já aplicada ao editor de Contas a Pagar (openCpEditor).
         if (!categoryId) { panel.querySelector('#cr-err').innerHTML = '<div class="form-err">Selecione a categoria financeira.</div>'; return; }
+        var financialAccountId = panel.querySelector('#cr-conta-fin').value || null;
+        // BUG CRÍTICO (auditoria noturna, "Contas a Receber sem Conta financeira"): um CR criado
+        // manualmente do zero nunca exigia Conta prevista (mesma rigidez que Contas a Pagar já tinha).
+        // Só exige para título NOVO e manual — títulos automáticos (ex.: Pix identificado na Carteira,
+        // origin SHOPEE_PEDIDO/CAIXA_TRANSFERENCIA) nascem de propósito sem conta (o banco só é
+        // confirmado depois, no Registrar recebimento — ver §CAIXA_TRANSFERENCIA/openCrBaixaModal),
+        // e reabrir um título existente só pra editar Observação, por exemplo, nunca deve travar.
+        if (isNew && !readOnlyOrigin && !financialAccountId) { panel.querySelector('#cr-err').innerHTML = '<div class="form-err">Selecione a conta financeira prevista.</div>'; return; }
         // PROMPT "Correção da Base Financeira" §3: salvar aqui é sempre um ato manual do operador —
         // marca Categoria/Conta como protegidas contra a próxima integração automática (ver
         // cpAplicarUpsertProtegido em crUpsertBySourceKey).
         var toSave = Object.assign({}, draft, {
           id: h ? h.id : null, descricao: desc, pagador: panel.querySelector('#cr-pagador').value.trim(), categoryId: categoryId,
           valor: valor, competencia: panel.querySelector('#cr-competencia').value || null, vencimento: panel.querySelector('#cr-vencimento').value || null,
-          financialAccountId: panel.querySelector('#cr-conta-fin').value || null, referencia: panel.querySelector('#cr-referencia').value.trim(), observacao: panel.querySelector('#cr-obs').value.trim(),
+          financialAccountId: financialAccountId, referencia: panel.querySelector('#cr-referencia').value.trim(), observacao: panel.querySelector('#cr-obs').value.trim(),
           manualFields: CP_CAMPOS_PROTEGIVEIS_MANUAL.slice(),
         });
         crHeaderSave(toSave).then(function (full) { h = full; isNew = false; toast('Conta a receber salva', desc); d.remove(); crRenderBody(); });
@@ -10791,14 +10847,24 @@
     panel.innerHTML = '<div class="dh"><div><b>Registrar recebimento</b></div><button class="x">&times;</button></div><div class="dbd">' +
       '<label class="fld">Valor recebido</label><input class="input" id="crb-valor" style="width:100%" value="' + saldo + '">' +
       '<label class="fld">Data</label><input type="date" class="input" id="crb-data" style="width:100%" value="' + cpToday() + '">' +
-      '<label class="fld">Conta financeira</label><select class="select" id="crb-conta" style="width:100%">' + crFinAccountOptions(h.financialAccountId).replace('Todas as contas financeiras', '— escolher —') + '</select>' +
+      '<label class="fld">Conta financeira *</label><select class="select" id="crb-conta" style="width:100%">' + crFinAccountOptions(h.financialAccountId).replace('Todas as contas financeiras', '— escolher —') + '</select>' +
+      '<label class="fld">Forma de recebimento *</label><select class="select" id="crb-forma" style="width:100%"><option value="">— escolher —</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '">' + esc(f) + '</option>'; }).join('') + '</select>' +
       '<label class="fld">Observação</label><input class="input" id="crb-obs" style="width:100%">' +
       '<div style="margin-top:12px"><button class="btn-sm primary" id="crb-salvar">Confirmar recebimento</button></div><div id="crb-err"></div></div>';
     panel.querySelector('.x').onclick = function () { d.remove(); };
     panel.querySelector('#crb-salvar').onclick = function () {
       var valorRecebido = cpParseNum(panel.querySelector('#crb-valor').value);
       if (valorRecebido == null || valorRecebido <= 0) { panel.querySelector('#crb-err').innerHTML = '<div class="form-err">Informe um valor válido.</div>'; return; }
-      crRegistrarBaixa(h.id, { valorRecebido: valorRecebido, date: panel.querySelector('#crb-data').value, financialAccountId: panel.querySelector('#crb-conta').value, observacao: panel.querySelector('#crb-obs').value.trim() }).then(function () { toast('Recebimento registrado', brl(valorRecebido)); d.remove(); if (onDone) onDone(); });
+      var dataBaixa = panel.querySelector('#crb-data').value;
+      if (!dataBaixa) { panel.querySelector('#crb-err').innerHTML = '<div class="form-err">Informe a data do recebimento.</div>'; return; }
+      var financialAccountId = panel.querySelector('#crb-conta').value;
+      // BUG CRÍTICO (auditoria noturna, "Contas a Receber sem Conta financeira"): sem Conta financeira
+      // + Forma de recebimento obrigatórias na baixa, o recebimento era confirmado sem nunca impactar o
+      // saldo bancário — o fluxo correto é CR → Baixa → Conta financeira → Saldo do banco.
+      if (!financialAccountId) { panel.querySelector('#crb-err').innerHTML = '<div class="form-err">Selecione a conta financeira que recebeu o valor.</div>'; return; }
+      var paymentMethod = panel.querySelector('#crb-forma').value;
+      if (!paymentMethod) { panel.querySelector('#crb-err').innerHTML = '<div class="form-err">Selecione a forma de recebimento.</div>'; return; }
+      crRegistrarBaixa(h.id, { valorRecebido: valorRecebido, date: dataBaixa, financialAccountId: financialAccountId, paymentMethod: paymentMethod, observacao: panel.querySelector('#crb-obs').value.trim() }).then(function () { toast('Recebimento registrado', brl(valorRecebido)); d.remove(); if (onDone) onDone(); });
     };
   }
 
