@@ -73,6 +73,11 @@
   var Produtos = null;
   var sub = { pedidos: 'pedidos', posvenda: 'visao' };
   var pedTab = 'ALL';
+  // PROMPT "OTIMIZAÇÃO COMPLETA DE UX/UI DESKTOP" — achado da auditoria de filtros/navegação: a busca
+  // de Pedidos era lida direto do DOM (document.getElementById('ped-q').value) a cada render, então
+  // se perdia ao trocar de módulo e voltar — diferente de todos os outros módulos (devF/walletF/
+  // aceleraF/affF/cpF/crF), que guardam a busca em estado. Migrado para o mesmo padrão.
+  var pedSearch = '';
   var devF = { search: '', internalStatus: '', disputeStatus: '', type: '', status: '', flag: '', jornada: '', motivo: '', fase: '' }, devPage = 1;
   // Shopee Acelera / Antecipação de Recebíveis
   var acelera = [];                 // registros pedido-a-pedido do relatório de antecipação
@@ -1063,6 +1068,7 @@
       '<select class="select sm" id="expmod"><option value=""' + (!pedExpF.modalidade ? ' selected' : '') + '>Modalidade: Todos</option><option value="normal"' + (pedExpF.modalidade === 'normal' ? ' selected' : '') + '>Normal</option><option value="full"' + (pedExpF.modalidade === 'full' ? ' selected' : '') + '>Full</option></select>' +
       '<input class="input sm" id="expq" style="width:220px" placeholder="Pedido / SKU / produto…" value="' + esc(pedExpF.search) + '">' +
       '<select class="select sm" id="expsort">' + [['prazo', 'Vence primeiro'], ['prazo_desc', 'Vence por último'], ['criacao', 'Pedido mais antigo'], ['criacao_desc', 'Pedido mais recente']].map(function (o) { return '<option value="' + o[0] + '"' + (pedExpF.sort === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>' +
+      ((pedExpF.search || pedExpF.prazo || pedExpF.modalidade || pedExpF.status) ? '<button class="link-btn" id="expclear">Limpar filtros</button>' : '') +
       '</div>';
     var q = pedExpF.search.toLowerCase();
     var filtered = baseList.filter(function (o) {
@@ -1111,6 +1117,7 @@
     var md = document.getElementById('expmod'); if (md) md.onchange = function () { pedExpF.modalidade = md.value; render(); };
     var so = document.getElementById('expsort'); if (so) so.onchange = function () { pedExpF.sort = so.value; render(); };
     var q = document.getElementById('expq'); if (q) { var t; q.oninput = function () { clearTimeout(t); t = setTimeout(function () { var v = q.value; pedExpF.search = v; render(); var el = document.getElementById('expq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
+    var expclr = document.getElementById('expclear'); if (expclr) expclr.onclick = function () { pedExpF.search = ''; pedExpF.status = ''; pedExpF.prazo = ''; pedExpF.modalidade = ''; pedExpF.sort = 'prazo'; render(); };
     app.querySelectorAll('[data-open]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.open); }; });
     app.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.goped360); }; });
     bindExpSessaoBlock();
@@ -1138,7 +1145,7 @@
     var baseList = pedTab === 'ALL' ? all : all.filter(function (o) { return o.normalizedStatus === pedTab; });
     var retornoToggle = (pedTab === 'CANCELADO' && comRetornoAssociado.length) ? '<div class="chips" style="margin-top:6px"><span class="chip' + (pedIncluirRetornoAssociado ? ' chip-on' : '') + '" data-pedretorno="1">+ Com devolução/motivo associado (status Shopee diferente) — ' + nn(comRetornoAssociado.length) + '</span></div>' : '';
     var list = (pedTab === 'CANCELADO' && pedIncluirRetornoAssociado) ? baseList.concat(comRetornoAssociado) : baseList;
-    var qel = document.getElementById('ped-q'); var q = qel ? qel.value : '';
+    var q = pedSearch;
     if (q) { var ql = q.toLowerCase(); list = list.filter(function (o) { return (o.id || '').toLowerCase().indexOf(ql) >= 0 || (o.tracking || '').toLowerCase().indexOf(ql) >= 0 || o.items.some(function (i) { return (i.sku || '').toLowerCase().indexOf(ql) >= 0 || (i.productName || '').toLowerCase().indexOf(ql) >= 0; }); }); }
     if (!all.length) return emptyBox('Nenhum pedido. Importe a planilha "Order.all…" da Shopee.');
     var rows = list.slice(0, 300).map(function (o) {
@@ -1148,7 +1155,8 @@
         '<td>' + (f.estimatedResult == null ? '<span class="tag warn">pendente</span>' : '<b style="color:var(--ok)">' + brl(f.estimatedResult) + '</b>') + '</td><td>' + (f.estimatedMarginPct == null ? '—' : pct(f.estimatedMarginPct)) + '</td>' +
         '<td>' + (occByOrder[o.id] ? '<span class="tag warn">devolução</span>' : '') + '</td><td><button class="btn-sm" data-open="' + esc(o.id) + '">Abrir</button></td></tr>';
     }).join('');
-    return '<div class="tabs">' + tabs + '</div>' + retornoToggle + '<div class="toolbar2"><input class="input sm" id="ped-q" style="width:280px" placeholder="Buscar ID, BR, SKU, produto…" value="' + esc(q) + '"></div>' +
+    var temFiltro = !!(q || pedTab !== 'ALL');
+    return '<div class="tabs">' + tabs + '</div>' + retornoToggle + '<div class="toolbar2"><input class="input sm" id="ped-q" style="width:280px" placeholder="Buscar ID, BR, SKU, produto…" value="' + esc(q) + '">' + (temFiltro ? '<button class="link-btn" id="ped-clear">Limpar filtros</button>' : '') + '</div>' +
       '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos' + (list.length > 300 ? ' (mostrando 300)' : '') + (pedTab === 'CANCELADO' ? ' <span class="footnote">— ' + nn(counts.CANCELADO) + ' com status "Cancelado" da Shopee' + (pedIncluirRetornoAssociado ? ' + ' + nn(comRetornoAssociado.length) + ' com devolução/motivo associado' : '') + '</span>' : '') +
       '</div>' +
       '<div class="panel"><div class="table-wrap"><table><thead><tr><th>Pedido</th><th>BR</th><th>Data</th><th>Status</th><th>Produto</th><th>Modalidade</th><th>Venda</th><th>Taxas</th><th>Lucro est.</th><th>Margem</th><th>Devolução</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
@@ -1156,7 +1164,8 @@
   function bindPedidosList() {
     app.querySelectorAll('[data-ptab]').forEach(function (t) { t.onclick = function () { pedTab = t.dataset.ptab; render(); }; });
     var rt = document.querySelector('[data-pedretorno]'); if (rt) rt.onclick = function () { pedIncluirRetornoAssociado = !pedIncluirRetornoAssociado; render(); };
-    var q = document.getElementById('ped-q'); if (q) { var deb; q.oninput = function () { clearTimeout(deb); deb = setTimeout(function () { var v = q.value; renderPedidos(); var el = document.getElementById('ped-q'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 200); }; }
+    var q = document.getElementById('ped-q'); if (q) { var deb; q.oninput = function () { clearTimeout(deb); deb = setTimeout(function () { pedSearch = q.value; renderPedidos(); var el = document.getElementById('ped-q'); if (el) { el.focus(); el.value = pedSearch; el.setSelectionRange(pedSearch.length, pedSearch.length); } }, 200); }; }
+    var clr = document.getElementById('ped-clear'); if (clr) clr.onclick = function () { pedSearch = ''; pedTab = 'ALL'; render(); };
     app.querySelectorAll('[data-open]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.open); }; });
   }
   function pedidosDashboard() {
@@ -3054,6 +3063,7 @@
       '<select class="select sm" id="devsort"><option value="recent"' + (devF.sort === 'recent' ? ' selected' : '') + '>Mais recentes</option><option value="antigo"' + (devF.sort === 'antigo' ? ' selected' : '') + '>Mais antigos</option><option value="prazo"' + (devF.sort === 'prazo' ? ' selected' : '') + '>Prazo de ação mais próximo</option><option value="valor"' + (devF.sort === 'valor' ? ' selected' : '') + '>Maior valor</option></select>' +
       '<span class="chip' + (devF.precisaAcao ? ' chip-on' : '') + '" data-ocprecisa="1" style="cursor:pointer">⚠️ Precisa da minha ação <b>' + nn(precisaAcaoN) + '</b></span>' +
       '<span class="chip" data-ocmanage="1" title="Criar, renomear ou remover status internos personalizados" style="cursor:pointer">⚙ Status internos</span>' +
+      ((devF.search || devF.status || devF.resolucao || devF.type || devF.precisaAcao || istKeys.length) ? '<button class="link-btn" id="devclear">Limpar filtros</button>' : '') +
       '</div>' +
       baixaShortcut + novoNote + demoNote + '<div class="count-line"><b>' + nn(list.length) + '</b> casos' + (selIds.length ? ' · <b>' + nn(selIds.length) + '</b> selecionado(s)' : '') + '</div>' + bulkBar +
       '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th style="width:34px"><input type="checkbox" id="devselall"' + (allChecked ? ' checked' : '') + ' title="Selecionar os desta página"></th><th>Pedido / Devolução</th><th>Tipo</th><th>Produto</th><th>Etapa / Próxima ação</th><th>Status Shopee</th><th>Status interno</th><th>Recebimento</th><th>Valor</th><th>Ação</th></tr></thead><tbody>' +
@@ -3116,6 +3126,7 @@
     var ocr = app.querySelector('[data-ocrec]'); if (ocr) ocr.onclick = function () { sub.posvenda = 'recebimentos'; recSearch = document.getElementById('devq') ? document.getElementById('devq').value : ''; render(); };
     var mg = app.querySelector('[data-ocmanage]'); if (mg) mg.onclick = function () { openManageStatus(); };
     var so = document.getElementById('devsort'); if (so) so.onchange = function () { devF.sort = so.value; render(); };
+    var dclr = document.getElementById('devclear'); if (dclr) dclr.onclick = function () { devF.search = ''; devF.status = ''; devF.resolucao = ''; devF.type = ''; devF.precisaAcao = false; devF.istSet = {}; devF.internalStatus = ''; devPage = 1; render(); };
     var pv = document.getElementById('devprev'); if (pv) pv.onclick = function () { if (devPage > 1) { devPage--; render(); } };
     var nx = document.getElementById('devnext'); if (nx) nx.onclick = function () { devPage++; render(); };
     // seleção múltipla
@@ -4777,7 +4788,7 @@
     var distRows = dist.map(function (a) { return '<tr><td><span class="tag">' + esc(a.label) + '</span></td><td>' + nn(a.pedidos) + '</td><td>' + nn(a.resgates) + '</td><td class="nowrap">' + brlC(a.antec) + '</td><td class="nowrap">' + brlC(a.taxa) + '</td></tr>'; }).join('');
     var distTable = '<div class="panel"><div class="ph"><h3>Distribuição das alíquotas</h3><span class="footnote" style="margin:0">calculada a partir dos dados — não assume faixas fixas</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Alíquota</th><th>Pedidos</th><th>Resgates</th><th>Antecipado</th><th>Taxa</th></tr></thead><tbody>' + (distRows || '<tr><td colspan="5" class="empty">Sem dados.</td></tr>') + '</tbody></table></div></div>';
     return head +
-      '<div class="toolbar2" style="margin-top:8px;gap:10px;flex-wrap:wrap"><input class="input sm" id="acq" style="width:280px" placeholder="Buscar ID do resgate…" value="' + esc(aceleraF.search) + '"><select class="select sm" id="acaliqf" style="width:160px">' + aliqOptions + '</select></div>' +
+      '<div class="toolbar2" style="margin-top:8px;gap:10px;flex-wrap:wrap"><input class="input sm" id="acq" style="width:280px" placeholder="Buscar ID do resgate…" value="' + esc(aceleraF.search) + '"><select class="select sm" id="acaliqf" style="width:160px">' + aliqOptions + '</select>' + ((aceleraF.search || aceleraF.aliq) ? '<button class="link-btn" id="acclear">Limpar filtros</button>' : '') + '</div>' +
       '<div class="count-line"><b>' + nn(gs.length) + '</b> resgates</div>' +
       '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>ID resgate</th><th>Pedidos</th><th>Disponível</th><th>Bruto resgatado</th><th>Taxa</th><th>Alíquota</th><th>Líquido</th><th>Reembolsado</th><th title="Valor ainda a liquidar dentro do ciclo deste resgate (campo \'Valor pendente\' da Shopee) — não é dinheiro sumido nem uma segunda antecipação.">A liquidar ⓘ</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="11" class="empty">Nenhum resgate neste filtro.</td></tr>') + '</tbody></table></div></div>' +
       (pages > 1 ? '<div style="display:flex;gap:8px;justify-content:flex-end;align-items:center"><button class="btn-sm" id="acprev"' + (aceleraPage <= 1 ? ' disabled' : '') + '>Anterior</button><span class="footnote" style="margin:0">página ' + aceleraPage + ' de ' + pages + '</span><button class="btn-sm" id="acnext"' + (aceleraPage >= pages ? ' disabled' : '') + '>Próxima</button></div>' : '') +
@@ -4786,6 +4797,7 @@
   function bindAceleraAntec() {
     var q = document.getElementById('acq'); if (q) { var t; q.oninput = function () { clearTimeout(t); t = setTimeout(function () { var v = q.value; aceleraF.search = v; aceleraPage = 1; render(); var el = document.getElementById('acq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
     var af = document.getElementById('acaliqf'); if (af) af.onchange = function () { aceleraF.aliq = af.value; aceleraPage = 1; render(); };
+    var acclr = document.getElementById('acclear'); if (acclr) acclr.onclick = function () { aceleraF.search = ''; aceleraF.aliq = ''; aceleraPage = 1; render(); };
     var pv = document.getElementById('acprev'); if (pv) pv.onclick = function () { if (aceleraPage > 1) { aceleraPage--; render(); } };
     var nx = document.getElementById('acnext'); if (nx) nx.onclick = function () { aceleraPage++; render(); };
   }
@@ -5290,7 +5302,7 @@
     var rows = slice.map(function (o) { var st = o.st; var stTag = st === 'concluido' ? 'ok' : st === 'cancelado' ? 'warn' : 'neutral'; return '<tr class="rowlink" data-affped="' + esc(o.orderId) + '"><td class="mono">' + esc(o.orderId) + '</td><td class="nowrap">' + esc((o.orderTime || '').slice(0, 10)) + '</td><td class="cell-text">' + esc(o.affUser) + '</td><td>' + nn(o.items.length) + '</td><td class="nowrap">' + brlU(o.purchase) + '</td><td class="nowrap">' + brlU(o.comAff) + '</td><td>' + pct(r2(o.rateN ? o.rateSum / o.rateN * 100 : 0)) + '</td><td class="cell-text">' + esc(o.channel || '—') + '</td><td><span class="tag ' + stTag + '">' + esc(o.status) + '</span></td><td class="cell-text">' + esc(o.dedState || '—') + '</td><td><button class="btn-sm" data-affped="' + esc(o.orderId) + '">Abrir</button></td></tr>'; }).join('');
     return head +
       '<div class="chips">' + channels.map(function (c) { return '<span class="chip' + (affF.channel === c ? ' chip-on' : '') + '" data-affchan="' + esc(c) + '">' + (c === '' ? 'Todos os canais' : esc(c)) + '</span>'; }).join('') + '</div>' +
-      '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="affpq" style="width:260px" placeholder="Buscar pedido ou afiliado…" value="' + esc(affF.search) + '"><select class="select sm" id="affstatus"><option value="">Status: todos</option>' + [['pendente', 'Pendente'], ['concluido', 'Concluído'], ['cancelado', 'Cancelado'], ['naopago', 'Não pago']].map(function (s) { return '<option value="' + s[0] + '"' + (affF.status === s[0] ? ' selected' : '') + '>' + s[1] + '</option>'; }).join('') + '</select><select class="select sm" id="affded"><option value="">Dedução: todas</option><option value="deduzido"' + (affF.ded === 'deduzido' ? ' selected' : '') + '>Deduzido</option><option value="pendente"' + (affF.ded === 'pendente' ? ' selected' : '') + '>Pendente</option></select>' + (affF.channel || affF.status || affF.ded || affF.search || affF.region ? '<button class="link-btn" id="affclear">limpar</button>' : '') + '</div>' +
+      '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="affpq" style="width:260px" placeholder="Buscar pedido ou afiliado…" value="' + esc(affF.search) + '"><select class="select sm" id="affstatus"><option value="">Status: todos</option>' + [['pendente', 'Pendente'], ['concluido', 'Concluído'], ['cancelado', 'Cancelado'], ['naopago', 'Não pago']].map(function (s) { return '<option value="' + s[0] + '"' + (affF.status === s[0] ? ' selected' : '') + '>' + s[1] + '</option>'; }).join('') + '</select><select class="select sm" id="affded"><option value="">Dedução: todas</option><option value="deduzido"' + (affF.ded === 'deduzido' ? ' selected' : '') + '>Deduzido</option><option value="pendente"' + (affF.ded === 'pendente' ? ' selected' : '') + '>Pendente</option></select>' + (affF.channel || affF.status || affF.ded || affF.search || affF.region ? '<button class="link-btn" id="affclear">Limpar filtros</button>' : '') + '</div>' +
       '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos</div>' +
       '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Data</th><th>Afiliado</th><th>Itens</th><th>Compra</th><th>Comissão</th><th>Taxa</th><th>Canal</th><th>Status</th><th>Dedução</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="11" class="empty">Nenhum pedido neste filtro.</td></tr>') + '</tbody></table></div></div>' +
       (pages > 1 ? '<div style="display:flex;gap:8px;justify-content:flex-end;align-items:center"><button class="btn-sm" id="affprev"' + (affPage <= 1 ? ' disabled' : '') + '>Anterior</button><span class="footnote" style="margin:0">página ' + affPage + ' de ' + pages + '</span><button class="btn-sm" id="affnext"' + (affPage >= pages ? ' disabled' : '') + '>Próxima</button></div>' : '');
@@ -7694,7 +7706,9 @@
   }
   // ---- ciclo de vida do fechamento — mesmo padrão já aprovado em walletCloseDay/walletDayStatus,
   // agora escopado ao núcleo Pedidos+Expedição+Acelera+Financeiro (não só à Carteira). ----
-  var CAIXA_LABEL = { ABERTO: ['Aberto', 'neutral'], FECHADO: ['Fechado', 'ok'], FECHADO_COM_RESSALVA: ['Fechado com ressalva', 'warn'], REVISAO_NECESSARIA: ['Revisão necessária', 'warn'] };
+  // PROMPT "OTIMIZAÇÃO COMPLETA DE UX/UI DESKTOP" §5/§9: status visual padronizado 🟢/🟡/🔴 — só
+  // troca o texto do rótulo (emoji), a lógica de status (caixaDayStatus) continua exatamente a mesma.
+  var CAIXA_LABEL = { ABERTO: ['🟡 Em conferência', 'neutral'], FECHADO: ['🟢 Fechado', 'ok'], FECHADO_COM_RESSALVA: ['🟡 Fechado com ressalva', 'warn'], REVISAO_NECESSARIA: ['🔴 Revisão necessária', 'warn'] };
   function caixaDayStatus(dateKey) {
     var pend = caixaDayPendencias(dateKey);
     var pendCart = caixaDayPendenciasCarteira(dateKey);
@@ -9414,7 +9428,10 @@
     var applyFilters = function () { if (vmin) cpF.valorMin = cpParseNum(vmin.value); if (vmax) cpF.valorMax = cpParseNum(vmax.value); if (doc) cpF.docNumber = doc.value; cpPage = 1; cpRenderBody(); };
     var f = document.getElementById('cp-filtrar'); if (f) f.onclick = applyFilters;
     var toggle = document.getElementById('cp-filtros-toggle'); if (toggle) toggle.onclick = function () { cpFiltrosAbertos = !cpFiltrosAbertos; cpRenderBody(); };
-    var lim = document.getElementById('cp-limpar'); if (lim) lim.onclick = function () { cpF = { situacao: '', categoryId: '', paymentMethod: '', financialAccountId: '', costCenterId: '', accountingAccountId: '', supplierId: '', valorMin: null, valorMax: null, docNumber: '', search: '', dateBasis: 'vencimento', sort: 'vencimento', dir: 'asc' }; cpPage = 1; cpRenderBody(); };
+    // PROMPT "OTIMIZAÇÃO COMPLETA DE UX/UI DESKTOP" — achado da auditoria: "Limpar filtros" não
+    // resetava o período global, apesar de aparecer visualmente dentro do mesmo painel de filtros —
+    // usuário clicava em limpar e o período restritivo continuava escondendo lançamentos.
+    var lim = document.getElementById('cp-limpar'); if (lim) lim.onclick = function () { cpF = { situacao: '', categoryId: '', paymentMethod: '', financialAccountId: '', costCenterId: '', accountingAccountId: '', supplierId: '', valorMin: null, valorMax: null, docNumber: '', search: '', dateBasis: 'vencimento', sort: 'vencimento', dir: 'asc' }; cpPage = 1; if (periodSel) periodSel.value = 'all'; render(); };
     app.querySelectorAll('[data-cpsort]').forEach(function (th) { th.onclick = function () { var k = th.dataset.cpsort; if (cpF.sort === k) cpF.dir = cpF.dir === 'asc' ? 'desc' : 'asc'; else { cpF.sort = k; cpF.dir = 'asc'; } cpRenderBody(); }; });
     app.querySelectorAll('[data-cpopen]').forEach(function (el) { el.onclick = function () { openCpEditor(el.dataset.cpopen); }; });
     var chkAll = document.getElementById('cp-chk-all'); if (chkAll) chkAll.onclick = function () { var all = cpFilteredList(); if (chkAll.checked) all.forEach(function (h) { cpSel.add(h.id); }); else cpSel.clear(); cpRenderBody(); };
@@ -10339,7 +10356,7 @@
     var instantSel = { 'cr-situacao': 'situacao', 'cr-basis': 'dateBasis' };
     Object.keys(instantSel).forEach(function (elId) { var el = document.getElementById(elId); if (el) el.onchange = function () { crF[instantSel[elId]] = el.value; crPage = 1; crRenderBody(); }; });
     var contaSel = document.getElementById('cr-conta'); if (contaSel) contaSel.onchange = function () { crF.financialAccountId = contaSel.value === '__none' ? '__none' : contaSel.value; crPage = 1; crRenderBody(); };
-    var lim = document.getElementById('cr-limpar'); if (lim) lim.onclick = function () { crF = { situacao: '', financialAccountId: '', search: '', dateBasis: 'vencimento', sort: 'vencimento', dir: 'asc' }; crPage = 1; crRenderBody(); };
+    var lim = document.getElementById('cr-limpar'); if (lim) lim.onclick = function () { crF = { situacao: '', financialAccountId: '', search: '', dateBasis: 'vencimento', sort: 'vencimento', dir: 'asc' }; crPage = 1; if (periodSel) periodSel.value = 'all'; render(); };
     app.querySelectorAll('[data-crsort]').forEach(function (th) { th.onclick = function () { var k = th.dataset.crsort; if (crF.sort === k) crF.dir = crF.dir === 'asc' ? 'desc' : 'asc'; else { crF.sort = k; crF.dir = 'asc'; } crRenderBody(); }; });
     app.querySelectorAll('[data-cropen]').forEach(function (el) { el.onclick = function () { openCrEditor(el.dataset.cropen); }; });
     var prev = document.getElementById('cr-prev'); if (prev) prev.onclick = function () { crPage--; crRenderBody(); };
@@ -11196,6 +11213,18 @@
 
   // ---------- boot ----------
   document.querySelectorAll('#nav a').forEach(function (a) { a.onclick = function () { route = a.dataset.route; render(); }; });
+  // PROMPT "OTIMIZAÇÃO COMPLETA DE UX/UI DESKTOP" §3: sidebar recolhível — só alterna uma classe no
+  // shell (CSS cuida do resto); preferência fica em memória, igual a todo outro estado de UI do app
+  // (nenhuma tela salva preferência em localStorage neste sistema).
+  (function bindNavCollapse() {
+    var shellEl = document.querySelector('.shell');
+    var toggleBtn = document.getElementById('nav-toggle');
+    var expandBtn = document.getElementById('nav-expand');
+    if (!shellEl) return;
+    function setCollapsed(v) { shellEl.classList.toggle('nav-collapsed', v); }
+    if (toggleBtn) toggleBtn.onclick = function () { setCollapsed(true); };
+    if (expandBtn) expandBtn.onclick = function () { setCollapsed(false); };
+  })();
   var dateInputs = document.getElementById('dateinputs');
   function syncDateUI() { if (dateInputs) dateInputs.className = 'datein' + (periodSel.value === 'custom' ? ' on' : ''); }
   periodSel.onchange = function () { syncDateUI(); if (periodSel.value === 'custom' && !customRange.from && !customRange.to) return; render(); };
