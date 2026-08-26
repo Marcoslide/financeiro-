@@ -339,7 +339,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 4a43641 · 2026-08-26 01:19 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 254e5ab · 2026-08-26 01:41 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -4411,14 +4411,20 @@ buffer/index.js:
   // ---------- período ----------
   function periodRange() {
     var p = periodSel.value, now = new Date();
-    if (p === 'today') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate()) };
+    // PROMPT "Correção da Base Financeira" §7: todo período relativo em aberto (hoje/7d/15d/30d/mês/
+    // ano) precisa de uma data final — sem isso `r.to` nunca era definido e inPeriod() deixava passar
+    // qualquer lançamento futuro indefinidamente (ex.: um vencimento de Contas a Pagar cadastrado pra
+    // daqui a 3 meses aparecia dentro do filtro "Hoje"). fimHoje = fim do dia de hoje, o mesmo teto que
+    // cada módulo já vinha aplicando manualmente por conta própria (ex.: caixaPeriodDays).
+    var fimHoje = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    if (p === 'today') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate()), to: fimHoje };
     if (p === 'yesterday') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1), to: new Date(now.getFullYear(), now.getMonth(), now.getDate()) };
-    if (p === '7d') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6) };
-    if (p === '15d') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 14) };
-    if (p === '30d') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29) };
-    if (p === 'month') return { from: new Date(now.getFullYear(), now.getMonth(), 1) };
+    if (p === '7d') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6), to: fimHoje };
+    if (p === '15d') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 14), to: fimHoje };
+    if (p === '30d') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29), to: fimHoje };
+    if (p === 'month') return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: fimHoje };
     if (p === 'prevmonth') return { from: new Date(now.getFullYear(), now.getMonth() - 1, 1), to: new Date(now.getFullYear(), now.getMonth(), 1) };
-    if (p === 'year') return { from: new Date(now.getFullYear(), 0, 1) };
+    if (p === 'year') return { from: new Date(now.getFullYear(), 0, 1), to: fimHoje };
     if (p === 'custom') { var r = {}; if (customRange.from) r.from = new Date(customRange.from + 'T00:00:00'); if (customRange.to) r.to = new Date(customRange.to + 'T23:59:59'); return r; }
     return {};
   }
@@ -9812,7 +9818,16 @@ buffer/index.js:
     var receitaLiquida = receitaBruta + descComerciais + taxasShopee + devolucoes + outrosAj;
     var custoTemDado = pe.custoItemsKnown > 0;
     var custoProdutos = custoTemDado ? pe.custoProd : null;
-    var lucro = custoProdutos == null ? null : receitaLiquida - custoProdutos;
+    // PROMPT "Correção da Base Financeira" §6: "Caixa/Minha Renda/Ficha do Pedido/Precificação devem
+    // usar as mesmas regras" — a Taxa de Antecipação do Acelera (descontada no resgate, fora do
+    // Pagamento Liberado) já era descontada do Lucro em caixaDreDia()/pedidoResultadoFinal(), mas
+    // faltava aqui, divergindo o Lucro da Minha Renda do mesmo conjunto de pedidos no Caixa. Reaproveita
+    // caixaPeriodEngine(caixaPeriodDays(periodRange())) — o MESMO motor e o MESMO seletor global de
+    // período já usados pelo Caixa — nunca um cálculo de Acelera paralelo.
+    var acEng = caixaPeriodEngine(caixaPeriodDays(periodRange()));
+    var temAcelera = acEng.totAcTaxa > 0;
+    var acTaxa = temAcelera ? -Math.abs(acEng.totAcTaxa) : 0;
+    var lucro = custoProdutos == null ? null : receitaLiquida - custoProdutos + acTaxa;
     var margem = (receitaBruta && lucro != null) ? r2(lucro / receitaBruta * 100) : null;
     var mrParcial = t.nMR < pe.n;
     var custoParcial = custoTemDado && pe.custoCoveragePct < 100;
@@ -9830,6 +9845,7 @@ buffer/index.js:
       line('Outros Ajustes/Descontos', outrosAj, { op: '−', note: 'aba Adjustment — total importado, sem data confiável para restringir ao período', drill: 'adjustes' }) +
       line('Receita Líquida', receitaLiquida, { total: true, op: '=', drill: 'receitaLiquida', warn: mrParcial }) +
       line('Custo dos Produtos', custoProdutos, { op: '−', note: custoNote, drill: custoTemDado ? 'custoProdutos' : null, warn: custoParcial }) +
+      (temAcelera ? line('Taxa de Antecipação — Shopee Acelera', acTaxa, { op: '−', note: 'descontada no resgate da Carteira, fora do Pagamento Liberado — mesmo valor do Caixa' }) : '') +
       line('Custos Fixos/Internos', null, { op: '−', note: 'sem fonte de dados no sistema' }) +
       line('Lucro', lucro, { total: true, op: '=', drill: 'lucro', warn: mrParcial || custoParcial }) +
       '<div class="fin-line"><span>Margem sobre a Receita Bruta' + (margem != null && (mrParcial || custoParcial) ? ' <span class="tag warn">parcial</span>' : '') + '</span><b class="' + (margem == null ? '' : margem >= 0 ? 'pos' : 'neg') + '">' + (margem == null ? '—' : pct(margem)) + '</b></div>';
@@ -11696,15 +11712,16 @@ buffer/index.js:
         if (!it.knownContribution) return;
         if (it.key === 'servico') {
           var sf = sellerCharges.serviceFee;
+          var catServico = cpCategoryIdByName('Taxa de Serviço Shopee');
           if (sf.children && sf.children.length) {
-            sf.children.forEach(function (c) { if (c.valor) apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', c.key.toUpperCase(), c.label + ' — Pedido ' + o.id + ' (Confirmado — Income)', c.valor, recebAcc ? recebAcc.id : null)); });
+            sf.children.forEach(function (c) { if (c.valor) apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', c.key.toUpperCase(), c.label + ' — Pedido ' + o.id + ' (Confirmado — Income)', c.valor, recebAcc ? recebAcc.id : null, catServico)); });
           } else {
-            apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', 'TOTAL', it.label + ' — Pedido ' + o.id + origemSufixo(it), it.knownContribution, recebAcc ? recebAcc.id : null));
+            apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', 'TOTAL', it.label + ' — Pedido ' + o.id + origemSufixo(it), it.knownContribution, recebAcc ? recebAcc.id : null, catServico));
           }
           return;
         }
         var cat = it.key === 'comissao' ? 'COMMISSION' : it.key.toUpperCase();
-        apPlan.push(apRow(opId, o.id, 'INCOME', cat, it.label + ' — Pedido ' + o.id + origemSufixo(it), it.valor, recebAcc ? recebAcc.id : null));
+        apPlan.push(apRow(opId, o.id, 'INCOME', cat, it.label + ' — Pedido ' + o.id + origemSufixo(it), it.valor, recebAcc ? recebAcc.id : null, cpCategoriaShopeeTax(it.key)));
       });
     });
     // ---- Fase 5c — Taxa de Antecipação do Acelera (descontada no resgate, saída = Carteira Shopee) ----
@@ -11714,7 +11731,7 @@ buffer/index.js:
       // todo o Caixa — ver taxaAceleraC/§linha 7376) — apRow() espera valorC em centavos e converte
       // pra reais internamente; multiplicar por 100 aqui duplicaria a conversão (bug real pego em
       // teste: gerava R$38.015,00 de "taxa" onde o correto era R$380,15).
-      if (opIdAc) { var walletAc = faWalletForOperation(opIdAc); apPlan.push(apRow(opIdAc, null, 'ACELERA', 'FEE', 'Taxa de Antecipação — Shopee Acelera (' + dbr(dateKey) + ')', Math.abs(ac.taxaAcelera), walletAc ? walletAc.id : null)); }
+      if (opIdAc) { var walletAc = faWalletForOperation(opIdAc); apPlan.push(apRow(opIdAc, null, 'ACELERA', 'FEE', 'Taxa de Antecipação — Shopee Acelera (' + dbr(dateKey) + ')', Math.abs(ac.taxaAcelera), walletAc ? walletAc.id : null, cpCategoryIdByName(CP_CAT_SHOPEE_ACELERA))); }
     }
     // ---- Fase 5d/6 — movimentos da Carteira já CLASSIFICADOS como despesa (débito vira Contas a
     // Pagar) — o lado crédito NÃO gera mais Contas a Receber automaticamente (§3/§7): é dinheiro que
@@ -11755,11 +11772,11 @@ buffer/index.js:
       var walletT = faWalletForOperation(opIdT); var opCompId = opCompanyId(opIdT);
       transf.autoTxs.forEach(function (t) {
         transferPlan.push({ sourceEventKey: feKey(opIdT, 'TRANSFER', 'WALLET_AUTO', t.id), operationId: opIdT, companyId: opCompId, fromAccountId: walletT ? walletT.id : null, toAccountId: null, valor: r2(Math.abs(t.amount)), date: t.date ? t.date.slice(0, 10) : dateKey, source: 'WALLET_AUTO', sourceId: t.id, status: 'CONCLUIDO' });
-        arPlan.push({ sourceEventKey: feKey(opIdT, 'CAIXA_TRANSFERENCIA', 'PIX_AUTO', t.id), operationId: opIdT, companyId: opCompId, orderId: null, descricao: 'Fechamento Caixa Shopee — Pix identificado na Carteira (' + dbr(t.date ? t.date.slice(0, 10) : dateKey) + ')', pagador: 'Shopee', origin: 'CAIXA_TRANSFERENCIA', valor: r2(Math.abs(t.amount)), competencia: t.date ? t.date.slice(0, 10) : dateKey, vencimento: t.date ? t.date.slice(0, 10) : dateKey, financialAccountId: null, referencia: t.id, __autoBaixa: null });
+        arPlan.push({ sourceEventKey: feKey(opIdT, 'CAIXA_TRANSFERENCIA', 'PIX_AUTO', t.id), operationId: opIdT, companyId: opCompId, orderId: null, descricao: 'Fechamento Caixa Shopee — Pix identificado na Carteira (' + dbr(t.date ? t.date.slice(0, 10) : dateKey) + ')', pagador: 'Shopee', origin: 'CAIXA_TRANSFERENCIA', valor: r2(Math.abs(t.amount)), competencia: t.date ? t.date.slice(0, 10) : dateKey, vencimento: t.date ? t.date.slice(0, 10) : dateKey, financialAccountId: null, categoryId: cpCategoryIdByName(CP_CAT_SHOPEE_TRANSFERENCIA), referencia: t.id, __autoBaixa: null });
       });
       transf.manual.forEach(function (bt) {
         transferPlan.push({ sourceEventKey: feKey(opIdT, 'TRANSFER', 'BANK_MANUAL', bt.id), operationId: opIdT, companyId: opCompId, fromAccountId: walletT ? walletT.id : null, toAccountId: bt.contaId || null, valor: r2(bt.valor), date: bt.quando ? bt.quando.slice(0, 10) : dateKey, source: 'BANK_MANUAL', sourceId: bt.id, status: 'CONCLUIDO' });
-        arPlan.push({ sourceEventKey: feKey(opIdT, 'CAIXA_TRANSFERENCIA', 'BANCO', bt.id), operationId: opIdT, companyId: opCompId, orderId: null, descricao: 'Fechamento Caixa Shopee — transferência para ' + (bankAccountLabel(bt.contaId) || 'banco a definir') + ' (' + dbr(bt.quando ? bt.quando.slice(0, 10) : dateKey) + ')', pagador: 'Shopee', origin: 'CAIXA_TRANSFERENCIA', valor: r2(bt.valor), competencia: bt.quando ? bt.quando.slice(0, 10) : dateKey, vencimento: bt.quando ? bt.quando.slice(0, 10) : dateKey, financialAccountId: bt.contaId || null, referencia: bt.id, __autoBaixa: bt.contaId ? { valorRecebido: r2(bt.valor), financialAccountId: bt.contaId, date: bt.quando ? bt.quando.slice(0, 10) : dateKey } : null });
+        arPlan.push({ sourceEventKey: feKey(opIdT, 'CAIXA_TRANSFERENCIA', 'BANCO', bt.id), operationId: opIdT, companyId: opCompId, orderId: null, descricao: 'Fechamento Caixa Shopee — transferência para ' + (bankAccountLabel(bt.contaId) || 'banco a definir') + ' (' + dbr(bt.quando ? bt.quando.slice(0, 10) : dateKey) + ')', pagador: 'Shopee', origin: 'CAIXA_TRANSFERENCIA', valor: r2(bt.valor), competencia: bt.quando ? bt.quando.slice(0, 10) : dateKey, vencimento: bt.quando ? bt.quando.slice(0, 10) : dateKey, financialAccountId: bt.contaId || null, categoryId: cpCategoryIdByName(CP_CAT_SHOPEE_TRANSFERENCIA), referencia: bt.id, __autoBaixa: bt.contaId ? { valorRecebido: r2(bt.valor), financialAccountId: bt.contaId, date: bt.quando ? bt.quando.slice(0, 10) : dateKey } : null });
       });
     }
     return { ar: arPlan, ap: apPlan, transfers: transferPlan, naoClassificados: { n: naoClassificados.length, valor: r2(naoClassificados.reduce(function (s, t) { return s + Math.abs(t.amount); }, 0)) } };
@@ -11768,6 +11785,11 @@ buffer/index.js:
   // cpRegistrarBaixa/crRegistrarBaixa (motores já aprovados de Contas a Pagar/Receber, sem duplicar
   // lógica), só grava financialtransfers/financialevents em lote no final.
   function caixaAplicarIntegracaoFinanceira(dateKey) {
+    // Categorias Shopee (Comissão/Taxa de Serviço/Acelera/Transferência…) precisam existir ANTES de
+    // montar o plano — cpCategoryIdByName() é lookup síncrono no array em memória; sem isso, no
+    // primeiríssimo fechamento do sistema (cpCategories ainda vazio) todo título nasceria sem
+    // categoria mesmo com o mapeamento correto no código.
+    return cpCategorySeedShopee().then(function () {
     var plano = caixaMontarIntegracaoFinanceira(dateKey);
     var seedOps = {}; plano.ar.concat(plano.ap).forEach(function (r) { if (r.operationId) seedOps[r.operationId] = 1; });
     return Promise.all(Object.keys(seedOps).map(function (opId) { return faSeedForOperation(opId); })).then(function () {
@@ -11794,6 +11816,7 @@ buffer/index.js:
         return Promise.all([pendingAR.length ? putMany('crheader', pendingAR) : null, pendingAP.length ? putMany('cpheader', pendingAP) : null, pendingFT.length ? putMany('financialtransfers', pendingFT) : null, pendingFE.length ? putMany('financialevents', pendingFE) : null].filter(Boolean));
       });
     }).then(function () { return plano; });
+    });
   }
   function caixaCloseDay(dateKey, status, userName, justificativa) {
     var vendas = caixaDayVendas(dateKey); var exp = caixaDayExpedicao(dateKey); var ac = aceleraResultadoFechamento(dateKey); var pend = caixaDayPendencias(dateKey); var pendCart = caixaDayPendenciasCarteira(dateKey);
@@ -12973,6 +12996,53 @@ buffer/index.js:
   // não é informado (§16/§19/§20 do prompt: categoria ≠ conta financeira ≠ conta contábil).
   function cpCategoryDefaults(categoryId) { var c = cpCategories.find(function (x) { return x.id === categoryId; }); return { accountingAccountId: (c && c.accountingAccountId) || null, costCenterId: (c && c.costCenterId) || null, dreGroup: (c && c.dreGroup) || null }; }
 
+  // PROMPT "Correção da Base Financeira": todo lançamento automático de Contas a Pagar/Receber gerado
+  // pelo fechamento do Caixa precisa nascer com Categoria financeira preenchida (nunca "—"), senão a
+  // DRE por categoria fica incompleta e o operador precisa classificar manualmente item a item.
+  // Categorias são cadastro do usuário (cpCategories não tinha nenhum seed fixo) — as funções abaixo
+  // garantem que o conjunto padrão de categorias Shopee existe, criando só as que ainda faltam
+  // (find-or-create por nome, nunca duplica) — mesmo padrão já usado por faSeedForOperation() para
+  // contas financeiras (Saldo Carteira Shopee / Recebíveis Shopee).
+  var CP_CAT_SHOPEE_ROOT = 'Taxas e Recebimentos Shopee';
+  var CP_CAT_SHOPEE_TAX_MAP = { comissao: 'Comissão Shopee', servico: 'Taxa de Serviço Shopee', afiliado: 'Comissão de Afiliados', taxaDevolucaoFacil: 'Taxa de Devolução Fácil', taxaRecargaAutomatica: 'Taxa de Recarga Automática', envioReverso: 'Envio Reverso', taxaDevolucaoVendedor: 'Taxa de Devolução do Vendedor', voucherSeller: 'Voucher do Vendedor', voucherCompartilhado: 'Voucher Compartilhado', coinCashbackSeller: 'Coin Cashback do Vendedor', coinCashbackCompartilhado: 'Coin Cashback Compartilhado', reembolso: 'Reembolso ao Comprador' };
+  var CP_CAT_SHOPEE_ACELERA = 'Taxa de Antecipação — Shopee Acelera';
+  var CP_CAT_SHOPEE_TRANSFERENCIA = 'Transferência Shopee → Banco';
+  function cpCategoryIdByName(name) { var c = cpCategories.find(function (x) { return x.name === name; }); return c ? c.id : null; }
+  // Resolve a categoria padrão de uma taxa Shopee (chave de resolveSellerCharges/it.key) — usada nos
+  // pontos de geração automática de Contas a Pagar do fechamento de caixa.
+  function cpCategoriaShopeeTax(key) { var name = CP_CAT_SHOPEE_TAX_MAP[key]; return name ? cpCategoryIdByName(name) : null; }
+  function cpCategorySeedShopee() {
+    var rootId = cpCategoryIdByName(CP_CAT_SHOPEE_ROOT);
+    var toCreate = [];
+    if (!rootId) { rootId = cpUid('CAT'); toCreate.push({ id: rootId, name: CP_CAT_SHOPEE_ROOT, parentId: null }); }
+    var filhas = Object.keys(CP_CAT_SHOPEE_TAX_MAP).map(function (k) { return CP_CAT_SHOPEE_TAX_MAP[k]; }).concat([CP_CAT_SHOPEE_ACELERA, CP_CAT_SHOPEE_TRANSFERENCIA]);
+    filhas.forEach(function (name) { if (!cpCategoryIdByName(name) && !toCreate.some(function (t) { return t.name === name; })) toCreate.push({ id: cpUid('CAT'), name: name, parentId: rootId }); });
+    if (!toCreate.length) return Promise.resolve();
+    var now = new Date().toISOString();
+    var full = toCreate.map(function (t) { return { id: t.id, name: t.name, parentId: t.parentId, type: 'DESPESA', accountingAccountId: null, dreGroup: null, costCenterId: null, active: true, createdAt: now, updatedAt: now }; });
+    cpCategories = cpCategories.concat(full);
+    return putMany('cpcategories', full);
+  }
+  // PROMPT "Correção da Base Financeira" §3: "automação nunca sobrescreve Categoria/Conta/Status/Baixa
+  // alterados manualmente, só preenche vazios". Status e Baixa já são protegidos por construção (status
+  // é sempre DERIVADO de cpPayments/crReceipts — tabelas de baixa próprias, nunca tocadas por este
+  // upsert; baixa em si vive em outra tabela). Restam Categoria (categoryId) e Conta financeira
+  // (financialAccountId) — os dois campos que o operador escolhe direto no editor manual
+  // (openCpEditor/openCrEditor) e que a integração automática do fechamento (caixaMontarIntegracaoFinanceira)
+  // também tenta preencher a cada re-fechamento idempotente. `full.manualFields` (setado pelos editores
+  // ao salvar) marca quais desses campos um humano já definiu — o upsert automático pula exatamente
+  // esses (só quando full[k] já tem valor: um campo manual limpo/vazio ainda pode ser auto-preenchido),
+  // nunca os demais (valor, vencimento, histórico continuam sempre a fonte real).
+  var CP_CAMPOS_PROTEGIVEIS_MANUAL = ['categoryId', 'financialAccountId'];
+  function cpAplicarUpsertProtegido(full, rec) {
+    var protegidos = full.manualFields || [];
+    Object.keys(rec).forEach(function (k) {
+      if (k === 'id' || k === 'createdAt' || k === 'history') return;
+      if (protegidos.indexOf(k) >= 0 && full[k] != null) return;
+      full[k] = rec[k];
+    });
+  }
+
   // ---- cadastros auxiliares (categorias / plano de contas / centro de custo / fornecedores) ----
   function cpSaveCategory(dto) {
     var id = dto.id || cpUid('CAT'); var now = new Date().toISOString();
@@ -13107,7 +13177,7 @@ buffer/index.js:
       // no histórico, quando o título já existia como provisório e o novo valor vem confirmado.
       var eraProvisorio = /\(Provisório — Order\)/.test(full.historico || '');
       var agoraConfirmado = /\(Confirmado — Income\)/.test(rec.historico || '');
-      Object.keys(rec).forEach(function (k) { if (k !== 'id' && k !== 'createdAt' && k !== 'history') full[k] = rec[k]; });
+      cpAplicarUpsertProtegido(full, rec);
       full.updatedAt = now;
       if (eraProvisorio && agoraConfirmado) cpPushHistory(full, 'TAXA_CONFIRMADA', 'Valor atualizado de Pedido para Income confirmado.');
       else cpPushHistory(full, 'ATUALIZACAO_AUTOMATICA', 'Atualizado pelo fechamento de caixa.');
@@ -13379,7 +13449,7 @@ buffer/index.js:
         '<td><input type="checkbox" class="cp-chk" data-id="' + h.id + '"' + (cpSel.has(h.id) ? ' checked' : '') + '></td>' +
         '<td class="rowlink" data-cpopen="' + h.id + '"><b>' + esc(h.supplierId ? cpSupplierLabel(h.supplierId) : (h.origin === 'FECHAMENTO_CAIXA' ? 'Shopee' : '—')) + '</b>' + (h.installmentsTotal > 1 ? ' <span class="footnote" style="margin:0">' + h.installmentIndex + '/' + h.installmentsTotal + '</span>' : '') + '</td>' +
         '<td class="cell-text">' + esc((h.historico || '').slice(0, 50)) + '</td>' +
-        '<td>' + esc(cpCategoryPathLabel(h.categoryId)) + '</td>' +
+        '<td>' + esc(cpCategoryPathLabel(h.categoryId)) + (h.manualFields && h.manualFields.length ? ' <span class="tag" title="Categoria/Conta definidas manualmente — protegidas contra sobrescrita automática">🔒 manual</span>' : '') + '</td>' +
         '<td>' + esc(h.orderId || '—') + '</td>' +
         '<td>' + esc(cpAccountingLabel(h.accountingAccountId)) + '</td>' +
         '<td>' + esc(h.paymentMethod || '—') + '</td>' +
@@ -13800,6 +13870,16 @@ buffer/index.js:
       if (!fieldVal('cp-fornecedor-sel')) { toast('Fornecedor obrigatório', 'Selecione ou cadastre um fornecedor antes de salvar.', true); return; }
       if (!fieldVal('cp-vencimento')) { toast('Vencimento obrigatório', '', true); return; }
       collectDraftFromForm();
+      // PROMPT "Correção da Base Financeira" §1: "todo lançamento deve ter Categoria financeira/Conta
+      // financeira — nunca incompleto" — mesma exigência já aplicada ao modal da Carteira
+      // (openWalletTx). Valida DEPOIS de collectDraftFromForm() pra aceitar tanto o select do topo
+      // (cp-categoria) quanto o da aba Pagamento (cp-cat-pgto), sem descartar o que o usuário digitou.
+      if (!draft.categoryId) { toast('Categoria financeira obrigatória', 'Selecione uma categoria antes de salvar — necessária para a DRE por categoria.', true); return; }
+      if (!draft.financialAccountId) { toast('Conta financeira obrigatória', 'Selecione a conta financeira de onde sai (ou sairá) o pagamento, na aba Pagamento.', true); return; }
+      // PROMPT "Correção da Base Financeira" §3: salvar aqui é sempre um ato manual do operador — marca
+      // Categoria/Conta como protegidas contra a próxima integração automática do fechamento (ver
+      // cpAplicarUpsertProtegido), que só volta a preenchê-las se o operador algum dia limpar o campo.
+      draft.manualFields = CP_CAMPOS_PROTEGIVEIS_MANUAL.slice();
       var isNewSeries = !existing && draft.occurrence && draft.occurrence.type !== 'UNICA';
       var chain;
       if (isNewSeries) {
@@ -14194,7 +14274,7 @@ buffer/index.js:
     var full;
     if (idx >= 0) {
       full = contasReceber[idx];
-      Object.keys(rec).forEach(function (k) { if (k !== 'id' && k !== 'createdAt' && k !== 'history') full[k] = rec[k]; });
+      cpAplicarUpsertProtegido(full, rec);
       full.updatedAt = now;
       crPushHistory(full, 'ATUALIZACAO_AUTOMATICA', 'Atualizado pelo fechamento de caixa.');
     } else {
@@ -14460,7 +14540,7 @@ buffer/index.js:
         '<td class="rowlink cell-text" data-cropen="' + h.id + '"><b>' + esc((h.descricao || '').slice(0, 60)) + '</b></td>' +
         '<td>' + esc(h.pagador || '—') + '</td>' +
         '<td>' + esc(CR_ORIGIN_LABEL[h.origin] || h.origin || '—') + '</td>' +
-        '<td>' + esc(cpCategoryPathLabel(h.categoryId)) + '</td>' +
+        '<td>' + esc(cpCategoryPathLabel(h.categoryId)) + (h.manualFields && h.manualFields.length ? ' <span class="tag" title="Categoria/Conta definidas manualmente — protegidas contra sobrescrita automática">🔒 manual</span>' : '') + '</td>' +
         '<td>' + esc(h.orderId || h.referencia || '—') + '</td>' +
         '<td class="nowrap">' + brl(h.valor) + '</td><td class="nowrap">' + brl(crRecebidoTotal(h)) + '</td><td class="nowrap">' + brl(saldo) + '</td>' +
         '<td><span class="badge ' + lbl[1] + '">' + lbl[0] + '</span></td>' +
@@ -14524,7 +14604,7 @@ buffer/index.js:
   function openCrEditor(id) {
     var h = id ? contasReceber.find(function (x) { return x.id === id; }) : null;
     var isNew = !h;
-    var draft = h ? Object.assign({}, h) : { descricao: '', pagador: '', categoria: '', valor: 0, competencia: cpToday(), vencimento: cpToday(), financialAccountId: '', referencia: '', observacao: '' };
+    var draft = h ? Object.assign({}, h) : { descricao: '', pagador: '', categoryId: null, valor: 0, competencia: cpToday(), vencimento: cpToday(), financialAccountId: '', referencia: '', observacao: '' };
     var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '560px'; panel.style.maxWidth = '96vw';
     d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
     function draw() {
@@ -14536,7 +14616,7 @@ buffer/index.js:
         (readOnlyOrigin ? '<div class="footnote" style="margin-bottom:8px">Gerado automaticamente pelo fechamento de caixa (Pedido ' + esc(h.orderId || '') + '). Descrição, valor e vencimento não são editáveis manualmente — só o recebimento.</div>' : '') +
         '<label class="fld">Descrição *</label><input class="input" id="cr-descricao" style="width:100%" value="' + esc(draft.descricao || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '>' +
         '<label class="fld">Pagador</label><input class="input" id="cr-pagador" style="width:100%" value="' + esc(draft.pagador || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '>' +
-        '<label class="fld">Categoria</label><input class="input" id="cr-categoria" style="width:100%" value="' + esc(draft.categoria || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '>' +
+        '<label class="fld">Categoria financeira *</label><select class="select" id="cr-categoria" style="width:100%"' + (readOnlyOrigin ? ' disabled' : '') + '>' + cpCategoryOptions(draft.categoryId, false).replace('<option value="">Todas as categorias</option>', '<option value="">— selecionar —</option>') + '</select>' +
         '<div style="display:flex;gap:8px"><div style="flex:1"><label class="fld">Valor *</label><input class="input" id="cr-valor" style="width:100%" value="' + (draft.valor || 0) + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div>' +
         '<div style="flex:1"><label class="fld">Competência</label><input type="date" class="input" id="cr-competencia" style="width:100%" value="' + (draft.competencia || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div>' +
         '<div style="flex:1"><label class="fld">Vencimento</label><input type="date" class="input" id="cr-vencimento" style="width:100%" value="' + (draft.vencimento || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div></div>' +
@@ -14553,12 +14633,20 @@ buffer/index.js:
       panel.querySelector('.x').onclick = function () { d.remove(); };
       panel.querySelector('#cr-salvar').onclick = function () {
         var desc = panel.querySelector('#cr-descricao').value.trim(); var valor = cpParseNum(panel.querySelector('#cr-valor').value);
+        var categoryId = panel.querySelector('#cr-categoria').value || null;
         if (!desc) { panel.querySelector('#cr-err').innerHTML = '<div class="form-err">Informe a descrição.</div>'; return; }
         if (valor == null || valor <= 0) { panel.querySelector('#cr-err').innerHTML = '<div class="form-err">Informe um valor válido.</div>'; return; }
+        // PROMPT "Correção da Base Financeira" §1/§7: categoria financeira obrigatória em todo
+        // lançamento — mesma exigência já aplicada ao editor de Contas a Pagar (openCpEditor).
+        if (!categoryId) { panel.querySelector('#cr-err').innerHTML = '<div class="form-err">Selecione a categoria financeira.</div>'; return; }
+        // PROMPT "Correção da Base Financeira" §3: salvar aqui é sempre um ato manual do operador —
+        // marca Categoria/Conta como protegidas contra a próxima integração automática (ver
+        // cpAplicarUpsertProtegido em crUpsertBySourceKey).
         var toSave = Object.assign({}, draft, {
-          id: h ? h.id : null, descricao: desc, pagador: panel.querySelector('#cr-pagador').value.trim(), categoria: panel.querySelector('#cr-categoria').value.trim(),
+          id: h ? h.id : null, descricao: desc, pagador: panel.querySelector('#cr-pagador').value.trim(), categoryId: categoryId,
           valor: valor, competencia: panel.querySelector('#cr-competencia').value || null, vencimento: panel.querySelector('#cr-vencimento').value || null,
           financialAccountId: panel.querySelector('#cr-conta-fin').value || null, referencia: panel.querySelector('#cr-referencia').value.trim(), observacao: panel.querySelector('#cr-obs').value.trim(),
+          manualFields: CP_CAMPOS_PROTEGIVEIS_MANUAL.slice(),
         });
         crHeaderSave(toSave).then(function (full) { h = full; isNew = false; toast('Conta a receber salva', desc); d.remove(); crRenderBody(); });
       };
@@ -15432,6 +15520,12 @@ buffer/index.js:
       // então não há uma operação única para atribuir a conta nova). Roda em background, não atrasa o
       // primeiro render.
       if (activeOperationId !== OP_ALL) faSeedForOperation(activeOperationId).catch(function () { });
+      // Categorias padrão Shopee (Comissão/Taxa de Serviço/Acelera/Transferência…) — globais, não
+      // dependem de operação ativa. Sem este seed no boot, o select "Categoria financeira" do modal de
+      // classificação da Carteira (openWalletTx) ficava vazio até o primeiro fechamento de caixa
+      // acontecer (cpCategorySeedShopee só era chamado de dentro de caixaAplicarIntegracaoFinanceira) —
+      // mesma lógica "roda em background, não atrasa o primeiro render" do seed de contas acima.
+      cpCategorySeedShopee().catch(function () { });
       render();
     });
   }).catch(function (e) { app.innerHTML = '<div class="form-err" style="max-width:640px;margin:24px auto"><b>Não foi possível abrir o banco de dados local.</b><br>' + esc(e.message || e) + '<div style="margin-top:12px"><button class="btn-sm primary" onclick="location.reload()">Recarregar</button></div></div>'; });
