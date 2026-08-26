@@ -548,6 +548,31 @@
     fin._items = items;
     return fin;
   }
+  // PROMPT "Unificação do motor financeiro canônico" §Dashboard: quando o pedido já tem Income
+  // cruzado (pedidoComposicaoFinanceira().temIncome), o Dashboard passa a mostrar o valor CONFIRMADO
+  // (mesmos números de comp.vendaBrutaC/taxasShopeeC/custoProdutoC/lucroC/margemPct que a Ficha do
+  // Pedido mostra) — nunca mais a estimativa do Order.all quando o dado real já existe. Sem Income,
+  // cai para orderFinance(o) (estimativa Order.all), como sempre foi — só agora rotulado como
+  // ESTIMADO, nunca confundido com confirmado. Retorna o MESMO formato de orderFinance() (revenue/
+  // marketplaceFeesTotal/productCostTotal/costPending/estimatedResult/estimatedMarginPct/_items) +
+  // `confirmado` (bool), para computeOrderAgg()/telas do Dashboard consumirem sem mudar de forma.
+  function dashboardOrderResult(o) {
+    var f = orderFinance(o); // sempre calculado — é a única fonte de custo por item (_items/linked)
+    var comp = pedidoComposicaoFinanceira(o.id);
+    if (!comp.temIncome) { f.confirmado = false; return f; }
+    // "revenue" continua SEMPRE Venda Bruta (nunca redefinida) — Ajustes+Taxas entram juntos em
+    // "marketplaceFeesTotal" (magnitude positiva a subtrair, mesma convenção de orderFinance) pra
+    // Lucro = revenue - marketplaceFeesTotal - custo bater exatamente com comp.lucroC.
+    var reducaoConfirmadaC = -((comp.ajustesPedidoC || 0) + (comp.taxasShopeeC || 0));
+    return {
+      revenue: (comp.vendaBrutaC || 0) / 100,
+      marketplaceFeesTotal: reducaoConfirmadaC / 100,
+      productCostTotal: f.productCostTotal, costPending: f.costPending,
+      estimatedResult: comp.custoPendente ? null : (comp.lucroC != null ? comp.lucroC / 100 : null),
+      estimatedMarginPct: (!comp.custoPendente && comp.lucroC != null && comp.vendaBrutaC) ? r2(comp.lucroC / comp.vendaBrutaC * 100) : null,
+      _items: f._items, confirmado: true,
+    };
+  }
 
   // ============================================================ IMPORTS (Pedidos / Pós-venda)
   function importPedidos(file) {
@@ -722,10 +747,14 @@
   function renderErrBox(msg) { return '<div class="form-err" style="max-width:640px;margin:24px auto"><b>Ops.</b><br>' + msg + '<div style="margin-top:12px"><button class="btn-sm primary" onclick="location.reload()">Recarregar</button></div></div>'; }
 
   // ---------- DASHBOARD global ----------
+  // PROMPT "Unificação do motor financeiro canônico": usa dashboardOrderResult() (Income confirmado
+  // quando existe, estimativa Order.all só quando não existe) — nunca mais orderFinance() puro, que
+  // ignorava o Income mesmo já confirmado. confirmadoN conta quantos pedidos do agregado já são
+  // valor real, pro selo 🟢 Confirmado Shopee / 🟡 Estimado aguardando Income nos cards.
   function computeOrderAgg(list) {
     list = list || pedidosInPeriod();
-    var agg = { orders: list.length, units: 0, revenue: 0, fees: 0, cost: 0, result: 0, costPending: 0, unlinked: 0, byStatus: {} };
-    list.forEach(function (o) { var f = orderFinance(o); agg.units += o.items.reduce(function (s, i) { return s + i.qty; }, 0); agg.revenue += f.revenue; agg.fees += f.marketplaceFeesTotal; agg.cost += f.productCostTotal; if (f.estimatedResult != null) agg.result += f.estimatedResult; else agg.costPending++; if (f._items.some(function (i) { return !i.linked; })) agg.unlinked++; agg.byStatus[o.normalizedStatus] = (agg.byStatus[o.normalizedStatus] || 0) + 1; });
+    var agg = { orders: list.length, units: 0, revenue: 0, fees: 0, cost: 0, result: 0, costPending: 0, unlinked: 0, confirmadoN: 0, byStatus: {} };
+    list.forEach(function (o) { var f = dashboardOrderResult(o); agg.units += o.items.reduce(function (s, i) { return s + i.qty; }, 0); agg.revenue += f.revenue; agg.fees += f.marketplaceFeesTotal; agg.cost += f.productCostTotal; if (f.estimatedResult != null) agg.result += f.estimatedResult; else agg.costPending++; if (f._items.some(function (i) { return !i.linked; })) agg.unlinked++; if (f.confirmado) agg.confirmadoN++; agg.byStatus[o.normalizedStatus] = (agg.byStatus[o.normalizedStatus] || 0) + 1; });
     return agg;
   }
   // BUG CRÍTICO (auditoria noturna, "Lucro zero quando custo não existe"): agg.result nasce em 0 e só
@@ -733,12 +762,24 @@
   // "Lucro R$0,00 / Margem 0%" como se fosse um resultado real (prejuízo/empate), quando na verdade é
   // ausência total de dado. Mesma convenção já usada em Minha Renda ("não disponível") e no Caixa
   // ("aguardando custo"): só existe número de lucro quando pelo menos um pedido tem custo resolvido.
+  // Selo de confiança do valor exibido: 🟢 Confirmado Shopee quando todo o agregado já cruzou com o
+  // Income (motor canônico pedidoComposicaoFinanceira), 🟡 Estimado quando ainda depende total ou
+  // parcialmente do Order.all sem confirmação da Shopee. Nunca deixar a Ficha mostrar "confirmado"
+  // enquanto o Dashboard mostra um valor estimado diferente para o mesmo conjunto de pedidos.
+  function pedConfirmacaoSelo(agg) {
+    if (!agg.orders) return '';
+    if (agg.confirmadoN === agg.orders) return '🟢 Confirmado Shopee (Income)';
+    if (agg.confirmadoN > 0) return '🟡 ' + nn(agg.confirmadoN) + '/' + nn(agg.orders) + ' confirmados Shopee — restante estimado (Order.all)';
+    return '🟡 Estimado (Order.all) — aguardando Income';
+  }
   function pedResultadoTexto(agg) {
     var semCustoNenhum = agg.orders > 0 && agg.costPending === agg.orders;
-    if (semCustoNenhum) return { resultado: 'Custos pendentes', margem: 'Margem indisponível', cls: 'amber', sub: nn(agg.costPending) + ' pedido(s) sem custo — nenhum lucro calculável ainda' };
+    var selo = pedConfirmacaoSelo(agg);
+    if (semCustoNenhum) return { resultado: 'Custos pendentes', margem: 'Margem indisponível', cls: 'amber', sub: nn(agg.costPending) + ' pedido(s) sem custo — nenhum lucro calculável ainda', selo: selo };
     return {
       resultado: brl(agg.result), margem: agg.revenue ? pct((agg.result / agg.revenue) * 100) : '—', cls: 'green',
       sub: agg.costPending ? agg.costPending + ' pedido(s) c/ custo pendente (resultado parcial)' : 'custo completo',
+      selo: selo,
     };
   }
   // §12-18: "pedidos feitos" (Data de criação) ≠ "pedidos pagos" (Hora do pagamento) — pedido sem
@@ -824,7 +865,7 @@
       '<div class="page-head"><div><h2>Visão geral</h2><p>Panorama de vendas e devoluções — números auditáveis, sem estimativas inventadas.</p></div></div>' +
       (empty ? banner('Comece importando planilhas em <b>Produtos</b>, <b>Pedidos</b> e <b>Devolução</b>. Os módulos se conectam automaticamente (SKU→família→custo e pedido↔devolução).') : '') +
       (empty ? '' : dashboardFunilPanel()) +
-      '<div class="cards6">' + fcard('Venda válida', brl(aVenda.revenue), 'blue', nn(aVenda.orders) + ' pedidos (exclui cancelados)') + fcard('Unidades', nn(aVenda.units), '') + fcard('Taxas marketplace', brl(aVenda.fees), 'red') + fcard('Custo produtos', brl(aVenda.cost), 'amber') + fcard('Resultado estimado', resTxt.resultado, resTxt.cls, resTxt.sub) + fcard('Margem estimada', resTxt.margem, resTxt.cls === 'amber' ? 'amber' : '') + '</div>' +
+      '<div class="cards6">' + fcard('Venda válida', brl(aVenda.revenue), 'blue', nn(aVenda.orders) + ' pedidos (exclui cancelados)') + fcard('Unidades', nn(aVenda.units), '') + fcard('Taxas marketplace', brl(aVenda.fees), 'red') + fcard('Custo produtos', brl(aVenda.cost), 'amber') + fcard('Resultado estimado', resTxt.resultado, resTxt.cls, resTxt.sub + (resTxt.selo ? ' · ' + resTxt.selo : '')) + fcard('Margem estimada', resTxt.margem, resTxt.cls === 'amber' ? 'amber' : '') + '</div>' +
       '<div class="cards6">' + fcard('A enviar', nn(a.byStatus.A_ENVIAR || 0), 'amber') + fcard('Enviados', nn(a.byStatus.ENVIADO || 0), 'blue') + fcard('Concluídos', nn(a.byStatus.CONCLUIDO || 0), 'green') + fcard('Cancelamentos', nn(cancelados.length), 'red', cancelados.length ? brl(canceladosRevenue) + ' fora do faturamento' : 'nenhum no período') + fcard('Devoluções', nn(o.length), '') + fcard('Prejuízo confirmado', brl(exposure.confirmedLoss), 'red') + '</div>' +
       '<div class="cards6">' + fcard('SKUs sem vínculo', nn(aVenda.unlinked) + ' pedidos', 'amber') + fcard('Custo pendente', nn(aVenda.costPending) + ' pedidos', 'amber') + fcard('Em risco (devolução)', brl(exposure.atRisk), 'amber') + '</div>' +
       panelImports();
@@ -1290,7 +1331,7 @@
       fcard('Venda paga (real)', brl(aPagos.revenue), 'green', canceladosPagos ? 'exclui ' + canceladosPagos + ' cancelado(s) pago(s)' : 'só pedidos válidos efetivamente pagos') +
       fcard('Não pagos', nn(naoPagos), naoPagos ? 'amber' : 'green') +
       '</div>' +
-      '<div class="cards6">' + fcard('Ticket médio', brl(ticket), '') + fcard('Unidades vendidas', nn(aBase.units), '') + fcard('Taxas marketplace', brl(aBase.fees), 'red') + fcard('Custo produtos', brl(aBase.cost), 'amber') + fcard('Resultado estimado', resTxt.resultado, resTxt.cls, resTxt.sub) + fcard('Margem estimada', resTxt.margem, resTxt.cls === 'amber' ? 'amber' : '') + '</div>' +
+      '<div class="cards6">' + fcard('Ticket médio', brl(ticket), '') + fcard('Unidades vendidas', nn(aBase.units), '') + fcard('Taxas marketplace', brl(aBase.fees), 'red') + fcard('Custo produtos', brl(aBase.cost), 'amber') + fcard('Resultado estimado', resTxt.resultado, resTxt.cls, resTxt.sub + (resTxt.selo ? ' · ' + resTxt.selo : '')) + fcard('Margem estimada', resTxt.margem, resTxt.cls === 'amber' ? 'amber' : '') + '</div>' +
       '<div class="cards6">' + fcard('A enviar', nn(aFeitos.byStatus.A_ENVIAR || 0), 'amber') + fcard('Expedidos (bipados)', nn(expedidos), 'blue') + fcard('Enviados', nn(aFeitos.byStatus.ENVIADO || 0), 'blue') + fcard('Concluídos', nn(aFeitos.byStatus.CONCLUIDO || 0), 'green') + fcard('Retornos e cancelados', nn(cancelados), 'red') + fcard('SKUs sem custo', nn(aBase.costPending) + ' pedidos', 'amber') + '</div>' +
       pedidosFullPanel(feitos) + pedidosModalidadesPanel(feitos) + topSkusPanel();
   }
@@ -1613,7 +1654,61 @@
     var ajustesC = somaGrupo(gDescontos) + somaGrupo(gCreditos);
     var receitaAjustadaC = receitaC != null ? receitaC + ajustesC : null;
     var rendaFinalShopeeC = receitaC != null ? receitaC + taxasSomaC : null;
-    return { orderId: orderId, operationId: opIdOrd, temIncome: !!mrRow, mrRow: mrRow, incomeResolve: incomeResolve, statusFinanceiro: statusFinanceiro, ord: ord, svcRows: svcRows, svcResolve: svcResolve, serviceFee: serviceFee, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gEnvio: gEnvio, gOutros: gOutros, envio: envio, auditoriaFonte: auditoriaFonte, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), envioC: somaGrupo(gEnvio), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, taxasSomaSemAjusteC: taxasSomaSemAjusteC, ajustesC: ajustesC, receitaAjustadaC: receitaAjustadaC, rendaFinalShopeeC: rendaFinalShopeeC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia };
+    // PROMPT "Unificação do motor financeiro canônico": nomes OFICIAIS da composição, usados por
+    // TODOS os módulos a partir de agora (Ficha/Caixa/Minha Renda/Dashboard/Precificação/Contas
+    // Financeiras) — nunca recalculados fora daqui. São ALIASES dos mesmos valores já computados
+    // acima (nenhuma conta nova, nenhum campo removido dos nomes antigos — quem já lia receitaC/
+    // custoProdC/resultadoC continua funcionando sem alteração):
+    //   vendaBrutaC = receitaC (Order.all, Preço Acordado × Qtd — nunca Income)
+    //   ajustesPedidoC = ajustesC (gDescontos+gCreditos: PIX/Cupom/Incentivo de cupom/Ação
+    //     comercial/vouchers/cashback do vendedor/Reembolso/Crédito de frete — cada um em UMA
+    //     única categoria, nunca duplicado em taxasShopeeC)
+    //   taxasShopeeC = somente gTaxas (comissão/serviço/transação/afiliados/taxa devolução fácil/
+    //     recarga automática — nat===DEBITO_VENDEDOR — NUNCA inclui PIX/Cupom/voucher/cashback,
+    //     que já estão em ajustesPedidoC; corrige o bug de dupla contagem confirmado em
+    //     resolveSellerCharges())
+    //   custoProdutoC = custoProdC (resolveSkuCost via orderFinance)
+    //   lucroC = resultadoC (rendaFinalShopeeC − custoProdutoC)
+    var taxasShopeeC = somaGrupo(gTaxas);
+    var canonico = { vendaBrutaC: receitaC, ajustesPedidoC: ajustesC, taxasShopeeC: taxasShopeeC, custoProdutoC: custoProdC, lucroC: resultadoC };
+    return Object.assign({ orderId: orderId, operationId: opIdOrd, temIncome: !!mrRow, mrRow: mrRow, incomeResolve: incomeResolve, statusFinanceiro: statusFinanceiro, ord: ord, svcRows: svcRows, svcResolve: svcResolve, serviceFee: serviceFee, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gEnvio: gEnvio, gOutros: gOutros, envio: envio, auditoriaFonte: auditoriaFonte, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), envioC: somaGrupo(gEnvio), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, taxasSomaSemAjusteC: taxasSomaSemAjusteC, ajustesC: ajustesC, receitaAjustadaC: receitaAjustadaC, rendaFinalShopeeC: rendaFinalShopeeC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia }, canonico);
+  }
+  // PROMPT "Unificação do motor financeiro canônico" — auditoria interna: compara, pedido a pedido,
+  // o valor ESPERADO (recomposto direto dos grupos já classificados a partir de Order.all/Income —
+  // gDescontos/gCreditos/gTaxas — e, para a Renda Final, o próprio "Quantia Total Lançada" do Income,
+  // a fonte mais independente que existe) contra o valor SISTEMA (os campos canônicos que Ficha/
+  // Caixa/Minha Renda/Dashboard realmente exibem). Nunca recalcula com uma fórmula diferente —
+  // "esperado" usa os MESMOS grupos que "sistema" deriva, servindo de guarda de regressão: se um
+  // futuro ajuste desalinhar o alias de algum campo canônico do resto da composição, aparece aqui
+  // como 🔴 na hora, pedido a pedido, sem esperar uma auditoria manual de 100 pedidos.
+  function auditarComposicaoFinanceiraPedido(orderId) {
+    var comp = pedidoComposicaoFinanceira(orderId);
+    var vendaEsperadoC = comp.ord ? Math.round(orderFinance(comp.ord).revenue * 100) : null;
+    var ajustesEsperadoC = comp.somaGrupo(comp.gDescontos) + comp.somaGrupo(comp.gCreditos);
+    var taxasEsperadoC = comp.somaGrupo(comp.gTaxas);
+    // Renda Final: quando o Income já cruzou este pedido, o esperado é o próprio "Quantia Total
+    // Lançada" (mrRow.liberado) — o número que a própria Shopee confirmou — SOMADO a qualquer
+    // Adjustment posterior real deste pedido (comp.adjRows): a liberação original é sempre anterior
+    // a esses eventos (§45-48), então comparar sistema (que já inclui o Adjustment) direto contra o
+    // liberado bruto gerava falso 🔴 em todo pedido com reembolso/compensação posterior — confirmado
+    // com dados reais (4/100 pedidos da amostra de auditoria, todos de devolução com Adjustment de
+    // compensação). Sem Income, não há um "esperado" confirmável — usa o próprio valor provisório do
+    // sistema (Order.all) só para não deixar a linha vazia, marcado como parcial.
+    var adjTotalC = comp.adjRows.reduce(function (s, a) { return s + (a.valor || 0); }, 0);
+    var rendaFinalEsperadoC = comp.mrRow ? comp.mrRow.liberado + adjTotalC : comp.rendaFinalShopeeC;
+    function linha(esperadoC, sistemaC, semReferenciaConfiavel) {
+      var diferencaC = (esperadoC != null && sistemaC != null) ? sistemaC - esperadoC : null;
+      var status = diferencaC == null ? '🟡 sem dado suficiente' : semReferenciaConfiavel ? '🟡 diferença explicada (sem Income — provisório)' : Math.abs(diferencaC) <= 2 ? '🟢 OK' : '🔴 divergência financeira';
+      return { esperadoC: esperadoC, sistemaC: sistemaC, diferencaC: diferencaC, status: status };
+    }
+    var vendaBruta = linha(vendaEsperadoC, comp.vendaBrutaC);
+    var ajustes = linha(ajustesEsperadoC, comp.ajustesPedidoC);
+    var taxas = linha(taxasEsperadoC, comp.taxasShopeeC);
+    var rendaFinal = linha(rendaFinalEsperadoC, comp.rendaFinalShopeeC, !comp.mrRow);
+    var linhas = [vendaBruta, ajustes, taxas, rendaFinal];
+    var statusGeral = linhas.some(function (l) { return l.status.indexOf('🔴') === 0; }) ? '🔴 divergência financeira'
+      : linhas.some(function (l) { return l.status.indexOf('🟡') === 0; }) ? '🟡 diferença explicada' : '🟢 OK';
+    return { orderId: orderId, temIncome: comp.temIncome, vendaBruta: vendaBruta, ajustes: ajustes, taxas: taxas, rendaFinal: rendaFinal, statusGeral: statusGeral };
   }
   // resolveSellerCharges(orderId) — PROMPT DEFINITIVO "FICHA DO PEDIDO — TAXAS SHOPEE + CUSTOS DA
   // LOJA + CABEÇALHO + RESULTADO": lista ÚNICA, FIXA e EXAUSTIVA de tudo que a Shopee efetivamente
@@ -1708,10 +1803,14 @@
       incomeItem('taxaRecargaAutomatica', 'Taxa da Recarga Automática', 'taxaRecargaAutomatica'),
       incomeItem('envioReverso', 'Taxa de envio reverso', 'envioReverso'),
       incomeItem('taxaDevolucaoVendedor', 'Taxa de devolução do vendedor', 'taxaDevolucaoVendedor'),
-      incomeItem('voucherSeller', 'Voucher subsidiado pelo Seller', 'voucherSeller'),
-      incomeItem('voucherCompartilhado', 'Voucher compartilhado — parcela Seller', 'voucherCompartilhado'),
-      incomeItem('coinCashbackSeller', 'Coin Cashback subsidiado pelo Seller', 'coinCashbackSeller'),
-      incomeItem('coinCashbackCompartilhado', 'Coin Cashback compartilhado — parcela Seller', 'coinCashbackCompartilhado'),
+      // PROMPT "Unificação do motor financeiro canônico" — REMOVIDOS: voucherSeller/
+      // voucherCompartilhado/coinCashbackSeller/coinCashbackCompartilhado. Eram somados aqui E em
+      // pedidoComposicaoFinanceira().gDescontos/ajustesPedidoC ao mesmo tempo (mesmo campo do Income,
+      // classificado como DESCONTO_COMERCIAL_VENDEDOR — dupla contagem confirmada, ainda que rara nos
+      // dados reais auditados: 1 pedido em 1.842). Regra nova: cada ajuste existe em UMA categoria só
+      // — vouchers/cashback do vendedor são "Ajustes do pedido" (comp.ajustesPedidoC), nunca "Taxas
+      // Shopee Descontadas da Loja". Continuam visíveis na Ficha (bloco 6, Créditos/Compensações) e em
+      // Contas a Pagar, só que a partir de comp.gDescontos, não mais daqui.
       incomeItem('reembolso', 'Valor reembolsado ao comprador', 'reembolsoComprador'),
     ];
     var complete = items.every(function (it) { return it.dataStatus === SELLER_CHARGE_STATUS.KNOWN_VALUE || it.dataStatus === SELLER_CHARGE_STATUS.KNOWN_ZERO; });
@@ -1968,10 +2067,16 @@
       '<div class="footnote" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">Detalhamento completo disponível após liberação da Renda Shopee. <button class="link-btn" data-selldiag="' + esc(orderId) + '">Diagnóstico</button></div>' :
       (sellerCharges.totalStatus !== 'COMPLETO' ?
       '<div class="footnote" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">DADOS FINANCEIROS NÃO LOCALIZADOS NO INCOME <button class="link-btn" data-selldiag="' + esc(orderId) + '">Diagnóstico</button></div>' : '');
+    // PROMPT "Unificação do motor financeiro canônico": este bloco continua um detalhamento
+    // operacional útil (taxa de devolução do vendedor, valor reembolsado ao comprador — dados que a
+    // composição canônica não modela ainda), mas o TOTAL daqui não é mais o "Taxas Shopee" oficial
+    // do cabeçalho (comp.taxasShopeeC, sempre igual em Ficha/Caixa/Minha Renda/Dashboard/
+    // Precificação/Contas Financeiras) — por isso o rótulo deixa isso explícito.
     var bloco3Taxas = '<div class="panel"><div class="ph"><h3>3. Taxas Shopee Descontadas do Vendedor</h3></div><div class="pb">' +
       naoLocalizadoAviso +
       itemsParaExibir.map(sellerChargeLine).join('') +
-      '<div class="fin-line total" style="margin-top:2px"><span>TOTAL DESCONTADO DA LOJA' + totalStatusTag + '</span>' + totalValorHtml + '</div>' +
+      '<div class="fin-line total" style="margin-top:2px"><span>Total deste detalhamento' + totalStatusTag + '</span>' + totalValorHtml + '</div>' +
+      '<div class="footnote" style="margin-top:2px">Detalhamento operacional — o valor oficial de "Taxas Shopee" usado em todo o sistema é <b>' + (taxasShopeeC != null ? brlC(taxasShopeeC) : '—') + '</b> (ver Resumo Financeiro acima).</div>' +
       '</div></div>';
     // 4. ENVIO (§27-39): só aparece quando o impacto líquido é diferente de zero.
     var bloco4Envio = '';
@@ -1997,15 +2102,21 @@
     // a linha inicial precisa ser receitaC (Order.all, Preço Acordado × Qtd), NUNCA mrRow.preco
     // ("Preço do produto" do Income — um campo diferente, usado só para a reconciliação interna do
     // Income, nunca como "quanto foi vendido" — mesma regra já documentada em receitaC acima).
-    var pagamentoLiberadoC = mrRow ? mrRow.liberado : (receitaC != null ? receitaC + taxasSomaC : null);
+    // PROMPT "Unificação do motor financeiro canônico" — BUG CONFIRMADO (auditoria de 100 pedidos):
+    // esta linha final mostrava pagamentoLiberadoC (mrRow.liberado, a liberação ORIGINAL do Income)
+    // em vez do resultado da própria equação acima (receitaC+somaGrupo(gDescontos+gCreditos)+
+    // somaGrupo(gTaxas) == comp.rendaFinalShopeeC) — divergindo do Resumo Financeiro/Resultado do
+    // Pedido na MESMA tela sempre que existe um Adjustment posterior (ex.: "Reembolso por objeto
+    // perdido" creditado depois da devolução, classificado em gCreditos). A equação agora fecha
+    // consigo mesma e usa o mesmo campo canônico que todo o resto do sistema exibe.
     var bloco7Conciliacao = mrRow ? '<div class="panel"><div class="ph"><h3>7. Conciliação do Pagamento</h3></div><div class="pb">' +
       fLine('Venda Bruta', receitaC) +
       (somaGrupo(gDescontos) + somaGrupo(gCreditos) ? fLine('Ajustes do pedido', somaGrupo(gDescontos) + somaGrupo(gCreditos)) : '') +
       (receitaC != null ? '<div class="fin-line" style="margin-top:2px"><span>= Receita Ajustada</span><b>' + brlC(receitaC + somaGrupo(gDescontos) + somaGrupo(gCreditos)) + '</b></div>' : '') +
       (envio && envio.subtotalC ? fLine('Subtotal de envio', envio.subtotalC) : '') +
       fLine('Taxas Shopee', somaGrupo(gTaxas)) +
-      '<div class="fin-line total"><span>= Renda Final Shopee</span><b>' + brlC(pagamentoLiberadoC) + '</b></div>' +
-      '<div style="margin-top:4px">' + taxasConf + '</div>' +
+      '<div class="fin-line total"><span>= Renda Final Shopee</span><b>' + brlC(comp.rendaFinalShopeeC) + '</b></div>' +
+      '<div style="margin-top:4px">' + taxasConf + (adjRows.length ? ' <span class="footnote" style="margin:0">— compara com a liberação ORIGINAL do Income; a Renda Final Shopee acima já inclui ' + nn(adjRows.length) + ' ajuste(s) posterior(es) (Adjustment) que a liberação original ainda não refletia.</span>' : '') + '</div>' +
       '</div></div>' : '<div class="panel"><div class="ph"><h3>7. Conciliação do Pagamento</h3></div><div class="pb"><span class="tag warn">🟡 Composição preliminar — aguardando Income</span><div class="footnote" style="margin-top:6px">' + (comp.incomeResolve.status === 'NOT_IN_INCOME' ? 'Este pedido ainda não aparece no relatório Income importado.' : INCOME_STATUS_TXT[comp.incomeResolve.status] || '') + '</div></div></div>';
     // Diagnóstico de cruzamento Income (PROMPT "Correção definitiva — Pedidos deve buscar as taxas
     // na base Income de Minha Renda" §16): equivalente visível a auditIncomeForOrder(operationId,
@@ -2026,6 +2137,14 @@
       (svcR.found ? '<div class="fin-line" style="padding-left:14px"><span>↳ Taxa por item vendido (Service Fee Details)</span><span>' + brlC(svcR.totals.porItem) + '</span></div>' : '') +
       '<div class="footnote" style="margin-top:6px">Lê direto de mrRenda/mrSvc (persistidos no boot, independentes de filtro/aba de Minha Renda) — se aparecer NOT_FOUND aqui, esse pedido realmente não está no arquivo Income importado; procure o mesmo ID direto na planilha (aba Renda, coluna ID do pedido) para confirmar.</div>' +
       '</div></details>';
+    // Auditoria da Composição Financeira (motor canônico) — pedido a pedido, Venda Bruta/Ajustes/
+    // Taxas/Renda Final: esperado (recomposto dos grupos + Quantia Total Lançada do Income) × sistema
+    // (os mesmos campos que Ficha/Caixa/Minha Renda/Dashboard exibem) — guarda de regressão visível.
+    var auditComp = auditarComposicaoFinanceiraPedido(orderId);
+    var auditCompRow = function (label, l) { return '<div class="fin-line"><span>' + esc(label) + '</span><span>esperado ' + (l.esperadoC != null ? brlC(l.esperadoC) : '—') + ' · sistema ' + (l.sistemaC != null ? brlC(l.sistemaC) : '—') + ' · dif. ' + (l.diferencaC != null ? brlC(l.diferencaC) : '—') + ' <span class="tag">' + l.status + '</span></span></div>'; };
+    var auditCompBlock = '<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Auditoria da composição financeira (esperado × sistema) — ' + auditComp.statusGeral + '</summary><div style="margin-top:6px">' +
+      auditCompRow('Venda Bruta', auditComp.vendaBruta) + auditCompRow('Ajustes do pedido', auditComp.ajustes) + auditCompRow('Taxas Shopee', auditComp.taxas) + auditCompRow('Renda Final Shopee', auditComp.rendaFinal) +
+      '</div></details>';
     var auditoriaBlock = '<div class="panel"><div class="ph"><h3>Auditoria Técnica</h3></div><div class="pb">' +
       (auditoriaFonte.length || shipRow ? '<details><summary style="cursor:pointer;font-weight:600">Ver campos brutos, origem e valores não contabilizados</summary><div style="margin-top:6px">' +
       auditoriaFonte.map(function (a) { return '<div class="fin-line"><span>' + esc(a.label) + ' <span class="footnote" style="margin:0">(' + esc(a.nota) + ')</span></span><span class="' + (a.valor < 0 ? 'neg' : 'pos') + '">' + brlC(a.valor) + '</span></div>'; }).join('') +
@@ -2033,6 +2152,7 @@
       '<div class="footnote" style="margin-top:6px">' + (mrRow ? 'Origem principal: Minha Renda (Income) · Pedido ' + esc(orderId) : ord ? 'Origem: Pedidos (aproximado — sem Minha Renda para este pedido)' : 'sem fonte') + '</div>' +
       '</div></details>' : '') +
       diagIncomeBlock +
+      auditCompBlock +
       '</div></div>';
     var taxasBlock = bloco3Taxas + bloco4Envio + bloco5Ajustes + bloco6Creditos + bloco7Conciliacao + auditoriaBlock;
 
@@ -2133,21 +2253,18 @@
     // §26: deliberadamente NÃO entra Acelera/impostos/risco/custos fixos/devolução/afiliados nesta
     // conta — isso continua existindo em pedidoResultadoFinal() (usado pela Precificação e pelo
     // bloco "Devolução reabriu o resultado deste pedido", ambos fora do escopo desta alteração).
-    // §PROMPT DEFINITIVO: TAXAS = "TOTAL DESCONTADO DA LOJA" (sellerCharges.totalC) — SEMPRE, a MESMA
-    // soma exibida no fim do bloco 3 acima, nunca um segundo cálculo. Sem Income cruzado, totalC já
-    // reflete só o que é conhecido (ex.: Taxa de serviço via Service Fee Details/estimativa) e carrega
-    // sellerCharges.totalStatus (PARCIAL/SEM_DADOS) — nunca mais um cálculo paralelo via gTaxas aqui.
-    // PROMPT "Correção da composição financeira por pedido": faltava o degrau AJUSTES DO PEDIDO
-    // (cupom/PIX/reembolso/vouchers/cashback/incentivo de cupom/ação comercial — comp.ajustesC, MESMA
-    // fonte de comp.gDescontos/gCreditos já usada nos blocos 5/6 abaixo) entre Venda e Taxas — sem ele,
-    // "Pagamento previsto"/"Lucro atual" ficavam sistematicamente inflados em pedidos com ajustes reais
-    // (confirmado com dados reais: pedido com R$14,91 de Cupom+PIX mostrava R$14,91 de lucro a mais do
-    // que a Shopee realmente paga). Nunca dois motores: ajustesC vem de pedidoComposicaoFinanceira(),
-    // taxasShopeeC continua vindo de resolveSellerCharges() — só a SOMA final passou a incluir os dois.
-    var ajustesC = comp.ajustesC;
-    var receitaAjustadaC = (receitaC != null && ajustesC != null) ? receitaC + ajustesC : null;
-    var taxasShopeeC = sellerCharges.totalC;
-    var pagamentoPrevistoC = (receitaAjustadaC != null && taxasShopeeC != null) ? receitaAjustadaC + taxasShopeeC : null;
+    // PROMPT "Unificação do motor financeiro canônico": cabeçalho e Resultado do Pedido leem os
+    // campos OFICIAIS de pedidoComposicaoFinanceira() direto — nunca mais recalculados aqui.
+    // ajustesPedidoC/taxasShopeeC/rendaFinalShopeeC/lucroC são as MESMAS variáveis que Caixa/Minha
+    // Renda/Dashboard/Precificação/Contas Financeiras agora leem — uma tela nunca pode mostrar um
+    // número diferente da outra pro mesmo pedido. sellerCharges continua existindo só para o
+    // detalhamento operacional do bloco 3 (granularidade extra: taxa de devolução do vendedor,
+    // valor reembolsado ao comprador — dados que a composição canônica ainda não modela — nunca
+    // como fonte do "Renda Final Shopee" exibido aqui).
+    var ajustesC = comp.ajustesPedidoC;
+    var receitaAjustadaC = comp.receitaAjustadaC;
+    var taxasShopeeC = comp.taxasShopeeC;
+    var pagamentoPrevistoC = comp.rendaFinalShopeeC;
     var lucroAtualSimplesC = (pagamentoPrevistoC != null && custoProdC != null) ? (pagamentoPrevistoC - custoProdC) : null;
     var margemAtualSimplesPct = (lucroAtualSimplesC != null && receitaC) ? r2(lucroAtualSimplesC / receitaC * 100) : null;
     // BUG 2 (Fase final de ajuste gerencial): venda/taxas/custo continuam calculados normalmente
@@ -5805,10 +5922,34 @@
     var custoProd = 0, custoItemsKnown = 0, custoItemsTotal = 0, custoOrdersFullN = 0;
     var mrRows = [];
     var bySku = {};
+    // PROMPT "Unificação do motor financeiro canônico": Ajustes do Pedido e Taxas Shopee do período
+    // NUNCA mais recombinam campos brutos do Income por conta própria — somam, pedido a pedido,
+    // exatamente os grupos que pedidoComposicaoFinanceira() já classificou (gDescontos+gCreditos/
+    // gTaxas — a MESMA fonte que a Ficha do Pedido e o Caixa usam). Corrige divergências confirmadas
+    // na auditoria: a fórmula manual antiga somava "Ajuste por participação em ação comercial" (campo
+    // de referência que a Ficha deliberadamente exclui — §13/§20/§109) e tratava frete/ação comercial/
+    // incentivo de cupom sem respeitar o sinal real do lançamento (SIGN em FIN_NATUREZA_MAP).
+    // Exclui fieldKey==='ajusteGenerico' (linhas vindas de mrAdj/Adjustment): a Minha Renda já soma
+    // Adjustment à parte, na linha própria "Outros Ajustes/Descontos" (pe.adjTot) — incluí-las aqui
+    // de novo duplicaria o valor (confirmado: a conferência com o Pagamento Liberado piorou de
+    // R$1.342,84 para R$2.577,85 de diferença antes deste filtro, num teste com dados reais).
+    function mrGruposSemAjusteGenerico(comp) {
+      var taxas = comp.gTaxas.filter(function (r) { return r.fieldKey !== 'ajusteGenerico'; });
+      var descontos = comp.gDescontos.filter(function (r) { return r.fieldKey !== 'ajusteGenerico'; });
+      var creditos = comp.gCreditos.filter(function (r) { return r.fieldKey !== 'ajusteGenerico'; });
+      return { taxasC: comp.somaGrupo(taxas), ajustesC: comp.somaGrupo(descontos) + comp.somaGrupo(creditos) };
+    }
+    var ajustesTotalC = 0, taxasShopeeTotalC = 0;
     list.forEach(function (o) {
       t.n++;
       var mrRow = mrByOrder[o.id];
-      if (mrRow) { t.nMR++; MR_FIELDS.forEach(function (k) { t[k] += mrRow[k]; }); mrRows.push(mrRow); }
+      if (mrRow) {
+        t.nMR++; MR_FIELDS.forEach(function (k) { t[k] += mrRow[k]; }); mrRows.push(mrRow);
+        var comp = pedidoComposicaoFinanceira(o.id);
+        var grp = mrGruposSemAjusteGenerico(comp);
+        ajustesTotalC += grp.ajustesC;
+        taxasShopeeTotalC += grp.taxasC;
+      }
       var f = orderFinance(o);
       faturamento += Math.round(f.revenue * 100);
       if (!f.costPending) custoOrdersFullN++;
@@ -5838,7 +5979,16 @@
       var d = r.dataConclusao || r.dataCriacao;
       return d && within(d);
     });
-    incomeExtra.forEach(function (r) { MR_FIELDS.forEach(function (k) { t[k] += r[k]; }); mrRows.push(r); });
+    incomeExtra.forEach(function (r) {
+      MR_FIELDS.forEach(function (k) { t[k] += r[k]; }); mrRows.push(r);
+      // Sem pedido importado (Order.all) para este ID, pedidoComposicaoFinanceira() ainda resolve o
+      // mrRow pelo próprio orderId do Income e classifica taxaRows normalmente — só Venda Bruta/
+      // Renda Final ficam null (não há Preço Acordado para calculá-las), o que não afeta Ajustes/Taxas.
+      var compExtra = pedidoComposicaoFinanceira(r.orderId);
+      var grpExtra = mrGruposSemAjusteGenerico(compExtra);
+      ajustesTotalC += grpExtra.ajustesC;
+      taxasShopeeTotalC += grpExtra.taxasC;
+    });
     var cross = mrSkuCrossCheck();
     if (cross.reliable) {
       list.forEach(function (o) { var key0 = (o.items[0] && o.items[0].sku) || '(sem sku)'; var g = bySku[key0]; if (g) o.items.forEach(function (it) { if (it.sku === key0) g.units += it.qty; }); });
@@ -5861,11 +6011,13 @@
     // PROMPT "Correção da composição financeira por pedido": mesma classificação de FIN_NATUREZA_MAP
     // usada por gTaxas (taxas reais cobradas pelo vendedor) — agora inclui taxaDevolucaoFacil e
     // taxaRecargaAutomatica, que antes ficavam de fora da soma (nunca somados em lugar nenhum).
-    var taxasShopeeTotal = t.comissao + t.servico + t.transacao + t.freteParceiro + t.descontoFrete + t.envioReverso + t.incentivoAcaoComercial + t.ajusteAcaoComercial + t.taxaDevolucaoFacil + t.taxaRecargaAutomatica;
-    // Mesma classificação de gDescontos+gCreditos: cupom/pix (descontos) + vouchers/cashback/incentivo
-    // de cupom (créditos) + reembolso (agora dentro deste subtotal, não mais somado à parte em
-    // receitaLiquida — evita contar reembolso duas vezes).
-    var descontosComerciais = t.cupom + t.pix + t.voucherSeller + t.voucherCompartilhado + t.coinCashbackSeller + t.coinCashbackCompartilhado + t.incentivoCupom + t.reembolso;
+    // taxasShopeeTotalC (canônico) já inclui afiliado — mantido separado aqui só para preservar a
+    // mesma decomposição visual já aprovada em toda a Minha Renda (Afiliados como card/linha própria,
+    // somado de volta em mrResultadoDetalhado/mrFechamentoPeriodo, exatamente como já funcionava).
+    var taxasShopeeTotal = taxasShopeeTotalC - t.afiliado;
+    // ajustesTotalC (canônico, gDescontos+gCreditos) já inclui reembolso — mesma classificação usada
+    // pela Ficha do Pedido/Caixa; substitui a soma manual antiga (que também incluía reembolso).
+    var descontosComerciais = ajustesTotalC;
     var receitaLiquida = t.preco + descontosComerciais + taxasShopeeTotal + t.afiliado; // deve ≈ t.liberado
     var custoCoveragePct = custoItemsTotal ? r2(custoItemsKnown / custoItemsTotal * 100) : 0;
     return {
@@ -5912,14 +6064,16 @@
   function openMrDrill(kind, label) {
     var pe = mrPeriodEngine(); var e = mrEngine(); var rows = [];
     if (kind === 'taxasShopee') {
-      // §39 do prompt de reorganização: precisa bater EXATAMENTE com a linha "Taxas Shopee" da DRE
-      // (pe.taxasShopeeTotal + t.afiliado) — inclui ação comercial e afiliados, que faltavam aqui.
-      // PROMPT "Correção da composição financeira por pedido": + taxaDevolucaoFacil/taxaRecargaAutomatica,
-      // agora somados em taxasShopeeTotal (mrPeriodEngine) — precisam entrar aqui também.
+      // PROMPT "Unificação do motor financeiro canônico": precisa bater EXATAMENTE com a linha "Taxas
+      // Shopee" da DRE (pe.taxasShopeeTotal + t.afiliado) — agora lida pedido a pedido do MESMO motor
+      // canônico (pedidoComposicaoFinanceira().taxasShopeeC), nunca mais uma recombinação manual de
+      // campos brutos (a fórmula antiga somava "Ajuste por participação em ação comercial", um campo
+      // de referência que a Ficha do Pedido deliberadamente exclui — §13/§20/§109).
       pe.rows.forEach(function (r) {
-        var v = r.comissao + r.servico + r.transacao + r.freteParceiro + r.descontoFrete + r.envioReverso + (r.incentivoAcaoComercial || 0) + (r.ajusteAcaoComercial || 0) + r.afiliado + (r.taxaDevolucaoFacil || 0) + (r.taxaRecargaAutomatica || 0); if (!v) return;
+        var comp = pedidoComposicaoFinanceira(r.orderId);
+        var v = comp.gTaxas.filter(function (x) { return x.fieldKey !== 'ajusteGenerico'; }).reduce(function (s, x) { return s + x.valor; }, 0); if (!v) return; // já inclui afiliado (gTaxas), exclui Adjustment (linha própria) — não somar r.afiliado de novo
         var sk = e.skuByOrder[r.orderId];
-        rows.push({ orderId: r.orderId, data: r.dataConclusao || r.dataCriacao, sku: sk && sk[0] ? sk[0].sku : '—', produto: sk && sk[0] ? sk[0].produto : (r.produto || '—'), descricao: 'comissão+serviço+transação+frete parceiro+ajuste de frete+envio reverso+ação comercial+afiliados', valor: v });
+        rows.push({ orderId: r.orderId, data: r.dataConclusao || r.dataCriacao, sku: sk && sk[0] ? sk[0].sku : '—', produto: sk && sk[0] ? sk[0].produto : (r.produto || '—'), descricao: 'Taxas Shopee (motor canônico, inclui afiliados)', valor: v });
       });
     } else if (MR_FIELDS.indexOf(kind) >= 0 || kind === 'receitaLiquida') {
       // "Receita Líquida" = exatamente o pagamento liberado (soma de mrRow.liberado) — mesma base do
@@ -8038,6 +8192,15 @@
         }
         var cat = it.key === 'comissao' ? 'COMMISSION' : it.key.toUpperCase();
         apPlan.push(apRow(opId, o.id, 'INCOME', cat, it.label + ' — Pedido ' + o.id + origemSufixo(it), it.valor, recebAcc ? recebAcc.id : null, cpCategoriaShopeeTax(it.key)));
+      });
+      // PROMPT "Unificação do motor financeiro canônico": voucher/cashback subsidiado pelo vendedor
+      // saiu de resolveSellerCharges (dupla contagem com comp.ajustesPedidoC — ver comentário na
+      // função) — continuam gerando título de Contas a Pagar normalmente, só que a partir do MESMO
+      // grupo canônico (comp.gDescontos) que já alimenta "Ajustes do pedido" em todo o resto do
+      // sistema, nunca uma soma paralela.
+      comp.gDescontos.forEach(function (r) {
+        if (!r.valor || ['voucherSeller', 'voucherCompartilhado', 'coinCashbackSeller', 'coinCashbackCompartilhado'].indexOf(r.fieldKey) < 0) return;
+        apPlan.push(apRow(opId, o.id, 'INCOME', r.fieldKey.toUpperCase(), r.label + ' — Pedido ' + o.id + ' (Confirmado — Income)', r.valor, recebAcc ? recebAcc.id : null, cpCategoriaShopeeTax(r.fieldKey)));
       });
     });
     // ---- Fase 5c — Taxa de Antecipação do Acelera (descontada no resgate, saída = Carteira Shopee) ----
@@ -10941,8 +11104,8 @@
     var rows = dias.map(function (k) {
       var linhas = byDia[k].map(function (o) {
         var c = pedidoComposicaoFinanceira(o.id);
-        var receitaC = c.receitaC != null ? c.receitaC : Math.round((o.totalAmount || 0) * 100);
-        var liquidoC = c.receitaC != null ? c.receitaC + c.taxasSomaC : null;
+        var receitaC = c.vendaBrutaC != null ? c.vendaBrutaC : Math.round((o.totalAmount || 0) * 100);
+        var liquidoC = c.rendaFinalShopeeC;
         return { o: o, receitaC: receitaC, liquidoC: liquidoC };
       });
       var valor = linhas.reduce(function (s, l) { return s + l.receitaC; }, 0);
