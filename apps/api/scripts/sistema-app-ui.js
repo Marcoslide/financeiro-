@@ -487,7 +487,13 @@
     return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
   }
   function resolveSkuCost(sku, itemHint) { return resolveSkuCostByKey(normalizeSkuKey(sku), sku, itemHint); }
-  var SKU_MOTIVO_LABEL = { SKU_NAO_LOCALIZADO: 'SKU não localizado em Produtos', SEM_FAMILIA: 'Família não atribuída', FAMILIA_NAO_ENCONTRADA: 'Família referenciada não existe mais em Produtos', FAMILIA_SEM_CUSTO: 'Custo da família não informado', SKU_CONFLITANTE: 'Conflito de SKU — mais de um anúncio ATIVO usa o mesmo código', SKU_CONFLITANTE_HISTORICAL: 'Conflito de SKU — mais de um anúncio INATIVO usa o mesmo código, sem identificador para desempatar' };
+  // PROMPT "Liberar classificação de família para qualquer SKU/produto sem bloqueio": SKU não é chave
+  // única de negócio — qualquer SKU pode receber qualquer família manualmente, sem bloqueio. O único
+  // alerta (nunca bloqueio) é quando o MESMO código de SKU literal está cadastrado com famílias
+  // diferentes em anúncios distintos — nesse caso o custo desse SKU específico fica ambíguo até o
+  // operador escolher qual família deve prevalecer (o pedido, o cadastro e a classificação de família
+  // nunca são bloqueados por isso).
+  var SKU_MOTIVO_LABEL = { SKU_NAO_LOCALIZADO: 'SKU não localizado em Produtos', SEM_FAMILIA: 'Família não atribuída', FAMILIA_NAO_ENCONTRADA: 'Família referenciada não existe mais em Produtos', FAMILIA_SEM_CUSTO: 'Custo da família não informado', SKU_CONFLITANTE: 'Este SKU possui mais de uma família cadastrada. Escolha qual deve prevalecer.', SKU_CONFLITANTE_HISTORICAL: 'Este SKU possui mais de uma família cadastrada. Escolha qual deve prevalecer.' };
   var SKU_REGRA_LABEL = { STRONG_VARIATION_ID: 'Identificador de variação do pedido', ACTIVE_EXACT_SKU: 'SKU exato · anúncio ativo', ACTIVE_REFERENCE_SKU: 'SKU de referência · anúncio ativo', HISTORICAL_INACTIVE_MATCH: 'Correspondência histórica · anúncio inativo' };
   // §44/§59 do prompt "Correção Financeira": rótulos únicos para incomeResolve.status/statusFinanceiro,
   // usados na Ficha do Pedido — declarados no escopo do módulo (não dentro de openPedidoFicha360) para
