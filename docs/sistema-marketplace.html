@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 2236e86 · 2026-08-26 22:12 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build f2cbb5b · 2026-08-26 23:10 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -3940,6 +3940,12 @@ buffer/index.js:
   var skuAliasIndex = {}; // chave normalizada -> [{variationId, matchedBy:'SKU'|'REFERENCE_SKU'}] (todas as variações que reivindicam esta chave)
   var skuConflicts = {}; // chave normalizada -> true quando 2+ variações distintas reivindicam a mesma chave
   var skuVarById = {}, skuFamById = {}; // snapshot de Produtos no momento do último rebuildSkuCost()
+  // PROMPT "Família de Produto — classificação manual sempre vence": escolha EXPLÍCITA do usuário de
+  // qual família um texto de SKU (normalizado) deve usar — sobrescreve QUALQUER resolução automática,
+  // inclusive conflito entre variações distintas com o mesmo SKU. Nunca derivado, sempre persistido
+  // (chave normalizeSkuKey(sku) -> {id, skuKey, skuOriginal, familyId, setAt}). Independente de
+  // rebuildSkuCost() — não é reindexado, é dado do usuário.
+  var skuFamilyOverrides = {};
   var lastImportStamp = null; // "Atualizado com dados até…" (§31)
   var wallet = [];            // extrato da carteira (linhas SHOPEE; reconstruídas são calculadas)
   var walletCls = {};         // classificação INTERNA por id (separada do dado Shopee; preservada na reimportação) —
@@ -4214,7 +4220,7 @@ buffer/index.js:
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id', bankaccounts: 'id', companies: 'id', operations: 'id', cpheader: 'id', cpitems: 'id', cppayments: 'id', cpattach: 'id', cpcategories: 'id', cpaccounting: 'id', cpcostcenters: 'id', cpsuppliers: 'id', cpsupplylinks: 'id', pricingopconfig: 'id', pricingfamilyrules: 'id', financialaccounts: 'id', financialevents: 'id', crheader: 'id', crreceipts: 'id', financialtransfers: 'id', fatorfuncionarios: 'id', fatorcustosfixos: 'id', fatorcustosvariaveis: 'id', fatorpedidosnapshots: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id', bankaccounts: 'id', companies: 'id', operations: 'id', cpheader: 'id', cpitems: 'id', cppayments: 'id', cpattach: 'id', cpcategories: 'id', cpaccounting: 'id', cpcostcenters: 'id', cpsuppliers: 'id', cpsupplylinks: 'id', pricingopconfig: 'id', pricingfamilyrules: 'id', financialaccounts: 'id', financialevents: 'id', crheader: 'id', crreceipts: 'id', financialtransfers: 'id', fatorfuncionarios: 'id', fatorcustosfixos: 'id', fatorcustosvariaveis: 'id', fatorpedidosnapshots: 'id', skufamilyoverrides: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -4321,6 +4327,16 @@ buffer/index.js:
       skuCost[key] = { linked: true, cost: r.found ? r.cost : null, familyName: r.familyName || null };
       if (/^SKU_CONFLIT/.test(r.motivo || '')) skuConflicts[key] = true; // auditável via resolveSkuCost().motivo
     });
+    // PROMPT "Família de Produto — classificação manual sempre vence": um override pode existir para um
+    // SKU que nunca teve variação cadastrada em Produtos (skuAliasIndex não tem a chave) — o override
+    // sozinho já resolve o custo (ver resolveSkuCostByKeyRaw), então o cache legado skuCost também
+    // precisa refletir isso, senão telas que só leem skuCost[...] (nunca a fonte canônica) mostrariam
+    // "não vinculado" incorretamente.
+    Object.keys(skuFamilyOverrides).forEach(function (key) {
+      if (skuCost[key]) return;
+      var r = resolveSkuCostByKey(key, key);
+      skuCost[key] = { linked: r.found, cost: r.found ? r.cost : null, familyName: r.familyName || null };
+    });
   }
   // Função canônica de resolução — TODOS os módulos (Pedidos/orderFinance, Ficha do Pedido, Devolução,
   // Minha Renda, Caixa, Inteligência) devem chamar resolveSkuCost(), nunca ler skuCost[...] direto.
@@ -4351,6 +4367,21 @@ buffer/index.js:
   }
   function resolveSkuCostByKeyRaw(key, requestedSku, itemHint) {
     if (!key) return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
+    // PROMPT "Família de Produto — classificação manual sempre vence": PRIORIDADE 1 ABSOLUTA. Se o
+    // usuário já escolheu manualmente qual família este texto de SKU deve usar (skuFamilyOverrides),
+    // essa escolha VENCE SEMPRE — nunca reavalia candidatas, nunca reabre "conflito", nunca bloqueia,
+    // mesmo que existam 2+ variações distintas com famílias diferentes reivindicando o mesmo SKU. O
+    // usuário é a fonte da verdade; qualquer SKU pode receber qualquer família. Independe de o SKU
+    // sequer existir em Produtos (skuAliasIndex) — o override por si só já resolve o custo.
+    var override = skuFamilyOverrides[key];
+    if (override) {
+      var fOv = skuFamById[override.familyId];
+      if (fOv) {
+        if (fOv.currentCostAmount == null) return { found: false, requestedSku: requestedSku, familyId: fOv.id, familyName: fOv.name, motivo: 'FAMILIA_SEM_CUSTO', regra: 'MANUAL_OVERRIDE', overridden: true };
+        return { found: true, requestedSku: requestedSku, canonicalSku: requestedSku, familyId: fOv.id, familyName: fOv.name, cost: Number(fOv.currentCostAmount), regra: 'MANUAL_OVERRIDE', overridden: true };
+      }
+      // família escolhida foi excluída depois de cadastrada — nunca trava: cai para a resolução normal.
+    }
     var candidates = skuAliasIndex[key];
     if (!candidates || !candidates.length) return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
     function finalize(cand, regra) {
@@ -4404,6 +4435,31 @@ buffer/index.js:
     return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
   }
   function resolveSkuCost(sku, itemHint) { return resolveSkuCostByKey(normalizeSkuKey(sku), sku, itemHint); }
+  // PROMPT "Família de Produto — classificação manual sempre vence": CRUD do override manual de
+  // SKU→Família. id determinístico = a própria chave normalizada (nunca duplica registro pro mesmo
+  // SKU — salvar de novo apenas atualiza a escolha). Sempre chama rebuildSkuCost() ao final para que
+  // Pedidos/Ficha/Caixa/Minha Renda/Fator de Custo enxerguem a nova resolução imediatamente (mesmo
+  // motor de reindexação já usado por toda mudança de família/custo em Produtos).
+  function skuFamilyOverrideSave(skuRaw, familyId) {
+    var key = normalizeSkuKey(skuRaw);
+    if (!key || !familyId) return Promise.resolve();
+    var rec = { id: key, skuKey: key, skuOriginal: skuRaw, familyId: familyId, setAt: new Date().toISOString() };
+    skuFamilyOverrides[key] = rec;
+    return putMany('skufamilyoverrides', [rec]).then(function () { rebuildSkuCost(); return rec; });
+  }
+  function skuFamilyOverrideRemove(skuRaw) {
+    var key = normalizeSkuKey(skuRaw);
+    if (!key) return Promise.resolve();
+    delete skuFamilyOverrides[key];
+    return delOne('skufamilyoverrides', key).then(function () { rebuildSkuCost(); });
+  }
+  // <select> com todas as famílias cadastradas (qualquer uma pode ser escolhida para qualquer SKU —
+  // nunca filtra por "famílias já vinculadas a este produto"). Reaproveitado por pedidosSkuDiag() e
+  // openSkuCostDiag() — nunca duas listas de família divergentes na mesma tela de diagnóstico.
+  function familySelectOptionsHtml(selectedId) {
+    var fams = Object.values(skuFamById).sort(function (a, b) { return (a.name || '').localeCompare(b.name || ''); });
+    return '<option value="">— escolher família —</option>' + fams.map(function (f) { return '<option value="' + esc(f.id) + '"' + (f.id === selectedId ? ' selected' : '') + '>' + esc(f.name) + (f.currentCostAmount != null ? ' (' + brl(f.currentCostAmount) + ')' : ' (sem custo)') + '</option>'; }).join('');
+  }
   // PROMPT "Liberar classificação de família para qualquer SKU/produto sem bloqueio": SKU não é chave
   // única de negócio — qualquer SKU pode receber qualquer família manualmente, sem bloqueio. O único
   // alerta (nunca bloqueio) é quando o MESMO código de SKU literal está cadastrado com famílias
@@ -4411,7 +4467,7 @@ buffer/index.js:
   // operador escolher qual família deve prevalecer (o pedido, o cadastro e a classificação de família
   // nunca são bloqueados por isso).
   var SKU_MOTIVO_LABEL = { SKU_NAO_LOCALIZADO: 'SKU não localizado em Produtos', SEM_FAMILIA: 'Família não atribuída', FAMILIA_NAO_ENCONTRADA: 'Família referenciada não existe mais em Produtos', FAMILIA_SEM_CUSTO: 'Custo da família não informado', SKU_CONFLITANTE: 'Este SKU possui mais de uma família cadastrada. Escolha qual deve prevalecer.', SKU_CONFLITANTE_HISTORICAL: 'Este SKU possui mais de uma família cadastrada. Escolha qual deve prevalecer.' };
-  var SKU_REGRA_LABEL = { STRONG_VARIATION_ID: 'Identificador de variação do pedido', ACTIVE_EXACT_SKU: 'SKU exato · anúncio ativo', ACTIVE_REFERENCE_SKU: 'SKU de referência · anúncio ativo', HISTORICAL_INACTIVE_MATCH: 'Correspondência histórica · anúncio inativo' };
+  var SKU_REGRA_LABEL = { STRONG_VARIATION_ID: 'Identificador de variação do pedido', ACTIVE_EXACT_SKU: 'SKU exato · anúncio ativo', ACTIVE_REFERENCE_SKU: 'SKU de referência · anúncio ativo', HISTORICAL_INACTIVE_MATCH: 'Correspondência histórica · anúncio inativo', MANUAL_OVERRIDE: '🔒 Família escolhida manualmente pelo usuário', MULTIPLE_LISTINGS_SAME_FAMILY: 'Múltiplos anúncios · mesma família' };
   // §44/§59 do prompt "Correção Financeira": rótulos únicos para incomeResolve.status/statusFinanceiro,
   // usados na Ficha do Pedido — declarados no escopo do módulo (não dentro de openPedidoFicha360) para
   // ficarem disponíveis independente da ordem de montagem dos blocos dentro da função.
@@ -4823,6 +4879,15 @@ buffer/index.js:
         var resolvidos = before - after;
         toast('Custos recalculados', resolvidos > 0 ? (resolvidos + ' item(ns) passaram a ter custo resolvido · ' + after + ' ainda pendente(s) de ' + before + '.') : (after + ' item(ns) ainda sem custo — confira o motivo na tabela abaixo.'));
       };
+      app.querySelectorAll('[data-skufamapply]').forEach(function (b) {
+        b.onclick = function () {
+          var sku = b.dataset.skufamapply;
+          var sel = app.querySelector('[data-skufamsel="' + CSS.escape(sku) + '"]');
+          var familyId = sel ? sel.value : '';
+          if (!familyId) { toast('Escolha uma família', '', true); return; }
+          skuFamilyOverrideSave(sku, familyId).then(function () { render(); toast('Família aplicada a este SKU', 'Vale para todos os pedidos com este SKU — nunca mais bloqueado por conflito.'); });
+        };
+      });
     }
   }
   function bindPedidosDashboard() { var s = document.getElementById('peddashbasis'); if (s) s.onchange = function () { pedDashBasis = s.value; render(); }; }
@@ -6114,7 +6179,7 @@ buffer/index.js:
       var custoUnit = r.found ? r.cost : null;
       var custoTotal = custoUnit != null ? r2(custoUnit * it.qty) : null;
       var unitPrice = it.agreedPrice != null ? it.agreedPrice : (it.subtotal != null && it.qty ? r2(it.subtotal / it.qty) : null);
-      return { produto: it.productName, sku: it.sku, skuEncontrado: r.canonicalSku || null, variacao: it.variationName, familia: r.familyName || null, qty: it.qty, unitPrice: unitPrice, total: it.subtotal, custoUnit: custoUnit, custoTotal: custoTotal, linked: r.found, matchedBy: r.matchedBy, motivo: r.motivo };
+      return { produto: it.productName, sku: it.sku, skuEncontrado: r.canonicalSku || null, variacao: it.variationName, familia: r.familyName || null, qty: it.qty, unitPrice: unitPrice, total: it.subtotal, custoUnit: custoUnit, custoTotal: custoTotal, linked: r.found, matchedBy: r.matchedBy, motivo: r.motivo, overridden: !!r.overridden };
     }) : [];
     // §10 do prompt de correção de custo: "Forma do cruzamento" (SKU exato × SKU de referência) fica
     // discreta em tooltip no próprio SKU — só para auditoria, nunca um card extra. §14: cada falha usa
@@ -6128,7 +6193,10 @@ buffer/index.js:
           var SKU_MOTIVO_CURTO = { SKU_NAO_LOCALIZADO: 'não localizado', SEM_FAMILIA: 'sem família', FAMILIA_NAO_ENCONTRADA: 'família inexistente', FAMILIA_SEM_CUSTO: 'sem custo', SKU_CONFLITANTE: 'conflito', SKU_CONFLITANTE_HISTORICAL: 'conflito' };
           var skuEncontradoCell = r.linked ? '<span title="' + cruzTitle + '">' + esc(r.skuEncontrado || r.sku || '—') + (r.matchedBy === 'REFERENCE_SKU' ? ' <span class="tag info" style="font-size:10px" title="' + cruzTitle + '">via ref.</span>' : '') + '</span>' : '<span class="tag warn" title="' + cruzTitle + '">' + esc(SKU_MOTIVO_CURTO[r.motivo] || '—') + '</span>';
           var custoCell = r.custoUnit != null ? brl(r.custoUnit) : '<span class="tag warn" title="' + cruzTitle + '">' + esc(SKU_MOTIVO_LABEL[r.motivo] || 'sem custo') + '</span>';
-          var diagCell = r.linked ? '' : ' <button class="btn-sm" data-skucostdiag="' + esc(orderId) + '" style="margin-left:4px;padding:1px 6px;font-size:10px">Diagnóstico</button>';
+          // PROMPT "Família de Produto — classificação manual sempre vence": o botão de Diagnóstico
+          // precisa continuar acessível mesmo depois que o override resolve o custo (r.linked=true) —
+          // senão o usuário perde o único caminho de volta até "Remover classificação manual".
+          var diagCell = (r.linked && !r.overridden) ? '' : ' <button class="btn-sm" data-skucostdiag="' + esc(orderId) + '" style="margin-left:4px;padding:1px 6px;font-size:10px">' + (r.overridden ? '🔒 Manual' : 'Diagnóstico') + '</button>';
           return '<tr><td class="cell-text">' + esc(r.produto || '—') + '</td><td class="mono">' + esc(r.sku || '—') + '</td><td class="mono">' + skuEncontradoCell + diagCell + '</td><td>' + esc(r.variacao || '—') + '</td><td>' + esc(r.familia || '—') + '</td><td>' + nn(r.qty) + '</td><td class="nowrap">' + (r.unitPrice != null ? brl(r.unitPrice) : '—') + '</td><td class="nowrap">' + (r.total != null ? brl(r.total) : '—') + '</td><td class="nowrap">' + custoCell + '</td><td class="nowrap">' + (r.custoTotal != null ? brl(r.custoTotal) : '—') + '</td></tr>';
         }).join('') +
         '</tbody></table></div>' : '') +
@@ -6391,17 +6459,40 @@ buffer/index.js:
         kv('Custo unitário', it.custoUnitario != null ? brl(it.custoUnitario) : '—') +
         kv('Custo total do item', it.custoTotal != null ? brl(it.custoTotal) : '—') +
         kv('STATUS FINAL', SKU_FINAL_STATUS_LABEL[fs] || fs) +
+        // PROMPT "Família de Produto — classificação manual sempre vence": disponível SEMPRE (não só
+        // em conflito) — o usuário pode escolher qualquer família para qualquer SKU, a qualquer
+        // momento; a escolha nunca é bloqueada e vale para todos os pedidos com este mesmo SKU.
+        (it.skuPedido ? ('<div style="margin-top:8px;padding-top:8px;border-top:1px dashed #22304a">' +
+          (it.resolveResult && it.resolveResult.overridden ?
+            '<div class="footnote" style="margin-bottom:6px">🔒 Família escolhida manualmente pelo usuário para este SKU — vale para todos os pedidos, sempre.</div><button class="btn-sm" data-skufamremove="' + esc(it.skuPedido) + '">Remover classificação manual</button>' :
+            '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><select class="select sm" data-skufamsel2="' + esc(it.skuPedido) + '">' + familySelectOptionsHtml(it.familyId) + '</select><button class="btn-sm" data-skufamapply2="' + esc(it.skuPedido) + '">Aplicar a este SKU</button></div>') +
+          '</div>') : '') +
         '</div>';
     }).join('');
     var html = '<div class="modal" style="width:620px;max-height:82vh;overflow:auto"><div class="mh"><h3>Diagnóstico — custo do produto</h3><button class="x">&times;</button></div><div class="mbd">' +
       kv('Pedido', a.orderId) + kv('operationId', a.operationId || '(nenhum)') +
       (itemsHtml || '<div class="footnote">Pedido sem itens ou não localizado.</div>') +
-      '<div class="footnote" style="margin-top:8px">Resolver canônico: SKU exato ativo &gt; SKU de referência ativo &gt; SKU exato inativo &gt; SKU de referência inativo. Conflito entre duas ou mais candidatas do mesmo nível nunca escolhe uma arbitrariamente.</div>' +
+      '<div class="footnote" style="margin-top:8px">Resolver canônico: SKU exato ativo &gt; SKU de referência ativo &gt; SKU exato inativo &gt; SKU de referência inativo. Conflito entre duas ou mais candidatas do mesmo nível nunca escolhe uma arbitrariamente — mas a classificação manual do usuário (acima) sempre vence, sem bloqueio.</div>' +
       '</div></div>';
     o.innerHTML = html;
     o.onclick = function (e) { if (e.target === o) o.remove(); };
     document.body.appendChild(o);
     o.querySelector('.x').onclick = function () { o.remove(); };
+    o.querySelectorAll('[data-skufamapply2]').forEach(function (b) {
+      b.onclick = function () {
+        var sku = b.dataset.skufamapply2;
+        var sel = o.querySelector('[data-skufamsel2="' + CSS.escape(sku) + '"]');
+        var familyId = sel ? sel.value : '';
+        if (!familyId) { toast('Escolha uma família', '', true); return; }
+        skuFamilyOverrideSave(sku, familyId).then(function () { o.remove(); openSkuCostDiag(orderId); render(); toast('Família aplicada a este SKU', 'Vale para todos os pedidos com este SKU — nunca mais bloqueado por conflito.'); });
+      };
+    });
+    o.querySelectorAll('[data-skufamremove]').forEach(function (b) {
+      b.onclick = function () {
+        var sku = b.dataset.skufamremove;
+        skuFamilyOverrideRemove(sku).then(function () { o.remove(); openSkuCostDiag(orderId); render(); toast('Classificação manual removida', 'O SKU volta a ser resolvido automaticamente.'); });
+      };
+    });
   }
 
   // ---------- PÓS-VENDA ----------
@@ -10987,9 +11078,13 @@ buffer/index.js:
     // operador uma confirmação visível de que a família/custo recém-cadastrados em Produtos já
     // alcançam os pedidos existentes — reaproveita rebuildSkuCost() (mesmo motor do onChange de
     // Produtos), nunca um cálculo de custo paralelo.
+    // PROMPT "Família de Produto — classificação manual sempre vence": cada linha ganha um seletor de
+    // família + botão "Aplicar" — escolher aqui cria o override (skuFamilyOverrideSave) e resolve o
+    // custo para TODOS os pedidos que usam este mesmo texto de SKU de uma vez só (não é por pedido).
     return '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Pedidos com SKU não cruzado</h3><div style="display:flex;align-items:center;gap:10px"><span class="footnote" style="margin:0">' + nn(rows.length) + ' item(ns) no período selecionado</span><button class="btn-sm" id="skuRecalc">Recalcular custos dos pedidos</button></div></div><div class="pb">' +
-      (rows.length ? ('<div class="footnote" style="margin-bottom:8px">' + resumo + '</div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>SKU recebido em Pedidos</th><th>Produto</th><th>Variação</th><th>Existe como v.sku?</th><th>Existe como v.referenceSku?</th><th>Família</th><th>Custo</th><th>Motivo da falha</th></tr></thead><tbody>' +
-        rows.map(function (r) { return '<tr><td class="mono rowlink" data-open="' + esc(r.orderId) + '" style="cursor:pointer;text-decoration:underline">' + esc(r.orderId) + '</td><td class="mono">' + esc(r.sku) + '</td><td class="cell-text">' + esc(r.produto || '—') + '</td><td>' + esc(r.variacao || '—') + '</td><td>' + (r.existeSku ? '🟢 Sim' : '⚪ Não') + '</td><td>' + (r.existeRef ? '🟢 Sim' : '⚪ Não') + '</td><td>' + esc(r.familia || '—') + '</td><td>—</td><td><span class="tag warn">' + esc(SKU_MOTIVO_LABEL[r.motivo] || r.motivo) + '</span></td></tr>'; }).join('') +
+      (rows.length ? ('<div class="footnote" style="margin-bottom:8px">' + resumo + ' · Escolha manualmente a família de qualquer SKU abaixo — a escolha vale para todos os pedidos com este SKU e nunca é bloqueada por conflito.</div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>SKU recebido em Pedidos</th><th>Produto</th><th>Variação</th><th>Existe como v.sku?</th><th>Existe como v.referenceSku?</th><th>Família</th><th>Custo</th><th>Motivo da falha</th><th>Escolher família manualmente</th></tr></thead><tbody>' +
+        rows.map(function (r) { return '<tr><td class="mono rowlink" data-open="' + esc(r.orderId) + '" style="cursor:pointer;text-decoration:underline">' + esc(r.orderId) + '</td><td class="mono">' + esc(r.sku) + '</td><td class="cell-text">' + esc(r.produto || '—') + '</td><td>' + esc(r.variacao || '—') + '</td><td>' + (r.existeSku ? '🟢 Sim' : '⚪ Não') + '</td><td>' + (r.existeRef ? '🟢 Sim' : '⚪ Não') + '</td><td>' + esc(r.familia || '—') + '</td><td>—</td><td><span class="tag warn">' + esc(SKU_MOTIVO_LABEL[r.motivo] || r.motivo) + '</span></td>' +
+        '<td><div style="display:flex;gap:6px;align-items:center"><select class="select sm" data-skufamsel="' + esc(r.sku) + '">' + familySelectOptionsHtml(null) + '</select><button class="btn-sm" data-skufamapply="' + esc(r.sku) + '">Aplicar</button></div></td></tr>'; }).join('') +
         '</tbody></table></div>') : '<span class="tag ok">🟢 Todos os SKUs do período foram cruzados com Produtos.</span>') +
       '</div></div>';
   }
@@ -16280,14 +16375,14 @@ buffer/index.js:
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; pricingOpConfig = []; pricingFamilyRules = []; pontoEquilibrioCfg = {}; metaLucroCfg = {}; financialAccounts = []; financialEvents = []; contasReceber = []; crReceipts = []; financialTransfers = []; fatorFuncionarios = []; fatorCustosFixos = []; fatorCustosVariaveis = []; fatorPedidoSnapshots = []; fatorConfig = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; pricingOpConfig = []; pricingFamilyRules = []; pontoEquilibrioCfg = {}; metaLucroCfg = {}; financialAccounts = []; financialEvents = []; contasReceber = []; crReceipts = []; financialTransfers = []; fatorFuncionarios = []; fatorCustosFixos = []; fatorCustosVariaveis = []; fatorPedidoSnapshots = []; fatorConfig = {}; skuFamilyOverrides = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
   var opSelBtn = document.getElementById('op-selector'); if (opSelBtn) opSelBtn.onclick = function () { openOperationSelector(); };
 
   // Abre o banco; se falhar (corrompido/bloqueado/privado), ativa o modo em memória e SEGUE —
   // o sistema sempre carrega e Produtos sempre abre (só não salva). Nunca dead-end / tela branca.
   openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers'), getAll('bankaccounts'), getAll('companies'), getAll('operations'), getAll('cpheader'), getAll('cpitems'), getAll('cppayments'), getAll('cpattach'), getAll('cpcategories'), getAll('cpaccounting'), getAll('cpcostcenters'), getAll('cpsuppliers'), getAll('cpsupplylinks'), getAll('pricingopconfig'), getAll('pricingfamilyrules'), getAll('financialaccounts'), getAll('financialevents'), getAll('crheader'), getAll('crreceipts'), getAll('financialtransfers'), getAll('fatorfuncionarios'), getAll('fatorcustosfixos'), getAll('fatorcustosvariaveis'), getAll('fatorpedidosnapshots')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers'), getAll('bankaccounts'), getAll('companies'), getAll('operations'), getAll('cpheader'), getAll('cpitems'), getAll('cppayments'), getAll('cpattach'), getAll('cpcategories'), getAll('cpaccounting'), getAll('cpcostcenters'), getAll('cpsuppliers'), getAll('cpsupplylinks'), getAll('pricingopconfig'), getAll('pricingfamilyrules'), getAll('financialaccounts'), getAll('financialevents'), getAll('crheader'), getAll('crreceipts'), getAll('financialtransfers'), getAll('fatorfuncionarios'), getAll('fatorcustosfixos'), getAll('fatorcustosvariaveis'), getAll('fatorpedidosnapshots'), getAll('skufamilyoverrides')]);
   }).then(function (r) {
     orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
     wallet = r[5] || [];
@@ -16317,6 +16412,7 @@ buffer/index.js:
     financialAccounts = r[37] || []; financialEvents = r[38] || []; contasReceber = r[39] || []; crReceipts = r[40] || []; financialTransfers = r[41] || [];
     fatorFuncionarios = r[42] || []; fatorCustosFixos = r[43] || []; fatorCustosVariaveis = r[44] || []; fatorPedidoSnapshots = r[45] || [];
     var fatorCfgRow = settings.filter(function (x) { return x.id === 'fatorConfig'; })[0]; if (fatorCfgRow && fatorCfgRow.data) fatorConfig = fatorCfgRow.data;
+    skuFamilyOverrides = {}; (r[46] || []).forEach(function (ov) { skuFamilyOverrides[ov.skuKey] = ov; });
     var activeSetting = settings.filter(function (x) { return x.id === 'activeOperationId'; })[0];
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
     plans = (r[4] || []).map(function (p) { if (PLAN_MIGR[p.status]) p.status = PLAN_MIGR[p.status]; if (p.scopeSkus == null && p.relatedSkus) p.scopeSkus = p.relatedSkus; if (p.indicatorKind == null) p.indicatorKind = 'liquido'; return p; });
