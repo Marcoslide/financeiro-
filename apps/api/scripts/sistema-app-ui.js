@@ -744,7 +744,14 @@
   function dashboardFunil() {
     var vendidos = pedidosPagosInPeriod();
     var aEnviar = vendidos.filter(function (o) { return o.normalizedStatus === 'A_ENVIAR'; });
-    var bipados = vendidos.filter(function (o) { return !!shipBip[o.id]; });
+    // PROMPT "Fase de correção geral pós-auditoria E2E" §Fase 2: "Foi expedido: 0" mesmo com dados
+    // reais — causa raiz era usar shipBip[o.id] direto (só bipe manual interno), ignorando pedidos
+    // Full/FBS (confirmados por STATUS da Shopee, nunca bipados fisicamente). expedidoSet() já é a
+    // "Definição única de 'expedido' — usada em toda parte que precisa saber 'isto já saiu?' —
+    // Expedição, Tempo de Envio e o cruzamento com o Acelera" (ver comentário de pedidoExpedidoInfo)
+    // — o funil do Dashboard só não estava reaproveitando essa definição canônica.
+    var expSet = expedidoSet();
+    var bipados = vendidos.filter(function (o) { return !!expSet[o.id]; });
     var acPedidosSet = {}; acelera.forEach(function (r) { acPedidosSet[r.pedido] = true; });
     var antecipados = bipados.filter(function (o) { return acPedidosSet[o.id]; });
     var recebidos = antecipados.filter(function (o) {
@@ -809,7 +816,18 @@
     if (sub.pedidos === 'pedidos') bindPedidosList();
     if (sub.pedidos === 'expedicao' || sub.pedidos === 'tempoenvio') bindPedidosExpedicao();
     if (sub.pedidos === 'dashboard') bindPedidosDashboard();
-    if (sub.pedidos === 'import') app.querySelectorAll('[data-open]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.open); }; });
+    if (sub.pedidos === 'import') {
+      app.querySelectorAll('[data-open]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.open); }; });
+      var skuRecalcBtn = document.getElementById('skuRecalc');
+      if (skuRecalcBtn) skuRecalcBtn.onclick = function () {
+        var before = pedidosSkuUnresolvedCount();
+        rebuildSkuCost();
+        var after = pedidosSkuUnresolvedCount();
+        render();
+        var resolvidos = before - after;
+        toast('Custos recalculados', resolvidos > 0 ? (resolvidos + ' item(ns) passaram a ter custo resolvido · ' + after + ' ainda pendente(s) de ' + before + '.') : (after + ' item(ns) ainda sem custo — confira o motivo na tabela abaixo.'));
+      };
+    }
   }
   function bindPedidosDashboard() { var s = document.getElementById('peddashbasis'); if (s) s.onchange = function () { pedDashBasis = s.value; render(); }; }
   // ---------- Expedição / Bipe (§1 do prompt de reorganização): "vendido" ≠ "expedido" ----------
@@ -6654,6 +6672,14 @@
   function panelImports() { return '<div class="panel"><div class="ph"><h3>Importações recentes</h3><span class="footnote" style="margin:0">' + batches.length + '</span></div><div class="table-wrap"><table><thead><tr><th>Módulo</th><th>Arquivo</th><th>Registros</th><th>Novos</th><th>Atualizados</th><th>Sem alteração</th><th>Data</th></tr></thead><tbody>' + (batches.length ? batches.slice(0, 20).map(impRow).join('') : '<tr><td colspan="7" class="empty">Nenhuma importação ainda.</td></tr>') + '</tbody></table></div></div>'; }
   function importsFor(mod) { var list = batches.filter(function (b) { return b.module.indexOf(mod) === 0; }); return '<div class="panel"><div class="ph"><h3>Histórico de importações — ' + esc(mod) + '</h3></div><div class="table-wrap"><table><thead><tr><th>Arquivo</th><th>Registros</th><th>Novos</th><th>Atualizados</th><th>Sem alteração</th><th>Período</th><th>Data</th></tr></thead><tbody>' + (list.length ? list.map(function (b) { return '<tr><td>' + esc(b.filename) + '</td><td>' + nn(b.seen) + (b.itemsSeen ? ' <span class="footnote">(' + nn(b.itemsSeen) + ' itens)</span>' : '') + '</td><td>' + nn(b.novo) + '</td><td>' + nn(b.upd) + '</td><td>' + nn(b.unch || 0) + '</td><td class="footnote">' + (b.periodStart ? dbr(b.periodStart) + '–' + dbr(b.periodEnd) : '—') + '</td><td class="footnote">' + new Date(b.createdAt).toLocaleString('pt-BR') + '</td></tr>'; }).join('') : '<tr><td colspan="7" class="empty">Nenhuma importação neste módulo.</td></tr>') + '</tbody></table></div></div>'; }
   function impRow(b) { return '<tr><td>' + esc(b.module) + '</td><td>' + esc(b.filename) + '</td><td>' + nn(b.seen) + '</td><td>' + nn(b.novo) + '</td><td>' + nn(b.upd) + '</td><td>' + nn(b.unch || 0) + '</td><td class="footnote">' + new Date(b.createdAt).toLocaleString('pt-BR') + '</td></tr>'; }
+  // Conta, em TODOS os pedidos (não só o período em tela), quantos itens com SKU ainda não resolvem
+  // custo — usado pela ação "Recalcular custos dos pedidos" para mostrar quantos itens passaram a
+  // resolver depois de um cadastro/alteração de família/custo em Produtos.
+  function pedidosSkuUnresolvedCount() {
+    var n = 0;
+    orders.forEach(function (o) { (o.items || []).forEach(function (it) { if (it.sku && !resolveSkuCost(it.sku).found) n++; }); });
+    return n;
+  }
   // §13 do prompt "custo de produtos não chega em Pedidos": diagnóstico determinístico — prova, item a
   // item, por que cada pedido não recebeu custo (nunca um "custo pendente" genérico). Some ao índice
   // canônico (resolveSkuCost/skuAliasIndex) — não recalcula nada, só expõe o motivo já resolvido.
@@ -6673,7 +6699,13 @@
     });
     var motivoCount = {}; rows.forEach(function (r) { motivoCount[r.motivo] = (motivoCount[r.motivo] || 0) + 1; });
     var resumo = Object.keys(motivoCount).map(function (m) { return esc(SKU_MOTIVO_LABEL[m] || m) + ': <b>' + motivoCount[m] + '</b>'; }).join(' · ');
-    return '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Pedidos com SKU não cruzado</h3><span class="footnote" style="margin:0">' + nn(rows.length) + ' item(ns) no período selecionado</span></div><div class="pb">' +
+    // PROMPT "Fase de correção geral pós-auditoria E2E" §Fase 1.3: ação "Recalcular custos dos
+    // pedidos" — resolveSkuCost já é chamado AO VIVO (nunca cacheado) em toda leitura de custo, então
+    // tecnicamente não existe valor "desatualizado" pra recalcular; o botão existe para dar ao
+    // operador uma confirmação visível de que a família/custo recém-cadastrados em Produtos já
+    // alcançam os pedidos existentes — reaproveita rebuildSkuCost() (mesmo motor do onChange de
+    // Produtos), nunca um cálculo de custo paralelo.
+    return '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Pedidos com SKU não cruzado</h3><div style="display:flex;align-items:center;gap:10px"><span class="footnote" style="margin:0">' + nn(rows.length) + ' item(ns) no período selecionado</span><button class="btn-sm" id="skuRecalc">Recalcular custos dos pedidos</button></div></div><div class="pb">' +
       (rows.length ? ('<div class="footnote" style="margin-bottom:8px">' + resumo + '</div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>SKU recebido em Pedidos</th><th>Produto</th><th>Variação</th><th>Existe como v.sku?</th><th>Existe como v.referenceSku?</th><th>Família</th><th>Custo</th><th>Motivo da falha</th></tr></thead><tbody>' +
         rows.map(function (r) { return '<tr><td class="mono rowlink" data-open="' + esc(r.orderId) + '" style="cursor:pointer;text-decoration:underline">' + esc(r.orderId) + '</td><td class="mono">' + esc(r.sku) + '</td><td class="cell-text">' + esc(r.produto || '—') + '</td><td>' + esc(r.variacao || '—') + '</td><td>' + (r.existeSku ? '🟢 Sim' : '⚪ Não') + '</td><td>' + (r.existeRef ? '🟢 Sim' : '⚪ Não') + '</td><td>' + esc(r.familia || '—') + '</td><td>—</td><td><span class="tag warn">' + esc(SKU_MOTIVO_LABEL[r.motivo] || r.motivo) + '</span></td></tr>'; }).join('') +
         '</tbody></table></div>') : '<span class="tag ok">🟢 Todos os SKUs do período foram cruzados com Produtos.</span>') +
