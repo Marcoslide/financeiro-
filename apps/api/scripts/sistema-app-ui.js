@@ -4370,14 +4370,14 @@
   function walletOrigemPanel(m) {
     var g = walletOrigemDiag(m);
     if (!g.elegiveis) return '';
-    var strip = kstrip([
-      { l: '🟢 Origem conciliada (ID exato, fonte definitiva)', v: nn(g.conciliados.length), cls: 'green' },
-      { l: '🔴 Diferença de valor (ID exato, fonte definitiva)', v: nn(g.divergentes.length), cls: g.divergentes.length ? 'red' : 'green' },
-      { l: '🔵 Candidato provável (valor+data) — confirmar', v: nn(g.candidatos.length), cls: g.candidatos.length ? 'blue' : '', s: 'nunca fecha sozinho — exige confirmação manual' },
-      { l: '🟡 Correspondência com estimativa (Devolução/Compensação)', v: nn(g.estimativa.length), cls: 'amber', s: 'valor solicitado, ainda provisório até a baixa — nunca contado como divergência' },
-      { l: '⚪ Pendência real (dentro da janela coberta)', v: nn(g.semOrigem.length), cls: g.semOrigem.length ? 'amber' : 'green' },
-      { l: '⚫ Fora da cobertura de conciliação', v: nn(g.foraCobertura.length), cls: '', s: 'fonte relevante ainda não importou dado para esse período — não é pendência' },
-      { l: '🔴 Possível duplicidade', v: nn(g.dup.length), cls: g.dup.length ? 'red' : 'green' },
+    var strip = MetricGrid([
+      MetricCard({ label: '🟢 Origem conciliada (ID exato, fonte definitiva)', value: nn(g.conciliados.length), cls: 'green' }),
+      MetricCard({ label: '🔴 Diferença de valor (ID exato, fonte definitiva)', value: nn(g.divergentes.length), cls: g.divergentes.length ? 'red' : 'green' }),
+      MetricCard({ label: '🔵 Candidato provável (valor+data) — confirmar', value: nn(g.candidatos.length), cls: g.candidatos.length ? 'blue' : '', sub: 'nunca fecha sozinho — exige confirmação manual' }),
+      MetricCard({ label: '🟡 Correspondência com estimativa (Devolução/Compensação)', value: nn(g.estimativa.length), cls: 'amber', sub: 'valor solicitado, ainda provisório até a baixa — nunca contado como divergência' }),
+      MetricCard({ label: '⚪ Pendência real (dentro da janela coberta)', value: nn(g.semOrigem.length), cls: g.semOrigem.length ? 'amber' : 'green' }),
+      MetricCard({ label: '⚫ Fora da cobertura de conciliação', value: nn(g.foraCobertura.length), cls: '', sub: 'fonte relevante ainda não importou dado para esse período — não é pendência' }),
+      MetricCard({ label: '🔴 Possível duplicidade', value: nn(g.dup.length), cls: g.dup.length ? 'red' : 'green' }),
     ]);
     var covLine = Object.keys(g.coverage).map(function (k) { var c = g.coverage[k]; return c ? (wcatLabel(k) + ': ' + dbr(c.min.toISOString()) + ' a ' + dbr(c.max.toISOString())) : (wcatLabel(k) + ': sem dado importado ainda'); }).filter(function (v, i, a) { return a.indexOf(v) === i; }).join(' · ');
     var divRows = g.divergentes.slice(0, 100).map(function (x) { return '<tr class="rowlink" data-wtx="' + esc(x.t.id) + '"><td class="nowrap">' + dbr(x.t.date) + '</td><td class="cell-text">' + esc(x.origin.fonte) + '</td><td class="nowrap">' + brl(x.origin.esperado) + '</td><td class="nowrap">' + brl(x.t.amount) + '</td><td class="nowrap neg">' + brl(x.origin.diff) + '</td></tr>'; }).join('');
@@ -4431,8 +4431,8 @@
       'A Shopee informa o saldo final de <b>' + brl(m.saldoAtual) + '</b>; somando saldo anterior + cada movimentação, o sistema reconstrói o mesmo valor — ' + (conferido ? 'e bate integralmente neste período.' : '<b>' + nn(abertas.length) + '</b> diferença(s) ainda sem explicação.') + ' Isso é distinto de <b>origem financeira identificada</b>: o saldo pode fechar matematicamente mesmo com lançamentos cuja origem (pedido/resgate) ainda não foi encontrada — é exatamente isso que a tabela abaixo lista.');
     var counts = {}; items.forEach(function (it) { counts[it.tipo] = (counts[it.tipo] || 0) + 1; });
     var stCounts = {}; items.forEach(function (it) { var s = wStatus(it.t); stCounts[s] = (stCounts[s] || 0) + 1; });
-    var strip = kstrip([{ l: 'Total a investigar', v: nn(items.length), cls: items.length ? 'red' : 'green' }].concat(Object.keys(WPROBLEMA).map(function (k) { return { l: WPROBLEMA[k], v: nn(counts[k] || 0), cls: counts[k] ? 'amber' : '' }; })).concat([{ l: 'Já resolvidas', v: nn(stCounts.RESOLVIDO || 0) + nn(stCounts.EXPLICADO || 0), cls: 'green' }]));
-    var head = secHead('CARTEIRA · CONFERÊNCIA', 'O que ainda precisa de investigação', 'Junta tudo que a conciliação automática não fechou sozinha — diferença de valor, duplicação, candidato a confirmar, origem não identificada e ajuste sem linha — num único lugar, com o Pedido sempre visível e ação sem sair da tela.') + conf;
+    var strip = MetricGrid([MetricCard({ label: 'Total a investigar', value: nn(items.length), cls: items.length ? 'red' : 'green' })].concat(Object.keys(WPROBLEMA).map(function (k) { return MetricCard({ label: WPROBLEMA[k], value: nn(counts[k] || 0), cls: counts[k] ? 'amber' : '' }); })).concat([MetricCard({ label: 'Já resolvidas', value: nn(stCounts.RESOLVIDO || 0) + nn(stCounts.EXPLICADO || 0), cls: 'green' })]));
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'CARTEIRA · CONFERÊNCIA', title: 'O que ainda precisa de investigação', description: 'Junta tudo que a conciliação automática não fechou sozinha — diferença de valor, duplicação, candidato a confirmar, origem não identificada e ajuste sem linha — num único lugar, com o Pedido sempre visível e ação sem sair da tela.' }) + conf;
     var toolbar = '<div class="toolbar2" style="margin-top:8px">' +
       '<select class="select sm" id="cfrtipo"><option value="">Problema: todos</option>' + Object.keys(WPROBLEMA).map(function (k) { return '<option value="' + k + '"' + (walletPendF.tipo === k ? ' selected' : '') + '>' + WPROBLEMA[k] + ' (' + nn(counts[k] || 0) + ')</option>'; }).join('') + '</select>' +
       '<select class="select sm" id="cfrst"><option value="">Situação: todas</option>' + Object.keys(WSTATUS).map(function (k) { return '<option value="' + k + '"' + (walletPendF.status === k ? ' selected' : '') + '>' + WSTATUS[k] + ' (' + nn(stCounts[k] || 0) + ')</option>'; }).join('') + '</select>' +
@@ -4497,7 +4497,7 @@
   // mas não é mais chamada "fechamento" para não sugerir um segundo encerramento oficial do dia.
   function walletFechamento() {
     var days = {}; wallet.forEach(function (t) { if (t.date && t.origin === 'SHOPEE') days[walletLocalDayKey(t)] = 1; });
-    var head = secHead('CARTEIRA · CONFERÊNCIA DE EXTRATO', 'Conferência diária do saldo', 'Para cada dia: veja operação, Acelera, movimentação da carteira e conciliação de SALDO juntos — feche quando estiver tudo certo, ou feche com pendências e justifique.') +
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'CARTEIRA · CONFERÊNCIA DE EXTRATO', title: 'Conferência diária do saldo', description: 'Para cada dia: veja operação, Acelera, movimentação da carteira e conciliação de SALDO juntos — feche quando estiver tudo certo, ou feche com pendências e justifique.' }) +
       callout('', 'O fechamento diário oficial é o Caixa', 'Esta tela confere o saldo/extrato da Carteira — não é mais o encerramento oficial do dia. Para fechar o dia (vendas, expedição, Acelera, pendências e DRE), use o menu <b>Caixa → Fechamento Diário</b>.');
     if (!Object.keys(days).length) return head + emptyBox('Nenhuma movimentação real (Shopee) importada ainda.');
     var list = Object.keys(days).sort().reverse().slice(0, 60).map(function (dk) { return walletDayStatus(dk); });
@@ -4505,11 +4505,11 @@
     var comPend = list.filter(function (x) { return x.status === 'FECHADO_COM_PENDENCIAS'; }).length;
     var fechados = list.filter(function (x) { return x.status === 'FECHADO'; }).length;
     var revisao = list.filter(function (x) { return x.status === 'REVISAO_NECESSARIA'; }).length;
-    var strip = kstrip([
-      { l: 'Dias fechados', v: nn(fechados), cls: 'green' },
-      { l: 'Dias fechados com pendências', v: nn(comPend), cls: comPend ? 'amber' : 'green' },
-      { l: 'Dias ainda não revisados (aberto)', v: nn(abertos), cls: abertos ? 'blue' : 'green' },
-      { l: 'Precisam revisão (movimento novo)', v: nn(revisao), cls: revisao ? 'red' : 'green' },
+    var strip = MetricGrid([
+      MetricCard({ label: 'Dias fechados', value: nn(fechados), cls: 'green' }),
+      MetricCard({ label: 'Dias fechados com pendências', value: nn(comPend), cls: comPend ? 'amber' : 'green' }),
+      MetricCard({ label: 'Dias ainda não revisados (aberto)', value: nn(abertos), cls: abertos ? 'blue' : 'green' }),
+      MetricCard({ label: 'Precisam revisão (movimento novo)', value: nn(revisao), cls: revisao ? 'red' : 'green' }),
     ]);
     var rows = list.map(function (x) {
       var dm = x.dm, rec = x.rec; var lbl = CLOSE_LABEL[x.status];
@@ -4626,7 +4626,7 @@
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + [['visao', 'Visão Geral'], ['mov', 'Movimentações'], ['conferencia', 'Conferência'], ['fechamento', 'Conferência de Extrato']].map(function (t) { return '<div class="subtab' + (walletSub === t[0] ? ' active' : '') + '" data-wsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-wimport="1">Importar extrato</button></div><div id="wbody" style="margin-top:14px"></div>';
     var body = document.getElementById('wbody');
     try {
-      if (!wallet.length) body.innerHTML = secHead('SALDO DA CARTEIRA', 'Saldo da Carteira', 'Mostrar, medir, rastrear e reconciliar tudo que acontece no saldo da Shopee.') + emptyBox('Nenhum extrato importado. Clique em “Importar extrato” para carregar o relatório de transações do saldo Shopee.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="wimp">Importar extrato</button></div>';
+      if (!wallet.length) body.innerHTML = PageHeader({ variant: 'eyebrow', eyebrow: 'SALDO DA CARTEIRA', title: 'Saldo da Carteira', description: 'Mostrar, medir, rastrear e reconciliar tudo que acontece no saldo da Shopee.' }) + emptyBox('Nenhum extrato importado. Clique em “Importar extrato” para carregar o relatório de transações do saldo Shopee.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="wimp">Importar extrato</button></div>';
       else if (walletSub === 'mov') body.innerHTML = walletMov();
       else if (walletSub === 'conferencia' || walletSub === 'ajustes' || walletSub === 'pendencias') body.innerHTML = walletConferencia();
       else if (walletSub === 'fechamento') body.innerHTML = walletFechamento();
@@ -4640,6 +4640,7 @@
     app.querySelectorAll('[data-wtx]').forEach(function (b) { b.onclick = function () { openWalletTx(b.dataset.wtx); }; });
     app.querySelectorAll('[data-wcat]').forEach(function (b) { b.onclick = function () { walletF = { search: '', cat: b.dataset.wcat, flow: '', sig: '' }; walletSub = 'mov'; render(); }; });
     app.querySelectorAll('[data-wflowgo]').forEach(function (b) { b.onclick = function () { walletF = { search: '', cat: '', flow: b.dataset.wflowgo, sig: '' }; walletSub = 'mov'; render(); }; });
+    bindMetricCards(app, { drill: function (action) { walletF = { search: '', cat: '', flow: action, sig: '' }; walletSub = 'mov'; render(); } });
     app.querySelectorAll('[data-wsig]').forEach(function (b) { b.onclick = function () { walletF = { search: '', cat: '', flow: '', sig: b.dataset.wsig }; walletSub = 'mov'; render(); }; });
     app.querySelectorAll('[data-wgo]').forEach(function (b) { b.onclick = function () { walletSub = b.dataset.wgo; render(); }; });
     if (walletSub === 'mov') bindWalletMov();
@@ -4651,17 +4652,17 @@
     var totalSaiAbs = Math.abs(g.totalSai) || 1;
     // BLOCO 1 — Situação + conferência Shopee × Sistema
     var conferido = g.divergentes.length === 0;
-    var band = kstrip([
-      { l: 'Saldo Shopee', v: brl(m.saldoAtual), cls: m.saldoAtual < 0 ? 'red' : 'blue', s: 'último do extrato' },
+    var band = MetricGrid([
+      MetricCard({ label: 'Saldo Shopee', value: brl(m.saldoAtual), cls: m.saldoAtual < 0 ? 'red' : 'blue', sub: 'último do extrato' }),
       // Refatoração M2 (auditoria de arquitetura §Carteira): o card "Saldo reconstruído" mostrava
       // literalmente o mesmo campo m.saldoAtual do card anterior — não existe, em walletMetrics(),
       // nenhum saldo somado independentemente a partir das transações (a reconciliação real produz
       // divergências por transação em m.diffs, não um total alternativo). Removido para não sugerir
       // uma segunda fonte de verdade que não existe — "Diferença" abaixo já comunica a divergência real.
-      { l: 'Diferença', v: conferido ? 'R$ 0,00' : nn(g.divergentes.length) + ' aberta(s)', cls: conferido ? 'green' : 'red' },
-      { l: 'Valor a ser ajustado', v: brl(m.ajusteAtual), cls: 'amber', s: 'snapshot (não somar)' },
-      { l: 'Entradas', v: brl(m.entradas), cls: 'green', s: nn(m.entN) + ' créditos' },
-      { l: 'Saídas', v: brl(m.saidas), cls: 'red', s: nn(m.saiN) + ' débitos' },
+      MetricCard({ label: 'Diferença', value: conferido ? 'R$ 0,00' : nn(g.divergentes.length) + ' aberta(s)', cls: conferido ? 'green' : 'red' }),
+      MetricCard({ label: 'Valor a ser ajustado', value: brl(m.ajusteAtual), cls: 'amber', sub: 'snapshot (não somar)' }),
+      MetricCard({ label: 'Entradas', value: brl(m.entradas), cls: 'green', sub: nn(m.entN) + ' créditos' }),
+      MetricCard({ label: 'Saídas', value: brl(m.saidas), cls: 'red', sub: nn(m.saiN) + ' débitos' }),
     ]);
     var conf = callout(conferido ? 'green' : 'warn', conferido ? '✓ Saldo conferido' : '⚠ Há movimentação a explicar', 'Shopee informa <b>' + brl(m.saldoAtual) + '</b> · sistema reconstruiu <b>' + brl(m.saldoAtual) + '</b>' + (conferido ? ' — a matemática bate. ' : ' — ') + (m.reconstructed.length ? '<b>' + nn(m.reconstructed.length) + '</b> movimentação(ões) sem linha foram reconstruídas (líquido ' + brl(m.semLinha) + ').' : '') + (conferido ? '' : ' <b>' + nn(g.divergentes.length) + '</b> diferença(s) ainda sem explicação — ver Ajustes e Divergências.'));
     // BLOCO 2 — Onde está saindo o dinheiro
@@ -4677,9 +4678,9 @@
       '<div class="fin-line"><span>Sem devolução encontrada</span><b>' + nn(g.devSemOcc) + '</b></div></div></div>' +
       '<div class="panel"><div class="ph"><h3>Responsabilidade das devoluções</h3><span class="footnote" style="margin:0">do módulo Devoluções</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Responsabilidade</th><th>Casos</th><th>Descontado</th></tr></thead><tbody>' + (g.resps.length ? g.resps.map(respRow).join('') : '<tr><td colspan="3" class="empty">Sem devoluções com débito.</td></tr>') + '</tbody></table></div></div></div>';
     // BLOCO 4 — Rastreamento
-    var trk = function (label, o, flow) { return '<div class="kc" style="cursor:pointer" data-wflowgo="' + flow + '"><div class="kl">' + label + '</div><div class="kv" style="font-size:16px">' + nn(o.n) + '</div><div class="ks">' + brl(o.v) + '</div></div>'; };
+    var trk = function (label, o, flow) { return MetricCard({ label: label, value: '<span style="font-size:16px">' + nn(o.n) + '</span>', sub: brl(o.v), drill: { action: flow, label: label } }); };
     var totSaiN = g.comPedido.n + g.semPedido.n || 1;
-    var bloco4 = '<div class="panel"><div class="ph"><h3>Rastreamento dos descontos</h3><span class="footnote" style="margin:0">' + pct(r2(g.comPedido.n / totSaiN * 100)) + ' com pedido · ' + pct(r2(g.comDev.n / totSaiN * 100)) + ' com devolução</span></div><div class="pb"><div class="kstrip" style="box-shadow:none;border:none">' + trk('Ligados a pedido', g.comPedido, 'pedido') + trk('Ligados a devolução', g.comDev, 'devolucao') + trk('Sem pedido', g.semPedido, 'sempedido') + trk('Sem categoria', g.semCat, 'semcat') + trk('Precisam de análise', g.precisa, 'precisa') + '</div></div></div>';
+    var bloco4 = '<div class="panel"><div class="ph"><h3>Rastreamento dos descontos</h3><span class="footnote" style="margin:0">' + pct(r2(g.comPedido.n / totSaiN * 100)) + ' com pedido · ' + pct(r2(g.comDev.n / totSaiN * 100)) + ' com devolução</span></div><div class="pb">' + MetricGrid([trk('Ligados a pedido', g.comPedido, 'pedido'), trk('Ligados a devolução', g.comDev, 'devolucao'), trk('Sem pedido', g.semPedido, 'sempedido'), trk('Sem categoria', g.semCat, 'semcat'), trk('Precisam de análise', g.precisa, 'precisa')]) + '</div></div>';
     // BLOCO 5 — Recorrentes
     var recRow = function (rp) { var un = rp.unclass > 0; return '<tr class="rowlink" data-wsig="' + esc(rp.sig) + '"><td class="cell-text">' + esc((rp.sample || rp.sig).slice(0, 60)) + (un ? ' <span class="tag warn">sem classe</span>' : '') + '</td><td>' + nn(rp.n) + '</td><td class="neg"><b>' + brl(rp.total) + '</b></td><td>' + esc(wcatLabel(rp.domCat)) + '</td><td class="footnote" style="margin:0">' + dbr(rp.last) + '</td></tr>'; };
     var bloco5 = g.recurring.length ? '<div class="panel"><div class="ph"><h3>Descontos recorrentes</h3><span class="footnote" style="margin:0">padrões repetidos (id/valor/data normalizados)</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Padrão</th><th>Ocorrências</th><th>Total</th><th>Categoria</th><th>Última vez</th></tr></thead><tbody>' + g.recurring.slice(0, 10).map(recRow).join('') + '</tbody></table></div></div>' : '';
@@ -4694,7 +4695,7 @@
     var series = walletSaldoSeries();
     var chart = chartCard('Fluxo da carteira — evolução do saldo', legendSwatch([['Saldo', '#2b4bd6'], ['Valor a ajustar', '#e0662a']]), svgWalletLine(series, { two: true }));
     var origemPanel = walletOrigemPanel(m);
-    return secHead('SALDO DA CARTEIRA', 'Raio-X da carteira', 'Onde o dinheiro está vazando: quanto, quantas vezes, por quê, em quais pedidos, de quem é a responsabilidade e o que ainda não conseguimos explicar.') +
+    return PageHeader({ variant: 'eyebrow', eyebrow: 'SALDO DA CARTEIRA', title: 'Raio-X da carteira', description: 'Onde o dinheiro está vazando: quanto, quantas vezes, por quê, em quais pedidos, de quem é a responsabilidade e o que ainda não conseguimos explicar.' }) +
       band + conf + bloco2 + bloco3 + bloco4 + bloco5 + bloco6 + chart + origemPanel;
   }
   var WFLOW_LABEL = { pedido: 'Ligados a um pedido', devolucao: 'Ligados a uma devolução', sempedido: 'Saídas sem pedido', semcat: 'Saídas sem categoria', precisa: 'Precisam de análise' };
@@ -4720,7 +4721,7 @@
     var slice = txs.slice(0, 400);
     var special = (WFLOW_LABEL[fl] ? fl : '') || (walletF.sig ? 'sig' : '');
     var banner = special ? callout('', 'Filtro do Raio-X', (walletF.sig ? 'Mostrando o padrão recorrente: <b>' + esc((walletF.sig || '').slice(0, 60)) + '</b>.' : 'Mostrando: <b>' + esc(WFLOW_LABEL[fl]) + '</b>.') + ' <button class="link-btn" id="wclearsp">limpar filtro</button>') : '';
-    return secHead('CARTEIRA · MOVIMENTAÇÕES', 'Movimentações', 'Rastreie cada valor: de onde veio, para onde foi, qual pedido, de quem é a responsabilidade e se o saldo fecha. Clique em “Classificar” para corrigir a categoria e definir a responsabilidade — sem alterar o dado da Shopee.') +
+    return PageHeader({ variant: 'eyebrow', eyebrow: 'CARTEIRA · MOVIMENTAÇÕES', title: 'Movimentações', description: 'Rastreie cada valor: de onde veio, para onde foi, qual pedido, de quem é a responsabilidade e se o saldo fecha. Clique em “Classificar” para corrigir a categoria e definir a responsabilidade — sem alterar o dado da Shopee.' }) +
       banner +
       '<div class="chips">' + flows.map(function (c) { return '<span class="chip' + (walletF.flow === c[0] ? ' chip-on' : '') + '" data-wflow="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
       '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="wq" style="width:280px" placeholder="Buscar pedido, descrição, valor, categoria ou responsável…" value="' + esc(walletF.search) + '"><select class="select sm" id="wcatsel">' + cats.map(function (c) { return '<option value="' + c[0] + '"' + (walletF.cat === c[0] ? ' selected' : '') + '>' + c[1] + '</option>'; }).join('') + '</select>' + (walletF.cat || walletF.flow || walletF.search || walletF.sig ? '<button class="link-btn" id="wclear">limpar tudo</button>' : '') + '</div>' +
@@ -4819,8 +4820,6 @@
   function openWalletTx(id, onDone) {
     var rec = reconcileWallet(); var t = rec.txs.find(function (x) { return x.id === id; }); if (!t) return;
     var isRec = t.origin === 'SISTEMA';
-    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '640px'; panel.style.maxWidth = '96vw';
-    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
     var ord = t.orderId ? orders.find(function (o) { return o.id === t.orderId; }) : null;
     var oc = t.orderId ? occ.find(function (o) { return !o.isDemo && o.orderId === t.orderId; }) : null;
     var recon = (t.expectedBalance != null) ? '<div class="panel"><div class="ph"><h3>Reconciliação</h3></div><div class="pb"><div class="fin-line"><span>Saldo anterior</span><span>' + brl(r2((t.expectedBalance) - (t.amount || 0))) + '</span></div><div class="fin-line"><span>' + (t.amount >= 0 ? '+ movimentação' : '− movimentação') + '</span><span>' + brl(t.amount) + '</span></div><div class="fin-line"><span>Saldo esperado</span><span>' + brl(t.expectedBalance) + '</span></div><div class="fin-line"><span>Saldo informado</span><span>' + brl(isRec ? t.informed : t.balance) + '</span></div><div class="fin-line total"><span>Diferença</span><span class="' + ((t.gap || 0) < 0 ? 'neg' : 'pos') + '">' + brl(isRec ? 0 : (t.gap || 0)) + '</span></div></div></div>' : '';
@@ -4910,26 +4909,34 @@
     // Valor/Data/Pedido no topo (o que o operador precisa ver PRIMEIRO pra decidir a classificação) —
     // Categoria/Responsabilidade continuam visíveis, só que abaixo (painel "Movimentação (Shopee)" e
     // dentro do próprio formulário), não competindo no topo.
-    panel.innerHTML = '<div class="dh"><div><b>' + (isRec ? 'Ajuste reconstruído' : 'Movimentação Shopee') + '</b><div class="footnote" style="margin:2px 0 0">' + (isRec ? 'Ajuste do sistema' : (t.amount < 0 ? 'Débito identificado' : 'Crédito identificado')) + ' <span class="tag ' + (wStatus(t) === 'EXPLICADO' || wStatus(t) === 'RESOLVIDO' ? 'ok' : 'neutral') + '" style="margin-left:6px">' + (WSTATUS[wStatus(t)]) + '</span></div></div><button class="x">&times;</button></div><div class="dbd">' +
-      '<div class="kstrip" style="margin-bottom:12px"><div class="kc"><div class="kl">Valor</div><div class="kv" style="font-size:20px;color:' + (t.amount < 0 ? 'var(--err)' : 'var(--ok)') + '">' + brl(t.amount) + '</div></div><div class="kc"><div class="kl">Data</div><div class="kv" style="font-size:15px">' + (t.date ? dbr(t.date) : '—') + '</div></div><div class="kc"><div class="kl">Pedido</div><div class="kv" style="font-size:15px">' + esc(t.orderId || '—') + '</div></div></div>' +
+    var summaryStrip = MetricGrid([
+      MetricCard({ label: 'Valor', value: '<span style="font-size:20px;color:' + (t.amount < 0 ? 'var(--err)' : 'var(--ok)') + '">' + brl(t.amount) + '</span>' }),
+      MetricCard({ label: 'Data', value: '<span style="font-size:15px">' + (t.date ? dbr(t.date) : '—') + '</span>' }),
+      MetricCard({ label: 'Pedido', value: '<span style="font-size:15px">' + esc(t.orderId || '—') + '</span>' }),
+    ]);
+    var bodyHtml = '<div style="margin-bottom:12px">' + summaryStrip + '</div>' +
       callout('', '✨ Explicar', walletExplain(t)) +
       classify +
       '<div class="panel"><div class="ph"><h3>Movimentação (Shopee)</h3></div><div class="pb">' + kv('Tipo (Shopee)', t.tipo || (isRec ? 'Reconstruído pelo sistema' : '—')) + kv('Categoria automática', wcatLabel(t.category)) + kv('Saldo após', t.balance != null ? brl(t.balance) : '—') + kv('Valor a ser ajustado', t.adjust != null ? brl(t.adjust) : '—') + '</div></div>' +
       (isRec ? '' : '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Descrição original da Shopee</summary><div class="pb"><div class="ro">' + esc(t.desc || '—') + '</div></div></details>') +
-      recon + pedido + devol + '</div>';
-    panel.querySelector('.x').onclick = function () { d.remove(); };
-    // "+ Criar categoria…" no select de Categoria financeira — mesmo padrão já usado no editor de
-    // Contas a Pagar (cp-categoria/catTopo, openCpCategoryQuickCreate) — cria direto no cadastro
-    // ÚNICO de categorias (cpCategories), nunca um cadastro paralelo pra Carteira/Caixa.
-    var catFinSel = panel.querySelector('#wcls-catfin');
-    if (catFinSel) catFinSel.onchange = function () {
-      if (catFinSel.value === '__new') {
-        openCpCategoryQuickCreate(function (cat) {
-          catFinSel.innerHTML = cpCategoryOptions(cat.id, true).replace('Todas as categorias', '— selecionar —');
-        });
-      }
-    };
-    panel.querySelector('#wcls-save').onclick = function () {
+      recon + pedido + devol;
+    var dw = openDrawer({
+      titleHtml: '<b>' + (isRec ? 'Ajuste reconstruído' : 'Movimentação Shopee') + '</b><div class="footnote" style="margin:2px 0 0">' + (isRec ? 'Ajuste do sistema' : (t.amount < 0 ? 'Débito identificado' : 'Crédito identificado')) + ' <span class="tag ' + (wStatus(t) === 'EXPLICADO' || wStatus(t) === 'RESOLVIDO' ? 'ok' : 'neutral') + '" style="margin-left:6px">' + (WSTATUS[wStatus(t)]) + '</span></div>',
+      width: 640,
+      bodyHtml: bodyHtml,
+      onMount: function (panel) {
+        // "+ Criar categoria…" no select de Categoria financeira — mesmo padrão já usado no editor de
+        // Contas a Pagar (cp-categoria/catTopo, openCpCategoryQuickCreate) — cria direto no cadastro
+        // ÚNICO de categorias (cpCategories), nunca um cadastro paralelo pra Carteira/Caixa.
+        var catFinSel = panel.querySelector('#wcls-catfin');
+        if (catFinSel) catFinSel.onchange = function () {
+          if (catFinSel.value === '__new') {
+            openCpCategoryQuickCreate(function (cat) {
+              catFinSel.innerHTML = cpCategoryOptions(cat.id, true).replace('Todas as categorias', '— selecionar —');
+            });
+          }
+        };
+        panel.querySelector('#wcls-save').onclick = function () {
       // PROMPT "Correção — Integração Classificação da Carteira/Caixa → Contas a Pagar/Receber → DRE":
       // "Nunca criar título sem categoria." — Categoria financeira e Conta financeira são obrigatórias
       // pra salvar, exatamente como a causa raiz exigia (título nascia com categoryId nulo).
@@ -4971,10 +4978,12 @@
       var mergedCls = Object.assign({}, c, patch);
       wsetCls(t.id, patch, panel.querySelector('#wcls-note').value.trim() || null, 'Operador').then(function () {
         return walletApplyClassificacao(t, mergedCls);
-      }).then(function () { d.remove(); render(); if (onDone) onDone(); toast('Classificação salva', patch.natureza ? (NATUREZA[patch.natureza] + (patch.natureza === 'DESPESA' && patch.apEnviar ? ' → Contas a Pagar' : patch.natureza === 'RECEITA' && patch.arEnviar ? ' → Contas a Receber' : '')) : ''); });
-    };
-    var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { d.remove(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
-    var gd = panel.querySelector('[data-godev]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev; d.remove(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
+      }).then(function () { dw.close(); render(); if (onDone) onDone(); toast('Classificação salva', patch.natureza ? (NATUREZA[patch.natureza] + (patch.natureza === 'DESPESA' && patch.apEnviar ? ' → Contas a Pagar' : patch.natureza === 'RECEITA' && patch.arEnviar ? ' → Contas a Receber' : '')) : ''); });
+        };
+        var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { dw.close(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
+        var gd = panel.querySelector('[data-godev]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev; dw.close(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
+      }
+    });
   }
 
   // ======================= SHOPEE ACELERA / ANTECIPAÇÃO DE RECEBÍVEIS =======================
@@ -8768,10 +8777,29 @@
     }
     refresh();
   }
+  function openBankAccountEdit(acc, onSaved) {
+    var bodyHtml = '<label class="fld">Nome da conta</label><input class="input" id="bke-nome" style="width:100%" value="' + esc(acc.nome || '') + '">' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">' +
+      '<div><label class="fld">Banco</label><input class="input" id="bke-banco" style="width:100%" value="' + esc(acc.banco || '') + '"></div>' +
+      '<div><label class="fld">Tipo</label><select class="select" id="bke-tipo" style="width:100%"><option value="">Tipo</option><option value="Corrente"' + (acc.tipo === 'Corrente' ? ' selected' : '') + '>Corrente</option><option value="Poupança"' + (acc.tipo === 'Poupança' ? ' selected' : '') + '>Poupança</option><option value="Digital"' + (acc.tipo === 'Digital' ? ' selected' : '') + '>Digital</option></select></div>' +
+      '<div><label class="fld">Agência</label><input class="input" id="bke-agencia" style="width:100%" value="' + esc(acc.agencia || '') + '"></div>' +
+      '<div><label class="fld">Conta</label><input class="input" id="bke-conta" style="width:100%" value="' + esc(acc.conta || '') + '"></div>' +
+      '<div><label class="fld">Saldo inicial (R$)</label><input class="input" id="bke-saldo" style="width:100%" value="' + esc(String(acc.saldoInicial || 0)) + '"></div>' +
+      '<div><label class="fld">Data inicial</label><input type="date" class="input" id="bke-data" style="width:100%" value="' + esc(acc.dataInicial || cpToday()) + '"></div>' +
+      '</div>';
+    openModal({
+      title: 'Editar conta bancária', bodyHtml: bodyHtml,
+      onConfirm: function (panel) {
+        var nome = panel.querySelector('#bke-nome').value.trim();
+        if (!nome) { toast('Informe o nome da conta', '', true); return false; }
+        return bankAccountSave(Object.assign({}, acc, {
+          nome: nome, banco: panel.querySelector('#bke-banco').value.trim(), agencia: panel.querySelector('#bke-agencia').value.trim(), conta: panel.querySelector('#bke-conta').value.trim(), tipo: panel.querySelector('#bke-tipo').value,
+          saldoInicial: cpParseNum(panel.querySelector('#bke-saldo').value) || 0, dataInicial: panel.querySelector('#bke-data').value || null,
+        })).then(function () { toast('Conta atualizada', nome); if (onSaved) onSaved(); });
+      },
+    });
+  }
   function openGerenciarBancos(onDone) {
-    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '560px'; panel.style.maxWidth = '96vw';
-    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
-    function refresh() { panel.innerHTML = body(); wire(); }
     function body() {
       var rows = bankAccounts.map(function (b) { var s = bankAccountSaldoAtual(b.id); return '<tr><td class="cell-text">' + esc(b.nome) + '</td><td class="cell-text">' + esc(b.banco || '—') + '</td><td class="mono">' + esc(b.agencia || '—') + '</td><td class="mono">' + esc(b.conta || '—') + '</td><td>' + esc(b.tipo || '—') + '</td><td class="nowrap">' + brl(s.saldoAtual) + '</td><td>' + (b.ativa !== false ? '<span class="tag ok">ativa</span>' : '<span class="tag neutral">inativa</span>') + '</td><td><button class="btn-sm" data-bankedit="' + esc(b.id) + '">Editar</button> <button class="btn-sm" data-banktoggle="' + esc(b.id) + '">' + (b.ativa !== false ? 'Desativar' : 'Ativar') + '</button></td></tr>'; }).join('');
       var table = '<div class="table-wrap"><table class="report"><thead><tr><th>Nome</th><th>Banco</th><th>Agência</th><th>Conta</th><th>Tipo</th><th>Saldo atual</th><th>Status</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="8" class="empty">Nenhuma conta cadastrada ainda.</td></tr>') + '</tbody></table></div>';
@@ -8792,24 +8820,23 @@
         '<input class="input sm" id="bk-saldo" placeholder="Saldo inicial" style="width:120px" value="0,00">' +
         '<input type="date" class="input sm" id="bk-data" placeholder="Data inicial" style="width:140px" value="' + cpToday() + '">' +
         '<button class="btn-sm primary" id="bk-salvar">Salvar</button></div></div></div>';
-      return '<div class="dh"><div><b>Gerenciar bancos / contas</b></div><button class="x">&times;</button></div><div class="dbd">' + table + tableFa + form + '</div>';
+      return table + tableFa + form;
     }
-    function wire() {
-      panel.querySelector('.x').onclick = function () { d.remove(); if (onDone) onDone(); };
-      panel.querySelector('#bk-salvar').onclick = function () {
-        var nome = panel.querySelector('#bk-nome').value.trim(); if (!nome) { toast('Informe o nome da conta', '', true); return; }
-        bankAccountSave({ nome: nome, banco: panel.querySelector('#bk-banco').value.trim(), agencia: panel.querySelector('#bk-agencia').value.trim(), conta: panel.querySelector('#bk-conta').value.trim(), tipo: panel.querySelector('#bk-tipo').value, saldoInicial: cpParseNum(panel.querySelector('#bk-saldo').value) || 0, dataInicial: panel.querySelector('#bk-data').value || null }).then(function () { toast('Conta cadastrada', nome); refresh(); });
-      };
-      panel.querySelectorAll('[data-banktoggle]').forEach(function (b) { b.onclick = function () { var acc = bankAccounts.find(function (x) { return x.id === b.dataset.banktoggle; }); if (acc) bankAccountSave(Object.assign({}, acc, { ativa: acc.ativa === false })).then(refresh); }; });
-      panel.querySelectorAll('[data-bankedit]').forEach(function (b) { b.onclick = function () {
-        var acc = bankAccounts.find(function (x) { return x.id === b.dataset.bankedit; }); if (!acc) return;
-        var nome = prompt('Nome da conta:', acc.nome); if (nome == null) return;
-        var saldoTxt = prompt('Saldo inicial (R$):', String(acc.saldoInicial || 0)); if (saldoTxt == null) return;
-        var dataTxt = prompt('Data inicial (AAAA-MM-DD):', acc.dataInicial || cpToday()); if (dataTxt == null) return;
-        bankAccountSave(Object.assign({}, acc, { nome: nome.trim() || acc.nome, saldoInicial: cpParseNum(saldoTxt) || 0, dataInicial: dataTxt.trim() || null })).then(refresh);
-      }; });
-    }
-    refresh();
+    var dw = openDrawer({
+      title: 'Gerenciar bancos / contas', width: 760, renderBody: body,
+      onClose: function () { if (onDone) onDone(); },
+      onMount: function (panel, refresh) {
+        panel.querySelector('#bk-salvar').onclick = function () {
+          var nome = panel.querySelector('#bk-nome').value.trim(); if (!nome) { toast('Informe o nome da conta', '', true); return; }
+          bankAccountSave({ nome: nome, banco: panel.querySelector('#bk-banco').value.trim(), agencia: panel.querySelector('#bk-agencia').value.trim(), conta: panel.querySelector('#bk-conta').value.trim(), tipo: panel.querySelector('#bk-tipo').value, saldoInicial: cpParseNum(panel.querySelector('#bk-saldo').value) || 0, dataInicial: panel.querySelector('#bk-data').value || null }).then(function () { toast('Conta cadastrada', nome); refresh(); });
+        };
+        panel.querySelectorAll('[data-banktoggle]').forEach(function (b) { b.onclick = function () { var acc = bankAccounts.find(function (x) { return x.id === b.dataset.banktoggle; }); if (acc) bankAccountSave(Object.assign({}, acc, { ativa: acc.ativa === false })).then(refresh); }; });
+        panel.querySelectorAll('[data-bankedit]').forEach(function (b) { b.onclick = function () {
+          var acc = bankAccounts.find(function (x) { return x.id === b.dataset.bankedit; }); if (!acc) return;
+          openBankAccountEdit(acc, refresh);
+        }; });
+      },
+    });
   }
   function caixaDiasComMovimento() {
     var days = {};
