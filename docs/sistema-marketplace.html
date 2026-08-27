@@ -331,12 +331,11 @@
       <a data-route="acelera" title="Shopee Acelera"><span class="ic">⚡</span><span class="lbl">Shopee Acelera</span></a>
       <a data-route="afiliados" title="Afiliados"><span class="ic">🤝</span><span class="lbl">Afiliados</span></a>
       <a data-route="minharenda" title="Minha Renda"><span class="ic">💰</span><span class="lbl">Minha Renda</span></a>
-      <a data-route="precificacao" title="Precificação"><span class="ic">📈</span><span class="lbl">Precificação</span></a>
-      <div class="nav-group">Fechamento</div>
-      <a data-route="caixa" title="Caixa"><span class="ic">🧾</span><span class="lbl">Caixa</span></a>
       <div class="nav-group">Financeiro</div>
+      <a data-route="caixa" title="Caixa"><span class="ic">🧾</span><span class="lbl">Caixa</span></a>
       <a data-route="contaspagar" title="Contas a Pagar"><span class="ic">📄</span><span class="lbl">Contas a Pagar</span></a>
       <a data-route="contasreceber" title="Contas a Receber"><span class="ic">💵</span><span class="lbl">Contas a Receber</span></a>
+      <a data-route="precificacao" title="Precificação"><span class="ic">📈</span><span class="lbl">Precificação</span></a>
       <a data-route="fator" title="Fator de Custo"><span class="ic">🏭</span><span class="lbl">Fator de Custo</span></a>
       <div class="nav-group">Inteligência</div>
       <a data-route="ia" title="Inteligência"><span class="ic">✦</span><span class="lbl">Inteligência</span></a>
@@ -344,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build a191f2c · 2026-08-27 11:58 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 4488845 · 2026-08-27 12:07 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -15425,7 +15424,11 @@ buffer/index.js:
         '<div><label class="fld">Valor (R$) *</label><input class="input" id="cp-valor" value="' + (valorFinal != null ? valorFinal.toFixed(2).replace('.', ',') : '') + '" ' + (items.length ? 'title="Calculado a partir dos itens — edite para sobrescrever manualmente"' : '') + (locked ? ' disabled' : '') + '></div></div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:10px"><div><label class="fld">Emissão *</label><input class="input" type="date" id="cp-emissao" value="' + esc(draft.emissao || '') + '"></div><div><label class="fld">Competência *</label><input class="input" type="date" id="cp-competencia" value="' + esc(draft.competencia || '') + '"></div><div><label class="fld">Vencimento *</label><input class="input" type="date" id="cp-vencimento" value="' + esc(draft.vencimento || '') + '"></div></div>' +
         '<label class="fld">Histórico</label><textarea class="input" id="cp-historico" maxlength="2000" style="width:100%;min-height:64px">' + esc(draft.historico || '') + '</textarea>' +
-        '<div style="display:grid;grid-template-columns:1fr 1fr" ><div><label class="fld">Categoria</label><select class="select" id="cp-categoria" style="width:100%">' + cpCategoryOptions(draft.categoryId, true) + '</select></div><div><label class="fld">Centro de custo</label><select class="select" id="cp-cc-topo" style="width:100%">' + cpCostCenterOptions(draft.costCenterId) + '</select></div></div>' +
+        // Refatoração M4 (Fase 4 — Reorganização Financeiro): Categoria financeira é o único campo de
+        // classificação obrigatório e sempre visível aqui. Centro de custo saiu daqui (era duplicado
+        // com o campo cp-cc-pgto da aba Pagamento) — agora vive só dentro de "Avançado" na aba
+        // Pagamento, e só aparece quando a empresa realmente cadastrou algum centro de custo.
+        '<label class="fld">Categoria financeira *</label><select class="select" id="cp-categoria" style="width:100%">' + cpCategoryOptions(draft.categoryId, true) + '</select>' +
         '</div>';
 
       var itensSec = '<div class="dbd" style="border-top:1px solid var(--line)">' +
@@ -15454,21 +15457,30 @@ buffer/index.js:
       return header + camposTopo + itensSec + tabsBar + '<div class="dbd">' + tabBody + '</div>' + pagamentosSec + histSec + nfeSec + footer;
     }
 
+    // Refatoração M4 (Fase 4 — Reorganização Financeiro): "simplificar em Categoria Financeira
+    // (obrigatória) / Plano de Contas (avançado) / Centro de Custo (só se usado)". Categoria financeira
+    // já vive sozinha em camposTopo (removida a duplicata cp-cat-pgto daqui). Aqui ficam só os campos
+    // de pagamento do dia a dia; Conta contábil (Plano de Contas) — inclusive as variantes de frete/
+    // outras despesas — e Centro de custo (só aparece se a empresa cadastrou algum) ficam dentro de um
+    // <details> recolhido por padrão, fora do caminho de quem só quer lançar e pagar uma conta.
     function cpTabPagamento() {
+      var temCC = cpCostCenters.length > 0;
+      var avancado = '<details style="margin-top:14px"><summary style="cursor:pointer;font-weight:700;padding:4px 0">Avançado — Plano de Contas' + (temCC ? ' e Centro de Custo' : '') + '</summary>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr' + (temCC ? ' 1fr' : '') + ';gap:12px;margin-top:10px">' +
+        '<div><label class="fld">Conta contábil</label><select class="select" id="cp-cta-pgto" style="width:100%">' + cpAccountingOptions(draft.accountingAccountId) + '</select></div>' +
+        '<div><label class="fld">Conta contábil do frete</label><select class="select" id="cp-cta-frete" style="width:100%"><option value="">(herda da conta)</option>' + cpAccountingOptions(draft.freteAccountingAccountId) + '</select></div>' +
+        '<div><label class="fld">Conta contábil de outras despesas</label><select class="select" id="cp-cta-outras" style="width:100%"><option value="">(herda da conta)</option>' + cpAccountingOptions(draft.outrasDespesasAccountingAccountId) + '</select></div>' +
+        (temCC ? ('<div><label class="fld">Centro de custo</label><select class="select" id="cp-cc-pgto" style="width:100%">' + cpCostCenterOptions(draft.costCenterId) + '</select></div>') : '') +
+        '</div></details>';
       return '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">' +
         '<div><label class="fld">Forma de pagamento</label><select class="select" id="cp-forma-pgto" style="width:100%"><option value="">—</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '"' + (draft.paymentMethod === f ? ' selected' : '') + '>' + esc(f) + '</option>'; }).join('') + '</select></div>' +
         '<div><label class="fld">Conta financeira</label><select class="select" id="cp-conta-fin" style="width:100%">' + cpFinAccountOptions(draft.financialAccountId).replace('Todas as contas financeiras', '— escolher —') + '</select></div>' +
         '<div><label class="fld">Nº documento</label><input class="input" id="cp-docnum" value="' + esc(draft.documentNumber || '') + '"></div>' +
-        '<div><label class="fld">Categoria (pagamento)</label><select class="select" id="cp-cat-pgto" style="width:100%">' + cpCategoryOptions(draft.categoryId, false) + '</select></div>' +
-        '<div><label class="fld">Conta contábil</label><select class="select" id="cp-cta-pgto" style="width:100%">' + cpAccountingOptions(draft.accountingAccountId) + '</select></div>' +
-        '<div><label class="fld">Centro de custo</label><select class="select" id="cp-cc-pgto" style="width:100%">' + cpCostCenterOptions(draft.costCenterId) + '</select></div>' +
         '<div><label class="fld">Juros mensal (%)</label><input class="input" id="cp-juros" value="' + (draft.jurosPercent || 0) + '"></div>' +
         '<div><label class="fld">Multa (%)</label><input class="input" id="cp-multa" value="' + (draft.multaPercent || 0) + '"></div>' +
         '<div><label class="fld">Frete (R$)</label><input class="input" id="cp-frete" value="' + (draft.freteValor || 0) + '"></div>' +
         '<div><label class="fld">Outras despesas (R$)</label><input class="input" id="cp-outras" value="' + (draft.outrasDespesasValor || 0) + '"></div>' +
-        '<div><label class="fld">Conta contábil do frete</label><select class="select" id="cp-cta-frete" style="width:100%"><option value="">(herda da conta)</option>' + cpAccountingOptions(draft.freteAccountingAccountId) + '</select></div>' +
-        '<div><label class="fld">Conta contábil de outras despesas</label><select class="select" id="cp-cta-outras" style="width:100%"><option value="">(herda da conta)</option>' + cpAccountingOptions(draft.outrasDespesasAccountingAccountId) + '</select></div>' +
-        '</div>' +
+        '</div>' + avancado +
         '<div class="table-wrap" style="margin-top:14px"><table class="report"><thead><tr><th>Vencimento original</th><th>Valor original</th><th>Frete</th><th>Outras despesas</th><th>Juros</th><th>Multa</th><th>Valor total</th></tr></thead><tbody><tr><td>' + dbr(draft.vencimento) + '</td><td>' + brl(cpItemsTotal(items)) + '</td><td>' + brl(draft.freteValor || 0) + '</td><td>' + brl(draft.outrasDespesasValor || 0) + '</td><td>' + brl(0) + '</td><td>' + brl(0) + '</td><td>' + brl(cpValorOriginal(items, draft.freteValor, draft.outrasDespesasValor)) + '</td></tr></tbody></table></div>';
     }
     function cpTabOcorrencia() {
@@ -15507,8 +15519,8 @@ buffer/index.js:
       draft.supplierId = fieldVal('cp-fornecedor-sel') || null;
       draft.emissao = fieldVal('cp-emissao'); draft.competencia = fieldVal('cp-competencia'); draft.vencimento = fieldVal('cp-vencimento');
       draft.historico = fieldVal('cp-historico');
-      draft.categoryId = fieldVal('cp-categoria') || fieldVal('cp-cat-pgto') || draft.categoryId || null;
-      draft.costCenterId = fieldVal('cp-cc-topo') || fieldVal('cp-cc-pgto') || draft.costCenterId || null;
+      draft.categoryId = fieldVal('cp-categoria') || draft.categoryId || null;
+      draft.costCenterId = fieldVal('cp-cc-pgto') || draft.costCenterId || null;
       var pForma = fieldVal('cp-forma-pgto'); if (pForma != null) draft.paymentMethod = pForma || null;
       var pConta = fieldVal('cp-conta-fin'); if (pConta != null) draft.financialAccountId = pConta || null;
       var pDoc = fieldVal('cp-docnum'); if (pDoc != null) draft.documentNumber = pDoc;
@@ -15548,8 +15560,8 @@ buffer/index.js:
       collectDraftFromForm();
       // PROMPT "Correção da Base Financeira" §1: "todo lançamento deve ter Categoria financeira/Conta
       // financeira — nunca incompleto" — mesma exigência já aplicada ao modal da Carteira
-      // (openWalletTx). Valida DEPOIS de collectDraftFromForm() pra aceitar tanto o select do topo
-      // (cp-categoria) quanto o da aba Pagamento (cp-cat-pgto), sem descartar o que o usuário digitou.
+      // (openWalletTx). Valida DEPOIS de collectDraftFromForm() pra não descartar o que o usuário
+      // digitou no select único de Categoria financeira (cp-categoria, topo do formulário — Fase 4).
       if (!draft.categoryId) { toast('Categoria financeira obrigatória', 'Selecione uma categoria antes de salvar — necessária para a DRE por categoria.', true); return; }
       if (!draft.financialAccountId) { toast('Conta financeira obrigatória', 'Selecione a conta financeira de onde sai (ou sairá) o pagamento, na aba Pagamento.', true); return; }
       // PROMPT "Correção da Base Financeira" §3: salvar aqui é sempre um ato manual do operador — marca
@@ -16188,12 +16200,34 @@ buffer/index.js:
     var proximos = all.filter(function (h) { var s = crStatusDerivado(h); return (s === 'EM_ABERTO' || s === 'PREVISTO' || s === 'PARCIAL') && h.vencimento >= hoje; }).sort(function (a, b) { return (a.vencimento || '').localeCompare(b.vencimento || ''); }).slice(0, 10);
     var proximosRows = proximos.map(function (h) { var lbl = CR_STATUS_LABEL[crStatusDerivado(h)]; return '<tr><td class="nowrap">' + dbr(h.vencimento) + '</td><td class="rowlink cell-text" data-cropen="' + h.id + '">' + esc((h.descricao || '').slice(0, 60)) + '</td><td class="nowrap">' + brl(crSaldo(h)) + '</td><td><span class="badge ' + lbl[1] + '">' + lbl[0] + '</span></td></tr>'; }).join('');
     var proximosBlock = '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Próximos recebimentos</h3></div><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>Vencimento</th><th>Descrição</th><th>Saldo</th><th>Status</th></tr></thead><tbody>' + (proximosRows || '<tr><td colspan="4" class="empty">Nenhum recebimento previsto.</td></tr>') + '</tbody></table></div></div></div>';
-    return devPeriodBarAsCp() + kpiHtml + bancosBlock + proximosBlock;
+    return devPeriodBarAsCp() + kpiHtml + bancosBlock + proximosBlock + crEvolucaoMensal();
   }
   function bindCrVisaoGeral() {
     bindDevPeriodBar();
     app.querySelectorAll('[data-cropen]').forEach(function (el) { el.onclick = function () { openCrEditor(el.dataset.cropen); }; });
     var g = document.getElementById('crvg-gerenciar'); if (g) g.onclick = function () { openGerenciarBancos(function () { crRenderBody(); }); };
+  }
+  // Refatoração M4 (Fase 4 — Reorganização Financeiro): "CR separar Previsão×Recebido com dashboard
+  // próprio (previsto/recebido/atrasado/próximos/evolução mensal)". A Visão Geral já tinha previsto/
+  // recebido/atrasado/próximos (crKpis + bloco de próximos recebimentos) — só faltava a evolução
+  // mensal. Últimos 6 meses fixos (não respeita o filtro de período do topo — é uma visão de
+  // tendência, igual ao padrão já usado em mrEvolucaoBlock/dashboard). Previsto = soma do valor dos
+  // títulos por mês de vencimento (todos, pagos ou não — "o que estava previsto entrar"); Recebido =
+  // soma das baixas reais (crReceipts não estornadas) por mês da data do recebimento.
+  function crEvolucaoMensal() {
+    var op = opActiveOrNull();
+    var list = contasReceber.filter(function (h) { return !op || !h.operationId || h.operationId === op; });
+    var byId = {}; list.forEach(function (h) { byId[h.id] = h; });
+    var hoje = new Date(); var months = [], labels = [];
+    for (var i = 5; i >= 0; i--) { var d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1); var k = d.toISOString().slice(0, 7); months.push(k); labels.push(['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'][d.getMonth()] + '/' + String(d.getFullYear()).slice(2)); }
+    var previsto = {}, recebido = {}; months.forEach(function (m) { previsto[m] = 0; recebido[m] = 0; });
+    list.forEach(function (h) { var mv = (h.vencimento || '').slice(0, 7); if (previsto.hasOwnProperty(mv)) previsto[mv] += (h.valor || 0); });
+    crReceipts.forEach(function (p) { if (p.estornado) return; var h = byId[p.accountsReceivableId]; if (!h) return; var mr = (p.date || '').slice(0, 7); if (recebido.hasOwnProperty(mr)) recebido[mr] += (p.valorRecebido || 0); });
+    if (!list.length && !crReceipts.length) return '';
+    return chartCard('Evolução mensal — Previsto × Recebido (últimos 6 meses)', legendSwatch([['Previsto', '#94a3b8'], ['Recebido', '#0f7a4f']]), svgGroupBars(labels, [
+      { name: 'Previsto', color: '#94a3b8', vals: months.map(function (m) { return previsto[m]; }) },
+      { name: 'Recebido', color: '#0f7a4f', vals: months.map(function (m) { return recebido[m]; }) },
+    ], { fmt: function (v) { return brl(v); } }));
   }
   function crKpis(list) {
     var hoje = cpToday();
