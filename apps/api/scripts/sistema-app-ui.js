@@ -5789,11 +5789,20 @@
     // canônico) quando o pedido existe — nunca recalcula por fora via orderFinance()/estimativa do
     // Order.all. comp.lucroC já é o Resultado do Pedido (Renda Final Shopee − Custo do Produto),
     // exatamente o mesmo valor mostrado na Ficha/Caixa/Minha Renda; aqui só se desconta, por cima,
-    // o custo específico de Afiliados (que não faz parte da composição canônica do pedido).
+    // o custo específico de Afiliados (que não faz parte da composição canônica do pedido) — MAS só
+    // quando o Income ainda não confirmou o pedido (comp.mrRow ausente). Quando o Income confirma,
+    // "Taxa de comissão Afiliados do Vendedor" (mrRow.afiliado) já entra em taxasSomaC/comp.lucroC —
+    // subtrair de novo aqui duplicava esse custo. Mesmo guard `(!mrRow && affRow)` já usado por
+    // pedidoResultadoFinal() (linha ~2061) — Fase 7.5 Bloco 2: 25 pedidos reais de afiliados
+    // auditados (Order.all + Income + Conversion Report) não reproduziram o caso ao vivo (nenhum
+    // tinha Income confirmado simultaneamente à amostra disponível), mas a assimetria entre as duas
+    // funções canônicas era real e comprovável por leitura de código — corrigida por consistência
+    // com o guard já aprovado, sem alterar nenhum valor hoje exibido (nos 25 casos reais, mrRow
+    // estava sempre ausente, então custoAff continua sendo subtraído exatamente como antes).
     var ord = orders.find(function (x) { return x.id === o.orderId; }); if (!ord) return { known: false };
     var comp = pedidoComposicaoFinanceira(ord.id);
     if (comp.custoPendente || comp.lucroC == null) return { known: false, partial: true, ord: ord, comp: comp };
-    var custoAff = (o.despesaHas ? o.despesaStated : o.despesaRecon) / 10000;
+    var custoAff = comp.mrRow ? 0 : (o.despesaHas ? o.despesaStated : o.despesaRecon) / 10000;
     var lucro = (comp.lucroC / 100) - custoAff;
     return { known: true, lucro: Math.round(lucro * 10000), margem: o.purchase ? (lucro / (o.purchase / 10000)) : 0, ord: ord, comp: comp };
   }
