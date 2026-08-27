@@ -7391,6 +7391,62 @@
       actionsHtml +
       '</div>' + filtersHtml;
   }
+  // Refatoração N13 (Fase 6.1c — infraestrutura definitiva): openModal() consolida o esqueleto que
+  // ~25 modais reimplementam hoje (.overlay > .modal > .mh/.mbd/.mf, fechar X/cancelar/clique fora,
+  // validação por toast) — ver relatório "Mapa de Duplicidades", Seção C. Cobre os 2 maiores gaps
+  // encontrados lá: NENHUM modal hoje tem loading no botão salvar (risco de duplo submit) nem erro
+  // inline padronizado (a maioria só usa toast). z-index de empilhamento agora é automático (conta
+  // quantos .overlay/.drawer já estão abertos), em vez do valor fixo que 2 telas aplicavam na mão.
+  //
+  // Contrato do onConfirm(panel): chamado ao clicar em Confirmar.
+  //   - retorna `false`  → validação falhou (o próprio onConfirm já avisou via toast) — modal continua
+  //     aberto, nada acontece.
+  //   - retorna uma Promise → openModal() trava os botões (bloqueio de duplo clique), troca o texto do
+  //     botão pro rótulo de loading; se resolver, fecha o modal sozinho; se rejeitar, reativa os
+  //     botões e mostra a mensagem de erro inline (nunca perde o que foi digitado).
+  //   - retorna undefined (nem false, nem Promise) → openModal() não faz nada sozinho; quem chamou é
+  //     responsável por fechar via o valor de retorno .close(), se for esse o caso.
+  function openModal(opts) {
+    opts = opts || {};
+    var width = opts.width || 480;
+    var stackDepth = document.querySelectorAll('.overlay, .drawer').length;
+    var o = document.createElement('div'); o.className = 'overlay';
+    if (stackDepth > 0) o.style.zIndex = String(65 + stackDepth);
+    var errId = 'mdlerr' + Date.now() + Math.round(Math.random() * 1e4);
+    o.innerHTML = '<div class="modal" style="width:' + width + 'px">' +
+      '<div class="mh"><h3>' + esc(opts.title || '') + '</h3><button class="x">&times;</button></div>' +
+      '<div class="mbd"><div class="form-err" id="' + errId + '" style="display:none"></div>' + (opts.bodyHtml || '') + '</div>' +
+      '<div class="mf"><button class="btn-sm" id="mdl-cancel">' + esc(opts.cancelLabel || 'Cancelar') + '</button><button class="btn-sm primary" id="mdl-confirm">' + esc(opts.confirmLabel || 'Salvar') + '</button></div>' +
+      '</div>';
+    document.body.appendChild(o);
+    var panel = o.querySelector('.modal');
+    var errBox = o.querySelector('#' + errId);
+    var loading = false;
+    function close() { if (loading) return; o.remove(); }
+    o.onclick = function (e) { if (e.target === o) close(); };
+    o.querySelector('.x').onclick = close;
+    var cancelBtn = o.querySelector('#mdl-cancel'); cancelBtn.onclick = function () { if (loading) return; if (opts.onCancel) opts.onCancel(); close(); };
+    var confirmBtn = o.querySelector('#mdl-confirm');
+    confirmBtn.onclick = function () {
+      if (loading) return; // bloqueio de duplo clique
+      if (errBox) { errBox.style.display = 'none'; errBox.textContent = ''; }
+      var result = opts.onConfirm ? opts.onConfirm(panel) : null;
+      if (result === false) return; // validação síncrona falhou — onConfirm já avisou (toast)
+      if (result && typeof result.then === 'function') {
+        loading = true; confirmBtn.disabled = true; cancelBtn.disabled = true;
+        var originalLabel = confirmBtn.textContent; confirmBtn.textContent = opts.loadingLabel || 'Salvando…';
+        result.then(function () {
+          loading = false; o.remove();
+        }).catch(function (e) {
+          loading = false; confirmBtn.disabled = false; cancelBtn.disabled = false; confirmBtn.textContent = originalLabel;
+          var msg = (e && (e.message || e)) || 'Não foi possível salvar.';
+          if (errBox) { errBox.textContent = msg; errBox.style.display = 'block'; } else { toast('Erro', msg, true); }
+        });
+      }
+    };
+    if (opts.onMount) opts.onMount(panel);
+    return { close: close, panel: panel };
+  }
   function kv(k, v) { return '<label class="fld">' + esc(k) + '</label><div class="ro">' + esc(v || '—') + '</div>'; }
   function rowline(k, v) { return '<div class="row"><span>' + esc(k) + '</span><b>' + v + '</b></div>'; }
   function banner(html) { return '<div class="info-banner">' + html + '</div>'; }
@@ -10505,8 +10561,13 @@
     document.querySelectorAll('[data-fgedit]').forEach(function (b) { b.onclick = function () { openFatorConfigEditor(opId, fatorConfigs.find(function (c) { return c.id === b.dataset.fgedit; })); }; });
     document.querySelectorAll('[data-fgdel]').forEach(function (b) { b.onclick = function () { if (!confirm('Remover esta configuração?')) return; fatorConfigRemove(b.dataset.fgdel).then(function () { render(); toast('Removida', ''); }); }; });
   }
+  // Refatoração N13 (Fase 6.1c — migração-piloto de openModal()): os 7 editores do Fator de Custo são
+  // o piloto de menor risco encontrado no relatório "Mapa de Duplicidades" (mesmo esqueleto, mesma
+  // validação por toast, nenhum tinha loading/erro inline). Cada um mantém EXATAMENTE os mesmos campos/
+  // ids/validações/chamadas de save/mensagens de toast de antes — só a moldura (overlay/modal/mh/mbd/
+  // mf, fechar X/cancelar/clique fora/ESC, z-index de empilhamento) passa a vir de openModal().
   function openFatorConfigEditor(opId, c) {
-    var o = document.createElement('div'); o.className = 'overlay'; o.innerHTML = '<div class="modal" style="width:480px"><div class="mh"><h3>' + (c ? 'Editar configuração' : 'Nova configuração do Fator de Custo') + '</h3><button class="x">×</button></div><div class="mbd">' +
+    var bodyHtml =
       '<label class="fld">Nome da configuração *</label><input class="input" id="fg-nome" style="width:100%" value="' + esc(c ? c.nome : '') + '" placeholder="Ex.: Fábrica Líder 2026">' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
       '<div><label class="fld">Data de início da validade</label><input class="input" type="date" id="fg-data" value="' + (c ? c.dataInicio : new Date().toISOString().slice(0, 10)) + '"></div>' +
@@ -10516,15 +10577,15 @@
       '<option value="TEMPO"' + (c && c.metodoCalculo === 'TEMPO' ? ' selected' : '') + '>Por tempo produtivo</option>' +
       '<option value="PROCESSO"' + (c && c.metodoCalculo === 'PROCESSO' ? ' selected' : '') + '>Por processo produtivo</option>' +
       '<option value="HIBRIDO"' + (!c || c.metodoCalculo === 'HIBRIDO' ? ' selected' : '') + '>Híbrido</option></select>' +
-      '<div class="footnote" style="margin-top:8px">O motor de cálculo já é baseado em roteiro (processos com tempo) em qualquer método — a escolha aqui é informativa/organizacional para o time, sem alterar a fórmula.</div>' +
-      '</div><div class="mf"><button class="btn-sm" id="fg-x">Cancelar</button><button class="btn-sm primary" id="fg-ok">Salvar</button></div></div>';
-    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
-    o.querySelector('.x').onclick = o.querySelector('#fg-x').onclick = function () { o.remove(); };
-    o.querySelector('#fg-ok').onclick = function () {
-      var nome = o.querySelector('#fg-nome').value.trim(); if (!nome) { toast('Informe o nome', '', true); return; }
-      var dto = { nome: nome, dataInicio: o.querySelector('#fg-data').value, status: o.querySelector('#fg-status').value, metodoCalculo: o.querySelector('#fg-metodo').value };
-      fatorConfigSalvar(opId, dto, c ? c.id : null).then(function () { o.remove(); toast('Configuração salva', nome); render(); });
-    };
+      '<div class="footnote" style="margin-top:8px">O motor de cálculo já é baseado em roteiro (processos com tempo) em qualquer método — a escolha aqui é informativa/organizacional para o time, sem alterar a fórmula.</div>';
+    openModal({
+      title: c ? 'Editar configuração' : 'Nova configuração do Fator de Custo', width: 480, bodyHtml: bodyHtml,
+      onConfirm: function (panel) {
+        var nome = panel.querySelector('#fg-nome').value.trim(); if (!nome) { toast('Informe o nome', '', true); return false; }
+        var dto = { nome: nome, dataInicio: panel.querySelector('#fg-data').value, status: panel.querySelector('#fg-status').value, metodoCalculo: panel.querySelector('#fg-metodo').value };
+        return fatorConfigSalvar(opId, dto, c ? c.id : null).then(function () { toast('Configuração salva', nome); render(); });
+      },
+    });
   }
 
   // ---------- 2. Setores Produtivos ----------
@@ -10541,7 +10602,7 @@
     document.querySelectorAll('[data-fsdel]').forEach(function (b) { b.onclick = function () { if (!confirm('Remover este setor? Processos/roteiros que apontam para ele ficarão órfãos.')) return; fatorSetorRemove(b.dataset.fsdel).then(function () { render(); toast('Removido', ''); }); }; });
   }
   function openFatorSetorEditor(opId, s) {
-    var o = document.createElement('div'); o.className = 'overlay'; o.innerHTML = '<div class="modal" style="width:520px"><div class="mh"><h3>' + (s ? 'Editar setor' : 'Novo setor produtivo') + '</h3><button class="x">×</button></div><div class="mbd">' +
+    var bodyHtml =
       '<label class="fld">Nome *</label><input class="input" id="fs-nome" style="width:100%" value="' + esc(s ? s.nome : '') + '" placeholder="Ex.: Corte">' +
       '<label class="fld">Descrição</label><input class="input" id="fs-desc" style="width:100%" value="' + esc(s && s.descricao || '') + '">' +
       '<label class="fld">Centro de custo</label><input class="input" id="fs-cc" style="width:100%" value="' + esc(s && s.centroCusto || '') + '">' +
@@ -10549,15 +10610,15 @@
       '<div><label class="fld">Horas disponíveis/mês</label><input class="input" id="fs-horas" value="' + (s && s.horasDisponiveisMes != null ? s.horasDisponiveisMes : 220) + '"></div>' +
       '<div><label class="fld">Dias trabalhados/mês</label><input class="input" id="fs-dias" value="' + (s && s.diasTrabalhados != null ? s.diasTrabalhados : 22) + '"></div>' +
       '<div><label class="fld">Turnos</label><input class="input" id="fs-turnos" value="' + (s && s.turnos != null ? s.turnos : 1) + '"></div>' +
-      '</div><label class="fld"><input type="checkbox" id="fs-ativo"' + (!s || s.ativo !== false ? ' checked' : '') + '> Ativo</label>' +
-      '</div><div class="mf"><button class="btn-sm" id="fs-x">Cancelar</button><button class="btn-sm primary" id="fs-ok">Salvar</button></div></div>';
-    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
-    o.querySelector('.x').onclick = o.querySelector('#fs-x').onclick = function () { o.remove(); };
-    o.querySelector('#fs-ok').onclick = function () {
-      var nome = o.querySelector('#fs-nome').value.trim(); if (!nome) { toast('Informe o nome', '', true); return; }
-      var dto = { nome: nome, descricao: o.querySelector('#fs-desc').value, centroCusto: o.querySelector('#fs-cc').value, horasDisponiveisMes: o.querySelector('#fs-horas').value, diasTrabalhados: o.querySelector('#fs-dias').value, turnos: o.querySelector('#fs-turnos').value, ativo: o.querySelector('#fs-ativo').checked };
-      fatorSetorSalvar(opId, dto, s ? s.id : null).then(function () { o.remove(); toast('Setor salvo', nome); render(); });
-    };
+      '</div><label class="fld"><input type="checkbox" id="fs-ativo"' + (!s || s.ativo !== false ? ' checked' : '') + '> Ativo</label>';
+    openModal({
+      title: s ? 'Editar setor' : 'Novo setor produtivo', width: 520, bodyHtml: bodyHtml,
+      onConfirm: function (panel) {
+        var nome = panel.querySelector('#fs-nome').value.trim(); if (!nome) { toast('Informe o nome', '', true); return false; }
+        var dto = { nome: nome, descricao: panel.querySelector('#fs-desc').value, centroCusto: panel.querySelector('#fs-cc').value, horasDisponiveisMes: panel.querySelector('#fs-horas').value, diasTrabalhados: panel.querySelector('#fs-dias').value, turnos: panel.querySelector('#fs-turnos').value, ativo: panel.querySelector('#fs-ativo').checked };
+        return fatorSetorSalvar(opId, dto, s ? s.id : null).then(function () { toast('Setor salvo', nome); render(); });
+      },
+    });
   }
 
   // ---------- 3. Funcionários Produtivos ----------
@@ -10576,7 +10637,7 @@
   function openFatorFuncionarioEditor(opId, f) {
     var setOpts = fatorSetores.filter(function (s) { return fatorOpMatch(s, opId); }).map(function (s) { return '<option value="' + esc(s.id) + '"' + (f && f.setorId === s.id ? ' selected' : '') + '>' + esc(s.nome) + '</option>'; }).join('');
     var motivosHtml = FATOR_MOTIVOS_PERDA.map(function (m) { var chk = f && (f.motivosPerda || []).indexOf(m) >= 0; return '<label style="margin-right:10px;font-weight:400"><input type="checkbox" class="ff-motivo" value="' + esc(m) + '"' + (chk ? ' checked' : '') + '> ' + esc(m) + '</label>'; }).join('');
-    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:560px"><div class="mh"><h3>' + (f ? 'Editar funcionário' : 'Novo funcionário produtivo') + '</h3><button class="x">×</button></div><div class="mbd">' +
+    var bodyHtml =
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
       '<div><label class="fld">Nome *</label><input class="input" id="ff-nome" value="' + esc(f ? f.nome : '') + '"></div>' +
       '<div><label class="fld">Cargo</label><input class="input" id="ff-cargo" value="' + esc(f && f.cargo || '') + '"></div>' +
@@ -10595,16 +10656,16 @@
       '<div><label class="fld">Horas produtivas reais/mês</label><input class="input" id="ff-hr" value="' + (f && f.horasProdutivasReaisMes != null ? f.horasProdutivasReaisMes : '') + '" placeholder="Ex.: 170"></div>' +
       '</div>' +
       '<label class="fld" style="margin-top:8px">Motivos de perda (informativo)</label><div>' + motivosHtml + '</div>' +
-      '<label class="fld" style="margin-top:10px"><input type="checkbox" id="ff-ativo"' + (!f || f.ativo ? ' checked' : '') + '> Ativo</label>' +
-      '</div><div class="mf"><button class="btn-sm" id="ff-x">Cancelar</button><button class="btn-sm primary" id="ff-ok">Salvar</button></div></div>';
-    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
-    o.querySelector('.x').onclick = o.querySelector('#ff-x').onclick = function () { o.remove(); };
-    o.querySelector('#ff-ok').onclick = function () {
-      var nome = o.querySelector('#ff-nome').value.trim(); if (!nome) { toast('Informe o nome', '', true); return; }
-      var motivos = Array.from(o.querySelectorAll('.ff-motivo:checked')).map(function (c) { return c.value; });
-      var dto = { nome: nome, cargo: o.querySelector('#ff-cargo').value.trim(), cpf: o.querySelector('#ff-cpf').value.trim(), setorId: o.querySelector('#ff-setor').value || null, salario: o.querySelector('#ff-salario').value, encargosPct: o.querySelector('#ff-encargos').value, beneficios: o.querySelector('#ff-beneficios').value, horasContratadasMes: o.querySelector('#ff-hc').value, horasProdutivasReaisMes: o.querySelector('#ff-hr').value, motivosPerda: motivos, ativo: o.querySelector('#ff-ativo').checked };
-      fatorFuncionarioSave(opId, dto, f ? f.id : null).then(function () { o.remove(); toast('Funcionário salvo', nome); render(); });
-    };
+      '<label class="fld" style="margin-top:10px"><input type="checkbox" id="ff-ativo"' + (!f || f.ativo ? ' checked' : '') + '> Ativo</label>';
+    openModal({
+      title: f ? 'Editar funcionário' : 'Novo funcionário produtivo', width: 560, bodyHtml: bodyHtml,
+      onConfirm: function (panel) {
+        var nome = panel.querySelector('#ff-nome').value.trim(); if (!nome) { toast('Informe o nome', '', true); return false; }
+        var motivos = Array.from(panel.querySelectorAll('.ff-motivo:checked')).map(function (c) { return c.value; });
+        var dto = { nome: nome, cargo: panel.querySelector('#ff-cargo').value.trim(), cpf: panel.querySelector('#ff-cpf').value.trim(), setorId: panel.querySelector('#ff-setor').value || null, salario: panel.querySelector('#ff-salario').value, encargosPct: panel.querySelector('#ff-encargos').value, beneficios: panel.querySelector('#ff-beneficios').value, horasContratadasMes: panel.querySelector('#ff-hc').value, horasProdutivasReaisMes: panel.querySelector('#ff-hr').value, motivosPerda: motivos, ativo: panel.querySelector('#ff-ativo').checked };
+        return fatorFuncionarioSave(opId, dto, f ? f.id : null).then(function () { toast('Funcionário salvo', nome); render(); });
+      },
+    });
   }
 
   // ---------- 4. Custos Fixos ----------
@@ -10624,7 +10685,7 @@
   function openFatorCustoFixoEditor(opId, f) {
     var setores = fatorSetores.filter(function (s) { return fatorOpMatch(s, opId); });
     var rateioRows = f && f.rateioTipo === 'SETORES' ? (f.rateioSetores || []).slice() : [];
-    var o = document.createElement('div'); o.className = 'overlay'; o.innerHTML = '<div class="modal" style="width:560px"><div class="mh"><h3>' + (f ? 'Editar custo fixo' : 'Novo custo fixo') + '</h3><button class="x">×</button></div><div class="mbd">' +
+    var bodyHtml =
       '<label class="fld">Nome *</label><input class="input" id="fx-nome" style="width:100%" value="' + esc(f ? f.nome : '') + '" placeholder="Ex.: Aluguel">' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
       '<div><label class="fld">Categoria</label><input class="input" id="fx-cat" value="' + esc(f && f.categoria || '') + '"></div>' +
@@ -10634,26 +10695,28 @@
       '<label style="font-weight:400"><input type="radio" name="fx-rateio" value="FABRICA"' + (!f || f.rateioTipo !== 'SETORES' ? ' checked' : '') + '> Toda fábrica (proporcional à capacidade de cada setor)</label>' +
       '<label style="font-weight:400"><input type="radio" name="fx-rateio" value="SETORES"' + (f && f.rateioTipo === 'SETORES' ? ' checked' : '') + '> Apenas setor(es) específico(s)</label></div>' +
       '<div id="fx-setores-box" style="display:' + (f && f.rateioTipo === 'SETORES' ? 'block' : 'none') + '"></div>' +
-      '<label class="fld" style="margin-top:8px"><input type="checkbox" id="fx-ativo"' + (!f || f.ativo !== false ? ' checked' : '') + '> Ativo</label>' +
-      '</div><div class="mf"><button class="btn-sm" id="fx-x">Cancelar</button><button class="btn-sm primary" id="fx-ok">Salvar</button></div></div>';
-    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
-    function renderRateioBox() {
-      var box = o.querySelector('#fx-setores-box');
+      '<label class="fld" style="margin-top:8px"><input type="checkbox" id="fx-ativo"' + (!f || f.ativo !== false ? ' checked' : '') + '> Ativo</label>';
+    function renderRateioBox(panel) {
+      var box = panel.querySelector('#fx-setores-box');
       box.innerHTML = rateioRows.map(function (r, i) { return '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px"><select class="select sm" data-rat-setor="' + i + '" style="flex:1">' + setores.map(function (s) { return '<option value="' + esc(s.id) + '"' + (s.id === r.setorId ? ' selected' : '') + '>' + esc(s.nome) + '</option>'; }).join('') + '</select><input class="input sm" style="width:80px" data-rat-pct="' + i + '" value="' + (r.pct != null ? r.pct : '') + '" placeholder="%"><button class="btn-sm" data-rat-del="' + i + '">×</button></div>'; }).join('') + '<button class="btn-sm" id="fx-rat-add">+ Adicionar setor</button>';
-      box.querySelectorAll('[data-rat-del]').forEach(function (b) { b.onclick = function () { rateioRows.splice(Number(b.dataset.ratDel), 1); renderRateioBox(); }; });
-      var addBtn = box.querySelector('#fx-rat-add'); if (addBtn) addBtn.onclick = function () { rateioRows.push({ setorId: setores[0] ? setores[0].id : '', pct: 0 }); renderRateioBox(); };
+      box.querySelectorAll('[data-rat-del]').forEach(function (b) { b.onclick = function () { rateioRows.splice(Number(b.dataset.ratDel), 1); renderRateioBox(panel); }; });
+      var addBtn = box.querySelector('#fx-rat-add'); if (addBtn) addBtn.onclick = function () { rateioRows.push({ setorId: setores[0] ? setores[0].id : '', pct: 0 }); renderRateioBox(panel); };
     }
-    renderRateioBox();
-    o.querySelectorAll('input[name="fx-rateio"]').forEach(function (r) { r.onchange = function () { o.querySelector('#fx-setores-box').style.display = r.value === 'SETORES' && r.checked ? 'block' : (o.querySelector('input[name="fx-rateio"]:checked').value === 'SETORES' ? 'block' : 'none'); }; });
-    o.querySelector('.x').onclick = o.querySelector('#fx-x').onclick = function () { o.remove(); };
-    o.querySelector('#fx-ok').onclick = function () {
-      var nome = o.querySelector('#fx-nome').value.trim(); if (!nome) { toast('Informe o nome', '', true); return; }
-      var tipo = o.querySelector('input[name="fx-rateio"]:checked').value;
-      var setorRows = [];
-      if (tipo === 'SETORES') { o.querySelectorAll('#fx-setores-box [data-rat-setor]').forEach(function (sel, i) { var pctInput = o.querySelector('[data-rat-pct="' + i + '"]'); setorRows.push({ setorId: sel.value, pct: cpParseNum(pctInput ? pctInput.value : 0) || 0 }); }); }
-      var dto = { nome: nome, categoria: o.querySelector('#fx-cat').value.trim(), valorMensal: o.querySelector('#fx-valor').value, rateioTipo: tipo, rateioSetores: setorRows, ativo: o.querySelector('#fx-ativo').checked };
-      fatorCustoFixoSave(opId, dto, f ? f.id : null).then(function () { o.remove(); toast('Custo fixo salvo', nome); render(); });
-    };
+    openModal({
+      title: f ? 'Editar custo fixo' : 'Novo custo fixo', width: 560, bodyHtml: bodyHtml,
+      onMount: function (panel) {
+        renderRateioBox(panel);
+        panel.querySelectorAll('input[name="fx-rateio"]').forEach(function (r) { r.onchange = function () { panel.querySelector('#fx-setores-box').style.display = r.value === 'SETORES' && r.checked ? 'block' : (panel.querySelector('input[name="fx-rateio"]:checked').value === 'SETORES' ? 'block' : 'none'); }; });
+      },
+      onConfirm: function (panel) {
+        var nome = panel.querySelector('#fx-nome').value.trim(); if (!nome) { toast('Informe o nome', '', true); return false; }
+        var tipo = panel.querySelector('input[name="fx-rateio"]:checked').value;
+        var setorRows = [];
+        if (tipo === 'SETORES') { panel.querySelectorAll('#fx-setores-box [data-rat-setor]').forEach(function (sel, i) { var pctInput = panel.querySelector('[data-rat-pct="' + i + '"]'); setorRows.push({ setorId: sel.value, pct: cpParseNum(pctInput ? pctInput.value : 0) || 0 }); }); }
+        var dto = { nome: nome, categoria: panel.querySelector('#fx-cat').value.trim(), valorMensal: panel.querySelector('#fx-valor').value, rateioTipo: tipo, rateioSetores: setorRows, ativo: panel.querySelector('#fx-ativo').checked };
+        return fatorCustoFixoSave(opId, dto, f ? f.id : null).then(function () { toast('Custo fixo salvo', nome); render(); });
+      },
+    });
   }
 
   // ---------- 5. Custos Variáveis ----------
@@ -10682,7 +10745,7 @@
   }
   function openFatorCustoVariavelEditor(opId, f) {
     var titulo = f ? 'Editar custo variável' : 'Novo custo variável';
-    var o = document.createElement('div'); o.className = 'overlay'; o.innerHTML = '<div class="modal" style="width:520px"><div class="mh"><h3>' + esc(titulo) + '</h3><button class="x">×</button></div><div class="mbd">' +
+    var bodyHtml =
       '<label class="fld">Nome *</label><input class="input" id="fv-nome" style="width:100%" value="' + esc(f ? f.nome : '') + '">' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
       '<div><label class="fld">Categoria</label><input class="input" id="fv-cat" value="' + esc(f && f.categoria || '') + '"></div>' +
@@ -10691,17 +10754,19 @@
       '<label class="fld">Unidade</label><select class="select" id="fv-unid" style="width:100%"><option value="UNIDADE"' + (!f || f.unidade === 'UNIDADE' ? ' selected' : '') + '>Por unidade produzida</option><option value="MINUTO"' + (f && f.unidade === 'MINUTO' ? ' selected' : '') + '>Por minuto</option></select>' +
       '<label class="fld">Aplicação</label><select class="select" id="fv-apl" style="width:100%"><option value="TODOS"' + (!f || f.aplicacaoTipo === 'TODOS' ? ' selected' : '') + '>Todos os produtos</option><option value="PRODUTO"' + (f && f.aplicacaoTipo === 'PRODUTO' ? ' selected' : '') + '>Produto específico</option><option value="FAMILIA"' + (f && f.aplicacaoTipo === 'FAMILIA' ? ' selected' : '') + '>Família específica</option><option value="SETOR"' + (f && f.aplicacaoTipo === 'SETOR' ? ' selected' : '') + '>Setor específico</option></select>' +
       '<div id="fv-apl-id-box" style="display:' + (f && (f.aplicacaoTipo === 'PRODUTO' || f.aplicacaoTipo === 'FAMILIA' || f.aplicacaoTipo === 'SETOR') ? 'block' : 'none') + '"><label class="fld">Selecione</label><select class="select" id="fv-apl-id" style="width:100%">' + fatorAplicacaoOptionsHtml(f && f.aplicacaoTipo, f && f.aplicacaoId) + '</select></div>' +
-      '<label class="fld" style="margin-top:8px"><input type="checkbox" id="fv-ativo"' + (!f || f.ativo !== false ? ' checked' : '') + '> Ativo</label>' +
-      '</div><div class="mf"><button class="btn-sm" id="fv-x">Cancelar</button><button class="btn-sm primary" id="fv-ok">Salvar</button></div></div>';
-    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
-    o.querySelector('#fv-apl').onchange = function () { var t = this.value; var box = o.querySelector('#fv-apl-id-box'); if (t === 'PRODUTO' || t === 'FAMILIA' || t === 'SETOR') { box.style.display = 'block'; o.querySelector('#fv-apl-id').innerHTML = fatorAplicacaoOptionsHtml(t, null); } else box.style.display = 'none'; };
-    o.querySelector('.x').onclick = o.querySelector('#fv-x').onclick = function () { o.remove(); };
-    o.querySelector('#fv-ok').onclick = function () {
-      var nome = o.querySelector('#fv-nome').value.trim(); if (!nome) { toast('Informe o nome', '', true); return; }
-      var apl = o.querySelector('#fv-apl').value;
-      var dto = { nome: nome, categoria: o.querySelector('#fv-cat').value.trim(), valor: o.querySelector('#fv-valor').value, unidade: o.querySelector('#fv-unid').value, aplicacaoTipo: apl, aplicacaoId: apl === 'TODOS' ? null : (o.querySelector('#fv-apl-id') ? o.querySelector('#fv-apl-id').value : null), ativo: o.querySelector('#fv-ativo').checked };
-      fatorCustoVariavelSave(opId, dto, f ? f.id : null).then(function () { o.remove(); toast('Custo variável salvo', nome); render(); });
-    };
+      '<label class="fld" style="margin-top:8px"><input type="checkbox" id="fv-ativo"' + (!f || f.ativo !== false ? ' checked' : '') + '> Ativo</label>';
+    openModal({
+      title: titulo, width: 520, bodyHtml: bodyHtml,
+      onMount: function (panel) {
+        panel.querySelector('#fv-apl').onchange = function () { var t = this.value; var box = panel.querySelector('#fv-apl-id-box'); if (t === 'PRODUTO' || t === 'FAMILIA' || t === 'SETOR') { box.style.display = 'block'; panel.querySelector('#fv-apl-id').innerHTML = fatorAplicacaoOptionsHtml(t, null); } else box.style.display = 'none'; };
+      },
+      onConfirm: function (panel) {
+        var nome = panel.querySelector('#fv-nome').value.trim(); if (!nome) { toast('Informe o nome', '', true); return false; }
+        var apl = panel.querySelector('#fv-apl').value;
+        var dto = { nome: nome, categoria: panel.querySelector('#fv-cat').value.trim(), valor: panel.querySelector('#fv-valor').value, unidade: panel.querySelector('#fv-unid').value, aplicacaoTipo: apl, aplicacaoId: apl === 'TODOS' ? null : (panel.querySelector('#fv-apl-id') ? panel.querySelector('#fv-apl-id').value : null), ativo: panel.querySelector('#fv-ativo').checked };
+        return fatorCustoVariavelSave(opId, dto, f ? f.id : null).then(function () { toast('Custo variável salvo', nome); render(); });
+      },
+    });
   }
 
   // ---------- 6. Impostos e Taxas Operacionais ----------
@@ -10719,19 +10784,19 @@
     document.querySelectorAll('[data-fidel]').forEach(function (b) { b.onclick = function () { if (!confirm('Remover este imposto?')) return; fatorImpostoRemove(b.dataset.fidel).then(function () { render(); toast('Removido', ''); }); }; });
   }
   function openFatorImpostoEditor(opId, i) {
-    var o = document.createElement('div'); o.className = 'overlay'; o.innerHTML = '<div class="modal" style="width:420px"><div class="mh"><h3>' + (i ? 'Editar imposto' : 'Novo imposto') + '</h3><button class="x">×</button></div><div class="mbd">' +
+    var bodyHtml =
       '<label class="fld">Nome *</label><input class="input" id="fi-nome" style="width:100%" value="' + esc(i ? i.nome : '') + '" placeholder="Ex.: Simples Nacional">' +
       '<label class="fld">Percentual (%)</label><input class="input" id="fi-pct" style="width:100%" value="' + (i && i.percentual != null ? i.percentual : '') + '" placeholder="8,00">' +
       '<label class="fld">Base de cálculo</label><select class="select" id="fi-base" style="width:100%"><option value="BRUTA"' + (!i || i.baseCalculo === 'BRUTA' ? ' selected' : '') + '>Venda bruta</option><option value="LIQUIDA"' + (i && i.baseCalculo === 'LIQUIDA' ? ' selected' : '') + '>Receita líquida</option></select>' +
-      '<label class="fld" style="margin-top:8px"><input type="checkbox" id="fi-ativo"' + (!i || i.ativo !== false ? ' checked' : '') + '> Ativo</label>' +
-      '</div><div class="mf"><button class="btn-sm" id="fi-x">Cancelar</button><button class="btn-sm primary" id="fi-ok">Salvar</button></div></div>';
-    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
-    o.querySelector('.x').onclick = o.querySelector('#fi-x').onclick = function () { o.remove(); };
-    o.querySelector('#fi-ok').onclick = function () {
-      var nome = o.querySelector('#fi-nome').value.trim(); if (!nome) { toast('Informe o nome', '', true); return; }
-      var dto = { nome: nome, percentual: o.querySelector('#fi-pct').value, baseCalculo: o.querySelector('#fi-base').value, ativo: o.querySelector('#fi-ativo').checked };
-      fatorImpostoSave(opId, dto, i ? i.id : null).then(function () { o.remove(); toast('Imposto salvo', nome); render(); });
-    };
+      '<label class="fld" style="margin-top:8px"><input type="checkbox" id="fi-ativo"' + (!i || i.ativo !== false ? ' checked' : '') + '> Ativo</label>';
+    openModal({
+      title: i ? 'Editar imposto' : 'Novo imposto', width: 420, bodyHtml: bodyHtml,
+      onConfirm: function (panel) {
+        var nome = panel.querySelector('#fi-nome').value.trim(); if (!nome) { toast('Informe o nome', '', true); return false; }
+        var dto = { nome: nome, percentual: panel.querySelector('#fi-pct').value, baseCalculo: panel.querySelector('#fi-base').value, ativo: panel.querySelector('#fi-ativo').checked };
+        return fatorImpostoSave(opId, dto, i ? i.id : null).then(function () { toast('Imposto salvo', nome); render(); });
+      },
+    });
   }
 
   // ---------- 7. Processos Produtivos ----------
@@ -10751,7 +10816,7 @@
   }
   function openFatorProcessoEditor(opId, p) {
     var setOpts = fatorSetores.filter(function (s) { return fatorOpMatch(s, opId); }).map(function (s) { return '<option value="' + esc(s.id) + '"' + (p && p.setorId === s.id ? ' selected' : '') + '>' + esc(s.nome) + '</option>'; }).join('');
-    var o = document.createElement('div'); o.className = 'overlay'; o.innerHTML = '<div class="modal" style="width:520px"><div class="mh"><h3>' + (p ? 'Editar processo' : 'Novo processo produtivo') + '</h3><button class="x">×</button></div><div class="mbd">' +
+    var bodyHtml =
       '<label class="fld">Nome *</label><input class="input" id="fp-nome" style="width:100%" value="' + esc(p ? p.nome : '') + '" placeholder="Ex.: Montagem">' +
       '<label class="fld">Setor *</label><select class="select" id="fp-setor" style="width:100%">' + setOpts + '</select>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
@@ -10760,16 +10825,16 @@
       '</div>' +
       '<label class="fld">Máquina utilizada</label><input class="input" id="fp-maq" style="width:100%" value="' + esc(p && p.maquina || '') + '">' +
       '<label class="fld">Custo adicional (R$, por unidade produzida)</label><input class="input" id="fp-add" style="width:100%" value="' + (p && p.custoAdicional != null ? p.custoAdicional : '') + '">' +
-      '<label class="fld" style="margin-top:8px"><input type="checkbox" id="fp-ativo"' + (!p || p.ativo !== false ? ' checked' : '') + '> Ativo</label>' +
-      '</div><div class="mf"><button class="btn-sm" id="fp-x">Cancelar</button><button class="btn-sm primary" id="fp-ok">Salvar</button></div></div>';
-    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
-    o.querySelector('.x').onclick = o.querySelector('#fp-x').onclick = function () { o.remove(); };
-    o.querySelector('#fp-ok').onclick = function () {
-      var nome = o.querySelector('#fp-nome').value.trim(); if (!nome) { toast('Informe o nome', '', true); return; }
-      var setorId = o.querySelector('#fp-setor').value; if (!setorId) { toast('Selecione o setor', '', true); return; }
-      var dto = { nome: nome, setorId: setorId, tempoPadraoMin: o.querySelector('#fp-tempo').value, funcionarioMedioQtd: o.querySelector('#fp-func').value, maquina: o.querySelector('#fp-maq').value, custoAdicional: o.querySelector('#fp-add').value, ativo: o.querySelector('#fp-ativo').checked };
-      fatorProcessoSave(opId, dto, p ? p.id : null).then(function () { o.remove(); toast('Processo salvo', nome); render(); });
-    };
+      '<label class="fld" style="margin-top:8px"><input type="checkbox" id="fp-ativo"' + (!p || p.ativo !== false ? ' checked' : '') + '> Ativo</label>';
+    openModal({
+      title: p ? 'Editar processo' : 'Novo processo produtivo', width: 520, bodyHtml: bodyHtml,
+      onConfirm: function (panel) {
+        var nome = panel.querySelector('#fp-nome').value.trim(); if (!nome) { toast('Informe o nome', '', true); return false; }
+        var setorId = panel.querySelector('#fp-setor').value; if (!setorId) { toast('Selecione o setor', '', true); return false; }
+        var dto = { nome: nome, setorId: setorId, tempoPadraoMin: panel.querySelector('#fp-tempo').value, funcionarioMedioQtd: panel.querySelector('#fp-func').value, maquina: panel.querySelector('#fp-maq').value, custoAdicional: panel.querySelector('#fp-add').value, ativo: panel.querySelector('#fp-ativo').checked };
+        return fatorProcessoSave(opId, dto, p ? p.id : null).then(function () { toast('Processo salvo', nome); render(); });
+      },
+    });
   }
 
   // ---------- 8. Roteiro por Família (+ exceção por SKU) ----------
