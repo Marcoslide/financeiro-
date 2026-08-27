@@ -7749,7 +7749,13 @@
     // variação fora do filtro fica órfã mesmo depois do usuário "classificar todas via master".
     function editMasterFamily(cell, pid, masters) { var m = masters.find(function (x) { return x.p.id === pid; }); if (!m) return; var actives = S2.families.filter(function (f) { return f.status === 'ACTIVE'; }); cell.innerHTML = '<select class="select sm inl"><option value="">— sem família —</option>' + actives.map(function (f) { return '<option value="' + f.id + '">' + esc(f.name) + '</option>'; }).join('') + '<option value="__new">+ criar nova família…</option></select>'; var se = cell.querySelector('select'); se.focus(); se.onkeydown = function (e) { if (e.key === 'Escape') refresh(); }; se.onchange = function () { var all = m.all; if (se.value === '__new') { familyEditor(null, function (f) { assignFamilyToVariations(all.map(function (v) { return v.id; }), f.id).then(function () { refresh(); toast('Família criada e aplicada', all.length + ' SKUs em “' + f.name + '”.'); }); }); return; } var fid = se.value || null; var mixed = uniq(all.map(function (v) { return v.familyId || null; })); var needConfirm = all.length > 1 && (mixed.length > 1 || (mixed.length === 1 && mixed[0] !== fid && mixed[0] != null)); var apply = function () { assignFamilyToVariations(all.map(function (v) { return v.id; }), fid).then(function () { refresh(); toast(fid ? 'Família aplicada' : 'Família removida', all.length + ' SKUs' + (fid ? ' classificados em “' + famName(fid) + '”' : '') + '.'); }); }; if (needConfirm) confirmModal('Aplicar família a ' + all.length + ' variações?', 'Este anúncio possui variações com classificações diferentes. Aplicar “' + (fid ? famName(fid) : 'sem família') + '” substituirá as famílias atuais em TODAS as ' + all.length + ' variações do produto (não só as visíveis no filtro atual).', apply, refresh); else apply(); }; }
     function editMasterClose(cell, pid, masters) { var m = masters.find(function (x) { return x.p.id === pid; }); if (!m) return; cell.innerHTML = '<input class="input sm inl" style="width:120px" placeholder="0,00">'; var inp = cell.querySelector('input'); inp.focus(); function done() { var val = parseNum(inp.value), all = m.all, hasIndiv = all.some(function (v) { return v.closingPrice != null; }) && uniq(all.map(function (v) { return v.closingPrice == null ? null : v.closingPrice; })).length > 1; var apply = function () { all.forEach(function (v) { v.closingPrice = val; }); saveVars(all).then(function () { refresh(); toast('Preço aplicado', all.length + ' SKUs com ' + brl(val) + '.'); }); }; if (all.length > 1 && hasIndiv) confirmModal('Aplicar ' + brl(val) + ' a ' + all.length + ' variações?', 'Existem preços de fechamento individuais neste anúncio. Eles serão substituídos em TODAS as ' + all.length + ' variações do produto.', apply, refresh); else apply(); } inp.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); done(); } else if (e.key === 'Escape') refresh(); }; inp.onblur = function () { setTimeout(function () { if (document.body.contains(inp)) refresh(); }, 120); }; }
-    function confirmModal(title, body, onYes, onNo) { var o = overlay('<div class="mh"><h3>' + esc(title) + '</h3><button class="x">×</button></div><div class="mbd"><p style="margin-top:0">' + esc(body) + '</p></div><div class="mf"><button class="btn-sm" id="no">Cancelar</button><button class="btn-sm primary" id="yes">Aplicar</button></div>'); o.querySelector('.x').onclick = o.querySelector('#no').onclick = function () { o.remove(); if (onNo) onNo(); }; o.querySelector('#yes').onclick = function () { o.remove(); onYes(); }; }
+    function confirmModal(title, body, onYes, onNo) {
+      var m = openModal({
+        title: title, width: 480, bodyHtml: '<p style="margin-top:0">' + esc(body) + '</p>',
+        confirmLabel: 'Aplicar', onCancel: onNo,
+        onConfirm: function () { m.close(); onYes(); },
+      });
+    }
     // PROMPT "Correção cadastro de Famílias, Produtos e Variações" — Edição em massa: botão único
     // "Alterar selecionadas" que informa Família E Custo juntos pra N variações selecionadas —
     // reaproveita openCostEditor (já faz exatamente isso, família+custo numa modal só) em vez de criar
@@ -7763,16 +7769,58 @@
     function statusBulk(st) { var pset = {}; selIds().forEach(function (id) { var v = S2.variations.find(function (x) { return x.id === id; }); if (v) pset[v.productId] = 1; }); var ch = []; S2.products.forEach(function (p) { if (pset[p.id]) { p.status = st; ch.push(p); } }); dbPut('products', ch).then(function () { onChange(); S2.selected.clear(); S2.allFiltered = false; refresh(); toast('Status alterado', 'Anúncios ' + (st === 'ACTIVE' ? 'ativados' : 'inativados') + '.'); }); }
     function openAssign() {
       var ids = selIds(), actives = S2.families.filter(function (f) { return f.status === 'ACTIVE'; });
-      var o = overlay('<div class="mh"><h3>Classificar família</h3><button class="x">×</button></div><div class="mbd"><p class="footnote" style="margin-top:0"><b>' + ids.length + '</b> SKUs serão alterados.</p><div id="ab"></div></div><div class="mf" id="af"></div>');
-      o.querySelector('.x').onclick = function () { o.remove(); };
       var creating = false, chosen = '';
-      function draw() { var body = o.querySelector('#ab'), foot = o.querySelector('#af'); if (creating) { body.innerHTML = '<div id="qe"></div><label class="fld">Nome da família *</label><input class="input" id="qn" placeholder="Ex.: Quadro 40x60 Premium com Vidro"><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><div><label class="fld">Código</label><input class="input" id="qc"></div><div><label class="fld">Custo (R$)</label><input class="input" id="qcost" placeholder="0,00"></div></div>'; foot.innerHTML = '<button class="btn-sm" id="qb">Voltar</button><button class="btn-sm primary" id="qcr">Criar e usar</button>'; o.querySelector('#qb').onclick = function () { creating = false; draw(); }; o.querySelector('#qcr').onclick = function () { var n = o.querySelector('#qn').value.trim(); if (!n) { o.querySelector('#qe').innerHTML = '<div class="form-err">Informe o nome.</div>'; return; } createFamily({ name: n, internalCode: o.querySelector('#qc').value.trim(), cost: o.querySelector('#qcost').value }).then(function (f) { creating = false; chosen = f.id; draw(); }); }; return; } var cf = S2.families.find(function (f) { return f.id === chosen; }); body.innerHTML = '<label class="fld">Família</label><select class="select" id="fs" style="width:100%"><option value="">— remover família —</option>' + actives.map(function (f) { return '<option value="' + f.id + '"' + (chosen === f.id ? ' selected' : '') + '>' + esc(f.name) + (f.currentCostAmount != null ? ' (' + brl(f.currentCostAmount) + ')' : ' (sem custo)') + '</option>'; }).join('') + '</select><div style="display:flex;gap:12px;margin-top:8px"><button class="link-btn" id="nf">+ Criar nova família</button></div>' + (cf ? '<div class="ro" style="margin-top:12px">Custo herdado: <b>' + (cf.currentCostAmount != null ? brl(cf.currentCostAmount) : 'não informado') + '</b></div>' : ''); foot.innerHTML = '<button class="btn-sm" id="ac">Cancelar</button><button class="btn-sm primary" id="ap">Aplicar a ' + ids.length + ' SKUs</button>'; o.querySelector('#fs').onchange = function () { chosen = this.value; draw(); }; o.querySelector('#nf').onclick = function () { creating = true; draw(); }; o.querySelector('#ac').onclick = function () { o.remove(); }; o.querySelector('#ap').onclick = function () { applyFamily(ids, chosen || null); o.remove(); }; }
-      draw();
+      var m = openModal({
+        title: 'Classificar família', width: 480,
+        bodyHtml: '<p class="footnote" style="margin-top:0"><b>' + ids.length + '</b> SKUs serão alterados.</p><div id="ab"></div>',
+        onMount: function (panel) {
+          // Footer dinâmico com 2 estados diferentes (normal / criando família), incluindo um
+          // "Voltar" que NÃO fecha o modal — o par fixo Cancelar/Confirmar do openModal() não cobre
+          // esse fluxo, então aqui ele só fornece a moldura (título/X/clique fora/empilhamento) e o
+          // footer original (mesmos ids/handlers de antes) continua sendo desenhado à mão.
+          panel.querySelector('.mf').style.display = 'none';
+          var foot = document.createElement('div'); foot.className = 'mf'; panel.appendChild(foot);
+          var body = panel.querySelector('#ab');
+          function draw() {
+            if (creating) {
+              body.innerHTML = '<div id="qe"></div><label class="fld">Nome da família *</label><input class="input" id="qn" placeholder="Ex.: Quadro 40x60 Premium com Vidro"><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><div><label class="fld">Código</label><input class="input" id="qc"></div><div><label class="fld">Custo (R$)</label><input class="input" id="qcost" placeholder="0,00"></div></div>';
+              foot.innerHTML = '<button class="btn-sm" id="qb">Voltar</button><button class="btn-sm primary" id="qcr">Criar e usar</button>';
+              body.querySelector('#qn').focus();
+              foot.querySelector('#qb').onclick = function () { creating = false; draw(); };
+              foot.querySelector('#qcr').onclick = function () { var n = body.querySelector('#qn').value.trim(); if (!n) { body.querySelector('#qe').innerHTML = '<div class="form-err">Informe o nome.</div>'; return; } createFamily({ name: n, internalCode: body.querySelector('#qc').value.trim(), cost: body.querySelector('#qcost').value }).then(function (f) { creating = false; chosen = f.id; draw(); }); };
+              return;
+            }
+            var cf = S2.families.find(function (f) { return f.id === chosen; });
+            body.innerHTML = '<label class="fld">Família</label><select class="select" id="fs" style="width:100%"><option value="">— remover família —</option>' + actives.map(function (f) { return '<option value="' + f.id + '"' + (chosen === f.id ? ' selected' : '') + '>' + esc(f.name) + (f.currentCostAmount != null ? ' (' + brl(f.currentCostAmount) + ')' : ' (sem custo)') + '</option>'; }).join('') + '</select><div style="display:flex;gap:12px;margin-top:8px"><button class="link-btn" id="nf">+ Criar nova família</button></div>' + (cf ? '<div class="ro" style="margin-top:12px">Custo herdado: <b>' + (cf.currentCostAmount != null ? brl(cf.currentCostAmount) : 'não informado') + '</b></div>' : '');
+            foot.innerHTML = '<button class="btn-sm" id="ac">Cancelar</button><button class="btn-sm primary" id="ap">Aplicar a ' + ids.length + ' SKUs</button>';
+            body.querySelector('#fs').onchange = function () { chosen = this.value; draw(); };
+            body.querySelector('#nf').onclick = function () { creating = true; draw(); };
+            foot.querySelector('#ac').onclick = function () { m.close(); };
+            foot.querySelector('#ap').onclick = function () { applyFamily(ids, chosen || null); m.close(); };
+          }
+          draw();
+        },
+      });
     }
     // PROMPT "Fase de correção geral pós-auditoria E2E" §Fase 5.2: mensagem precisa refletir a ação
     // real — "Família atribuída" aparecendo quando o operador REMOVE a família (fid null) é enganoso.
     function applyFamily(ids, fid) { assignFamilyToVariations(ids, fid).then(function () { S2.selected.clear(); S2.allFiltered = false; refresh(); toast(fid ? 'Família atribuída' : 'Família removida', ids.length + ' SKUs' + (fid ? ' em “' + famName(fid) + '”' : '') + '.'); }); }
-    function openBulkPrice() { var ids = selIds(), o = overlay('<div class="mh"><h3>Preço de fechamento em massa</h3><button class="x">×</button></div><div class="mbd"><p class="footnote" style="margin-top:0"><b>' + ids.length + '</b> SKUs serão alterados. O preço Shopee não muda.</p><label class="fld">Preço de fechamento (R$)</label><input class="input" id="bp" placeholder="0,00"></div><div class="mf"><button class="btn-sm" id="c">Cancelar</button><button class="btn-sm primary" id="ok">Aplicar a ' + ids.length + ' SKUs</button></div>'); o.querySelector('.x').onclick = o.querySelector('#c').onclick = function () { o.remove(); }; o.querySelector('#ok').onclick = function () { var val = parseNum(o.querySelector('#bp').value), ch = []; ids.forEach(function (id) { var v = S2.variations.find(function (x) { return x.id === id; }); if (v) { v.closingPrice = val; ch.push(v); } }); saveVars(ch).then(function () { S2.selected.clear(); S2.allFiltered = false; o.remove(); refresh(); toast('Preço aplicado', ids.length + ' SKUs com ' + brl(val) + '.'); }); }; }
+    function openBulkPrice() {
+      var ids = selIds();
+      openModal({
+        title: 'Preço de fechamento em massa', width: 480,
+        bodyHtml: '<p class="footnote" style="margin-top:0"><b>' + ids.length + '</b> SKUs serão alterados. O preço Shopee não muda.</p><label class="fld">Preço de fechamento (R$)</label><input class="input" id="bp" placeholder="0,00">',
+        confirmLabel: 'Aplicar a ' + ids.length + ' SKUs',
+        onConfirm: function (panel) {
+          var val = parseNum(panel.querySelector('#bp').value), ch = [];
+          ids.forEach(function (id) { var v = S2.variations.find(function (x) { return x.id === id; }); if (v) { v.closingPrice = val; ch.push(v); } });
+          return saveVars(ch).then(function () {
+            S2.selected.clear(); S2.allFiltered = false; refresh();
+            toast('Preço aplicado', ids.length + ' SKUs com ' + brl(val) + '.');
+          });
+        },
+      });
+    }
     // Editor de CUSTO direto na célula: escolher OU criar família e informar o custo unitário (§26 — custo mora na família).
     function openCostEditor(vids) {
       var vs = vids.map(function (id) { return S2.variations.find(function (v) { return v.id === id; }); }).filter(Boolean);
@@ -7780,47 +7828,81 @@
       var famIds = uniq(vs.map(function (v) { return v.familyId || null; }));
       var curFam = famIds.length === 1 && famIds[0] ? famById()[famIds[0]] : null;
       var actives = S2.families.filter(function (f) { return f.status === 'ACTIVE'; });
-      var o = overlay('<div class="mh"><h3>Custo do produto</h3><button class="x">×</button></div><div class="mbd">' +
-        '<p class="footnote" style="margin-top:0">O custo pertence à <b>família</b> e é herdado por todos os SKUs vinculados. ' + vs.length + ' SKU(s) selecionado(s).</p>' +
-        '<div id="ce"></div>' +
-        '<label class="fld">Família</label><select class="select" id="csel" style="width:100%"><option value="">— escolher família —</option>' +
-        actives.map(function (f) { return '<option value="' + f.id + '"' + (curFam && curFam.id === f.id ? ' selected' : '') + '>' + esc(f.name) + (f.currentCostAmount != null ? ' (' + brl(f.currentCostAmount) + ')' : ' (sem custo)') + '</option>'; }).join('') +
-        '<option value="__new">+ Criar nova família…</option></select><div id="cnew"></div>' +
-        '<label class="fld">Custo unitário (R$)</label><input class="input" id="ccost" placeholder="0,00" value="' + (curFam && curFam.currentCostAmount != null ? curFam.currentCostAmount : '') + '"><div class="footnote" id="chint">' + (curFam && curFam.currentCostAmount != null ? 'Herdado da família' : '') + '</div>' +
-        '<div class="footnote">Ao salvar, o custo passa a valer para todos os SKUs da família (histórico preservado) e o lucro dos Pedidos é recalculado.</div>' +
-        '</div><div class="mf"><button class="btn-sm" id="cx">Cancelar</button><button class="btn-sm primary" id="cok">Salvar custo</button></div>');
-      var sel = o.querySelector('#csel');
-      function drawNew() { var box = o.querySelector('#cnew'); box.innerHTML = sel.value === '__new' ? '<label class="fld">Nome da nova família *</label><input class="input" id="cnn" placeholder="Ex.: Quadro 40x60 Premium">' : ''; }
-      // Ao escolher uma família existente, preenche o custo herdado dela imediatamente (§ correção custo).
-      function fillCost() { if (sel.value && sel.value !== '__new') { var fm = famById()[sel.value]; var ci = o.querySelector('#ccost'); var hint = o.querySelector('#chint'); if (fm && fm.currentCostAmount != null) { ci.value = fm.currentCostAmount; if (hint) hint.textContent = 'Herdado da família'; } else { ci.value = ''; if (hint) hint.textContent = fm ? 'Família sem custo — informe o custo' : ''; } } }
-      sel.onchange = function () { drawNew(); fillCost(); }; drawNew();
-      o.querySelector('.x').onclick = o.querySelector('#cx').onclick = function () { o.remove(); };
-      o.querySelector('#cok').onclick = function () {
-        var cost = o.querySelector('#ccost').value, costNum = parseNum(cost);
-        if (costNum == null) { o.querySelector('#ce').innerHTML = '<div class="form-err">Informe o custo unitário.</div>'; return; }
-        var val = sel.value, chain;
-        if (val === '__new') { var nm = (o.querySelector('#cnn').value || '').trim(); if (!nm) { o.querySelector('#ce').innerHTML = '<div class="form-err">Informe o nome da nova família.</div>'; return; } chain = createFamily({ name: nm, cost: cost }).then(function (f) { return f.id; }); }
-        else if (val) { chain = updateFamily(famById()[val], { cost: cost }).then(function () { return val; }); }
-        else { o.querySelector('#ce').innerHTML = '<div class="form-err">Escolha ou crie uma família.</div>'; return; }
-        chain.then(function (fid) { return assignFamilyToVariations(vs.map(function (v) { return v.id; }), fid).then(function () { return fid; }); }).then(function (fid) {
+      openModal({
+        title: 'Custo do produto', width: 480,
+        bodyHtml: '<p class="footnote" style="margin-top:0">O custo pertence à <b>família</b> e é herdado por todos os SKUs vinculados. ' + vs.length + ' SKU(s) selecionado(s).</p>' +
+          '<label class="fld">Família</label><select class="select" id="csel" style="width:100%"><option value="">— escolher família —</option>' +
+          actives.map(function (f) { return '<option value="' + f.id + '"' + (curFam && curFam.id === f.id ? ' selected' : '') + '>' + esc(f.name) + (f.currentCostAmount != null ? ' (' + brl(f.currentCostAmount) + ')' : ' (sem custo)') + '</option>'; }).join('') +
+          '<option value="__new">+ Criar nova família…</option></select><div id="cnew"></div>' +
+          '<label class="fld">Custo unitário (R$)</label><input class="input" id="ccost" placeholder="0,00" value="' + (curFam && curFam.currentCostAmount != null ? curFam.currentCostAmount : '') + '"><div class="footnote" id="chint">' + (curFam && curFam.currentCostAmount != null ? 'Herdado da família' : '') + '</div>' +
+          '<div class="footnote">Ao salvar, o custo passa a valer para todos os SKUs da família (histórico preservado) e o lucro dos Pedidos é recalculado.</div>',
+        confirmLabel: 'Salvar custo',
+        onMount: function (panel) {
+          var sel = panel.querySelector('#csel');
+          function drawNew() { var box = panel.querySelector('#cnew'); box.innerHTML = sel.value === '__new' ? '<label class="fld">Nome da nova família *</label><input class="input" id="cnn" placeholder="Ex.: Quadro 40x60 Premium">' : ''; }
+          // Ao escolher uma família existente, preenche o custo herdado dela imediatamente (§ correção custo).
+          function fillCost() { if (sel.value && sel.value !== '__new') { var fm = famById()[sel.value]; var ci = panel.querySelector('#ccost'); var hint = panel.querySelector('#chint'); if (fm && fm.currentCostAmount != null) { ci.value = fm.currentCostAmount; if (hint) hint.textContent = 'Herdado da família'; } else { ci.value = ''; if (hint) hint.textContent = fm ? 'Família sem custo — informe o custo' : ''; } } }
+          sel.onchange = function () { drawNew(); fillCost(); }; drawNew();
+        },
+        onConfirm: function (panel) {
+          var cost = panel.querySelector('#ccost').value, costNum = parseNum(cost);
+          if (costNum == null) { toast('Informe o custo unitário', '', true); return false; }
+          var sel = panel.querySelector('#csel'), val = sel.value, chain;
+          if (val === '__new') {
+            var nm = (panel.querySelector('#cnn').value || '').trim();
+            if (!nm) { toast('Informe o nome da nova família', '', true); return false; }
+            chain = createFamily({ name: nm, cost: cost }).then(function (f) { return f.id; });
+          } else if (val) {
+            chain = updateFamily(famById()[val], { cost: cost }).then(function () { return val; });
+          } else {
+            toast('Escolha ou crie uma família', '', true); return false;
+          }
           // §7: nunca mostrar "Custo salvo" sem antes provar, SKU a SKU, que Pedidos já consegue ler o
           // custo (resolveSkuCost encontrado, com a família e o custo corretos) — se algum SKU afetado
           // ainda não resolve, mostrar o motivo técnico em vez de fingir sucesso.
-          var falhas = [];
-          vs.forEach(function (v) {
-            var r1 = v.sku ? resolveSkuCost(v.sku) : null;
-            var r2 = v.referenceSku ? resolveSkuCost(v.referenceSku) : null;
-            var ok = (r1 && r1.found && r1.familyId === fid) || (r2 && r2.found && r2.familyId === fid);
-            if (!ok) falhas.push((v.sku || v.referenceSku || v.id) + ' (' + ((r1 && SKU_MOTIVO_LABEL[r1.motivo]) || (r2 && SKU_MOTIVO_LABEL[r2.motivo]) || 'não resolvido') + ')');
+          return chain.then(function (fid) { return assignFamilyToVariations(vs.map(function (v) { return v.id; }), fid).then(function () { return fid; }); }).then(function (fid) {
+            var falhas = [];
+            vs.forEach(function (v) {
+              var r1 = v.sku ? resolveSkuCost(v.sku) : null;
+              var r2 = v.referenceSku ? resolveSkuCost(v.referenceSku) : null;
+              var ok = (r1 && r1.found && r1.familyId === fid) || (r2 && r2.found && r2.familyId === fid);
+              if (!ok) falhas.push((v.sku || v.referenceSku || v.id) + ' (' + ((r1 && SKU_MOTIVO_LABEL[r1.motivo]) || (r2 && SKU_MOTIVO_LABEL[r2.motivo]) || 'não resolvido') + ')');
+            });
+            refresh();
+            if (falhas.length) toast('Custo salvo, mas não confirmado em todos os SKUs', 'Pedidos ainda não conseguirá ler o custo de: ' + falhas.join('; ') + '.', true);
+            else toast('Custo salvo', vs.length + ' SKU(s) · custo unitário ' + brl(costNum) + '.');
           });
-          o.remove(); refresh();
-          if (falhas.length) toast('Custo salvo, mas não confirmado em todos os SKUs', 'Pedidos ainda não conseguirá ler o custo de: ' + falhas.join('; ') + '.', true);
-          else toast('Custo salvo', vs.length + ' SKU(s) · custo unitário ' + brl(costNum) + '.');
-        });
-      };
+        },
+      });
     }
-    function overlay(html, w) { var o = document.createElement('div'); o.className = 'overlay'; o.innerHTML = '<div class="modal" style="width:' + (w || 520) + 'px">' + html + '</div>'; o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o); return o; }
-    function openImportModal() { var o = overlay('<div class="mh"><h3>Importar planilha da Shopee</h3><button class="x">×</button></div><div class="mbd"><div class="dz" id="dz"><div style="font-size:26px;opacity:.4">⭱</div><div class="footnote" id="dzt" style="margin-top:6px">Arraste o arquivo .xlsx ou clique para selecionar</div><input type="file" accept=".xlsx" class="hidden" id="file"></div><div class="footnote">Reimportar sincroniza nome/preço/estoque da Shopee sem duplicar; família, preço de fechamento e custo são preservados.</div><div id="ie"></div></div><div class="mf"><button class="btn-sm" id="c">Cancelar</button><button class="btn-sm primary" id="go" disabled>Importar</button></div>'); var file = null, dz = o.querySelector('#dz'), inp = o.querySelector('#file'); o.querySelector('.x').onclick = o.querySelector('#c').onclick = function () { o.remove(); }; dz.onclick = function () { inp.click(); }; dz.ondragover = function (e) { e.preventDefault(); dz.classList.add('over'); }; dz.ondragleave = function () { dz.classList.remove('over'); }; dz.ondrop = function (e) { e.preventDefault(); dz.classList.remove('over'); file = e.dataTransfer.files[0]; show(); }; inp.onchange = function () { file = inp.files[0]; show(); }; function show() { if (file) { o.querySelector('#dzt').innerHTML = '<b>' + esc(file.name) + '</b> · ' + (file.size / 1024).toFixed(0) + ' KB'; o.querySelector('#go').disabled = false; } } o.querySelector('#go').onclick = function () { file.arrayBuffer().then(function (ab) { try { var parsed = parse(ab, file.name); if (parsed.notRecognized) { o.querySelector('#ie').innerHTML = '<div class="form-err">Cabeçalho de produtos não encontrado nesta planilha.</div>'; return; } syncRows(parsed.rows, file.name).then(function (res) { o.remove(); render(); toast(res.errors ? 'Importação concluída com erros' : 'Importação concluída', res.total + ' SKUs · ' + (res.newProducts + res.newVariations) + ' novos · ' + res.updated + ' atualizados · ' + res.unchanged + ' sem alteração · ' + res.errors + ' erros', res.errors > 0); }); } catch (e) { o.querySelector('#ie').innerHTML = '<div class="form-err">' + esc(e.message || e) + '</div>'; } }); }; }
+    function openImportModal() {
+      var file = null;
+      openModal({
+        title: 'Importar planilha da Shopee', width: 520,
+        bodyHtml: '<div class="dz" id="dz"><div style="font-size:26px;opacity:.4">⭱</div><div class="footnote" id="dzt" style="margin-top:6px">Arraste o arquivo .xlsx ou clique para selecionar</div><input type="file" accept=".xlsx" class="hidden" id="file"></div><div class="footnote">Reimportar sincroniza nome/preço/estoque da Shopee sem duplicar; família, preço de fechamento e custo são preservados.</div>',
+        confirmLabel: 'Importar',
+        onMount: function (panel) {
+          var dz = panel.querySelector('#dz'), inp = panel.querySelector('#file'), confirmBtn = panel.querySelector('#mdl-confirm');
+          confirmBtn.disabled = true;
+          function show() { if (file) { panel.querySelector('#dzt').innerHTML = '<b>' + esc(file.name) + '</b> · ' + (file.size / 1024).toFixed(0) + ' KB'; confirmBtn.disabled = false; } }
+          dz.onclick = function () { inp.click(); };
+          dz.ondragover = function (e) { e.preventDefault(); dz.classList.add('over'); };
+          dz.ondragleave = function () { dz.classList.remove('over'); };
+          dz.ondrop = function (e) { e.preventDefault(); dz.classList.remove('over'); file = e.dataTransfer.files[0]; show(); };
+          inp.onchange = function () { file = inp.files[0]; show(); };
+        },
+        onConfirm: function () {
+          if (!file) return false;
+          return file.arrayBuffer().then(function (ab) {
+            var parsed = parse(ab, file.name);
+            if (parsed.notRecognized) throw new Error('Cabeçalho de produtos não encontrado nesta planilha.');
+            return syncRows(parsed.rows, file.name).then(function (res) {
+              render(); toast(res.errors ? 'Importação concluída com erros' : 'Importação concluída', res.total + ' SKUs · ' + (res.newProducts + res.newVariations) + ' novos · ' + res.updated + ' atualizados · ' + res.unchanged + ' sem alteração · ' + res.errors + ' erros', res.errors > 0);
+            });
+          });
+        },
+      });
+    }
 
     // PROMPT "Fator de Custo": tempoProducaoMin é campo puramente aditivo (não afeta currentCostAmount
     // nem nenhum consumidor existente de família) — usado só pelo motor fatorTempoProducaoPedido() para
@@ -7832,7 +7914,27 @@
       wireTabs(); q('#nf').onclick = function () { familyEditor(null); }; q('#fq').oninput = debounce(drawFam, 180); q('#fst').onchange = drawFam; drawFam();
       function drawFam() { var qv = normalize(q('#fq').value), st = q('#fst').value, counts = {}; S2.variations.forEach(function (v) { if (v.familyId) counts[v.familyId] = (counts[v.familyId] || 0) + 1; }); var list = S2.families.filter(function (f) { return (!qv || normalize(f.name).indexOf(qv) >= 0) && (st === '' || (st === 'NOCOST' ? f.currentCostAmount == null : f.status === st)); }).sort(function (a, b) { return a.name.localeCompare(b.name); }); q('#fl').innerHTML = list.length ? '<div class="table-wrap"><table><thead><tr><th>Família</th><th>Código</th><th>Custo atual</th><th>SKUs vinculados</th><th>Status</th><th>Custo atualizado</th><th></th></tr></thead><tbody>' + list.map(function (f) { return '<tr><td><b>' + esc(f.name) + '</b></td><td class="mono">' + esc(f.internalCode || '—') + '</td><td>' + (f.currentCostAmount != null ? brl(f.currentCostAmount) : '<span class="badge b-warn">não informado</span>') + '</td><td>' + (counts[f.id] || 0) + '</td><td><span class="badge ' + (f.status === 'ACTIVE' ? 'b-ok' : 'b-neutral') + '">' + (f.status === 'ACTIVE' ? 'Ativa' : 'Inativa') + '</span></td><td class="footnote" style="margin:0">' + (f.costUpdatedAt ? new Date(f.costUpdatedAt).toLocaleString('pt-BR') : '—') + '</td><td><button class="btn-sm" data-fam="' + f.id + '">Editar</button></td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="empty"><div class="ico">⁘</div><p>Nenhuma família. Crie a primeira para atribuir custo.</p></div>'; appEl.querySelectorAll('[data-fam]').forEach(function (b) { b.onclick = function () { familyEditor(S2.families.find(function (x) { return x.id === b.dataset.fam; })); }; }); }
     }
-    function familyEditor(fam, onSaved) { var o = overlay('<div class="mh"><h3>' + (fam ? 'Editar família' : 'Nova família') + '</h3><button class="x">×</button></div><div class="mbd" style="max-height:72vh;overflow:auto"><div id="fe"></div><label class="fld">Nome *</label><input class="input" id="fn" value="' + esc(fam ? fam.name : '') + '"><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><div><label class="fld">Código interno</label><input class="input" id="fc" value="' + esc(fam && fam.internalCode || '') + '"></div><div><label class="fld">Custo (R$)</label><input class="input" id="fcost" value="' + (fam && fam.currentCostAmount != null ? fam.currentCostAmount : '') + '" placeholder="0,00"></div></div><label class="fld">Tempo de produção (min) — legado <span class="footnote" style="margin:0">campo antigo, mantido só para não perder dado já cadastrado; o Fator de Custo agora usa o Roteiro Produtivo (Financeiro &gt; Fator de Custo &gt; Roteiro por Família), com um processo por etapa</span></label><input class="input" id="ftempo" value="' + (fam && fam.tempoProducaoMin != null ? fam.tempoProducaoMin : '') + '" placeholder="0"><label class="fld">Observações</label><input class="input" id="fnotes" value="' + esc(fam && fam.notes || '') + '"><label class="fld">Status</label><select class="select" id="fss" style="width:100%"><option value="ACTIVE"' + (!fam || fam.status === 'ACTIVE' ? ' selected' : '') + '>Ativa</option><option value="INACTIVE"' + (fam && fam.status === 'INACTIVE' ? ' selected' : '') + '>Inativa</option></select><div class="footnote">Ao alterar o custo, o valor anterior é preservado no histórico e passa a valer para todos os SKUs vinculados.</div>' + (fam && fam.costHistory && fam.costHistory.length ? '<label class="fld">Histórico de custo</label><div class="table-wrap" style="border:1px solid var(--line);border-radius:10px"><table><thead><tr><th>Custo</th><th>Vigente a partir de</th></tr></thead><tbody>' + fam.costHistory.slice().reverse().map(function (h) { return '<tr><td>' + brl(h.costAmount) + '</td><td>' + new Date(h.effectiveFrom).toLocaleString('pt-BR') + '</td></tr>'; }).join('') + '</tbody></table></div>' : '') + '</div><div class="mf"><button class="btn-sm" id="fx">Cancelar</button><button class="btn-sm primary" id="fsv">Salvar</button></div>', 560); o.querySelector('.x').onclick = o.querySelector('#fx').onclick = function () { o.remove(); }; o.querySelector('#fsv').onclick = function () { var n = o.querySelector('#fn').value.trim(); if (!n) { o.querySelector('#fe').innerHTML = '<div class="form-err">Informe o nome.</div>'; return; } var dto = { name: n, internalCode: o.querySelector('#fc').value.trim(), cost: o.querySelector('#fcost').value, tempoProducaoMin: o.querySelector('#ftempo').value, notes: o.querySelector('#fnotes').value.trim(), status: o.querySelector('#fss').value }; (fam ? updateFamily(fam, dto).then(function () { return fam; }) : createFamily(dto)).then(function (saved) { o.remove(); render(); toast(fam ? 'Família atualizada' : 'Família criada', n); if (onSaved) onSaved(saved); }); }; }
+    function familyEditor(fam, onSaved) {
+      openModal({
+        title: fam ? 'Editar família' : 'Nova família', width: 560,
+        bodyHtml: '<label class="fld">Nome *</label><input class="input" id="fn" value="' + esc(fam ? fam.name : '') + '">' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><div><label class="fld">Código interno</label><input class="input" id="fc" value="' + esc(fam && fam.internalCode || '') + '"></div><div><label class="fld">Custo (R$)</label><input class="input" id="fcost" value="' + (fam && fam.currentCostAmount != null ? fam.currentCostAmount : '') + '" placeholder="0,00"></div></div>' +
+          '<label class="fld">Tempo de produção (min) — legado <span class="footnote" style="margin:0">campo antigo, mantido só para não perder dado já cadastrado; o Fator de Custo agora usa o Roteiro Produtivo (Financeiro &gt; Fator de Custo &gt; Roteiro por Família), com um processo por etapa</span></label><input class="input" id="ftempo" value="' + (fam && fam.tempoProducaoMin != null ? fam.tempoProducaoMin : '') + '" placeholder="0">' +
+          '<label class="fld">Observações</label><input class="input" id="fnotes" value="' + esc(fam && fam.notes || '') + '">' +
+          '<label class="fld">Status</label><select class="select" id="fss" style="width:100%"><option value="ACTIVE"' + (!fam || fam.status === 'ACTIVE' ? ' selected' : '') + '>Ativa</option><option value="INACTIVE"' + (fam && fam.status === 'INACTIVE' ? ' selected' : '') + '>Inativa</option></select>' +
+          '<div class="footnote">Ao alterar o custo, o valor anterior é preservado no histórico e passa a valer para todos os SKUs vinculados.</div>' +
+          (fam && fam.costHistory && fam.costHistory.length ? '<label class="fld">Histórico de custo</label><div class="table-wrap" style="border:1px solid var(--line);border-radius:10px"><table><thead><tr><th>Custo</th><th>Vigente a partir de</th></tr></thead><tbody>' + fam.costHistory.slice().reverse().map(function (h) { return '<tr><td>' + brl(h.costAmount) + '</td><td>' + new Date(h.effectiveFrom).toLocaleString('pt-BR') + '</td></tr>'; }).join('') + '</tbody></table></div>' : ''),
+        confirmLabel: 'Salvar',
+        onConfirm: function (panel) {
+          var n = panel.querySelector('#fn').value.trim();
+          if (!n) { toast('Informe o nome', '', true); return false; }
+          var dto = { name: n, internalCode: panel.querySelector('#fc').value.trim(), cost: panel.querySelector('#fcost').value, tempoProducaoMin: panel.querySelector('#ftempo').value, notes: panel.querySelector('#fnotes').value.trim(), status: panel.querySelector('#fss').value };
+          return (fam ? updateFamily(fam, dto).then(function () { return fam; }) : createFamily(dto)).then(function (saved) {
+            render(); toast(fam ? 'Família atualizada' : 'Família criada', n); if (onSaved) onSaved(saved);
+          });
+        },
+      });
+    }
     // §16/§17 do prompt "custo de Produtos não chega em Pedidos": auditoria determinística de variações
     // órfãs (sem familyId) em produtos que JÁ têm família cadastrada em outras variações do mesmo
     // produto. Nunca cruza por nome/descrição — só agrupa por productId real. Divide em dois grupos:
