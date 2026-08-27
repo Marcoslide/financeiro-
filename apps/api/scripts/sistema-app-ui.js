@@ -12528,6 +12528,54 @@
     });
   }
 
+  // ---- Fase 9 — telas de cadastro CR (Centros de Recebimentos / Categorias), mesmo padrão visual
+  // das telas de CP (renderCpCentrosCustoTab/renderCpCategoriasTab), mas 100% isoladas: leem e
+  // gravam só em crCostCenters/crCategories, nunca em cpCostCenters/cpCategories.
+  function renderCrClassificacoesTab() {
+    var countsCat = {}; contasReceber.forEach(function (h) { if (h.categoryId) countsCat[h.categoryId] = (countsCat[h.categoryId] || 0) + 1; });
+    var rowsCc = crCostCenters.slice().sort(function (a, b) { return a.name.localeCompare(b.name); }).map(function (c) {
+      var n = crCategories.filter(function (x) { return x.costCenterId === c.id; }).length;
+      return '<tr><td>' + esc(c.name) + '</td><td>' + n + '</td><td><span class="badge ' + (c.active ? 'b-ok' : 'b-neutral') + '">' + (c.active ? 'Ativo' : 'Inativo') + '</span></td><td><button class="btn-sm" data-crccedit="' + c.id + '">Editar</button></td></tr>';
+    }).join('');
+    var rowsCat = crCategories.slice().sort(function (a, b) { return crCostCenterLabel(a.costCenterId).localeCompare(crCostCenterLabel(b.costCenterId)) || a.name.localeCompare(b.name); }).map(function (c) {
+      return '<tr><td><b>' + esc(c.name) + '</b></td><td>' + esc(crCostCenterLabel(c.costCenterId)) + '</td><td>' + (countsCat[c.id] || 0) + '</td><td><span class="badge ' + (c.active ? 'b-ok' : 'b-neutral') + '">' + (c.active ? 'Ativa' : 'Inativa') + '</span></td><td><button class="btn-sm" data-crcatedit="' + c.id + '">Editar</button></td></tr>';
+    }).join('');
+    return '<div class="panel"><div class="ph"><h3>Centros de Recebimentos</h3><button class="btn-sm primary" id="cr-cc-new">+ Novo centro de recebimentos</button></div><div class="table-wrap">' + (rowsCc ? '<table><thead><tr><th>Nome</th><th>Categorias</th><th>Status</th><th></th></tr></thead><tbody>' + rowsCc + '</tbody></table>' : '<div class="empty"><p>Nenhum centro de recebimentos cadastrado.</p></div>') + '</div></div>' +
+      '<div class="panel" style="margin-top:16px"><div class="ph"><h3>Categorias</h3><button class="btn-sm primary" id="cr-cat-new">+ Nova categoria</button></div><div class="table-wrap">' + (rowsCat ? '<table><thead><tr><th>Categoria</th><th>Centro de Recebimentos</th><th>Títulos vinculados</th><th>Status</th><th></th></tr></thead><tbody>' + rowsCat + '</tbody></table>' : '<div class="empty"><p>Nenhuma categoria cadastrada.</p></div>') + '</div></div>';
+  }
+  function bindCrClassificacoesTab() {
+    var nc = document.getElementById('cr-cc-new'); if (nc) nc.onclick = function () { openCrCostCenterEditor(null); };
+    app.querySelectorAll('[data-crccedit]').forEach(function (b) { b.onclick = function () { openCrCostCenterEditor(crCostCenters.find(function (c) { return c.id === b.dataset.crccedit; })); }; });
+    var na = document.getElementById('cr-cat-new'); if (na) na.onclick = function () { openCrCategoryEditor(null); };
+    app.querySelectorAll('[data-crcatedit]').forEach(function (b) { b.onclick = function () { openCrCategoryEditor(crCategories.find(function (c) { return c.id === b.dataset.crcatedit; })); }; });
+  }
+  function openCrCostCenterEditor(cc) {
+    var bodyHtml = '<label class="fld">Nome *</label><input class="input" id="crcce-nm" style="width:100%" value="' + esc(cc ? cc.name : '') + '"><label class="fld"><input type="checkbox" id="crcce-ativa"' + (!cc || cc.active ? ' checked' : '') + '> Ativo</label>';
+    openModal({
+      title: cc ? 'Editar centro de recebimentos' : 'Novo centro de recebimentos', width: 380, bodyHtml: bodyHtml,
+      onConfirm: function (panel) {
+        var nm = panel.querySelector('#crcce-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return false; }
+        return crSaveCostCenter({ id: cc ? cc.id : null, name: nm, active: panel.querySelector('#crcce-ativa').checked, createdAt: cc && cc.createdAt }).then(function () { toast('Centro de recebimentos salvo', nm); crRenderBody(); });
+      },
+    });
+  }
+  function openCrCategoryEditor(cat) {
+    var bodyHtml =
+      '<label class="fld">Nome *</label><input class="input" id="crce-nm" style="width:100%" value="' + esc(cat ? cat.name : '') + '">' +
+      '<label class="fld">Centro de Recebimentos *</label><select class="select" id="crce-cc" style="width:100%">' + crCostCenterOptions(cat ? cat.costCenterId : null) + '</select>' +
+      '<label class="fld"><input type="checkbox" id="crce-ativa"' + (!cat || cat.active ? ' checked' : '') + '> Ativa</label>';
+    openModal({
+      title: cat ? 'Editar categoria' : 'Nova categoria', width: 420, bodyHtml: bodyHtml,
+      onConfirm: function (panel) {
+        var nm = panel.querySelector('#crce-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return false; }
+        var ccId = panel.querySelector('#crce-cc').value || null;
+        if (!ccId) { toast('Centro de Recebimentos obrigatório', 'Toda categoria precisa pertencer a um Centro de Recebimentos.', true); return false; }
+        return crSaveCategory({ id: cat ? cat.id : null, name: nm, costCenterId: ccId, active: panel.querySelector('#crce-ativa').checked, createdAt: cat && cat.createdAt, migradoDeCpCategoryId: cat ? cat.migradoDeCpCategoryId : null })
+          .then(function () { toast('Categoria salva', nm); crRenderBody(); });
+      },
+    });
+  }
+
   // ---- CRUD manual (Fase 4: Descrição/Pagador/Categoria/Valor/Competência/Vencimento/Empresa/
   // Operação/Conta prevista/Referência/Observação) ----
   function crHeaderSave(draft) {
@@ -12611,7 +12659,7 @@
   }
   function renderContasReceber() {
     app.innerHTML = PageHeader({ variant: 'eyebrow', eyebrow: 'FINANCEIRO', title: 'Contas a Receber', description: 'Controle de dinheiro que a empresa tem para receber, o que já foi recebido, onde entrou e o saldo dos bancos — nasce do fechamento de Caixa (só transferências reais para banco, nunca por pedido) e de lançamentos manuais.' }) +
-      '<div class="subtabs">' + [['visaogeral', 'Visão Geral'], ['lista', 'Lista'], ['shopee', 'Pedidos (auditoria)'], ['projecao', 'Projeção de Recebimentos']].map(function (t) { return '<div class="subtab' + (crSub === t[0] ? ' active' : '') + '" data-crtab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>' +
+      '<div class="subtabs">' + [['visaogeral', 'Visão Geral'], ['lista', 'Lista'], ['shopee', 'Pedidos (auditoria)'], ['projecao', 'Projeção de Recebimentos'], ['classificacoes', 'Classificações']].map(function (t) { return '<div class="subtab' + (crSub === t[0] ? ' active' : '') + '" data-crtab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>' +
       '<div id="crbody" style="margin-top:14px"></div>';
     crRenderBody();
     app.querySelectorAll('[data-crtab]').forEach(function (t) { t.onclick = function () { crSub = t.dataset.crtab; crPage = 1; render(); }; });
@@ -12621,6 +12669,7 @@
     if (crSub === 'visaogeral') { body.innerHTML = renderCrVisaoGeral(); bindCrVisaoGeral(); return; }
     if (crSub === 'shopee') { body.innerHTML = renderCrShopeeDia(); bindCrShopeeDia(); return; }
     if (crSub === 'projecao') { body.innerHTML = renderCrProjecao(); bindCrProjecao(); return; }
+    if (crSub === 'classificacoes') { body.innerHTML = renderCrClassificacoesTab(); bindCrClassificacoesTab(); return; }
     body.innerHTML = renderCrLista(); bindCrLista();
   }
   // ==================== PROJEÇÃO DE RECEBIMENTOS FUTUROS (VISÃO GERENCIAL) ====================
