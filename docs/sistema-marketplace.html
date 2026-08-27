@@ -317,7 +317,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 6e2dd40 · 2026-08-27 23:38 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 52ef41c · 2026-08-27 23:41 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -8658,7 +8658,15 @@ buffer/index.js:
     if (natAtual && NATUREZA_OPCOES.indexOf(natAtual) < 0) NATUREZA_OPCOES.push(natAtual);
     var naturezaOptionsHtml = '<option value="">(automática pelo sinal: ' + (t.amount < 0 ? 'Despesa' : 'Receita') + ')</option>' + NATUREZA_OPCOES.map(function (k) { return '<option value="' + k + '"' + (natAtual === k ? ' selected' : '') + '>' + (NATUREZA[k] || k) + '</option>'; }).join('');
     var categoriaFinDefault = c.categoriaFinanceiraId || '';
-    var categoriaFinOptionsHtml = cpCategoryOptions(categoriaFinDefault, true).replace('Todas as categorias', '— selecionar —');
+    // Fase 9: Débito busca SÓ classificações de Contas a Pagar (cpCategories); Crédito busca SÓ
+    // classificações de Contas a Receber (crCategories) — nunca a mesma lista pros dois lados, e
+    // nunca uma terceira biblioteca paralela "Categoria Caixa"/"Categoria Carteira" (§ walletApplyClassificacao
+    // já usa natureza DESPESA/AJUSTE→AP, RECEITA/CREDITO→AR com o MESMO categoriaFinanceiraId — a UI
+    // só precisa oferecer a lista certa pra cada lado). Sem Natureza ainda escolhida, decide pelo sinal
+    // do valor (mesma regra usada no rótulo "(automática pelo sinal: ...)").
+    function wCatSide(nat) { if (nat === 'DESPESA' || nat === 'AJUSTE') return 'CP'; if (nat === 'RECEITA' || nat === 'CREDITO') return 'CR'; return t.amount < 0 ? 'CP' : 'CR'; }
+    function wCatOptionsHtml(side, selectedId) { return (side === 'CP' ? cpCategoryOptions(selectedId, true) : crCategoryOptions(selectedId, true)).replace('Todas as categorias', '— selecionar —'); }
+    var categoriaFinOptionsHtml = wCatOptionsHtml(wCatSide(natAtual), categoriaFinDefault);
     function opcaoPagamentoRadio(name, atual) {
       return '<label class="fld">Opção de pagamento</label>' +
         '<label class="fld" style="display:flex;align-items:center;gap:8px;font-weight:400"><input type="radio" name="' + name + '" value="PENDENTE"' + (atual !== 'PAGO' ? ' checked' : '') + '> Criar pendente</label>' +
@@ -8723,14 +8731,20 @@ buffer/index.js:
       width: 640,
       bodyHtml: bodyHtml,
       onMount: function (panel) {
-        // "+ Criar categoria…" no select de Categoria financeira — mesmo padrão já usado no editor de
-        // Contas a Pagar (cp-categoria/catTopo, openCpCategoryQuickCreate) — cria direto no cadastro
-        // ÚNICO de categorias (cpCategories), nunca um cadastro paralelo pra Carteira/Caixa.
+        // "+ Criar categoria…" no select de Categoria financeira abre o cadastro certo pro lado atual
+        // (Débito/Despesa → CP, Crédito/Receita → CR) — nunca cpCategoryQuickCreate() fixo, senão um
+        // crédito classificado como Receita nasceria com uma categoria de despesa.
+        var natSel = panel.querySelector('#wcls-nat');
         var catFinSel = panel.querySelector('#wcls-catfin');
+        if (natSel && catFinSel) natSel.onchange = function () {
+          catFinSel.innerHTML = wCatOptionsHtml(wCatSide(natSel.value), null);
+        };
         if (catFinSel) catFinSel.onchange = function () {
           if (catFinSel.value === '__new') {
-            openCpCategoryQuickCreate(function (cat) {
-              catFinSel.innerHTML = cpCategoryOptions(cat.id, true).replace('Todas as categorias', '— selecionar —');
+            var side = wCatSide(natSel ? natSel.value : natAtual);
+            var quickCreate = side === 'CP' ? openCpCategoryQuickCreate : openCrCategoryQuickCreate;
+            quickCreate(function (cat) {
+              catFinSel.innerHTML = wCatOptionsHtml(side, cat.id);
             });
           }
         };
@@ -14973,7 +14987,6 @@ buffer/index.js:
   var CP_CAT_SHOPEE_ROOT = 'Taxas e Recebimentos Shopee';
   var CP_CAT_SHOPEE_TAX_MAP = { comissao: 'Comissão Shopee', servico: 'Taxa de Serviço Shopee', afiliado: 'Comissão de Afiliados', taxaDevolucaoFacil: 'Taxa de Devolução Fácil', taxaRecargaAutomatica: 'Taxa de Recarga Automática', envioReverso: 'Envio Reverso', taxaDevolucaoVendedor: 'Taxa de Devolução do Vendedor', voucherSeller: 'Voucher do Vendedor', voucherCompartilhado: 'Voucher Compartilhado', coinCashbackSeller: 'Coin Cashback do Vendedor', coinCashbackCompartilhado: 'Coin Cashback Compartilhado', reembolso: 'Reembolso ao Comprador' };
   var CP_CAT_SHOPEE_ACELERA = 'Taxa de Antecipação — Shopee Acelera';
-  var CP_CAT_SHOPEE_TRANSFERENCIA = 'Transferência Shopee → Banco';
   function cpCategoryIdByName(name) { var c = cpCategories.find(function (x) { return x.name === name; }); return c ? c.id : null; }
   // Resolve a categoria padrão de uma taxa Shopee (chave de resolveSellerCharges/it.key) — usada nos
   // pontos de geração automática de Contas a Pagar do fechamento de caixa.
@@ -14982,7 +14995,10 @@ buffer/index.js:
     var rootId = cpCategoryIdByName(CP_CAT_SHOPEE_ROOT);
     var toCreate = [];
     if (!rootId) { rootId = cpUid('CAT'); toCreate.push({ id: rootId, name: CP_CAT_SHOPEE_ROOT, parentId: null }); }
-    var filhas = Object.keys(CP_CAT_SHOPEE_TAX_MAP).map(function (k) { return CP_CAT_SHOPEE_TAX_MAP[k]; }).concat([CP_CAT_SHOPEE_ACELERA, CP_CAT_SHOPEE_TRANSFERENCIA]);
+    // Fase 9: "Transferência Shopee → Banco" saiu do seed de CP — é uma categoria de CRÉDITO (a Shopee
+    // manda dinheiro pro banco), não uma despesa. A versão real vive só em crCategories
+    // (CR_CAT_SHOPEE_TRANSFERENCIA), nunca duplicada aqui.
+    var filhas = Object.keys(CP_CAT_SHOPEE_TAX_MAP).map(function (k) { return CP_CAT_SHOPEE_TAX_MAP[k]; }).concat([CP_CAT_SHOPEE_ACELERA]);
     filhas.forEach(function (name) { if (!cpCategoryIdByName(name) && !toCreate.some(function (t) { return t.name === name; })) toCreate.push({ id: cpUid('CAT'), name: name, parentId: rootId }); });
     // Fase 9: Categoria sempre precisa de Centro de Custos — mesmo seed idempotente (find-or-create
     // por nome) usado para as próprias categorias, aplicado aqui ao centro que as abriga.
