@@ -40,10 +40,8 @@
   .nav a .lbl{overflow:hidden;text-overflow:ellipsis}
   .nav a:hover{background:rgba(255,255,255,.06);color:#fff}
   .nav a.active{background:var(--brand-2);color:#fff}
-  .nav a.soon{opacity:.5;cursor:default}
-  .nav a .soon-tag{margin-left:auto;font-size:9.5px;background:rgba(255,255,255,.12);padding:1px 6px;border-radius:6px}
   .shell.nav-collapsed .nav a{justify-content:center;padding:9px 0}
-  .shell.nav-collapsed .nav a .lbl,.shell.nav-collapsed .nav a .soon-tag{display:none}
+  .shell.nav-collapsed .nav a .lbl{display:none}
   .nav-expand{display:none;width:100%;margin-top:6px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:#c3cce0;border-radius:8px;padding:8px 0;font-size:15px;align-items:center;justify-content:center}
   .nav-expand:hover{background:rgba(255,255,255,.16);color:#fff}
   .shell.nav-collapsed .nav-expand{display:flex}
@@ -58,11 +56,6 @@
   .page-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:14px;gap:16px;flex-wrap:wrap}
   .page-head h2{margin:0;font-size:20px}.page-head p{margin:3px 0 0;color:var(--muted);font-size:13px}
   .info-banner{background:var(--info-bg);border:1px solid #cfe0fb;color:#1b4c99;border-radius:10px;padding:9px 14px;font-size:12.5px;margin-bottom:14px}
-  .kpi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px;margin-bottom:16px}
-  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow)}
-  .kpi .lbl{font-size:12px;color:var(--muted);font-weight:600}.kpi .val{font-size:20px;font-weight:750;margin-top:8px}
-  .kpi.clickable{cursor:pointer;transition:.12s}.kpi.clickable:hover{border-color:var(--brand-2);box-shadow:0 2px 6px rgba(43,75,214,.12)}
-  .kpi.on{border-color:var(--brand-2);background:#f5f8ff}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;margin-bottom:16px}
   .panel .ph{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}
   .panel .ph h3{margin:0;font-size:14.5px}.pb{padding:16px}
@@ -126,7 +119,6 @@
   .master-row>td{background:#fbfcff;border-top:1px solid var(--line)}
   .master-row .pname{font-weight:700}
   .subrow>td{background:#fff}.subrow .vname{font-weight:600}
-  tr.matched>td{background:#fff8e6}
   .chk{width:15px;height:15px;cursor:pointer;accent-color:var(--brand-2)}
   .expander{border:1px solid var(--line);background:#fff;border-radius:6px;width:22px;height:22px;font-weight:700;color:var(--brand);line-height:1;cursor:pointer;padding:0}
   .tag{display:inline-block;padding:2px 7px;border-radius:6px;font-size:10.5px;font-weight:700;background:var(--neutral-bg);color:var(--neutral)}
@@ -163,7 +155,6 @@
   .toast.err{border-left-color:var(--err)}.toast .tt{font-weight:700;margin-bottom:2px}
   .dz{border:2px dashed var(--line);border-radius:12px;padding:26px;text-align:center;cursor:pointer;background:#fbfcfe}
   .dz.over{border-color:var(--brand-2);background:#f0f4ff}
-  .seedbar{background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:12px;color:var(--muted);margin-bottom:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
   /* --- extras do sistema unificado --- */
   .cards6{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:16px}
   .fcard{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--panel);box-shadow:var(--shadow)}
@@ -218,10 +209,6 @@
   .kstrip .kc .ks{font-size:11.5px;color:var(--muted);margin-top:4px}
   .kstrip .kc.red .kv{color:var(--err)}.kstrip .kc.amber .kv{color:var(--warn)}.kstrip .kc.green .kv{color:var(--ok)}.kstrip .kc.blue .kv{color:var(--brand-2)}.kstrip .kc.orange .kv{color:#e0662a}
   @media(max-width:720px){.kstrip .kc{border-right:none;border-bottom:1px solid var(--line)}}
-  /* ---- Caixa: visual financeiro profissional (prompt "Refazer layout do Fechamento") ---- */
-  .cx-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
-  .cx-head b{font-size:17px}
-  .cx-sub{font-size:12.5px;color:var(--muted);margin-top:2px}
   /* Parte 5 do prompt "Correção do custo + taxas...": cada assunto do fechamento precisa da SUA
      PRÓPRIA caixa — fundo, borda, cabeçalho, corpo e espaçamento externo — nunca parecer continuação
      visual do bloco anterior. Cabeçalho "sangra" as bordas via margin negativo (sem mudar o HTML dos
@@ -230,20 +217,11 @@
   .cx-section:first-child{margin-top:0}
   .cx-section h4{font-size:12px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:-14px -16px 12px;padding:11px 16px;border-bottom:1px solid var(--line);background:var(--bg2,#f7f8fa);border-radius:12px 12px 0 0;display:flex;justify-content:space-between;align-items:center;gap:10px}
   .cx-h4-sub{font-size:12px;font-weight:700;letter-spacing:0;text-transform:none;color:var(--ink);white-space:nowrap}
-  .cx-flow{display:flex;align-items:stretch;gap:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--panel);box-shadow:var(--shadow)}
-  .cx-flow-step{flex:1;min-width:110px;padding:12px 14px;text-align:center;border-right:1px dashed var(--line);position:relative}
-  .cx-flow-step:last-child{border-right:none}
-  .cx-flow-step .cxl{font-size:10.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--muted)}
-  .cx-flow-step .cxv{font-size:17px;font-weight:800;margin-top:4px}
-  .cx-flow-step.neg .cxv{color:var(--err)}.cx-flow-step.pos .cxv{color:var(--ok)}.cx-flow-step.neu .cxv{color:var(--brand-2)}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
   @media (max-width:900px){.grid2{grid-template-columns:1fr}}
-  .cx-flow-step:not(:last-child)::after{content:'→';position:absolute;right:-9px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:13px;z-index:1}
-  @media(max-width:640px){.cx-flow{flex-direction:column}.cx-flow-step{border-right:none;border-bottom:1px dashed var(--line);text-align:left}.cx-flow-step:last-child{border-bottom:none}.cx-flow-step:not(:last-child)::after{content:'↓';right:auto;left:14px;top:auto;bottom:-9px;transform:none}}
   .cx-kv{display:flex;justify-content:space-between;gap:10px;padding:5px 0;font-size:13px}
   .cx-kv .cxl{color:var(--muted)}
   .cx-kv .cxv{font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
-  .cx-badge{display:inline-block;padding:1px 6px;border-radius:5px;font-size:10px;font-weight:700;background:var(--info-bg);color:var(--info)}
   details.cx-collapse{border:1px solid var(--line);border-radius:10px;margin-top:8px;overflow:hidden}
   details.cx-collapse>summary{cursor:pointer;padding:10px 14px;font-weight:700;font-size:13px;list-style:none;display:flex;justify-content:space-between;align-items:center;background:var(--bg2,#f7f8fa)}
   details.cx-collapse>summary::-webkit-details-marker{display:none}
@@ -251,9 +229,6 @@
   details.cx-collapse[open]>summary::after{content:'▾'}
   details.cx-collapse>.pb{padding:10px 14px}
   .cx-footer{position:sticky;bottom:0;background:var(--panel);border-top:1px solid var(--line);padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
-  /* prompt "Refazer a tela Caixa": fluxo do dinheiro em sequência única, sem cards soltos — seta
-     puramente visual entre passos, nunca layout fixo que possa estourar a tela. */
-  .cx-flow-arrow{text-align:center;color:var(--muted);font-size:15px;padding:2px 0;line-height:1}
   /* prompt "Reestruturação do Caixa": blocos empilhados SEM setas — cada etapa do fluxo do dinheiro
      é um bloco com divisor fino, nunca "↓" entre eles. cx-block-total destaca os totais/resultados
      intermediários (Resultado após taxas/Disponível na carteira/Diferença) com fundo sutil. */
@@ -286,7 +261,6 @@
   table.report thead th{background:#2b3444;color:#e7ecf5;border-bottom:none}
   table.report tbody tr:nth-child(even) td{background:#fafbfd}
   table.report tbody tr.total td{background:#fdf1e9;font-weight:750;border-top:2px solid #f0d3bf}
-  table.report td .bad{color:var(--err);font-weight:750}
   .rowlink{cursor:pointer}.rowlink:hover td{background:#eef3ff !important}
   .datein{display:none;gap:6px;align-items:center}
   .datein.on{display:inline-flex}
@@ -343,7 +317,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build e59b94d · 2026-08-27 22:31 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 81418f8 · 2026-08-27 22:34 UTC</div>
     </div>
   </aside>
   <div class="main">
