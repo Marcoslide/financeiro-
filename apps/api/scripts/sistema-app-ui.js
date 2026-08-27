@@ -12446,6 +12446,10 @@
   // → Categoria), nunca compartilhado com CP — nem lista, nem ID, mesmo quando o nome é igual (ex.:
   // "Outros" em CP e "Outros" em CR são dois registros independentes).
   function crCostCenterLabel(id) { var c = crCostCenters.find(function (x) { return x.id === id; }); return c ? c.name : '—'; }
+  // Fase 9 V5: mesmo padrão do CP (cpCentroIdFromCategoria/cpCentroFromCategoria) — Centro de
+  // Recebimentos nunca é escolhido à parte, é sempre derivado da Categoria selecionada.
+  function crCentroIdFromCategoria(categoryId) { var c = crCategories.find(function (x) { return x.id === categoryId; }); return c ? c.costCenterId : null; }
+  function crCentroFromCategoria(categoryId) { var id = crCentroIdFromCategoria(categoryId); return id ? crCostCenterLabel(id) : '—'; }
   function crCategoryLabel(id) { var c = crCategories.find(function (x) { return x.id === id; }); return c ? c.name : '—'; }
   function crCategoryPathLabel(id) {
     var c = crCategories.find(function (x) { return x.id === id; }); if (!c) return '—';
@@ -12588,6 +12592,22 @@
         if (!ccId) { toast('Centro de Recebimentos obrigatório', 'Toda categoria precisa pertencer a um Centro de Recebimentos.', true); return false; }
         return crSaveCategory({ id: cat ? cat.id : null, name: nm, costCenterId: ccId, active: panel.querySelector('#crce-ativa').checked, createdAt: cat && cat.createdAt, migradoDeCpCategoryId: cat ? cat.migradoDeCpCategoryId : null })
           .then(function () { toast('Categoria salva', nm); crRenderBody(); });
+      },
+    });
+  }
+  // Atalho "+ Criar categoria…" usado dentro do lançamento de Contas a Receber (openCrEditor) — mesmo
+  // padrão de openCpCategoryQuickCreate, mas gravando exclusivamente em crCategories/crCostCenters.
+  function openCrCategoryQuickCreate(onSaved) {
+    var bodyHtml =
+      '<label class="fld">Nome *</label><input class="input" id="crc-nm" style="width:100%">' +
+      '<label class="fld">Centro de Recebimentos *</label><select class="select" id="crc-cc" style="width:100%">' + crCostCenterOptions(null) + '</select>';
+    openModal({
+      title: 'Criar categoria', width: 420, bodyHtml: bodyHtml, confirmLabel: 'Criar',
+      onConfirm: function (panel) {
+        var nm = panel.querySelector('#crc-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return false; }
+        var ccId = panel.querySelector('#crc-cc').value || null;
+        if (!ccId) { toast('Centro de Recebimentos obrigatório', 'Toda categoria precisa pertencer a um Centro de Recebimentos.', true); return false; }
+        return crSaveCategory({ name: nm, costCenterId: ccId }).then(function (cat) { toast('Categoria criada', nm); onSaved(cat); });
       },
     });
   }
@@ -12988,7 +13008,11 @@
         (readOnlyOrigin ? '<div class="footnote" style="margin-bottom:8px">Gerado automaticamente pelo fechamento de caixa (Pedido ' + esc(h.orderId || '') + '). Descrição, valor e vencimento não são editáveis manualmente — só o recebimento.</div>' : '') +
         '<label class="fld">Descrição *</label><input class="input" id="cr-descricao" style="width:100%" value="' + esc(draft.descricao || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '>' +
         '<label class="fld">Pagador</label><input class="input" id="cr-pagador" style="width:100%" value="' + esc(draft.pagador || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '>' +
-        '<label class="fld">Categoria financeira *</label><select class="select" id="cr-categoria" style="width:100%"' + (readOnlyOrigin ? ' disabled' : '') + '>' + cpCategoryOptions(draft.categoryId, false).replace('<option value="">Todas as categorias</option>', '<option value="">— selecionar —</option>') + '</select>' +
+        // Fase 9: Contas a Receber usa exclusivamente crCategoryOptions() (crCategories) — nunca as
+        // categorias de Contas a Pagar. "+ Criar categoria…" abre openCrCategoryQuickCreate(), o
+        // cadastro próprio de CR, nunca cpCategoryQuickCreate().
+        '<label class="fld">Categoria financeira *</label><select class="select" id="cr-categoria" style="width:100%"' + (readOnlyOrigin ? ' disabled' : '') + '>' + crCategoryOptions(draft.categoryId, !readOnlyOrigin).replace('<option value="">Todas as categorias</option>', '<option value="">— selecionar —</option>') + '</select>' +
+        (draft.categoryId ? '<div class="cx-kv" style="margin-top:6px"><span class="cxl">Centro de Recebimentos</span><span class="cxv">' + esc(crCentroFromCategoria(draft.categoryId)) + '</span></div>' : '') +
         '<div style="display:flex;gap:8px"><div style="flex:1"><label class="fld">Valor *</label><input class="input" id="cr-valor" style="width:100%" value="' + (draft.valor || 0) + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div>' +
         '<div style="flex:1"><label class="fld">Competência</label><input type="date" class="input" id="cr-competencia" style="width:100%" value="' + (draft.competencia || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div>' +
         '<div style="flex:1"><label class="fld">Vencimento</label><input type="date" class="input" id="cr-vencimento" style="width:100%" value="' + (draft.vencimento || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div></div>' +
@@ -13003,6 +13027,25 @@
         (!isNew && !h.canceledAt && !recibos.length ? '<button class="btn-sm" id="cr-cancelar" style="background:var(--err);border-color:var(--err);color:#fff">Cancelar conta</button>' : '') +
         '</div><div id="cr-err"></div></div>';
       panel.querySelector('.x').onclick = function () { d.remove(); };
+      // Sincroniza o que o operador já digitou nos outros campos antes de redesenhar o drawer (troca
+      // de categoria dispara um novo draw() — sem isto, texto já digitado em Descrição/Pagador/Valor
+      // etc. seria perdido, voltando ao valor original de `draft`).
+      function syncFormIntoDraft() {
+        var f = function (fid) { var el = panel.querySelector('#' + fid); return el ? el.value : null; };
+        if (f('cr-descricao') != null) draft.descricao = f('cr-descricao');
+        if (f('cr-pagador') != null) draft.pagador = f('cr-pagador');
+        if (f('cr-valor') != null) draft.valor = cpParseNum(f('cr-valor'));
+        if (f('cr-competencia') != null) draft.competencia = f('cr-competencia');
+        if (f('cr-vencimento') != null) draft.vencimento = f('cr-vencimento');
+        if (f('cr-conta-fin') != null) draft.financialAccountId = f('cr-conta-fin');
+        if (f('cr-referencia') != null) draft.referencia = f('cr-referencia');
+        if (f('cr-obs') != null) draft.observacao = f('cr-obs');
+      }
+      var catSel = panel.querySelector('#cr-categoria');
+      if (catSel) catSel.onchange = function () {
+        if (catSel.value === '__new') { openCrCategoryQuickCreate(function (cat) { syncFormIntoDraft(); draft.categoryId = cat.id; draw(); }); return; }
+        syncFormIntoDraft(); draft.categoryId = catSel.value || null; draw();
+      };
       panel.querySelector('#cr-salvar').onclick = function () {
         var desc = panel.querySelector('#cr-descricao').value.trim(); var valor = cpParseNum(panel.querySelector('#cr-valor').value);
         var categoryId = panel.querySelector('#cr-categoria').value || null;
