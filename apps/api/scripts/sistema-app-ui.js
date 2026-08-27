@@ -6397,7 +6397,7 @@
     var trs = rows.slice(0, 500).map(function (r) { return '<tr class="rowlink" data-drillped="' + esc(r.orderId) + '"><td class="mono">' + esc(r.orderId) + '</td><td class="nowrap">' + (r.data ? dbr(r.data) : '—') + '</td><td class="mono">' + esc(r.sku) + '</td><td class="cell-text">' + esc((r.produto || '—').slice(0, 26)) + '</td><td class="cell-text">' + esc(r.descricao) + '</td><td class="nowrap ' + (r.valor < 0 ? 'neg' : 'pos') + '">' + brlC(r.valor) + '</td></tr>'; }).join('');
     var periodNote = kind === 'adjustes' ? ('Filtrado pela Data de conclusão do ajuste, dentro do período selecionado no topo da tela.' + (pe.adjSemData ? ' ' + nn(pe.adjSemData) + ' lançamento(s) sem data reconhecida na fonte não aparecem aqui.' : '')) : 'Respeita o período selecionado no topo da tela.';
     panel.innerHTML = '<div class="dh"><div><b>' + esc(label) + '</b></div><button class="x">&times;</button></div><div class="dbd">' +
-      '<div class="kstrip" style="margin-bottom:12px"><div class="kc"><div class="kl">Total exibido</div><div class="kv">' + brlC(total) + '</div></div><div class="kc"><div class="kl">Pedidos envolvidos</div><div class="kv">' + nn(rows.length) + '</div></div></div>' +
+      '<div style="margin-bottom:12px">' + MetricGrid([MetricCard({ label: 'Total exibido', value: brlC(total) }), MetricCard({ label: 'Pedidos envolvidos', value: nn(rows.length) })]) + '</div>' +
       (rows.length ? '<div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Data</th><th>SKU</th><th>Produto</th><th>Descrição</th><th>Valor</th></tr></thead><tbody>' + trs + '</tbody></table></div>' + (rows.length > 500 ? '<div class="footnote" style="padding:8px 0">Mostrando os 500 maiores lançamentos de ' + nn(rows.length) + '.</div>' : '') : emptyBox('Nenhum lançamento encontrado para este valor no período selecionado.')) +
       '<div class="footnote" style="padding:8px 0">' + esc(periodNote) + ' Clique no pedido para abrir a Ficha Financeira 360º.</div>' +
       '</div>';
@@ -6417,7 +6417,7 @@
     app.innerHTML = dadosAtualizadosAteBadge() + devPeriodBar() + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + tabs.map(function (t) { return '<div class="subtab' + (mrSub === t[0] ? ' active' : '') + '" data-mrsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-mrimport="1">Importar Income</button></div><div id="mrbody" style="margin-top:14px"></div>';
     var body = document.getElementById('mrbody');
     try {
-      if (!mrRenda.length && mrSub !== 'meta') body.innerHTML = secHead('MINHA RENDA', 'Consolidação Financeira Shopee', 'Quanto vendemos, quanto foi descontado, para onde foi o dinheiro e quanto a Shopee liberou — do agregado até o pedido.') + emptyBox('Nenhum relatório importado. Envie o Income (XLSX) da Shopee — é a única fonte necessária para a Minha Renda.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="mrimp">Importar Income</button></div>';
+      if (!mrRenda.length && mrSub !== 'meta') body.innerHTML = PageHeader({ variant: 'eyebrow', eyebrow: 'MINHA RENDA', title: 'Consolidação Financeira Shopee', description: 'Quanto vendemos, quanto foi descontado, para onde foi o dinheiro e quanto a Shopee liberou — do agregado até o pedido.' }) + emptyBox('Nenhum relatório importado. Envie o Income (XLSX) da Shopee — é a única fonte necessária para a Minha Renda.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="mrimp">Importar Income</button></div>';
       else body.innerHTML = ({ visao: mrVisao, financeiro: mrFinanceiro, produto: mrProduto, auditoria: mrAuditoria, meta: mrMeta }[mrSub] || mrVisao)();
     } catch (e) { body.innerHTML = '<div class="form-err">Erro ao renderizar Minha Renda: ' + esc(e.message || e) + '</div>'; }
     app.querySelectorAll('[data-mrsub]').forEach(function (b) { b.onclick = function () { mrSub = b.dataset.mrsub; mrPage = 1; render(); }; });
@@ -6434,6 +6434,7 @@
     app.querySelectorAll('[data-gowal]').forEach(function (b) { b.onclick = function () { route = 'carteira'; walletSub = 'mov'; render(); }; });
     app.querySelectorAll('[data-golink]').forEach(function (b) { b.onclick = function () { route = b.dataset.golink; render(); }; });
     app.querySelectorAll('[data-mrdrill]').forEach(function (b) { b.onclick = function () { openMrDrill(b.dataset.mrdrill, b.dataset.mrdrilllabel || b.dataset.mrdrill); }; });
+    bindMetricCards(app, { drill: function (action, label) { openMrDrill(action, label); } });
     bindDevPeriodBar();
     if (mrSub === 'meta') bindMrMeta();
     if (mrSub === 'produto') bindMrProduto();
@@ -6446,7 +6447,7 @@
   }
   function mrVisao() {
     var pe = mrPeriodEngine(); var t = pe.t;
-    var head = secHead('MINHA RENDA', 'Visão Geral', 'Análise financeira real do período selecionado no topo da tela (pedidos PAGOS — hora do pagamento). Pagamento liberado = renda líquida Shopee (não é lucro, ver §23).');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'MINHA RENDA', title: 'Visão Geral', description: 'Análise financeira real do período selecionado no topo da tela (pedidos PAGOS — hora do pagamento). Pagamento liberado = renda líquida Shopee (não é lucro, ver §23).' });
     if (!pe.n) return head + emptyBox('Nenhum pedido pago no período selecionado. Motivo: não há pedidos com "Hora do pagamento do pedido" preenchida dentro deste intervalo — ajuste o período ou importe Pedidos.');
     // §13/§16/§19: Faturamento Bruto e Ticket Médio vêm direto de Pedidos (preço acordado × qtd dos
     // pedidos pagos) e NUNCA dependem de custo/Minha Renda estarem disponíveis. Custo dos Produtos é
@@ -6462,24 +6463,34 @@
     var custoParcial = custoTemDado && pe.custoCoveragePct < 100;
     var taxasShopeeAbs = Math.abs(pe.taxasShopeeTotal), afiliadosAbs = Math.abs(t.afiliado), devolucoesAbs = Math.abs(t.reembolso), outrosAbs = Math.abs(t.cupom + t.pix) + Math.abs(pe.adjTot);
     var parcialTag = ' <span class="tag warn">parcial</span>';
-    var strip1 = kstrip([
-      { l: 'Faturamento Bruto', v: brlC(pe.faturamento), cls: 'blue', s: nn(pe.n) + ' pedidos pagos no período', drill: 'faturamento', drillLabel: 'Faturamento Bruto' },
-      { l: 'Receita Líquida (Pagamento Liberado)', v: brlC(t.liberado), cls: 'blue', s: nn(t.nMR) + ' de ' + nn(pe.n) + ' com dados da Shopee — não é faturamento (§23)', drill: t.nMR ? 'receitaLiquida' : null, drillLabel: 'Receita Líquida' },
-      { l: 'Lucro' + (temLucro && lucroParcial ? parcialTag : ''), v: temLucro ? brlC(pe.lucro) : 'não disponível', s: temLucro ? null : 'Motivo: nenhum pedido pago do período tem o custo de todos os itens cadastrado em Produtos.', cls: !temLucro ? 'blue' : (pe.lucro >= 0 ? 'green' : 'red'), drill: temLucro ? 'lucro' : null, drillLabel: 'Lucro' },
-      { l: 'Margem Líquida %' + (margemLiq != null && lucroParcial ? parcialTag : ''), v: margemLiq != null ? pct(margemLiq) : '—', cls: margemLiq == null ? 'blue' : (margemLiq >= 0 ? 'green' : 'red') },
+    // Fase 7.1 (migração para componentes padrão): MetricCard() escapa o label (nunca aceita HTML
+    // cru nele, ao contrário do kstrip antigo) — os 4 cards que anexavam <span class="tag warn">
+    // parcial</span> direto no rótulo usam customBody() pra reproduzir exatamente o mesmo visual
+    // (mesma estrutura lbl/val/footnote do MetricCard normal, só com a tag inline quando aplicável).
+    function mrLblTagCard(label, tagOn, value, sub, cls, drillAction, drillLabel) {
+      return MetricCard({
+        customBody: '<div class="lbl">' + esc(label) + (tagOn ? parcialTag : '') + '</div><div class="val">' + value + '</div>' + (sub ? '<div class="footnote" style="margin-top:4px">' + esc(sub) + '</div>' : ''),
+        cls: cls, drill: drillAction ? { action: drillAction, label: drillLabel } : undefined,
+      });
+    }
+    var strip1 = MetricGrid([
+      MetricCard({ label: 'Faturamento Bruto', value: brlC(pe.faturamento), cls: 'blue', sub: nn(pe.n) + ' pedidos pagos no período', drill: { action: 'faturamento', label: 'Faturamento Bruto' } }),
+      MetricCard({ label: 'Receita Líquida (Pagamento Liberado)', value: brlC(t.liberado), cls: 'blue', sub: nn(t.nMR) + ' de ' + nn(pe.n) + ' com dados da Shopee — não é faturamento (§23)', drill: t.nMR ? { action: 'receitaLiquida', label: 'Receita Líquida' } : undefined }),
+      mrLblTagCard('Lucro', temLucro && lucroParcial, temLucro ? brlC(pe.lucro) : 'não disponível', temLucro ? null : 'Motivo: nenhum pedido pago do período tem o custo de todos os itens cadastrado em Produtos.', !temLucro ? 'blue' : (pe.lucro >= 0 ? 'green' : 'red'), temLucro ? 'lucro' : null, 'Lucro'),
+      mrLblTagCard('Margem Líquida %', margemLiq != null && lucroParcial, margemLiq != null ? pct(margemLiq) : '—', null, margemLiq == null ? 'blue' : (margemLiq >= 0 ? 'green' : 'red')),
     ]);
-    var strip2 = kstrip([
-      { l: 'Pedidos pagos', v: nn(pe.n), cls: 'blue', s: pe.pendN ? nn(pe.pendN) + ' com custo pendente em algum item' : 'todos com custo conhecido' },
-      { l: 'Ticket Médio', v: ticketMedio != null ? brlC(ticketMedio) : 'não disponível', cls: 'blue', s: 'faturamento ÷ pedidos pagos' },
-      { l: 'Lucro Médio por Pedido' + (temLucro && lucroParcial ? parcialTag : ''), v: lucroMedioPedido != null ? brlC(lucroMedioPedido) : 'não disponível', s: lucroMedioPedido != null ? null : 'Motivo: nenhum pedido pago do período tem lucro calculável (custo incompleto).', cls: lucroMedioPedido == null ? 'blue' : (lucroMedioPedido >= 0 ? 'green' : 'red') },
-      { l: 'Custo dos Produtos' + (custoParcial ? parcialTag : ''), v: custoTemDado ? brlC(pe.custoProd) : 'não disponível', cls: 'amber', s: custoTemDado ? (nn(pe.custoItemsKnown) + ' de ' + nn(pe.custoItemsTotal) + ' itens com custo (' + pct(pe.custoCoveragePct) + ')') : 'Motivo: nenhum custo de produto foi encontrado para os pedidos pagos deste período (SKUs sem vínculo em Produtos ou sem custo cadastrado).', drill: custoTemDado ? 'custoProdutos' : null, drillLabel: 'Custo dos Produtos' },
+    var strip2 = MetricGrid([
+      MetricCard({ label: 'Pedidos pagos', value: nn(pe.n), cls: 'blue', sub: pe.pendN ? nn(pe.pendN) + ' com custo pendente em algum item' : 'todos com custo conhecido' }),
+      MetricCard({ label: 'Ticket Médio', value: ticketMedio != null ? brlC(ticketMedio) : 'não disponível', cls: 'blue', sub: 'faturamento ÷ pedidos pagos' }),
+      mrLblTagCard('Lucro Médio por Pedido', temLucro && lucroParcial, lucroMedioPedido != null ? brlC(lucroMedioPedido) : 'não disponível', lucroMedioPedido != null ? null : 'Motivo: nenhum pedido pago do período tem lucro calculável (custo incompleto).', lucroMedioPedido == null ? 'blue' : (lucroMedioPedido >= 0 ? 'green' : 'red')),
+      mrLblTagCard('Custo dos Produtos', custoParcial, custoTemDado ? brlC(pe.custoProd) : 'não disponível', custoTemDado ? (nn(pe.custoItemsKnown) + ' de ' + nn(pe.custoItemsTotal) + ' itens com custo (' + pct(pe.custoCoveragePct) + ')') : 'Motivo: nenhum custo de produto foi encontrado para os pedidos pagos deste período (SKUs sem vínculo em Produtos ou sem custo cadastrado).', 'amber', custoTemDado ? 'custoProdutos' : null, 'Custo dos Produtos'),
     ]);
     var pctConciliado = pe.n ? r2(t.nMR / pe.n * 100) : 0;
-    var strip3 = kstrip([
-      { l: 'Total Taxas Shopee', v: brlC(taxasShopeeAbs), cls: 'red', s: 'sem afiliados — ver Financeiro para o detalhamento completo e a DRE' },
-      { l: 'Afiliados', v: brlC(afiliadosAbs), cls: 'amber', drill: t.nMR ? 'afiliado' : null, drillLabel: 'Afiliados' },
-      { l: 'Devoluções', v: brlC(devolucoesAbs), cls: 'red', drill: t.nMR ? 'reembolso' : null, drillLabel: 'Devoluções' },
-      { l: '% Conciliado', v: pct(pctConciliado), cls: pctConciliado >= 95 ? 'green' : 'amber', s: nn(t.nMR) + ' de ' + nn(pe.n) + ' pedidos pagos com Minha Renda cruzada' },
+    var strip3 = MetricGrid([
+      MetricCard({ label: 'Total Taxas Shopee', value: brlC(taxasShopeeAbs), cls: 'red', sub: 'sem afiliados — ver Financeiro para o detalhamento completo e a DRE' }),
+      MetricCard({ label: 'Afiliados', value: brlC(afiliadosAbs), cls: 'amber', drill: t.nMR ? { action: 'afiliado', label: 'Afiliados' } : undefined }),
+      MetricCard({ label: 'Devoluções', value: brlC(devolucoesAbs), cls: 'red', drill: t.nMR ? { action: 'reembolso', label: 'Devoluções' } : undefined }),
+      MetricCard({ label: '% Conciliado', value: pct(pctConciliado), cls: pctConciliado >= 95 ? 'green' : 'amber', sub: nn(t.nMR) + ' de ' + nn(pe.n) + ' pedidos pagos com Minha Renda cruzada' }),
     ]);
     var coverage = t.nMR < pe.n ? callout('warn', 'Cobertura da Minha Renda no período', '<b>' + nn(t.nMR) + '</b> de <b>' + nn(pe.n) + '</b> pedidos pagos têm dados reais da Shopee (Income) cruzados por pedido no período. Faturamento Bruto/Ticket Médio já vêm de Pedidos (sempre completos); Taxas Shopee/Afiliados/Devoluções/Receita Líquida acima refletem os pedidos cobertos pela Minha Renda' + (pe.nIncomeExtra ? ' <b>mais</b> ' + nn(pe.nIncomeExtra) + ' lançamento(s) do Income com data própria no período mas sem pedido pago correspondente (§31 — o Income é fonte autossuficiente, nunca some por falta de cruzamento)' : '') + ' — nunca estimados.') : (pe.nIncomeExtra ? callout('', 'Income além dos pedidos pagos', '<b>' + nn(pe.nIncomeExtra) + '</b> lançamento(s) do Income entram nos totais de Taxas/Receita Líquida acima por data própria (conclusão do pagamento/criação), mesmo sem um pedido pago correspondente no módulo Pedidos neste período — a taxa é real e não pode desaparecer por falta de cruzamento.') : '');
     // Visão Geral responde "como está o negócio" — KPIs executivos, evolução e "para onde foi o
@@ -6699,7 +6710,7 @@
   }
   function mrFinanceiro() {
     var pe = mrPeriodEngine();
-    var head = secHead('MINHA RENDA · FINANCEIRO', 'O que entrou, o que saiu, para onde foi', 'O fechamento financeiro gerencial do período selecionado — DRE completa, taxas por categoria, entradas × saídas e o fechamento. A Carteira confirma a origem de cada movimento; esta tela não depende dela para existir (o Income já é fonte suficiente).');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'MINHA RENDA · FINANCEIRO', title: 'O que entrou, o que saiu, para onde foi', description: 'O fechamento financeiro gerencial do período selecionado — DRE completa, taxas por categoria, entradas × saídas e o fechamento. A Carteira confirma a origem de cada movimento; esta tela não depende dela para existir (o Income já é fonte suficiente).' });
     if (!pe.n) return head + emptyBox('Nenhum pedido pago no período selecionado. Motivo: não há pedidos com "Hora do pagamento do pedido" preenchida dentro deste intervalo — ajuste o período ou importe Pedidos.');
     var e = mrEngine();
     return head + mrResultadoDetalhado(pe, false) + mrSaidasPorCategoria(pe) + mrTaxasPorCategoriaBlock(pe, false) + mrCategoriasFinanceiras(pe) + mrImpactosBlock(e, false) + mrFechamentoPeriodo(pe) + mrCoberturaBox();
@@ -6818,7 +6829,7 @@
     return { range: range, totalDias: totalDias, diasDecorridos: diasDecorridos, diasRestantes: diasRestantes, metaC: metaC, realizado: realizado, falta: falta, necessarioPorDia: necessarioPorDia, ritmoEsperado: ritmoEsperado, ritmoDiffPct: ritmoDiffPct, ritmoStatus: ritmoStatus, projecao: projecao, projStatus: projStatus, margemMedia: margemMedia, ticketMedio: ticketMedio, faturamentoNecessario: faturamentoNecessario, pedidosNecessarios: pedidosNecessarios, nConhecido: nConhecido, nPendenteCusto: nPendenteCusto, coveragePct: coveragePct, vendaMediaDiaria: vendaMediaDiaria, lucroMedioDiario: lucroMedioDiario, vendaNecessariaPorDia: vendaNecessariaPorDia, serie: serie };
   }
   function mrMeta() {
-    var head = secHead('MINHA RENDA · META & PROJEÇÃO', 'Quanto falta para a meta?', 'Cálculo determinístico sobre os pedidos do período — lucro usa Minha Renda quando cobre o pedido, senão o estimado de Pedidos. Nunca soma os dois.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'MINHA RENDA · META & PROJEÇÃO', title: 'Quanto falta para a meta?', description: 'Cálculo determinístico sobre os pedidos do período — lucro usa Minha Renda quando cobre o pedido, senão o estimado de Pedidos. Nunca soma os dois.' });
     // ---- Modo planejamento (§30-33): ainda não "gerada" — o valor/período pode mudar livremente.
     if (!mrMetaCfg.gerada) {
       var cfgBox = '<div class="panel"><div class="ph"><h3>Nova meta</h3></div><div class="pb"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">' +
@@ -6830,11 +6841,11 @@
       if (!mrMetaCfg.lucroAlvo) return head + cfgBox + emptyBox('Informe quanto quer lucrar para ver o cálculo de faturamento necessário.');
       var mp = mrMetaEngine();
       var covWarn = mp.coveragePct < 100 ? callout('warn', '⚠️ Projeção parcial — existem pedidos sem custo cadastrado', pct(mp.coveragePct) + ' das vendas do período possuem custo completo. O cálculo abaixo usa só os pedidos com custo conhecido — não finge precisão sobre os demais.') : callout('green', '✓ Cobertura completa', pct(mp.coveragePct) + ' das vendas do período têm custo completo.');
-      var preview = kstrip([
-        { l: 'Margem líquida projetada (do período)', v: pct(r2(mp.margemMedia * 100)), cls: 'blue' },
-        { l: 'Lucro já realizado no período', v: brlC(mp.realizado), cls: mp.realizado >= 0 ? 'green' : 'red' },
-        { l: 'Falta para a meta', v: brlC(mp.falta), cls: mp.falta > 0 ? 'amber' : 'green' },
-        { l: 'Faturamento estimado necessário', v: mp.faturamentoNecessario != null ? brlC(mp.faturamentoNecessario) : 'sem margem para calcular', cls: 'amber' },
+      var preview = MetricGrid([
+        MetricCard({ label: 'Margem líquida projetada (do período)', value: pct(r2(mp.margemMedia * 100)), cls: 'blue' }),
+        MetricCard({ label: 'Lucro já realizado no período', value: brlC(mp.realizado), cls: mp.realizado >= 0 ? 'green' : 'red' }),
+        MetricCard({ label: 'Falta para a meta', value: brlC(mp.falta), cls: mp.falta > 0 ? 'amber' : 'green' }),
+        MetricCard({ label: 'Faturamento estimado necessário', value: mp.faturamentoNecessario != null ? brlC(mp.faturamentoNecessario) : 'sem margem para calcular', cls: 'amber' }),
       ]);
       var gerarBtn = '<div class="panel"><div class="pb"><button class="btn-sm primary" id="metagerar">Gerar meta</button> <span class="footnote">Congela o período (datas fixas) e passa a acompanhar as vendas reais automaticamente todo dia — sem precisar informar nada manualmente.</span></div></div>';
       return head + cfgBox + covWarn + preview + gerarBtn;
@@ -6843,29 +6854,29 @@
     var m = mrMetaEngine();
     var metaHead = '<div class="panel"><div class="pb" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><div><b>' + esc(mrMetaCfg.nome || 'Meta') + '</b> <span class="footnote">gerada em ' + dbr(mrMetaCfg.geradaEm) + ' · período ' + esc(mrMetaCfg.customFrom || '') + ' a ' + esc(mrMetaCfg.customTo || '') + '</span></div><button class="btn-sm" id="metanova">Nova meta</button></div></div>';
     var covWarn2 = m.coveragePct < 100 ? callout('warn', '⚠️ Acompanhamento parcial — existem pedidos sem custo cadastrado', pct(m.coveragePct) + ' das vendas do período têm custo completo (' + nn(m.nConhecido) + ' pedidos conhecidos' + (m.nPendenteCusto ? ' · ' + nn(m.nPendenteCusto) + ' pendentes' : '') + '). O realizado/ritmo abaixo usa só o que já tem custo cadastrado.') : '';
-    var strip1 = kstrip([
-      { l: 'Meta de lucro', v: brlC(m.metaC), cls: 'blue' },
-      { l: 'Lucro já realizado', v: brlC(m.realizado), cls: m.realizado >= 0 ? 'green' : 'red', s: nn(m.nConhecido) + ' pedidos c/ custo conhecido' + (m.nPendenteCusto ? ' · ' + nn(m.nPendenteCusto) + ' com custo pendente' : '') },
-      { l: 'Falta', v: brlC(m.falta), cls: m.falta > 0 ? 'amber' : 'green' },
-      { l: 'Dias decorridos / restantes', v: nn(m.diasDecorridos) + ' / ' + nn(m.diasRestantes), cls: 'blue' },
-      { l: 'Lucro necessário/dia', v: brlC(m.necessarioPorDia), cls: 'amber' },
-      { l: 'Lucro necessário/semana', v: brlC(m.necessarioPorDia * 7), cls: 'amber' },
+    var strip1 = MetricGrid([
+      MetricCard({ label: 'Meta de lucro', value: brlC(m.metaC), cls: 'blue' }),
+      MetricCard({ label: 'Lucro já realizado', value: brlC(m.realizado), cls: m.realizado >= 0 ? 'green' : 'red', sub: nn(m.nConhecido) + ' pedidos c/ custo conhecido' + (m.nPendenteCusto ? ' · ' + nn(m.nPendenteCusto) + ' com custo pendente' : '') }),
+      MetricCard({ label: 'Falta', value: brlC(m.falta), cls: m.falta > 0 ? 'amber' : 'green' }),
+      MetricCard({ label: 'Dias decorridos / restantes', value: nn(m.diasDecorridos) + ' / ' + nn(m.diasRestantes), cls: 'blue' }),
+      MetricCard({ label: 'Lucro necessário/dia', value: brlC(m.necessarioPorDia), cls: 'amber' }),
+      MetricCard({ label: 'Lucro necessário/semana', value: brlC(m.necessarioPorDia * 7), cls: 'amber' }),
     ]);
-    var stripDiaria = kstrip([
-      { l: 'Venda média diária (realizada)', v: brlC(m.vendaMediaDiaria), cls: 'blue' },
-      { l: 'Lucro médio diário (realizado)', v: brlC(m.lucroMedioDiario), cls: m.lucroMedioDiario >= 0 ? 'green' : 'red' },
-      { l: 'Venda necessária por dia (p/ meta)', v: m.vendaNecessariaPorDia != null ? brlC(m.vendaNecessariaPorDia) : '—', cls: 'amber' },
+    var stripDiaria = MetricGrid([
+      MetricCard({ label: 'Venda média diária (realizada)', value: brlC(m.vendaMediaDiaria), cls: 'blue' }),
+      MetricCard({ label: 'Lucro médio diário (realizado)', value: brlC(m.lucroMedioDiario), cls: m.lucroMedioDiario >= 0 ? 'green' : 'red' }),
+      MetricCard({ label: 'Venda necessária por dia (p/ meta)', value: m.vendaNecessariaPorDia != null ? brlC(m.vendaNecessariaPorDia) : '—', cls: 'amber' }),
     ]);
     var ritmoIcon = m.ritmoStatus === 'ACIMA' ? '🟢' : m.ritmoStatus === 'NO_RITMO' ? '🟡' : '🔴';
     var ritmoTxt = m.ritmoStatus === 'ACIMA' ? pct(Math.abs(m.ritmoDiffPct)) + ' acima do ritmo necessário.' : m.ritmoStatus === 'NO_RITMO' ? 'No ritmo esperado.' : pct(Math.abs(m.ritmoDiffPct)) + ' abaixo da velocidade necessária.';
     var ritmoBox = callout(m.ritmoStatus === 'ABAIXO' ? 'warn' : 'green', ritmoIcon + ' Ritmo da meta', 'Meta proporcional até hoje: <b>' + brlC(m.ritmoEsperado) + '</b> · Realizado: <b>' + brlC(m.realizado) + '</b> · ' + ritmoTxt);
     var projIcon = m.projStatus === 'ACIMA' ? '🟢' : m.projStatus === 'NO_RITMO' ? '🟡' : '🔴';
     var projBox = callout(m.projStatus === 'ABAIXO' ? 'warn' : 'green', projIcon + ' Projeção de fechamento (mantendo o ritmo atual)', 'Lucro projetado: <b>' + brlC(m.projecao) + '</b> · Meta: <b>' + brlC(m.metaC) + '</b> · Diferença projetada: <b>' + brlC(m.projecao - m.metaC) + '</b>');
-    var strip2 = kstrip([
-      { l: 'Margem média realizada (atual)', v: pct(r2(m.margemMedia * 100)), cls: 'blue' },
-      { l: 'Ticket médio', v: brlC(m.ticketMedio), cls: 'blue' },
-      { l: 'Faturamento necessário (com margem atual)', v: m.faturamentoNecessario != null ? brlC(m.faturamentoNecessario) : 'sem margem para calcular', cls: 'amber' },
-      { l: 'Pedidos necessários', v: m.pedidosNecessarios != null ? nn(m.pedidosNecessarios) : '—', cls: 'amber' },
+    var strip2 = MetricGrid([
+      MetricCard({ label: 'Margem média realizada (atual)', value: pct(r2(m.margemMedia * 100)), cls: 'blue' }),
+      MetricCard({ label: 'Ticket médio', value: brlC(m.ticketMedio), cls: 'blue' }),
+      MetricCard({ label: 'Faturamento necessário (com margem atual)', value: m.faturamentoNecessario != null ? brlC(m.faturamentoNecessario) : 'sem margem para calcular', cls: 'amber' }),
+      MetricCard({ label: 'Pedidos necessários', value: m.pedidosNecessarios != null ? nn(m.pedidosNecessarios) : '—', cls: 'amber' }),
     ]);
     // §39: a margem usada na criação da meta é preservada — se a margem real mudar durante o
     // período, mostramos as duas leituras lado a lado, sem alterar a meta original silenciosamente.
@@ -7024,7 +7035,7 @@
   };
   function mrProduto() {
     var pe = mrPeriodEngine(); var list = pe.skuList; var cross = pe.cross;
-    var head = secHead('MINHA RENDA · PRODUTOS E SKUS', 'Rentabilidade por SKU no período', 'Lucro e margem usam o mesmo motor da Ficha 360/Meta (custo de Produtos + taxas reais). Unidades e Família só aparecem quando o SKU do Income coincide de fato com o SKU de Pedidos/Produtos — "custo pendente" nunca é tratado como zero.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'MINHA RENDA · PRODUTOS E SKUS', title: 'Rentabilidade por SKU no período', description: 'Lucro e margem usam o mesmo motor da Ficha 360/Meta (custo de Produtos + taxas reais). Unidades e Família só aparecem quando o SKU do Income coincide de fato com o SKU de Pedidos/Produtos — "custo pendente" nunca é tratado como zero.' });
     if (!list.length) return head + emptyBox('Sem pedidos no período para montar a rentabilidade por SKU.');
     var crossNote = !cross.reliable ? callout('warn', '⚠ Unidades, família e devolução por SKU não disponíveis', 'O "SKU" do Income é o ID numérico interno da Shopee; o SKU de Pedidos/Produtos é a referência do próprio vendedor — só ' + pct(cross.overlapPct) + ' coincidem neste conjunto de arquivos. Para não inventar vínculo, unidades, família, lucro/unidade e devolução por SKU ficam "não disponível". Lucro, margem e faturamento continuam corretos — usam o ID do <b>pedido</b>, igual em todas as fontes.') : '';
     var withProfit = list.filter(function (x) { return x.lucroN > 0; });
@@ -7033,13 +7044,15 @@
     var fkey = MR_PROD_FILTERS[mrProdFilter] ? mrProdFilter : 'todos'; var F = MR_PROD_FILTERS[fkey];
     var filtered = list.filter(F.pred).sort(F.sort);
     var chips = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">' + Object.keys(MR_PROD_FILTERS).map(function (k) { return '<button class="btn-sm' + (k === fkey ? ' primary' : '') + '" data-mrprodf="' + k + '">' + esc(MR_PROD_FILTERS[k].label) + '</button>'; }).join('') + '</div>';
-    var hi = function (label, x, extra) { return x ? '<div class="kc"><div class="kl">' + esc(label) + '</div><div class="kv" style="font-size:14px">' + esc((x.sku || '—')) + '</div><div class="ks">' + esc(extra) + '</div></div>' : ''; };
+    // Fase 7.1 (migração para componentes padrão): hi() virou um wrapper fino de MetricCard() com
+    // customBody — mesmo conteúdo (SKU como "valor", texto, não número) e mesmo layout, sem clique.
+    var hi = function (label, x, extra) { return x ? MetricCard({ customBody: '<div class="lbl">' + esc(label) + '</div><div class="val" style="font-size:14px">' + esc((x.sku || '—')) + '</div><div class="footnote" style="margin-top:4px">' + esc(extra) + '</div>' }) : ''; };
     var maisLucrativo = withProfit.slice().sort(function (a, b) { return b.lucro - a.lucro; })[0];
     var maiorMargemX = withProfit.filter(function (x) { return x.margem != null; }).sort(function (a, b) { return b.margem - a.margem; })[0];
     var maiorFat = list.slice().sort(function (a, b) { return b.preco - a.preco; })[0];
     var maiorVol = cross.reliable ? list.slice().sort(function (a, b) { return (b.units || 0) - (a.units || 0); })[0] : null;
     var maiorPerdaDevol = cross.reliable ? list.filter(function (x) { return x.devLoss > 0; }).sort(function (a, b) { return b.devLoss - a.devLoss; })[0] : null;
-    var highlights = '<div class="kstrip">' + hi('SKU mais lucrativo', maisLucrativo, maisLucrativo ? brlC(maisLucrativo.lucro) : '') + hi('Maior margem', maiorMargemX, maiorMargemX ? pct(maiorMargemX.margem) : '') + hi('Maior faturamento', maiorFat, brlC(maiorFat ? maiorFat.preco : 0)) + hi('Maior volume', maiorVol, maiorVol ? nn(maiorVol.units) + ' un.' : '') + hi('Maior perda em devolução', maiorPerdaDevol, maiorPerdaDevol ? brlC(maiorPerdaDevol.devLoss) : '') + '</div>';
+    var highlights = MetricGrid([hi('SKU mais lucrativo', maisLucrativo, maisLucrativo ? brlC(maisLucrativo.lucro) : ''), hi('Maior margem', maiorMargemX, maiorMargemX ? pct(maiorMargemX.margem) : ''), hi('Maior faturamento', maiorFat, brlC(maiorFat ? maiorFat.preco : 0)), hi('Maior volume', maiorVol, maiorVol ? nn(maiorVol.units) + ' un.' : ''), hi('Maior perda em devolução', maiorPerdaDevol, maiorPerdaDevol ? brlC(maiorPerdaDevol.devLoss) : '')].filter(Boolean));
     var custoNote = semCusto ? callout('warn', nn(semCusto) + ' SKU(s) com custo pendente', 'Não entram nos rankings de lucro/margem — cadastre o custo em Produtos para liberá-los.') : '';
     var body;
     if (fkey === 'comLucro') {
@@ -7093,11 +7106,11 @@
     };
   }
   function mrAuditoria() {
-    var head = secHead('MINHA RENDA · AUDITORIA', 'Proveniência, mapa de campos e integridade', 'Cada número tem origem rastreável: arquivo, aba, tipo, pedido. MINHA RENDA = INCOME XLSX — única fonte.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'MINHA RENDA · AUDITORIA', title: 'Proveniência, mapa de campos e integridade', description: 'Cada número tem origem rastreável: arquivo, aba, tipo, pedido. MINHA RENDA = INCOME XLSX — única fonte.' });
     var imps = batches.filter(function (b) { return b.module === 'Minha Renda'; });
     var impRows = imps.slice(0, 30).map(function (b) { return '<tr><td class="nowrap">' + new Date(b.createdAt).toLocaleString('pt-BR') + '</td><td class="cell-text">' + esc(b.filename) + '</td><td>' + nn(b.seen) + '</td><td>' + nn(b.novo) + '</td></tr>'; }).join('');
     var e = mrEngine();
-    var counts = kstrip([{ l: 'Linhas Order', v: nn(e.orders.length), cls: 'blue' }, { l: 'Linhas SKU', v: nn(mrRenda.length - e.orders.length), cls: 'blue' }, { l: 'Divergências de frete', v: nn(mrShip.length), cls: 'amber' }, { l: 'Ajustes', v: nn(mrAdj.length), cls: 'amber' }, { l: 'Service Fee (linhas)', v: nn(mrSvc.length), cls: 'blue' }]);
+    var counts = MetricGrid([MetricCard({ label: 'Linhas Order', value: nn(e.orders.length), cls: 'blue' }), MetricCard({ label: 'Linhas SKU', value: nn(mrRenda.length - e.orders.length), cls: 'blue' }), MetricCard({ label: 'Divergências de frete', value: nn(mrShip.length), cls: 'amber' }), MetricCard({ label: 'Ajustes', value: nn(mrAdj.length), cls: 'amber' }), MetricCard({ label: 'Service Fee (linhas)', value: nn(mrSvc.length), cls: 'blue' })]);
     // §39 — Auditoria da planilha Income
     var pedidosUnicosIncome = {}; e.orders.forEach(function (o) { pedidosUnicosIncome[o.orderId] = 1; });
     var datas = e.orders.map(function (o) { return o.dataConclusao || o.dataCriacao; }).filter(Boolean).sort();
@@ -7190,13 +7203,13 @@
       if (subtotal) comImpacto++; else if (env) semImpacto++;
       return '<tr class="rowlink" data-goped360="' + esc(s.orderId) + '"><td class="mono">' + esc(s.orderId) + '</td><td class="nowrap">' + brl(s.esperado) + '</td><td class="nowrap">' + brl(s.real) + '</td><td class="nowrap' + (s.real - s.esperado > 0 ? ' neg' : '') + '">' + brl(s.real - s.esperado) + '</td><td class="nowrap">' + (compComprador != null ? brl(compComprador) : '—') + '</td><td class="nowrap">' + (compShopee != null ? brl(compShopee) : '—') + '</td><td class="nowrap">' + (subtotal != null ? brl(subtotal) : '— sem Income') + '</td><td class="nowrap' + (subtotal ? (subtotal < 0 ? ' neg' : ' pos') : '') + '"><b>' + (subtotal != null ? brl(subtotal) : '—') + '</b></td></tr>';
     }).join('');
-    var strip = kstrip([
-      { l: 'Pedidos com discrepância', v: nn(mrShip.length), cls: 'blue' },
-      { l: 'Frete esperado (total)', v: brl(totalEsperado), cls: 'blue' },
-      { l: 'Frete real cobrado (total)', v: brl(totalReal), cls: 'blue' },
-      { l: 'Diferença bruta (total)', v: brl(totalDiff), cls: totalDiff > 0 ? 'amber' : 'green', s: 'nunca é prejuízo automático — ver Impacto Líquido' },
-      { l: 'Com impacto líquido real na Líder', v: nn(comImpacto), cls: comImpacto ? 'amber' : 'green' },
-      { l: 'Compensado (impacto líquido zero)', v: nn(semImpacto), cls: 'green' },
+    var strip = MetricGrid([
+      MetricCard({ label: 'Pedidos com discrepância', value: nn(mrShip.length), cls: 'blue' }),
+      MetricCard({ label: 'Frete esperado (total)', value: brl(totalEsperado), cls: 'blue' }),
+      MetricCard({ label: 'Frete real cobrado (total)', value: brl(totalReal), cls: 'blue' }),
+      MetricCard({ label: 'Diferença bruta (total)', value: brl(totalDiff), cls: totalDiff > 0 ? 'amber' : 'green', sub: 'nunca é prejuízo automático — ver Impacto Líquido' }),
+      MetricCard({ label: 'Com impacto líquido real na Líder', value: nn(comImpacto), cls: comImpacto ? 'amber' : 'green' }),
+      MetricCard({ label: 'Compensado (impacto líquido zero)', value: nn(semImpacto), cls: 'green' }),
     ]);
     return '<div class="panel"><div class="ph"><h3>Auditoria de Frete (Shipping Fee Discrepancy)</h3><span class="footnote" style="margin:0">só mostra frete cobrado acima do esperado — discrepância ≠ perda financeira automática (§42)</span></div><div class="pb">' + strip + '</div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Frete esperado</th><th>Frete real (parceiro)</th><th>Diferença</th><th>Compensação comprador</th><th>Compensação Shopee</th><th>Subtotal de Envio</th><th>Impacto Líquido</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
   }
