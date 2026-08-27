@@ -7278,17 +7278,60 @@
   // nada: quem já montava a string de cor pra fcard() continua passando o mesmo valor.
   // Migração é gradual, módulo por módulo (piloto: Dashboard) — o resto do sistema continua usando
   // fcard()/kstrip() por enquanto, exatamente como o plano de execução do relatório recomenda.
+  // Refatoração N11 (Fase 6.1a — maturação): evolui MetricCard() com os padrões que fcard()/kstrip()/
+  // kpi() cobriam separadamente, sem CSS novo (proibido nesta fase) e sem inventar um mecanismo de
+  // clique novo — os 3 variants clicáveis (drill/filter/selected) geram atributos data-mc-* padrão;
+  // quem chama ainda liga o clique no próprio bind*() de sempre (mesmo idioma já usado em todo o
+  // arquivo: data-dashgo, data-fin, data-k…), só que agora sempre com o MESMO nome, então nenhuma tela
+  // precisa inventar um data-* novo — só chamar bindMetricCards() uma vez. Laranja (achado do
+  // relatório: kstrip tem .orange, fcard não) via inline style reaproveitando o MESMO hex do CSS já
+  // existente (#e0662a, .kstrip .kc.orange .kv) — nunca um valor novo inventado.
+  var MC_STATUS_CLS = { positive: 'green', warn: 'amber', negative: 'red', info: 'blue', neutral: '' };
+  var MC_ORANGE = '#e0662a';
   function MetricCard(opts) {
     opts = opts || {};
-    var STATUS_CLS = { positive: 'green', warn: 'amber', negative: 'red', info: 'blue', neutral: '' };
-    var cls = STATUS_CLS.hasOwnProperty(opts.status) ? STATUS_CLS[opts.status] : (opts.status || opts.cls || '');
+    var statusKey = opts.status || opts.cls || '';
+    var isOrange = statusKey === 'orange' || statusKey === 'laranja';
+    var cls = isOrange ? '' : (MC_STATUS_CLS.hasOwnProperty(statusKey) ? MC_STATUS_CLS[statusKey] : statusKey);
     var titleAttr = opts.tooltip ? ' title="' + esc(opts.tooltip) + '"' : '';
+
     if (opts.loading) {
       return '<div class="fcard"' + titleAttr + '><div class="lbl">' + esc(opts.label || '') + '</div><div class="val" style="opacity:.35">…</div></div>';
     }
     if (opts.empty) {
       return '<div class="fcard"' + titleAttr + '><div class="lbl">' + esc(opts.label || '') + '</div><div class="val" style="font-size:13px;color:var(--muted);font-weight:400">' + esc(typeof opts.empty === 'string' ? opts.empty : 'sem dados') + '</div></div>';
     }
+    // card de ação — sem valor numérico, um botão/link no lugar (ex.: "Importar arquivo")
+    if (opts.variant === 'action') {
+      return '<div class="fcard"' + titleAttr + '><div class="lbl">' + esc(opts.label || '') + '</div><div style="margin-top:8px">' + (opts.actionHtml || '') + '</div></div>';
+    }
+
+    var dataAttrs = '', extraCls = '', clickStyle = '';
+    // A) drill — abre um detalhamento (padrão Minha Renda/Caixa). `action`/`label` viram os MESMOS
+    // dois atributos sempre, então bindMetricCards() liga uma vez só, qualquer tela.
+    if (opts.drill) {
+      dataAttrs += ' data-mc-drill="' + esc(opts.drill.action) + '" data-mc-drilllabel="' + esc(opts.drill.label || opts.label || '') + '"';
+      extraCls += ' rowlink'; clickStyle = 'cursor:pointer;';
+    }
+    // B) filter — card alterna um filtro (padrão Produtos/kpi toggle). Estado ativo = outline, sem
+    // precisar de uma classe CSS nova (mesma técnica já usada por devFinImpacto/card() pro select).
+    if (opts.variant === 'filter') {
+      dataAttrs += ' data-mc-filter="' + esc(opts.filterKey != null ? opts.filterKey : '') + '"';
+      clickStyle = 'cursor:pointer;' + (opts.active ? 'outline:2px solid var(--brand-2);' : '');
+    }
+    // C) selected — card marca uma seleção ativa sem navegar (padrão Devolução/devFinImpacto).
+    if (opts.variant === 'selected') {
+      dataAttrs += ' data-mc-select="' + esc(opts.selectKey != null ? opts.selectKey : '') + '"';
+      clickStyle = 'cursor:pointer;' + (opts.selected ? 'outline:2px solid var(--brand);' : '');
+    }
+    var styleAttr = clickStyle ? ' style="' + clickStyle + '"' : '';
+
+    // D) customBody — MetricCard vira só a moldura (rótulo opcional + slot livre), pro caso Caixa
+    // (renderização própria por card, não título+valor simples).
+    if (opts.customBody) {
+      return '<div class="fcard ' + cls + extraCls + '"' + titleAttr + dataAttrs + styleAttr + '>' + (opts.label ? '<div class="lbl">' + esc(opts.label) + '</div>' : '') + opts.customBody + '</div>';
+    }
+
     var trendMark = '';
     if (opts.trend) {
       var arrow = opts.trend === 'up' ? '↑' : opts.trend === 'down' ? '↓' : '→';
@@ -7297,19 +7340,52 @@
     }
     var pctMark = opts.pct != null ? ' <span class="footnote" style="margin:0">' + pct(opts.pct) + '</span>' : '';
     var subLine = opts.sub ? '<div class="footnote" style="margin-top:4px">' + (opts.subHtml ? opts.sub : esc(opts.sub)) + '</div>' : '';
-    return '<div class="fcard ' + cls + '"' + titleAttr + '><div class="lbl">' + esc(opts.label || '') + '</div><div class="val">' + opts.value + trendMark + pctMark + '</div>' + subLine + '</div>';
+    var valStyle = isOrange ? ' style="color:' + MC_ORANGE + '"' : '';
+    return '<div class="fcard ' + cls + extraCls + '"' + titleAttr + dataAttrs + styleAttr + '><div class="lbl">' + esc(opts.label || '') + '</div><div class="val"' + valStyle + '>' + opts.value + trendMark + pctMark + '</div>' + subLine + '</div>';
   }
   function MetricGrid(cardsHtml) { return '<div class="cards6">' + cardsHtml.join('') + '</div>'; }
-  // PageHeader() — segundo componente base (mesma Fase 6). Cobre a variante "faixa flex com ações à
-  // direita" (.page-head), que é o padrão hoje usado no Dashboard — a variante "eyebrow" de secHead()
-  // fica pra uma migração futura, sem forçar as ~40 telas que já usam secHead() a mudar de estilo
-  // visual nesta passada. Sem breadcrumb "de verdade" hoje (o sistema não tem navegação hierárquica
-  // por trilha) — o campo existe na assinatura pra já cobrir o caso quando/se for necessário.
+  // Companion de bind — mesmo idioma de sempre (querySelectorAll+forEach dentro do bind*() da tela),
+  // só centraliza a query nos 3 atributos padrão que MetricCard gera, pra nenhuma tela reinventar um
+  // data-* novo. handlers: { drill(action,label,el), filter(key,el), selected(key,el) }. Chamar uma
+  // vez, depois de innerHTML=, igual a qualquer outro app.querySelectorAll('[data-x]') já existente.
+  function bindMetricCards(scope, handlers) {
+    handlers = handlers || {};
+    var root = scope || app;
+    if (handlers.drill) root.querySelectorAll('[data-mc-drill]').forEach(function (el) { el.onclick = function () { handlers.drill(el.dataset.mcDrill, el.dataset.mcDrilllabel, el); }; });
+    if (handlers.filter) root.querySelectorAll('[data-mc-filter]').forEach(function (el) { el.onclick = function () { handlers.filter(el.dataset.mcFilter, el); }; });
+    if (handlers.selected) root.querySelectorAll('[data-mc-select]').forEach(function (el) { el.onclick = function () { handlers.selected(el.dataset.mcSelect, el); }; });
+  }
+  // Refatoração N12 (Fase 6.1b — maturação): PageHeader() ganha 3 variantes, cobrindo os 3 estilos de
+  // cabeçalho já mapeados no relatório "Mapa de Duplicidades" (Seção D) — sem CSS novo, cada variante
+  // reaproveita classes já existentes (.page-head / .rhead+secHead / .page-head+select+tag do
+  // Fechamento de Caixa).
+  //   simple   — .page-head, o padrão usado hoje no Dashboard (default, compatível com a chamada já
+  //              migrada — não muda nada pra quem já usa PageHeader sem passar `variant`).
+  //   eyebrow  — MESMO markup de secHead() (.rhead/.eyebrow/.rtitle/.rsub/.rule), byte-a-byte, pra
+  //              cobrir as ~40 telas que já usam secHead() numa futura migração sem mudar o visual.
+  //   financial— cabeçalho rico (badge de status, <select> embutido, resumo, botões condicionais) —
+  //              modelado no cabeçalho do Fechamento de Caixa, o mais complexo já encontrado.
+  // Validado nesta fase contra Dashboard (simple, já em produção) e a FORMA dos cabeçalhos atuais de
+  // Pedidos (simple+ação) e Fator de Custo (simple, só título+descrição) — nenhum dos dois foi migrado
+  // ainda (só Dashboard está em produção), por instrução explícita de não migrar tudo de uma vez.
   function PageHeader(opts) {
     opts = opts || {};
-    var breadcrumbHtml = opts.breadcrumb ? '<div class="crumbs">' + esc(opts.breadcrumb) + '</div>' : '';
-    var actionsHtml = opts.actions && opts.actions.length ? '<div style="display:flex;gap:8px;flex-wrap:wrap">' + opts.actions.join('') + '</div>' : '';
+    var variant = opts.variant || 'simple';
+    var actionsHtml = opts.actions && opts.actions.length ? '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' + opts.actions.join('') + '</div>' : '';
     var filtersHtml = opts.filters ? '<div style="margin-top:10px">' + opts.filters + '</div>' : '';
+    if (variant === 'eyebrow') {
+      var rhead = '<div class="rhead"><div class="eyebrow">' + esc(opts.eyebrow || '') + '</div><h3 class="rtitle">' + esc(opts.title || '') + '</h3>' + (opts.description ? '<p class="rsub">' + esc(opts.description) + '</p>' : '') + '<div class="rule"></div></div>';
+      return rhead + actionsHtml + filtersHtml;
+    }
+    if (variant === 'financial') {
+      var selectHtml = opts.select ? '<select class="select sm" id="' + esc(opts.select.id) + '">' + opts.select.optionsHtml + '</select>' : '';
+      var badgeHtml = opts.badge ? '<span class="tag ' + esc(opts.badge.cls || '') + '">' + esc(opts.badge.label) + '</span>' : '';
+      var noteHtml = opts.note ? '<span class="footnote" style="margin:0">' + esc(opts.note) + '</span>' : '';
+      var rightRow = (selectHtml || badgeHtml || noteHtml || actionsHtml) ? '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' + selectHtml + badgeHtml + noteHtml + (opts.actions || []).join('') + '</div>' : '';
+      return '<div class="page-head" style="align-items:center"><div><h2 style="margin:0;font-size:20px">' + esc(opts.title || '') + '</h2>' + (opts.summary ? '<p style="margin:4px 0 0;color:var(--muted);font-size:13px">' + opts.summary + '</p>' : '') + '</div>' + rightRow + '</div>' + filtersHtml;
+    }
+    // simple (default) — idêntico ao comportamento original, já em produção no Dashboard.
+    var breadcrumbHtml = opts.breadcrumb ? '<div class="crumbs">' + esc(opts.breadcrumb) + '</div>' : '';
     return '<div class="page-head">' +
       '<div>' + breadcrumbHtml + '<h2>' + esc(opts.title || '') + '</h2>' + (opts.description ? '<p>' + esc(opts.description) + '</p>' : '') + '</div>' +
       actionsHtml +
