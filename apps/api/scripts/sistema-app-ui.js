@@ -7447,6 +7447,36 @@
     if (opts.onMount) opts.onMount(panel);
     return { close: close, panel: panel };
   }
+  // openDrawer() — infraestrutura única do padrão .drawer/.drawer-panel/.dh/.dbd já usado em ~50
+  // pontos do sistema (openPedidoFicha360, openFicha, openWalletTx, etc). Fase 6.1: só a fundação —
+  // nenhum drawer existente foi migrado ainda. abertura/fechamento seguem o mesmo idioma real (clique
+  // fora fecha, botão .x fecha, ESC fecha via o listener global já existente); stack automático
+  // (drawer filho abre por cima do pai, mesma lógica de z-index incremental do openModal); refresh()
+  // re-renderiza o corpo sem fechar o drawer (mesmo padrão manual já usado em pontos como a Central
+  // de Pendências, que redefine panel.innerHTML + rewire em vez de remover/recriar o elemento).
+  function openDrawer(opts) {
+    opts = opts || {};
+    var width = opts.width || 860;
+    var stackDepth = document.querySelectorAll('.overlay, .drawer').length;
+    var d = document.createElement('div'); d.className = 'drawer';
+    if (stackDepth > 0) d.style.zIndex = String(60 + stackDepth);
+    var panel = document.createElement('div'); panel.className = 'drawer-panel';
+    panel.style.width = width + 'px'; panel.style.maxWidth = '98vw';
+    d.appendChild(panel);
+    d.onclick = function (e) { if (e.target === d) close(); };
+    document.body.appendChild(d);
+    function renderBody() {
+      var titleHtml = opts.titleHtml || ('<b>' + esc(opts.title || '') + '</b>');
+      var bodyHtml = opts.renderBody ? opts.renderBody(panel) : (opts.bodyHtml || '');
+      panel.innerHTML = '<div class="dh"><div>' + titleHtml + '</div><button class="x">&times;</button></div><div class="dbd">' + bodyHtml + '</div>';
+      panel.querySelector('.x').onclick = close;
+      if (opts.onMount) opts.onMount(panel, refresh);
+    }
+    function close() { if (opts.onClose) opts.onClose(); d.remove(); }
+    function refresh() { renderBody(); }
+    renderBody();
+    return { close: close, refresh: refresh, panel: panel, el: d };
+  }
   function kv(k, v) { return '<label class="fld">' + esc(k) + '</label><div class="ro">' + esc(v || '—') + '</div>'; }
   function rowline(k, v) { return '<div class="row"><span>' + esc(k) + '</span><b>' + v + '</b></div>'; }
   function banner(html) { return '<div class="info-banner">' + html + '</div>'; }
