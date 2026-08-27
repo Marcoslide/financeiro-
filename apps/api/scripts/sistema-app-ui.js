@@ -12433,7 +12433,7 @@
     return list;
   }
   function renderContasReceber() {
-    app.innerHTML = secHead('FINANCEIRO', 'Contas a Receber', 'Controle de dinheiro que a empresa tem para receber, o que já foi recebido, onde entrou e o saldo dos bancos — nasce do fechamento de Caixa (só transferências reais para banco, nunca por pedido) e de lançamentos manuais.') +
+    app.innerHTML = PageHeader({ variant: 'eyebrow', eyebrow: 'FINANCEIRO', title: 'Contas a Receber', description: 'Controle de dinheiro que a empresa tem para receber, o que já foi recebido, onde entrou e o saldo dos bancos — nasce do fechamento de Caixa (só transferências reais para banco, nunca por pedido) e de lançamentos manuais.' }) +
       '<div class="subtabs">' + [['visaogeral', 'Visão Geral'], ['lista', 'Lista'], ['shopee', 'Pedidos (auditoria)'], ['projecao', 'Projeção de Recebimentos']].map(function (t) { return '<div class="subtab' + (crSub === t[0] ? ' active' : '') + '" data-crtab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>' +
       '<div id="crbody" style="margin-top:14px"></div>';
     crRenderBody();
@@ -12507,12 +12507,12 @@
     var liquidoC = vendaBrutaC + taxasC;
     var aliq = crProjAliquotaMedia();
     var simAntecC = aliq != null ? Math.round(liquidoC * (1 - aliq)) : null;
-    var cards = kstrip([
-      { l: 'Pedidos em Carteira', v: nn(list.length) },
-      { l: 'Venda Bruta Futura', v: brlC(vendaBrutaC), s: 'Order.all — Preço acordado × Qtd' },
-      { l: 'Taxas Estimadas', v: brlC(taxasC), cls: 'red' },
-      { l: 'Líquido Projetado', v: brlC(liquidoC), cls: 'blue' },
-      { l: 'Após Antecipação (simulação)', v: simAntecC != null ? brlC(simAntecC) : 'sem histórico do Acelera', s: aliq != null ? ('alíquota média ' + pct(r2(aliq * 100))) : null },
+    var cards = MetricGrid([
+      MetricCard({ label: 'Pedidos em Carteira', value: nn(list.length) }),
+      MetricCard({ label: 'Venda Bruta Futura', value: brlC(vendaBrutaC), sub: 'Order.all — Preço acordado × Qtd' }),
+      MetricCard({ label: 'Taxas Estimadas', value: brlC(taxasC), cls: 'red' }),
+      MetricCard({ label: 'Líquido Projetado', value: brlC(liquidoC), cls: 'blue' }),
+      MetricCard({ label: 'Após Antecipação (simulação)', value: simAntecC != null ? brlC(simAntecC) : 'sem histórico do Acelera', sub: aliq != null ? ('alíquota média ' + pct(r2(aliq * 100))) : null }),
     ]);
     // Gráfico simples "Próximos 7/15/30 dias" — soma de venda bruta por faixa de prazo de envio
     // (shipByDate), sem nenhuma biblioteca externa (barras em CSS puro, mesmo padrão visual do resto
@@ -12576,11 +12576,11 @@
     var opIdVG = opActiveOrNull();
     var contasFa = financialAccounts.filter(function (a) { return a.active !== false && (!a.operationId || a.operationId === opIdVG); });
     var saldoBancos = bancos.reduce(function (s, b) { return s + bankAccountSaldoAtual(b.id).saldoAtual; }, 0) + contasFa.reduce(function (s, a) { return s + faSaldoAtual(a.id).saldoAtual; }, 0);
-    var kpiHtml = kstrip([
-      { l: 'Total a receber', v: brl(kpis.aReceber) },
-      { l: 'Recebido no período', v: brl(kpis.recebidoPeriodo) },
-      { l: 'Em atraso', v: brl(kpis.vencido) },
-      { l: 'Saldo dos bancos', v: brl(saldoBancos) },
+    var kpiHtml = MetricGrid([
+      MetricCard({ label: 'Total a receber', value: brl(kpis.aReceber) }),
+      MetricCard({ label: 'Recebido no período', value: brl(kpis.recebidoPeriodo) }),
+      MetricCard({ label: 'Em atraso', value: brl(kpis.vencido) }),
+      MetricCard({ label: 'Saldo dos bancos', value: brl(saldoBancos) }),
     ]);
     var bancosRows = bancos.map(function (b) { var s = bankAccountSaldoAtual(b.id); return '<div class="panel" style="margin-bottom:8px"><div class="pb"><details class="cx-collapse"><summary class="cx-kv"><span>' + esc(b.nome) + (b.banco ? ' — ' + esc(b.banco) : '') + '</span><b>' + brl(s.saldoAtual) + '</b></summary>' +
       '<div class="fin-line"><span>Saldo inicial' + (b.dataInicial ? ' (' + dbr(b.dataInicial) + ')' : '') + '</span><span>' + brl(s.saldoInicial) + '</span></div>' +
@@ -12642,14 +12642,17 @@
     var all = crFilteredList();
     var pageList = all.slice((crPage - 1) * crPageSize, crPage * crPageSize);
     var kpis = crKpis(all);
-    var kpiHtml = kstrip([
-      { l: 'A receber', v: brl(kpis.aReceber) },
-      { l: 'Em atraso', v: brl(kpis.vencido) },
-      { l: 'Recebido no período', v: brl(kpis.recebidoPeriodo) },
-      { l: 'Recebido hoje', v: brl(kpis.recebidoHoje) },
+    var kpiHtml = MetricGrid([
+      MetricCard({ label: 'A receber', value: brl(kpis.aReceber) }),
+      MetricCard({ label: 'Em atraso', value: brl(kpis.vencido) }),
+      MetricCard({ label: 'Recebido no período', value: brl(kpis.recebidoPeriodo) }),
+      MetricCard({ label: 'Recebido hoje', value: brl(kpis.recebidoHoje) }),
     ]);
-    var header = '<div class="page-head"><div><h2 style="margin:0;font-size:20px">Contas a Receber</h2>' +
-      '<p style="margin:4px 0 0;color:var(--muted);font-size:13px">' + nn(all.length) + ' conta(s) · saldo ' + brl(all.reduce(function (s, h) { return s + crSaldo(h); }, 0)) + '</p></div>' +
+    // Fase 7.1 (limpeza de header duplicado): o título "Contas a Receber" já é mostrado por
+    // renderContasReceber() acima desta view em TODAS as subabas; esta linha mantém só o resumo
+    // (respeitando os filtros atuais) e a ação, sem repetir o h2.
+    var header = '<div class="page-head" style="align-items:center"><div>' +
+      '<p style="margin:0;color:var(--muted);font-size:13px">' + nn(all.length) + ' conta(s) · saldo ' + brl(all.reduce(function (s, h) { return s + crSaldo(h); }, 0)) + '</p></div>' +
       '<div style="display:flex;gap:8px"><button class="btn-sm primary" id="cr-new">+ Nova conta a receber</button></div></div>';
     var basisOpts = [['competencia', 'Competência'], ['vencimento', 'Vencimento']];
     var filtros = '<div class="panel"><div class="pb">' + devPeriodBarAsCp() +
@@ -12791,32 +12794,38 @@
     }
     draw();
   }
+  // Fase 7.1 (migração para componentes padrão): "openCrBaixaModal" já era um modal na prática (uma
+  // única confirmação, nunca uma ficha/detalhe) — só estava implementado com o markup de drawer.
+  // Migrado para openModal() de verdade; mesma validação inline em #crb-err, mesmo fluxo assíncrono.
+  // Chamado de dentro do drawer openCrEditor (ainda aberto atrás) — o z-index automático do openModal
+  // já garante que fica por cima.
   function openCrBaixaModal(h, onDone) {
-    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '440px'; panel.style.maxWidth = '96vw';
-    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
     var saldo = crSaldo(h);
-    panel.innerHTML = '<div class="dh"><div><b>Registrar recebimento</b></div><button class="x">&times;</button></div><div class="dbd">' +
+    var bodyHtml =
       '<label class="fld">Valor recebido</label><input class="input" id="crb-valor" style="width:100%" value="' + saldo + '">' +
       '<label class="fld">Data</label><input type="date" class="input" id="crb-data" style="width:100%" value="' + cpToday() + '">' +
       '<label class="fld">Conta financeira *</label><select class="select" id="crb-conta" style="width:100%">' + crFinAccountOptions(h.financialAccountId).replace('Todas as contas financeiras', '— escolher —') + '</select>' +
       '<label class="fld">Forma de recebimento *</label><select class="select" id="crb-forma" style="width:100%"><option value="">— escolher —</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '">' + esc(f) + '</option>'; }).join('') + '</select>' +
       '<label class="fld">Observação</label><input class="input" id="crb-obs" style="width:100%">' +
-      '<div style="margin-top:12px"><button class="btn-sm primary" id="crb-salvar">Confirmar recebimento</button></div><div id="crb-err"></div></div>';
-    panel.querySelector('.x').onclick = function () { d.remove(); };
-    panel.querySelector('#crb-salvar').onclick = function () {
-      var valorRecebido = cpParseNum(panel.querySelector('#crb-valor').value);
-      if (valorRecebido == null || valorRecebido <= 0) { panel.querySelector('#crb-err').innerHTML = '<div class="form-err">Informe um valor válido.</div>'; return; }
-      var dataBaixa = panel.querySelector('#crb-data').value;
-      if (!dataBaixa) { panel.querySelector('#crb-err').innerHTML = '<div class="form-err">Informe a data do recebimento.</div>'; return; }
-      var financialAccountId = panel.querySelector('#crb-conta').value;
-      // BUG CRÍTICO (auditoria noturna, "Contas a Receber sem Conta financeira"): sem Conta financeira
-      // + Forma de recebimento obrigatórias na baixa, o recebimento era confirmado sem nunca impactar o
-      // saldo bancário — o fluxo correto é CR → Baixa → Conta financeira → Saldo do banco.
-      if (!financialAccountId) { panel.querySelector('#crb-err').innerHTML = '<div class="form-err">Selecione a conta financeira que recebeu o valor.</div>'; return; }
-      var paymentMethod = panel.querySelector('#crb-forma').value;
-      if (!paymentMethod) { panel.querySelector('#crb-err').innerHTML = '<div class="form-err">Selecione a forma de recebimento.</div>'; return; }
-      crRegistrarBaixa(h.id, { valorRecebido: valorRecebido, date: dataBaixa, financialAccountId: financialAccountId, paymentMethod: paymentMethod, observacao: panel.querySelector('#crb-obs').value.trim() }).then(function () { toast('Recebimento registrado', brl(valorRecebido)); d.remove(); if (onDone) onDone(); });
-    };
+      '<div id="crb-err"></div>';
+    openModal({
+      title: 'Registrar recebimento', width: 440, bodyHtml: bodyHtml, confirmLabel: 'Confirmar recebimento',
+      onConfirm: function (panel) {
+        var errEl = panel.querySelector('#crb-err'); errEl.innerHTML = '';
+        var valorRecebido = cpParseNum(panel.querySelector('#crb-valor').value);
+        if (valorRecebido == null || valorRecebido <= 0) { errEl.innerHTML = '<div class="form-err">Informe um valor válido.</div>'; return false; }
+        var dataBaixa = panel.querySelector('#crb-data').value;
+        if (!dataBaixa) { errEl.innerHTML = '<div class="form-err">Informe a data do recebimento.</div>'; return false; }
+        var financialAccountId = panel.querySelector('#crb-conta').value;
+        // BUG CRÍTICO (auditoria noturna, "Contas a Receber sem Conta financeira"): sem Conta financeira
+        // + Forma de recebimento obrigatórias na baixa, o recebimento era confirmado sem nunca impactar o
+        // saldo bancário — o fluxo correto é CR → Baixa → Conta financeira → Saldo do banco.
+        if (!financialAccountId) { errEl.innerHTML = '<div class="form-err">Selecione a conta financeira que recebeu o valor.</div>'; return false; }
+        var paymentMethod = panel.querySelector('#crb-forma').value;
+        if (!paymentMethod) { errEl.innerHTML = '<div class="form-err">Selecione a forma de recebimento.</div>'; return false; }
+        return crRegistrarBaixa(h.id, { valorRecebido: valorRecebido, date: dataBaixa, financialAccountId: financialAccountId, paymentMethod: paymentMethod, observacao: panel.querySelector('#crb-obs').value.trim() }).then(function () { toast('Recebimento registrado', brl(valorRecebido)); if (onDone) onDone(); });
+      },
+    });
   }
 
   // ===================== PRECIFICAÇÃO & MARGEM (Fase 1: motor + Simulador + Regras & Custos +
