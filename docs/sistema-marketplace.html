@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 4da4073 · 2026-08-27 13:55 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build c84c6f1 · 2026-08-27 15:12 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -12043,37 +12043,41 @@ buffer/index.js:
       }
     });
     rows.forEach(function (r) { soma += r.valor; r.cp = contasPagar.find(function (h) { return h.sourceEventKey === r.key; }); });
-    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '640px'; panel.style.maxWidth = '96vw'; panel.style.zIndex = '65';
-    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
     var tbl = rows.map(function (r) {
       var statusTag = r.cp ? (cpPaymentsForHeader(r.cp.id).some(function (p) { return !p.estornado; }) ? '<span class="tag ok">Pago</span>' : '<span class="tag warn">Em aberto</span>') : '<span class="footnote" style="margin:0">— (fecha o dia p/ gerar)</span>';
       var catTxt = r.cp && r.cp.categoryId ? esc(cpCategoryLabel(r.cp.categoryId)) : '<span class="footnote" style="margin:0">—</span>';
       return '<tr><td class="mono rowlink" data-goped360="' + esc(r.orderId) + '">' + esc(r.orderId) + '</td><td>Despesa</td><td>' + catTxt + '</td><td>' + statusTag + '</td><td class="nowrap ' + (r.valor < 0 ? 'neg' : 'pos') + '">' + brlC(r.valor) + '</td><td>' + (r.cp ? '<button class="btn-sm" data-cpedit="' + esc(r.cp.id) + '">Alterar</button>' : '<span class="footnote" style="margin:0">—</span>') + '</td></tr>';
     }).join('');
     var titulo = childKey ? (SVC_CHILD_LABEL[childKey] || childKey) : label;
-    panel.innerHTML = '<div class="dh"><div><b>' + esc(titulo) + '</b>' + (childKey ? '<span class="footnote" style="margin:4px 0 0">componente de ' + esc(label) + '</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' +
-      '<div class="footnote" style="margin-bottom:8px">' + nn(rows.length) + ' pedido(s) de ' + nn(vendas.n) + ' compõem esta linha da DRE de ' + esc(dbr(dateKey)) + '. Natureza/Status vêm do título de Contas a Pagar gerado por este pedido — "Alterar" edita o mesmo título (categoria/status), nunca um cadastro paralelo.</div>' +
+    var bodyHtml = '<div class="footnote" style="margin-bottom:8px">' + nn(rows.length) + ' pedido(s) de ' + nn(vendas.n) + ' compõem esta linha da DRE de ' + esc(dbr(dateKey)) + '. Natureza/Status vêm do título de Contas a Pagar gerado por este pedido — "Alterar" edita o mesmo título (categoria/status), nunca um cadastro paralelo.</div>' +
       '<div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Natureza</th><th>Categoria</th><th>Status</th><th>Valor</th><th>Ação</th></tr></thead><tbody>' + (tbl || '<tr><td colspan="6" class="empty">Nenhum pedido com este componente neste dia.</td></tr>') + '</tbody></table></div>' +
-      '<div class="fin-line total" style="margin-top:8px"><span>Soma dos pedidos</span><b>' + brlC(soma) + '</b></div>' +
-      '</div>';
-    panel.querySelectorAll('[data-cpedit]').forEach(function (b) { b.onclick = function () { d.remove(); openCpEditor(b.dataset.cpedit); }; });
-    panel.querySelector('.x').onclick = function () { d.remove(); };
-    panel.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { d.remove(); openPedidoFicha360(b.dataset.goped360); }; });
+      '<div class="fin-line total" style="margin-top:8px"><span>Soma dos pedidos</span><b>' + brlC(soma) + '</b></div>';
+    // Fase 7.1 (migração para componentes padrão): mesmo conteúdo de antes, agora via openDrawer()
+    // — candidato "detalhes de lançamento" citado no prompt. z-index deixa de ser fixo ('65').
+    var dw = openDrawer({
+      width: 640,
+      titleHtml: '<b>' + esc(titulo) + '</b>' + (childKey ? '<span class="footnote" style="margin:4px 0 0">componente de ' + esc(label) + '</span>' : ''),
+      bodyHtml: bodyHtml,
+      onMount: function (panel) {
+        panel.querySelectorAll('[data-cpedit]').forEach(function (b) { b.onclick = function () { dw.close(); openCpEditor(b.dataset.cpedit); }; });
+        panel.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { dw.close(); openPedidoFicha360(b.dataset.goped360); }; });
+      },
+    });
   }
   // Drill dos pedidos vendidos abaixo do preço recomendado (§47) — reaproveita exatamente a lista já
   // calculada por caixaDreDia() (dre.pedidosAbaixoRecomendado), nunca recalcula.
   function caixaPrecAbaixoRecomendadoOpen(dateKey) {
     var dre = caixaDreDia(dateKey, caixaOrigemAntecipacao(dateKey).pedidos);
     var rows = dre.pedidosAbaixoRecomendado.map(function (p) { return '<tr class="rowlink" data-goped360="' + esc(p.orderId) + '"><td class="mono">' + esc(p.orderId) + '</td><td class="nowrap neg">' + brlC(p.impactoC) + '</td></tr>'; }).join('');
-    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '520px'; panel.style.maxWidth = '96vw'; panel.style.zIndex = '65';
-    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
-    panel.innerHTML = '<div class="dh"><div><b>Pedidos vendidos abaixo do preço recomendado</b></div><button class="x">&times;</button></div><div class="dbd">' +
-      '<div class="footnote" style="margin-bottom:8px">' + nn(dre.pedidosAbaixoRecomendado.length) + ' pedido(s) de ' + nn(dre.precComFamiliaN) + ' com precificação em ' + esc(dbr(dateKey)) + '.</div>' +
+    var bodyHtml = '<div class="footnote" style="margin-bottom:8px">' + nn(dre.pedidosAbaixoRecomendado.length) + ' pedido(s) de ' + nn(dre.precComFamiliaN) + ' com precificação em ' + esc(dbr(dateKey)) + '.</div>' +
       '<div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Impacto estimado no lucro</th></tr></thead><tbody>' + (rows || '<tr><td colspan="2" class="empty">Nenhum.</td></tr>') + '</tbody></table></div>' +
-      '<div class="fin-line total" style="margin-top:8px"><span>Impacto total</span><b class="neg">' + brlC(dre.impactoAbaixoRecomendadoC) + '</b></div>' +
-      '</div>';
-    panel.querySelector('.x').onclick = function () { d.remove(); };
-    panel.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { d.remove(); openPedidoFicha360(b.dataset.goped360); }; });
+      '<div class="fin-line total" style="margin-top:8px"><span>Impacto total</span><b class="neg">' + brlC(dre.impactoAbaixoRecomendadoC) + '</b></div>';
+    var dw = openDrawer({
+      width: 520, title: 'Pedidos vendidos abaixo do preço recomendado', bodyHtml: bodyHtml,
+      onMount: function (panel) {
+        panel.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { dw.close(); openPedidoFicha360(b.dataset.goped360); }; });
+      },
+    });
   }
   function caixaDreBlock(dre, dateKey) {
     var line = function (label, v, opts) { opts = opts || {}; return '<div class="fin-line' + (opts.total ? ' total' : '') + '"><span>' + (opts.op ? '<b>' + opts.op + '</b> ' : '') + esc(label) + (opts.note ? ' <span class="footnote" style="margin:0">' + esc(opts.note) + '</span>' : '') + '</span><b class="' + (v == null ? '' : v < 0 ? 'neg' : v > 0 ? 'pos' : '') + '">' + (v == null ? 'não disponível' : brlC(v)) + '</b></div>'; };
@@ -12939,9 +12943,13 @@ buffer/index.js:
     var maiorPend = todasPend.length ? todasPend.reduce(function (a, b) { return b.valor > a.valor ? b : a; }) : null;
     return { maiorLucro: maiorLucro, maiorPrejuizo: maiorPrejuizo, melhorSku: melhorSku, piorSku: piorSku, maiorTaxa: maiorTaxa, maiorDesconto: maiorDesconto, maiorPend: maiorPend };
   }
+  // Fase 7.1 (migração para componentes padrão): caixaCard() virou um wrapper fino de MetricCard()
+  // — mesmo valor/cor/clique de antes, só a montagem de HTML mudou (kc/kl → fcard/lbl). comLink usa
+  // o `drill` padrão de MetricCard (data-mc-drill) em vez do data-goped360 manual; bindCaixaDashboardView
+  // liga esse drill a openPedidoFicha360 via bindMetricCards().
   function caixaCard(titulo, x, renderFn, comLink) {
-    if (!x) return '<div class="kc"><div class="kl">' + esc(titulo) + '</div><div class="footnote" style="margin-top:4px">sem dados suficientes</div></div>';
-    return '<div class="kc' + (comLink ? ' rowlink" data-goped360="' + esc(x.orderId) : '') + '"><div class="kl">' + esc(titulo) + '</div>' + renderFn(x) + '</div>';
+    if (!x) return MetricCard({ label: titulo, empty: 'sem dados suficientes' });
+    return MetricCard({ label: titulo, customBody: renderFn(x), drill: comLink ? { action: x.orderId, label: titulo } : undefined });
   }
   // §59 do prompt: melhores/piores do PERÍODO INTEIRO — não só do último dia. maiorLucro/Prejuízo/
   // Taxa/Desconto/Pendência são max/min associativos (reaproveita caixaInteligenciaDia por dia, sem
@@ -12972,7 +12980,7 @@ buffer/index.js:
   // global (devPeriodBar/periodRange — nunca uma segunda definição de período) e somando, dia a dia,
   // exatamente o que os motores canônicos já aprovados apuram.
   function caixaDashboardView() {
-    var head = secHead('CAIXA · DASHBOARD', 'Visão gerencial do negócio', 'Faturamento, lucro, taxas, custo, Acelera e pendências agregados no período selecionado — sempre somando o que os motores já aprovados (caixaDreDia/aceleraResultadoFechamento/caixaFluxoDia) apuram por dia, nunca um cálculo paralelo.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'CAIXA · DASHBOARD', title: 'Visão gerencial do negócio', description: 'Faturamento, lucro, taxas, custo, Acelera e pendências agregados no período selecionado — sempre somando o que os motores já aprovados (caixaDreDia/aceleraResultadoFechamento/caixaFluxoDia) apuram por dia, nunca um cálculo paralelo.' });
     if (!orders.length) return head + emptyBox('Importe os Pedidos para começar.');
     var range = periodRange();
     var days = caixaPeriodDays(range);
@@ -12996,21 +13004,21 @@ buffer/index.js:
     // caixaDreDia (Venda Bruta − Taxas Shopee − Afiliados − Devoluções − Ajustes − Descontos
     // comerciais + Créditos + Envio) — nunca um segundo cálculo, só a soma correta do que a DRE do dia
     // já apura.
-    var row1 = kstrip([
-      { l: 'Faturamento', v: brlC(eng.totFat), cls: 'blue', s: cmp ? fmtDelta(cmp.deltaFat) + ' vs período anterior' : undefined, sHtml: !!cmp },
-      { l: 'Receita Líquida Real', v: brlC(eng.totReceitaLiquida), cls: 'blue', s: 'Venda Bruta − Taxas Shopee − Afiliados − Devoluções − Ajustes − Descontos comerciais' },
-      { l: 'Lucro', v: eng.diasSemCustoCompleto === 0 ? brlC(eng.totLucro) : brlC(eng.totLucro) + ' (parcial)', cls: eng.totLucro >= 0 ? 'green' : 'red', s: eng.diasSemCustoCompleto ? nn(eng.diasSemCustoCompleto) + ' dia(s) com custo pendente, não somados' : (cmp ? fmtDelta(cmp.deltaLucro) + ' vs período anterior' : undefined), sHtml: !eng.diasSemCustoCompleto && !!cmp },
-      { l: 'Margem', v: margemTxt, cls: 'blue', s: cmp && cmp.deltaMargemPP != null ? (cmp.deltaMargemPP >= 0 ? '+' : '') + r2(cmp.deltaMargemPP) + ' p.p. vs período anterior' : (eng.diasSemCustoCompleto ? 'custo incompleto em ' + nn(eng.diasSemCustoCompleto) + ' dia(s)' : undefined) },
+    var row1 = MetricGrid([
+      MetricCard({ label: 'Faturamento', value: brlC(eng.totFat), cls: 'blue', sub: cmp ? fmtDelta(cmp.deltaFat) + ' vs período anterior' : undefined, subHtml: !!cmp }),
+      MetricCard({ label: 'Receita Líquida Real', value: brlC(eng.totReceitaLiquida), cls: 'blue', sub: 'Venda Bruta − Taxas Shopee − Afiliados − Devoluções − Ajustes − Descontos comerciais' }),
+      MetricCard({ label: 'Lucro', value: eng.diasSemCustoCompleto === 0 ? brlC(eng.totLucro) : brlC(eng.totLucro) + ' (parcial)', cls: eng.totLucro >= 0 ? 'green' : 'red', sub: eng.diasSemCustoCompleto ? nn(eng.diasSemCustoCompleto) + ' dia(s) com custo pendente, não somados' : (cmp ? fmtDelta(cmp.deltaLucro) + ' vs período anterior' : undefined), subHtml: !eng.diasSemCustoCompleto && !!cmp }),
+      MetricCard({ label: 'Margem', value: margemTxt, cls: 'blue', sub: cmp && cmp.deltaMargemPP != null ? (cmp.deltaMargemPP >= 0 ? '+' : '') + r2(cmp.deltaMargemPP) + ' p.p. vs período anterior' : (eng.diasSemCustoCompleto ? 'custo incompleto em ' + nn(eng.diasSemCustoCompleto) + ' dia(s)' : undefined) }),
     ]);
     // BUG 1 §"Separar da visão financeira": Recebimento (Acelera/Carteira/Banco) é o CAMINHO do
     // dinheiro, nunca somado dentro da Receita Líquida acima — as duas linhas medem coisas diferentes
     // (quanto a venda vale líquida vs quanto já entrou fisicamente na conta).
     var row2Titulo = '<div class="footnote" style="margin:14px 0 4px;font-weight:700;color:var(--text)">Recebimento (separado da Receita Líquida — mede o dinheiro que já entrou, não o que a venda vale)</div>';
-    var row2 = kstrip([
-      { l: 'Pedidos pagos', v: nn(eng.totPedidosPagos), cls: 'blue' },
-      { l: 'Pedidos expedidos', v: nn(eng.totPedidosExpedidos), cls: 'blue' },
-      { l: 'Recebido via Acelera', v: eng.totAcLiquido ? brlC(eng.totAcLiquido) : '—', cls: 'green' },
-      { l: 'Transferido para banco', v: brl(eng.totTransferido), cls: 'blue' },
+    var row2 = MetricGrid([
+      MetricCard({ label: 'Pedidos pagos', value: nn(eng.totPedidosPagos), cls: 'blue' }),
+      MetricCard({ label: 'Pedidos expedidos', value: nn(eng.totPedidosExpedidos), cls: 'blue' }),
+      MetricCard({ label: 'Recebido via Acelera', value: eng.totAcLiquido ? brlC(eng.totAcLiquido) : '—', cls: 'green' }),
+      MetricCard({ label: 'Transferido para banco', value: brl(eng.totTransferido), cls: 'blue' }),
     ]);
     var occPeriodo = occInPeriod(); var expo = sumExposure(occPeriodo);
     // BUG 4 (Fase final de ajuste gerencial): quando não há ocorrência no módulo Devolução mas a DRE
@@ -13018,11 +13026,11 @@ buffer/index.js:
     // acima já desconta esse valor — este card mostra isso explicitamente em vez de exibir "R$0,00"
     // silenciosamente como se não houvesse devolução nenhuma no período.
     var devolFallbackTxt = (!expo.confirmedLoss && eng.diasComDevolucaoFallback) ? (nn(eng.diasComDevolucaoFallback) + ' dia(s) com devolução via ' + (eng.totDevolucoesFallbackC ? 'Income/Carteira' : 'módulo Devolução') + ' (' + brlC(-eng.totDevolucoesFallbackC) + ' já descontado(s) na Receita Líquida Real acima)') : (nn(occPeriodo.length) + ' ocorrência(s) no período');
-    var row3 = kstrip([
-      { l: 'Taxas Shopee', v: brlC(eng.totTaxas), cls: 'red' },
-      { l: 'Custo dos produtos', v: eng.custoConhecidoN ? brlC(-eng.totCusto) : '—', cls: 'amber', s: eng.custoConhecidoN + ' de ' + eng.totPedidosPagos + ' pedidos com custo conhecido' },
-      { l: 'Devoluções / perdas', v: brl(-expo.confirmedLoss), cls: expo.confirmedLoss ? 'red' : 'green', s: devolFallbackTxt },
-      { l: 'Pendências financeiras', v: nn(eng.totPend), cls: eng.totPend ? 'amber' : 'green' },
+    var row3 = MetricGrid([
+      MetricCard({ label: 'Taxas Shopee', value: brlC(eng.totTaxas), cls: 'red' }),
+      MetricCard({ label: 'Custo dos produtos', value: eng.custoConhecidoN ? brlC(-eng.totCusto) : '—', cls: 'amber', sub: eng.custoConhecidoN + ' de ' + eng.totPedidosPagos + ' pedidos com custo conhecido' }),
+      MetricCard({ label: 'Devoluções / perdas', value: brl(-expo.confirmedLoss), cls: expo.confirmedLoss ? 'red' : 'green', sub: devolFallbackTxt }),
+      MetricCard({ label: 'Pendências financeiras', value: nn(eng.totPend), cls: eng.totPend ? 'amber' : 'green' }),
     ]);
 
     // ---- Gráficos (§52-53): grid 2 colunas no desktop, empilhado no mobile.
@@ -13035,9 +13043,9 @@ buffer/index.js:
     var ressalva = eng.porDia.filter(function (d) { return d.status === 'FECHADO_COM_RESSALVA'; }).length;
     var abertos = eng.porDia.filter(function (d) { return d.status === 'ABERTO'; }).length;
     var revisao = eng.porDia.filter(function (d) { return d.status === 'REVISAO_NECESSARIA'; }).length;
-    var conciliacao = '<div class="cx-section"><h4>Conciliação do período</h4>' + kstrip([
-      { l: 'Dias fechados', v: nn(fechados), cls: 'green' }, { l: 'Fechados com ressalva', v: nn(ressalva), cls: ressalva ? 'amber' : 'green' },
-      { l: 'Dias abertos', v: nn(abertos), cls: abertos ? 'blue' : 'green' }, { l: 'Precisam revisão', v: nn(revisao), cls: revisao ? 'red' : 'green' },
+    var conciliacao = '<div class="cx-section"><h4>Conciliação do período</h4>' + MetricGrid([
+      MetricCard({ label: 'Dias fechados', value: nn(fechados), cls: 'green' }), MetricCard({ label: 'Fechados com ressalva', value: nn(ressalva), cls: ressalva ? 'amber' : 'green' }),
+      MetricCard({ label: 'Dias abertos', value: nn(abertos), cls: abertos ? 'blue' : 'green' }), MetricCard({ label: 'Precisam revisão', value: nn(revisao), cls: revisao ? 'red' : 'green' }),
     ]) + '</div>';
 
     // ---- Taxas do período (tabela — §60)
@@ -13051,15 +13059,15 @@ buffer/index.js:
 
     // ---- Melhores e piores do período (§59)
     var mp = caixaPeriodMelhoresPiores(days);
-    var melhoresPiores = '<div class="cx-section"><h4>Melhores e piores do período</h4><div class="kstrip" style="flex-wrap:wrap">' +
-      caixaCard('Pedido mais lucrativo', mp.maiorLucro, function (x) { return '<div class="kv pos" style="font-size:15px">' + brlC(x.c.resultadoC) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + ' · ' + esc((x.it.productName || '—').slice(0, 24)) + '</div>'; }, true) +
-      caixaCard('Pedido com maior prejuízo', mp.maiorPrejuizo, function (x) { return '<div class="kv neg" style="font-size:15px">' + brlC(x.c.resultadoC) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + ' · ' + esc((x.it.productName || '—').slice(0, 24)) + '</div>'; }, true) +
-      caixaCard('Produto/SKU mais lucrativo', mp.melhorSku, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.lucro) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.sku) + ' · ' + nn(x.n) + ' pedido(s)</div>'; }, false) +
-      caixaCard('Produto/SKU com maior prejuízo', mp.piorSku, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.lucro) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.sku) + ' · ' + nn(x.n) + ' pedido(s)</div>'; }, false) +
-      caixaCard('Maior taxa (pedido)', mp.maiorTaxa, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.taxa) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + '</div>'; }, true) +
-      caixaCard('Maior desconto (pedido)', mp.maiorDesconto, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.desconto) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + '</div>'; }, true) +
-      caixaCard('Maior pendência', mp.maiorPend, function (x) { return '<div class="kv" style="font-size:15px">' + brlC(x.valor) + '</div><div class="footnote" style="margin:2px 0 0">' + esc(x.orderId) + '</div>'; }, true) +
-      '</div></div>';
+    var melhoresPiores = '<div class="cx-section"><h4>Melhores e piores do período</h4>' + MetricGrid([
+      caixaCard('Pedido mais lucrativo', mp.maiorLucro, function (x) { return '<div style="font-size:15px;font-weight:800;color:var(--ok)">' + brlC(x.c.resultadoC) + '</div><div class="footnote" style="margin-top:4px">' + esc(x.orderId) + ' · ' + esc((x.it.productName || '—').slice(0, 24)) + '</div>'; }, true),
+      caixaCard('Pedido com maior prejuízo', mp.maiorPrejuizo, function (x) { return '<div style="font-size:15px;font-weight:800;color:var(--err)">' + brlC(x.c.resultadoC) + '</div><div class="footnote" style="margin-top:4px">' + esc(x.orderId) + ' · ' + esc((x.it.productName || '—').slice(0, 24)) + '</div>'; }, true),
+      caixaCard('Produto/SKU mais lucrativo', mp.melhorSku, function (x) { return '<div style="font-size:15px;font-weight:800">' + brlC(x.lucro) + '</div><div class="footnote" style="margin-top:4px">' + esc(x.sku) + ' · ' + nn(x.n) + ' pedido(s)</div>'; }, false),
+      caixaCard('Produto/SKU com maior prejuízo', mp.piorSku, function (x) { return '<div style="font-size:15px;font-weight:800">' + brlC(x.lucro) + '</div><div class="footnote" style="margin-top:4px">' + esc(x.sku) + ' · ' + nn(x.n) + ' pedido(s)</div>'; }, false),
+      caixaCard('Maior taxa (pedido)', mp.maiorTaxa, function (x) { return '<div style="font-size:15px;font-weight:800">' + brlC(x.taxa) + '</div><div class="footnote" style="margin-top:4px">' + esc(x.orderId) + '</div>'; }, true),
+      caixaCard('Maior desconto (pedido)', mp.maiorDesconto, function (x) { return '<div style="font-size:15px;font-weight:800">' + brlC(x.desconto) + '</div><div class="footnote" style="margin-top:4px">' + esc(x.orderId) + '</div>'; }, true),
+      caixaCard('Maior pendência', mp.maiorPend, function (x) { return '<div style="font-size:15px;font-weight:800">' + brlC(x.valor) + '</div><div class="footnote" style="margin-top:4px">' + esc(x.orderId) + '</div>'; }, true),
+    ]) + '</div>';
 
     // ---- Filtro por operação — só relevante em modo consolidado (§63-64): nunca mistura dado
     // gravado, só soma por cima o que cada operação já apurou isoladamente.
@@ -13092,6 +13100,7 @@ buffer/index.js:
     bindDevPeriodBar();
     app.querySelectorAll('[data-goped360]').forEach(function (b) { if (b.dataset.goped360) b.onclick = function () { openPedidoFicha360(b.dataset.goped360); }; });
     app.querySelectorAll('[data-caixadia]').forEach(function (b) { b.onclick = function () { caixaAbrirDia(b.dataset.caixadia); }; });
+    bindMetricCards(app, { drill: function (action) { openPedidoFicha360(action); } });
   }
   // Abre o dia diretamente na tela de Fechamento — SEMPRE página cheia, nunca drawer/modal (prompt
   // "Refazer a tela Caixa": "CAIXA DEVE SER UMA ROTA/PÁGINA COMPLETA").
@@ -13105,7 +13114,7 @@ buffer/index.js:
   // caixaMontarIntegracaoFinanceira); só a apresentação foi reorganizada numa sequência linear.
   function caixaFechamentoView() {
     var days = caixaDiasComMovimento();
-    if (!days.length) return secHead('CAIXA', 'Fechamento do Dia', null) + emptyBox('Nenhum movimento (pedido pago, sessão de expedição ou resgate do Acelera) encontrado ainda.');
+    if (!days.length) return PageHeader({ variant: 'eyebrow', eyebrow: 'CAIXA', title: 'Fechamento do Dia' }) + emptyBox('Nenhum movimento (pedido pago, sessão de expedição ou resgate do Acelera) encontrado ainda.');
     var dateKey = caixaFechamentoDate && days.indexOf(caixaFechamentoDate) >= 0 ? caixaFechamentoDate : days[0];
     caixaFechamentoDate = dateKey;
     return caixaFechamentoBodyHtml(dateKey);
@@ -13167,16 +13176,22 @@ buffer/index.js:
     // recorte por conta — ver Camada 1-4 do motor, já aprovadas em fases anteriores; um seletor real
     // mudaria o ESCOPO do cálculo, não só a exibição) — e as ações Reabrir/Exportar/Ver auditoria.
     var closedNow = st.status === 'FECHADO' || st.status === 'FECHADO_COM_RESSALVA';
-    var header = '<div class="page-head" style="align-items:center"><div><h2 style="margin:0;font-size:20px">Fechamento de Caixa</h2><p style="margin:4px 0 0;color:var(--muted);font-size:13px">' + esc(opLbl) + ' <span style="margin:0 6px">·</span> Conta financeira: Todas</p></div>' +
-      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
-      '<select class="select sm" id="cx-date-sel">' + dateOptions + '</select>' +
-      '<span class="tag ' + lbl[1] + '">' + esc(lbl[0]) + '</span>' +
-      (st.status === 'REVISAO_NECESSARIA' ? '<span class="footnote" style="margin:0">⚠ movimento posterior</span>' : '') +
-      (closedNow ? '<button class="btn-sm" id="caixa-reabrir" title="Volta o dia para Em conferência — nada já lançado em Contas a Pagar/Receber é apagado">Reabrir caixa</button>' : '') +
-      '<button class="btn-sm" id="caixa-ver-auditoria" title="Ir para a Diferença entre líquido calculado e recebido">Ver auditoria</button>' +
-      '<button class="btn-sm" id="caixa-xlsx" title="Exportar planilha">Exportar</button>' +
-      '<button class="btn-sm" id="caixa-print" title="Imprimir / gerar PDF">Imprimir</button>' +
-      '</div></div>';
+    // Fase 7.1 (migração para componentes padrão): mesmo HTML de antes, agora via PageHeader
+    // ({variant:'financial'}) — variant modelada originalmente neste exato cabeçalho (ver comentário
+    // de PageHeader). Nenhum id/atributo/texto mudou — só a montagem da string.
+    var cxHeaderActions = [];
+    if (closedNow) cxHeaderActions.push('<button class="btn-sm" id="caixa-reabrir" title="Volta o dia para Em conferência — nada já lançado em Contas a Pagar/Receber é apagado">Reabrir caixa</button>');
+    cxHeaderActions.push('<button class="btn-sm" id="caixa-ver-auditoria" title="Ir para a Diferença entre líquido calculado e recebido">Ver auditoria</button>');
+    cxHeaderActions.push('<button class="btn-sm" id="caixa-xlsx" title="Exportar planilha">Exportar</button>');
+    cxHeaderActions.push('<button class="btn-sm" id="caixa-print" title="Imprimir / gerar PDF">Imprimir</button>');
+    var header = PageHeader({
+      variant: 'financial', title: 'Fechamento de Caixa',
+      summary: esc(opLbl) + ' <span style="margin:0 6px">·</span> Conta financeira: Todas',
+      select: { id: 'cx-date-sel', optionsHtml: dateOptions },
+      badge: { cls: lbl[1], label: lbl[0] },
+      note: st.status === 'REVISAO_NECESSARIA' ? '⚠ movimento posterior' : null,
+      actions: cxHeaderActions,
+    });
 
     // PROMPT "REESTRUTURAÇÃO COMPLETA DO MÓDULO CAIXA / CONCILIAÇÃO FINANCEIRA SHOPEE" — REGRA
     // PRINCIPAL: "Venda ≠ Dinheiro recebido... não usar simplesmente venda do dia... trazer somente
@@ -13270,13 +13285,13 @@ buffer/index.js:
     // de resumo no topo — "em 5 segundos o usuário entende quanto vendeu/recebeu/saiu/sobrou". Reusa
     // exatamente os mesmos números já calculados no fluxo abaixo (valorVendaC/liquidoCarteiraC/taxasC/
     // fluxo.descontos/fluxo.transferido/diferencaRealC) — nenhum valor novo é calculado aqui.
-    var resumoTopo = kstrip([
-      { l: 'Venda Bruta', v: brlC(valorVendaC), s: 'Pedidos vinculados' },
-      { l: 'Recebido Shopee', v: brlC(liquidoCarteiraC), s: 'Acelera + Carteira', cls: 'green' },
-      { l: 'Descontos Shopee', v: brlC(taxasC), s: 'Income', cls: 'red' },
-      { l: 'Despesas', v: '-' + brl(fluxo.descontos), s: 'Carteira/Contas', cls: fluxo.descontos ? 'red' : '' },
-      { l: 'Transferido p/ Banco', v: brl(fluxo.transferido), cls: 'blue' },
-      { l: 'Saldo Final', v: brlC(diferencaRealC), cls: diferencaOk ? 'green' : 'red' },
+    var resumoTopo = MetricGrid([
+      MetricCard({ label: 'Venda Bruta', value: brlC(valorVendaC), sub: 'Pedidos vinculados' }),
+      MetricCard({ label: 'Recebido Shopee', value: brlC(liquidoCarteiraC), sub: 'Acelera + Carteira', cls: 'green' }),
+      MetricCard({ label: 'Descontos Shopee', value: brlC(taxasC), sub: 'Income', cls: 'red' }),
+      MetricCard({ label: 'Despesas', value: '-' + brl(fluxo.descontos), sub: 'Carteira/Contas', cls: fluxo.descontos ? 'red' : '' }),
+      MetricCard({ label: 'Transferido p/ Banco', value: brl(fluxo.transferido), cls: 'blue' }),
+      MetricCard({ label: 'Saldo Final', value: brlC(diferencaRealC), cls: diferencaOk ? 'green' : 'red' }),
     ]);
 
     // PROMPT "REESTRUTURAÇÃO PROFISSIONAL DO CAIXA" §5: painel "Conciliação Financeira" dedicado —
@@ -13548,11 +13563,11 @@ buffer/index.js:
     var apTotal = planoFin.ap.reduce(function (s, r) { return s + r.valor; }, 0);
     var trTotal = planoFin.transfers.reduce(function (s, r) { return s + r.valor; }, 0);
     var integracaoResumo = '<div class="cx-section"><details class="cx-collapse"><summary class="cx-kv"><span>Resumo da integração financeira <span class="footnote" style="margin:0">(gerado/atualizado ao fechar — idempotente)</span></span><span></span></summary><div class="pb">' +
-      kstrip([
-        { l: 'Contas a Receber', v: nn(planoFin.ar.length) + ' · ' + brl(arTotal) },
-        { l: 'Contas a Pagar', v: nn(planoFin.ap.length) + ' · ' + brl(apTotal) },
-        { l: 'Transferências', v: nn(planoFin.transfers.length) + ' · ' + brl(trTotal) },
-        { l: 'Não classificados (Carteira)', v: nn(planoFin.naoClassificados.n) + ' · ' + brl(planoFin.naoClassificados.valor), cls: planoFin.naoClassificados.n ? 'amber' : '' },
+      MetricGrid([
+        MetricCard({ label: 'Contas a Receber', value: nn(planoFin.ar.length) + ' · ' + brl(arTotal) }),
+        MetricCard({ label: 'Contas a Pagar', value: nn(planoFin.ap.length) + ' · ' + brl(apTotal) }),
+        MetricCard({ label: 'Transferências', value: nn(planoFin.transfers.length) + ' · ' + brl(trTotal) }),
+        MetricCard({ label: 'Não classificados (Carteira)', value: nn(planoFin.naoClassificados.n) + ' · ' + brl(planoFin.naoClassificados.valor), cls: planoFin.naoClassificados.n ? 'amber' : '' }),
       ]) + '</div></details></div>';
 
     // ---- Fechar (rodapé) ----
@@ -13631,37 +13646,43 @@ buffer/index.js:
     var lfPed = document.getElementById('lf-ped'); if (lfPed) lfPed.oninput = lfApplyFilters;
   }
   // Modal de transferência manual — só aberto sob demanda (nunca formulário permanente no fechamento).
+  // Fase 7.1 (migração para componentes padrão): mesmo comportamento de antes — validação inline em
+  // #bt-err, confirmação de possível duplicidade, registro assíncrono — agora via openModal() (ESC/
+  // clique fora/duplo clique tratados pela infraestrutura, z-index automático em vez de '70' fixo).
   function openTransferenciaManualModal(dateKey, onSaved) {
     var transfAtual = caixaDayTransferenciasBancarias(dateKey);
-    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:420px">' +
-      '<div class="mh"><h3>Adicionar transferência não encontrada</h3><button class="x">×</button></div><div class="mbd">' +
+    var bodyHtml =
       '<label class="fld">Conta destino</label><select class="select" id="bt-conta" style="width:100%">' + ('<option value="">Selecione a conta…</option>' + bankAccountsForActiveCompany().filter(function (b) { return b.ativa !== false; }).map(function (b) { return '<option value="' + esc(b.id) + '">' + esc(b.nome) + (b.banco ? ' — ' + esc(b.banco) : '') + '</option>'; }).join('') + '<option value="__novo__">+ Cadastrar nova conta</option>') + '</select>' +
       '<label class="fld">Valor (R$)</label><input class="input" id="bt-valor" style="width:100%" placeholder="0,00">' +
       '<label class="fld">Data/hora</label><input class="input" type="datetime-local" id="bt-quando" value="' + esc(dateKey) + 'T12:00" style="width:100%">' +
       '<label class="fld">Observação (opcional)</label><input class="input" id="bt-obs" style="width:100%">' +
-      '<div id="bt-err"></div></div><div class="mf"><button class="btn-sm" id="bt-cancel">Cancelar</button><button class="btn-sm primary" id="bt-registrar">Registrar transferência</button></div></div>';
-    o.onclick = function (e) { if (e.target === o) o.remove(); };
-    document.body.appendChild(o);
-    o.querySelector('.x').onclick = o.querySelector('#bt-cancel').onclick = function () { o.remove(); };
-    var contaSel = o.querySelector('#bt-conta'); contaSel.onchange = function () {
-      if (contaSel.value !== '__novo__') return;
-      contaSel.value = '';
-      openCadastrarContaModal(function (full) { var opt = document.createElement('option'); opt.value = full.id; opt.textContent = full.nome + (full.banco ? ' — ' + full.banco : ''); contaSel.insertBefore(opt, contaSel.lastElementChild); contaSel.value = full.id; });
-    };
-    o.querySelector('#bt-registrar').onclick = function () {
-      var valor = walletNum(o.querySelector('#bt-valor').value);
-      var errEl = o.querySelector('#bt-err');
-      if (valor == null || valor <= 0) { errEl.innerHTML = '<div class="form-err">Informe um valor válido.</div>'; return; }
-      var quando = o.querySelector('#bt-quando').value; if (!quando) { errEl.innerHTML = '<div class="form-err">Informe a data/hora.</div>'; return; }
-      // §25 do prompt "Refazer layout": nunca deixar duplicar silenciosamente um Pix já importado.
-      var possivelDup = transfAtual.autoTxs.some(function (a) { return Math.abs(Math.abs(a.amount) - valor) <= 1; });
-      if (possivelDup && !confirm('Já existe uma transferência semelhante importada da Carteira. Deseja realmente registrar outra?')) return;
-      var contaId = contaSel.value || null; if (contaId === '__novo__') contaId = null; var conta = contaId ? bankAccountLabel(contaId) : null; var obs = o.querySelector('#bt-obs').value.trim() || null;
-      caixaRegistrarTransferenciaBanco(valor, new Date(quando).toISOString(), conta, obs, contaId).then(function () { o.remove(); toast('Transferência registrada', brl(valor)); if (onSaved) onSaved(); render(); });
-    };
+      '<div id="bt-err"></div>';
+    openModal({
+      title: 'Adicionar transferência não encontrada', width: 420, bodyHtml: bodyHtml, confirmLabel: 'Registrar transferência',
+      onMount: function (panel) {
+        var contaSel = panel.querySelector('#bt-conta');
+        contaSel.onchange = function () {
+          if (contaSel.value !== '__novo__') return;
+          contaSel.value = '';
+          openCadastrarContaModal(function (full) { var opt = document.createElement('option'); opt.value = full.id; opt.textContent = full.nome + (full.banco ? ' — ' + full.banco : ''); contaSel.insertBefore(opt, contaSel.lastElementChild); contaSel.value = full.id; });
+        };
+      },
+      onConfirm: function (panel) {
+        var errEl = panel.querySelector('#bt-err'); errEl.innerHTML = '';
+        var valor = walletNum(panel.querySelector('#bt-valor').value);
+        if (valor == null || valor <= 0) { errEl.innerHTML = '<div class="form-err">Informe um valor válido.</div>'; return false; }
+        var quando = panel.querySelector('#bt-quando').value; if (!quando) { errEl.innerHTML = '<div class="form-err">Informe a data/hora.</div>'; return false; }
+        // §25 do prompt "Refazer layout": nunca deixar duplicar silenciosamente um Pix já importado.
+        var possivelDup = transfAtual.autoTxs.some(function (a) { return Math.abs(Math.abs(a.amount) - valor) <= 1; });
+        if (possivelDup && !confirm('Já existe uma transferência semelhante importada da Carteira. Deseja realmente registrar outra?')) return false;
+        var contaSel = panel.querySelector('#bt-conta');
+        var contaId = contaSel.value || null; if (contaId === '__novo__') contaId = null; var conta = contaId ? bankAccountLabel(contaId) : null; var obs = panel.querySelector('#bt-obs').value.trim() || null;
+        return caixaRegistrarTransferenciaBanco(valor, new Date(quando).toISOString(), conta, obs, contaId).then(function () { toast('Transferência registrada', brl(valor)); if (onSaved) onSaved(); render(); });
+      },
+    });
   }
   function caixaHistoricoView() {
-    var head = secHead('CAIXA · HISTÓRICO', 'Fechamentos anteriores', 'Snapshot imutável de cada dia fechado — novo dado relacionado a um dia já fechado nunca reescreve o snapshot; vira Evento Posterior vinculado ao pedido, na data correspondente.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'CAIXA · HISTÓRICO', title: 'Fechamentos anteriores', description: 'Snapshot imutável de cada dia fechado — novo dado relacionado a um dia já fechado nunca reescreve o snapshot; vira Evento Posterior vinculado ao pedido, na data correspondente.' });
     var allDays = Object.keys(caixaClose).sort().reverse();
     if (!allDays.length) return head + emptyBox('Nenhum dia fechado ainda.');
     // PROMPT "REESTRUTURAÇÃO PROFISSIONAL DO CAIXA" §7: mesmo period global de todo o sistema
@@ -13923,11 +13944,15 @@ buffer/index.js:
   function caixaRentabilidadeView() {
     var days = caixaDiasComMovimento();
     var opId = opActiveOrNull();
-    if (!days.length) return secHead('CAIXA', 'Rentabilidade Real', 'Camada de análise de custo/lucro real — complementar ao Fechamento, nunca o substitui.') + emptyBox('Nenhum movimento (pedido pago) encontrado ainda.');
+    if (!days.length) return PageHeader({ variant: 'eyebrow', eyebrow: 'CAIXA', title: 'Rentabilidade Real', description: 'Camada de análise de custo/lucro real — complementar ao Fechamento, nunca o substitui.' }) + emptyBox('Nenhum movimento (pedido pago) encontrado ainda.');
     var dateKey = caixaFechamentoDate && days.indexOf(caixaFechamentoDate) >= 0 ? caixaFechamentoDate : days[0];
     caixaFechamentoDate = dateKey;
     var dateOptions = days.slice(0, 120).map(function (dk) { return '<option value="' + esc(dk) + '"' + (dk === dateKey ? ' selected' : '') + '>' + dbr(dk) + '</option>'; }).join('');
-    var head = '<div class="page-head"><div><h2>Rentabilidade Real</h2><p>Depois de taxas do marketplace, custo do produto e custos internos de operação (mão de obra, custos fixos e variáveis, impostos) — quanto sobrou de verdade. Camada complementar: não substitui o Fechamento nem recalcula taxas Shopee. Configuração completa em Financeiro &gt; Fator de Custo.</p></div><button class="btn-sm" id="rent-gofator">⚙️ Configurar Fator de Custo</button></div>';
+    var head = PageHeader({
+      title: 'Rentabilidade Real',
+      description: 'Depois de taxas do marketplace, custo do produto e custos internos de operação (mão de obra, custos fixos e variáveis, impostos) — quanto sobrou de verdade. Camada complementar: não substitui o Fechamento nem recalcula taxas Shopee. Configuração completa em Financeiro > Fator de Custo.',
+      actions: ['<button class="btn-sm" id="rent-gofator">⚙️ Configurar Fator de Custo</button>'],
+    });
     var filtros = '<div class="panel"><div class="pb" style="display:flex;gap:12px;flex-wrap:wrap;align-items:end">' +
       '<div><label class="fld">Data de referência</label><select class="select sm" id="rent-date">' + dateOptions + '</select></div>' +
       '<div><label class="fld">Período</label><select class="select sm" id="rent-periodo"><option value="dia"' + (caixaRentPeriodo === 'dia' ? ' selected' : '') + '>Dia</option><option value="semana"' + (caixaRentPeriodo === 'semana' ? ' selected' : '') + '>Semana</option><option value="mes"' + (caixaRentPeriodo === 'mes' ? ' selected' : '') + '>Mês</option></select></div>' +
@@ -13949,18 +13974,18 @@ buffer/index.js:
       return head + filtros + bloqueio;
     }
     var agg = caixaFatorCustoPeriodo(dateKey);
-    var cards = '<div class="cards6">' +
-      fcard('Venda Bruta', brlC(agg.vendaBrutaC), 'blue', nn(agg.n) + ' pedido(s)') +
-      fcard('Taxas Marketplace', brlC(agg.taxasMarketplaceC), 'red') +
-      fcard('Custos Produto', brlC(-agg.custoProdutoC), 'amber', agg.custoPendenteN ? nn(agg.custoPendenteN) + ' pendente(s)' : '') +
-      fcard('Mão de Obra', brlC(-agg.horaHomemC), '') +
-      fcard('Custos Fixos', brlC(-agg.custosFixosAbsorvidosC), '') +
-      fcard('Custos Variáveis', brlC(-agg.custosVariaveisC), '') +
-      '</div><div class="cards6">' +
-      fcard('Impostos', brlC(-agg.impostoC), '') +
-      fcard('Lucro Real', agg.lucroRealC == null ? 'Indisponível' : brlC(agg.lucroRealC), agg.lucroRealC == null ? 'amber' : agg.lucroRealC >= 0 ? 'green' : 'red') +
-      fcard('Margem Real', agg.margemRealPct != null ? pct(agg.margemRealPct) : '—', agg.margemRealPct != null && agg.margemRealPct < 0 ? 'red' : '') +
-      '</div>';
+    var cards = MetricGrid([
+      MetricCard({ label: 'Venda Bruta', value: brlC(agg.vendaBrutaC), cls: 'blue', sub: nn(agg.n) + ' pedido(s)' }),
+      MetricCard({ label: 'Taxas Marketplace', value: brlC(agg.taxasMarketplaceC), cls: 'red' }),
+      MetricCard({ label: 'Custos Produto', value: brlC(-agg.custoProdutoC), cls: 'amber', sub: agg.custoPendenteN ? nn(agg.custoPendenteN) + ' pendente(s)' : '' }),
+      MetricCard({ label: 'Mão de Obra', value: brlC(-agg.horaHomemC) }),
+      MetricCard({ label: 'Custos Fixos', value: brlC(-agg.custosFixosAbsorvidosC) }),
+      MetricCard({ label: 'Custos Variáveis', value: brlC(-agg.custosVariaveisC) }),
+    ]) + MetricGrid([
+      MetricCard({ label: 'Impostos', value: brlC(-agg.impostoC) }),
+      MetricCard({ label: 'Lucro Real', value: agg.lucroRealC == null ? 'Indisponível' : brlC(agg.lucroRealC), cls: agg.lucroRealC == null ? 'amber' : agg.lucroRealC >= 0 ? 'green' : 'red' }),
+      MetricCard({ label: 'Margem Real', value: agg.margemRealPct != null ? pct(agg.margemRealPct) : '—', cls: agg.margemRealPct != null && agg.margemRealPct < 0 ? 'red' : '' }),
+    ]);
     var configBox = agg.custoPendenteN ? callout('warn', nn(agg.custoPendenteN) + ' pedido(s) com produto sem custo cadastrado', 'Excluído(s) do Lucro Real/Margem Real acima — corrija a classificação de SKU→Família para incluí-los.') : '';
     var tableRows = agg.itens.map(function (it) { return '<tr class="rowlink" data-rentped="' + esc(it.orderId) + '"><td class="mono">' + esc(it.orderId) + '</td><td class="nowrap">' + brlC(it.fc.vendaBrutaC) + '</td><td class="nowrap neg">' + brlC(it.fc.taxasMarketplaceC) + '</td><td class="nowrap neg">' + (it.fc.custoPendente ? '<span class="tag warn" style="font-size:9px">pendente</span>' : brlC(-it.fc.custoProdutoC)) + '</td><td class="nowrap neg">' + brlC(-(it.fc.horaHomemC + it.fc.custosFixosAbsorvidosC + it.fc.custosVariaveisC + it.fc.impostoC)) + '</td><td class="nowrap ' + (it.fc.lucroRealC == null ? '' : it.fc.lucroRealC < 0 ? 'neg' : 'pos') + '"><b>' + (it.fc.lucroRealC == null ? 'Indisponível' : brlC(it.fc.lucroRealC)) + '</b></td><td>' + (it.fc.margemRealPct != null ? pct(it.fc.margemRealPct) : '—') + '</td><td>' + (it.fc.congelado ? '🔒' : '🟡') + '</td></tr>'; }).join('');
     var table = agg.itens.length ? '<div class="panel"><div class="ph"><h3>Lucro real por pedido</h3><span class="footnote" style="margin:0">clique num pedido para abrir a Ficha</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Venda</th><th>Taxas</th><th>Custo Produto</th><th>Custos Internos</th><th>Lucro Real</th><th>Margem</th><th></th></tr></thead><tbody>' + tableRows + '</tbody></table></div></div>' : emptyBox('Nenhum pedido no filtro/período selecionado.');
