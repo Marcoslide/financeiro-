@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build eadda96 · 2026-08-27 15:35 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 988a5ca · 2026-08-27 16:43 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -4934,8 +4934,7 @@ buffer/index.js:
   // ---------- PEDIDOS ----------
   function renderPedidos() {
     app.innerHTML =
-      '<div class="page-head"><div><h2>Pedidos</h2><p>Núcleo transacional. Importação idempotente (upsert), sem duplicar vendas.</p></div>' +
-      '<button class="btn-sm primary" id="imp-ped">Importar planilha de pedidos</button></div>' +
+      PageHeader({ variant: 'financial', title: 'Pedidos', summary: 'Núcleo transacional. Importação idempotente (upsert), sem duplicar vendas.', actions: ['<button class="btn-sm primary" id="imp-ped">Importar planilha de pedidos</button>'] }) +
       dadosAtualizadosAteBadge() +
       devPeriodBar() +
       '<div class="subtabs">' + subtab('pedidos', 'pedidos', 'Pedidos') + subtab('pedidos', 'expedicao', 'Expedição') + subtab('pedidos', 'dashboard', 'Dashboard') + subtab('pedidos', 'import', 'Importações') + '</div>' +
@@ -5246,18 +5245,18 @@ buffer/index.js:
     return info.expedido ? { tag: 'ok', txt: 'Bipado', at: info.at } : { tag: 'warn', txt: 'Falta bipar', at: null };
   }
   function pedidosExpedicao() {
-    var head = secHead('PEDIDOS · EXPEDIÇÃO', 'Bipar e confirmar a saída', 'A fila é exatamente a aba A Enviar de Pedidos. Normal confirma por bipe; Full/FBS confirma sozinho quando a Shopee muda o status para Enviado — nunca exige bip.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'PEDIDOS · EXPEDIÇÃO', title: 'Bipar e confirmar a saída', description: 'A fila é exatamente a aba A Enviar de Pedidos. Normal confirma por bipe; Full/FBS confirma sozinho quando a Shopee muda o status para Enviado — nunca exige bip.' });
     if (!orders.length) return head + emptyBox('Importe os Pedidos para começar a controlar a expedição.');
     var baseList = orders.filter(function (o) { return o.normalizedStatus === 'A_ENVIAR'; });
     var bipados = baseList.filter(function (o) { return pedIsExpedido(o.id); });
     var faltando = baseList.filter(function (o) { return !pedIsExpedido(o.id); });
     var pendTotal = pendenciasConferencia().filter(function (i) { return ['PEND_FINANCEIRA', 'PEND_OPERACIONAL', 'PEND_EXPEDICAO', 'INVESTIGAR'].indexOf(i.situacao) >= 0; }).length;
     // §68: KPIs simples, só isso.
-    var strip = kstrip([
-      { l: 'Deveriam sair', v: nn(baseList.length), cls: 'blue' },
-      { l: 'Expedidos', v: nn(bipados.length), cls: 'green' },
-      { l: 'Faltando', v: nn(faltando.length), cls: faltando.length ? 'amber' : 'green' },
-      { l: 'Pendências', v: nn(pendTotal), cls: pendTotal ? 'red' : 'green' },
+    var strip = MetricGrid([
+      MetricCard({ label: 'Deveriam sair', value: nn(baseList.length), cls: 'blue' }),
+      MetricCard({ label: 'Expedidos', value: nn(bipados.length), cls: 'green' }),
+      MetricCard({ label: 'Faltando', value: nn(faltando.length), cls: faltando.length ? 'amber' : 'green' }),
+      MetricCard({ label: 'Pendências', value: nn(pendTotal), cls: pendTotal ? 'red' : 'green' }),
     ]);
     // §60: campo de bipe GRANDE no topo — primeiro elemento da tela, sempre.
     var bipe = '<div class="panel" style="border:2px solid var(--accent,#2b4bd6)"><div class="ph"><h3>BIPAR PEDIDO</h3><span class="footnote" style="margin:0">leitor USB/Bluetooth (emite como teclado) ou digite e pressione Enter</span></div><div class="pb"><div style="display:flex;gap:10px"><input class="input" id="bipinput" placeholder="Digite ou escaneie o ID do pedido (ou o BR)" autofocus style="flex:1;font-size:20px;padding:14px 16px;height:auto"><button class="btn-sm primary" id="bipbtn" style="font-size:16px;padding:0 24px">BIPAR</button></div><div class="footnote" style="margin-top:8px">Aceita o BR da etiqueta (resolvido pelo rastreamento) ou o ID do pedido. Se o BR não for encontrado, ou aparecer em mais de um pedido, nada é registrado automaticamente. Duplicidade (pedido já bipado) é avisada, não bloqueada silenciosamente.</div></div></div>';
@@ -5383,16 +5382,30 @@ buffer/index.js:
     var cancelados = feitos.filter(pedidoIsRetornoCancelado).length;
     var resTxt = pedResultadoTexto(aBase);
     var basisSel ='<div class="panel"><div class="pb" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b style="font-size:12.5px;color:var(--muted)">Base temporal para venda/margem:</b><select class="select sm" id="peddashbasis"><option value="criacao"' + (pedDashBasis === 'criacao' ? ' selected' : '') + '>Pela criação do pedido</option><option value="pagamento"' + (pedDashBasis === 'pagamento' ? ' selected' : '') + '>Pelo pagamento</option></select><span class="footnote">"Pedidos feitos" e "Pedidos pagos" sempre usam sua própria data — o seletor só decide a base de Venda/Margem/Ticket abaixo. Pedidos cancelados nunca entram em nenhuma dessas contagens.</span></div></div>';
-    return basisSel + '<div class="cards6">' +
-      fcard('Pedidos feitos', nn(aFeitos.orders), 'blue', 'pela data de criação') +
-      fcard('Pedidos pagos', nn(aPagos.orders), 'green', 'pela hora do pagamento, exclui cancelados') +
-      fcard('Taxa de conversão em pagamento', pct(conversao), 'blue', 'pagos ÷ feitos') +
-      fcard('Valor dos pedidos feitos', brl(aFeitos.revenue), '', 'todos, pagos ou não') +
-      fcard('Venda paga (real)', brl(aPagos.revenue), 'green', canceladosPagos ? 'exclui ' + canceladosPagos + ' cancelado(s) pago(s)' : 'só pedidos válidos efetivamente pagos') +
-      fcard('Não pagos', nn(naoPagos), naoPagos ? 'amber' : 'green') +
-      '</div>' +
-      '<div class="cards6">' + fcard('Ticket médio', brl(ticket), '') + fcard('Unidades vendidas', nn(aBase.units), '') + fcard('Taxas marketplace', brl(aBase.fees), 'red') + fcard('Custo produtos', brl(aBase.cost), 'amber') + fcard('Resultado estimado', resTxt.resultado, resTxt.cls, resTxt.sub + (resTxt.selo ? ' · ' + resTxt.selo : '')) + fcard('Margem estimada', resTxt.margem, resTxt.cls === 'amber' ? 'amber' : '') + '</div>' +
-      '<div class="cards6">' + fcard('A enviar', nn(aFeitos.byStatus.A_ENVIAR || 0), 'amber') + fcard('Expedidos (bipados)', nn(expedidos), 'blue') + fcard('Enviados', nn(aFeitos.byStatus.ENVIADO || 0), 'blue') + fcard('Concluídos', nn(aFeitos.byStatus.CONCLUIDO || 0), 'green') + fcard('Retornos e cancelados', nn(cancelados), 'red') + fcard('SKUs sem custo', nn(aBase.costPending) + ' pedidos', 'amber') + '</div>' +
+    return basisSel + MetricGrid([
+      MetricCard({ label: 'Pedidos feitos', value: nn(aFeitos.orders), cls: 'blue', sub: 'pela data de criação' }),
+      MetricCard({ label: 'Pedidos pagos', value: nn(aPagos.orders), cls: 'green', sub: 'pela hora do pagamento, exclui cancelados' }),
+      MetricCard({ label: 'Taxa de conversão em pagamento', value: pct(conversao), cls: 'blue', sub: 'pagos ÷ feitos' }),
+      MetricCard({ label: 'Valor dos pedidos feitos', value: brl(aFeitos.revenue), sub: 'todos, pagos ou não' }),
+      MetricCard({ label: 'Venda paga (real)', value: brl(aPagos.revenue), cls: 'green', sub: canceladosPagos ? 'exclui ' + canceladosPagos + ' cancelado(s) pago(s)' : 'só pedidos válidos efetivamente pagos' }),
+      MetricCard({ label: 'Não pagos', value: nn(naoPagos), cls: naoPagos ? 'amber' : 'green' }),
+    ]) +
+      MetricGrid([
+        MetricCard({ label: 'Ticket médio', value: brl(ticket) }),
+        MetricCard({ label: 'Unidades vendidas', value: nn(aBase.units) }),
+        MetricCard({ label: 'Taxas marketplace', value: brl(aBase.fees), cls: 'red' }),
+        MetricCard({ label: 'Custo produtos', value: brl(aBase.cost), cls: 'amber' }),
+        MetricCard({ label: 'Resultado estimado', value: resTxt.resultado, cls: resTxt.cls, sub: resTxt.sub + (resTxt.selo ? ' · ' + resTxt.selo : '') }),
+        MetricCard({ label: 'Margem estimada', value: resTxt.margem, cls: resTxt.cls === 'amber' ? 'amber' : '' }),
+      ]) +
+      MetricGrid([
+        MetricCard({ label: 'A enviar', value: nn(aFeitos.byStatus.A_ENVIAR || 0), cls: 'amber' }),
+        MetricCard({ label: 'Expedidos (bipados)', value: nn(expedidos), cls: 'blue' }),
+        MetricCard({ label: 'Enviados', value: nn(aFeitos.byStatus.ENVIADO || 0), cls: 'blue' }),
+        MetricCard({ label: 'Concluídos', value: nn(aFeitos.byStatus.CONCLUIDO || 0), cls: 'green' }),
+        MetricCard({ label: 'Retornos e cancelados', value: nn(cancelados), cls: 'red' }),
+        MetricCard({ label: 'SKUs sem custo', value: nn(aBase.costPending) + ' pedidos', cls: 'amber' }),
+      ]) +
       pedidosFullPanel(feitos) + pedidosModalidadesPanel(feitos) + topSkusPanel();
   }
   // §29-33: Full/FBS precisa de visibilidade própria (duas formas de identificar na planilha:
@@ -11452,12 +11465,12 @@ buffer/index.js:
     var semCusto = totalSkus - comCusto;
     var motivoCount = {}; rows.forEach(function (r) { motivoCount[r.motivo] = (motivoCount[r.motivo] || 0) + 1; });
     var resumo = Object.keys(motivoCount).map(function (m) { return esc(SKU_MOTIVO_LABEL[m] || m) + ': <b>' + motivoCount[m] + '</b>'; }).join(' · ');
-    var kpiStrip = '<div class="cards6" style="margin-bottom:12px">' +
-      fcard('Total de SKUs analisados', nn(totalSkus), 'blue') +
-      fcard('Com família', nn(comFamilia), '') +
-      fcard('Com custo resolvido', nn(comCusto), comCusto === totalSkus ? 'green' : '') +
-      fcard('Sem custo', nn(semCusto), semCusto ? 'amber' : 'green') +
-      '</div>';
+    var kpiStrip = '<div style="margin-bottom:12px">' + MetricGrid([
+      MetricCard({ label: 'Total de SKUs analisados', value: nn(totalSkus), cls: 'blue' }),
+      MetricCard({ label: 'Com família', value: nn(comFamilia) }),
+      MetricCard({ label: 'Com custo resolvido', value: nn(comCusto), cls: comCusto === totalSkus ? 'green' : '' }),
+      MetricCard({ label: 'Sem custo', value: nn(semCusto), cls: semCusto ? 'amber' : 'green' }),
+    ]) + '</div>';
     // PROMPT "Fase de correção geral pós-auditoria E2E" §Fase 1.3: ação "Recalcular custos dos
     // pedidos" — resolveSkuCost já é chamado AO VIVO (nunca cacheado) em toda leitura de custo, então
     // tecnicamente não existe valor "desatualizado" pra recalcular; o botão existe para dar ao
