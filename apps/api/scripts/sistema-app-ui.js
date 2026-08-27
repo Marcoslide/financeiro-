@@ -2612,7 +2612,6 @@
   function openSellerChargesDiag(orderId) {
     var a = auditIncomeOrder(orderId);
     var sc = resolveSellerCharges(orderId);
-    var o = document.createElement('div'); o.className = 'overlay';
     var rows = [
       ['Fonte atual das taxas', sc.totalStatus === 'PROVISORIO' ? 'Provisória (Order) — aguardando liberação da Renda Shopee' : (sc.found ? 'Confirmada (Income)' : (sc.totalStatus === 'SEM_DADOS' ? 'Sem dados (nem Income, nem Order)' : 'Parcial'))],
       ['ID do pedido (original)', a.orderIdOriginal],
@@ -2631,14 +2630,12 @@
       ['operationId(s) dessas linhas no Service Fee Details', a.svcOperationIds.length ? a.svcOperationIds.join(', ') : '—'],
       ['Service Fee Details → encontrado?', a.serviceFeeStatus ? 'Sim' : 'Não'],
     ];
-    var html = '<div class="modal" style="width:560px"><div class="mh"><h3>Diagnóstico — cruzamento Income</h3><button class="x">&times;</button></div><div class="mbd">' +
-      rows.map(function (r) { return kv(r[0], r[1]); }).join('') +
-      '<div class="footnote" style="margin-top:8px">Esses valores vêm direto do que foi importado nesta sessão — nenhum é estimado.</div>' +
-      '</div></div>';
-    o.innerHTML = html;
-    o.onclick = function (e) { if (e.target === o) o.remove(); };
-    document.body.appendChild(o);
-    o.querySelector('.x').onclick = function () { o.remove(); };
+    openDrawer({
+      width: 560,
+      title: 'Diagnóstico — cruzamento Income',
+      bodyHtml: rows.map(function (r) { return kv(r[0], r[1]); }).join('') +
+        '<div class="footnote" style="margin-top:8px">Esses valores vêm direto do que foi importado nesta sessão — nenhum é estimado.</div>',
+    });
   }
 
   // Diagnóstico de custo do produto (prompt "Resolver canônico SKU→Variação→Família→Custo") —
@@ -2647,8 +2644,31 @@
   // recalcula nada — só formata o que auditOrderProductCost() (fonte única) já produziu.
   var SKU_FINAL_STATUS_LABEL = { SKU_NOT_FOUND: 'SKU_NOT_FOUND — SKU não localizado', SKU_CONFLICT: 'SKU_CONFLICT — mais de um anúncio disputa o mesmo código', FAMILY_NOT_ASSIGNED: 'FAMILY_NOT_ASSIGNED — variação localizada, família não atribuída', FAMILY_NOT_FOUND: 'FAMILY_NOT_FOUND — família referenciada não existe mais', COST_NOT_DEFINED: 'COST_NOT_DEFINED — família sem custo cadastrado', COST_RESOLVED: 'COST_RESOLVED — custo resolvido' };
   function openSkuCostDiag(orderId) {
+    openDrawer({
+      width: 620,
+      title: 'Diagnóstico — custo do produto',
+      renderBody: function () { return openSkuCostDiagBody(orderId); },
+      onMount: function (panel, refresh) {
+        panel.querySelectorAll('[data-skufamapply2]').forEach(function (b) {
+          b.onclick = function () {
+            var sku = b.dataset.skufamapply2;
+            var sel = panel.querySelector('[data-skufamsel2="' + CSS.escape(sku) + '"]');
+            var familyId = sel ? sel.value : '';
+            if (!familyId) { toast('Escolha uma família', '', true); return; }
+            skuFamilyOverrideSave(sku, familyId).then(function () { refresh(); render(); toast('Família aplicada a este SKU', 'Vale para todos os pedidos com este SKU — nunca mais bloqueado por conflito.'); });
+          };
+        });
+        panel.querySelectorAll('[data-skufamremove]').forEach(function (b) {
+          b.onclick = function () {
+            var sku = b.dataset.skufamremove;
+            skuFamilyOverrideRemove(sku).then(function () { refresh(); render(); toast('Classificação manual removida', 'O SKU volta a ser resolvido automaticamente.'); });
+          };
+        });
+      },
+    });
+  }
+  function openSkuCostDiagBody(orderId) {
     var a = auditOrderProductCost(orderId);
-    var o = document.createElement('div'); o.className = 'overlay';
     var itemsHtml = (a.items || []).map(function (it, idx) {
       var fs = it.resolveResult ? it.resolveResult.finalStatus : (it.status === 'OK' ? 'COST_RESOLVED' : (SKU_FINAL_STATUS_LABEL[it.status] ? it.status : 'SKU_NOT_FOUND'));
       var cand = function (list, label) { return kv(label, list && list.length ? list.map(function (c) { return (skuVarById[c.variationId] ? (skuVarById[c.variationId].sku || skuVarById[c.variationId].referenceSku || c.variationId) : c.variationId) + ' · produto ' + c.productId + ' · ' + (c.status || '—'); }).join('<br>') : '—'); };
@@ -2692,30 +2712,9 @@
           '</div>') : '') +
         '</div>';
     }).join('');
-    var html = '<div class="modal" style="width:620px;max-height:82vh;overflow:auto"><div class="mh"><h3>Diagnóstico — custo do produto</h3><button class="x">&times;</button></div><div class="mbd">' +
-      kv('Pedido', a.orderId) + kv('operationId', a.operationId || '(nenhum)') +
+    return kv('Pedido', a.orderId) + kv('operationId', a.operationId || '(nenhum)') +
       (itemsHtml || '<div class="footnote">Pedido sem itens ou não localizado.</div>') +
-      '<div class="footnote" style="margin-top:8px">Resolver canônico: SKU exato ativo &gt; SKU de referência ativo &gt; SKU exato inativo &gt; SKU de referência inativo. Conflito entre duas ou mais candidatas do mesmo nível nunca escolhe uma arbitrariamente — mas a classificação manual do usuário (acima) sempre vence, sem bloqueio.</div>' +
-      '</div></div>';
-    o.innerHTML = html;
-    o.onclick = function (e) { if (e.target === o) o.remove(); };
-    document.body.appendChild(o);
-    o.querySelector('.x').onclick = function () { o.remove(); };
-    o.querySelectorAll('[data-skufamapply2]').forEach(function (b) {
-      b.onclick = function () {
-        var sku = b.dataset.skufamapply2;
-        var sel = o.querySelector('[data-skufamsel2="' + CSS.escape(sku) + '"]');
-        var familyId = sel ? sel.value : '';
-        if (!familyId) { toast('Escolha uma família', '', true); return; }
-        skuFamilyOverrideSave(sku, familyId).then(function () { o.remove(); openSkuCostDiag(orderId); render(); toast('Família aplicada a este SKU', 'Vale para todos os pedidos com este SKU — nunca mais bloqueado por conflito.'); });
-      };
-    });
-    o.querySelectorAll('[data-skufamremove]').forEach(function (b) {
-      b.onclick = function () {
-        var sku = b.dataset.skufamremove;
-        skuFamilyOverrideRemove(sku).then(function () { o.remove(); openSkuCostDiag(orderId); render(); toast('Classificação manual removida', 'O SKU volta a ser resolvido automaticamente.'); });
-      };
-    });
+      '<div class="footnote" style="margin-top:8px">Resolver canônico: SKU exato ativo &gt; SKU de referência ativo &gt; SKU exato inativo &gt; SKU de referência inativo. Conflito entre duas ou mais candidatas do mesmo nível nunca escolhe uma arbitrariamente — mas a classificação manual do usuário (acima) sempre vence, sem bloqueio.</div>';
   }
 
   // ---------- PÓS-VENDA ----------
