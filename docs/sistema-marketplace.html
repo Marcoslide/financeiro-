@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 4488845 · 2026-08-27 12:07 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 29d953c · 2026-08-27 12:42 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -3936,6 +3936,21 @@ buffer/index.js:
   // ---------- estado compartilhado ----------
   var route = 'dashboard', DB = null;
   var orders = [], occ = [], batches = [], plans = [];
+  // Refatoração N5 (Fase 5 — Performance): caches por-renderização, estritamente aditivos — nunca
+  // alteram nenhum valor retornado, só evitam recalcular o mesmo resultado puro para a mesma chave
+  // dentro da mesma "foto" de dados em memória. ordersByIdCache/compByOrderIdCache são zerados no topo
+  // de render() (cobre toda reatribuição de orders/mrRenda/mrSvc/mrAdj — importação, boot, troca de
+  // operação); skuCostMapCache é zerado dentro de rebuildSkuCost() (o único ponto que já reconstrói
+  // skuAliasIndex/skuVarById/skuFamById, dos quais resolveSkuCost() depende). Nunca lido fora das
+  // funções que os populam — se algum consumidor precisar, deve chamar getOrdersById()/o próprio
+  // pedidoComposicaoFinanceira()/resolveSkuCost(), nunca acessar o Map diretamente.
+  var ordersByIdCache = null;
+  var compByOrderIdCache = new Map();
+  var skuCostMapCache = new Map();
+  function getOrdersById() {
+    if (!ordersByIdCache) { ordersByIdCache = new Map(); orders.forEach(function (o) { ordersByIdCache.set(o.id, o); }); }
+    return ordersByIdCache;
+  }
   var skuCost = {}; // legado — chave normalizada -> {linked,cost,familyName} (retrocompat, derivado de resolveSkuCost)
   var skuAliasIndex = {}; // chave normalizada -> [{variationId, matchedBy:'SKU'|'REFERENCE_SKU'}] (todas as variações que reivindicam esta chave)
   var skuConflicts = {}; // chave normalizada -> true quando 2+ variações distintas reivindicam a mesma chave
@@ -4305,6 +4320,11 @@ buffer/index.js:
   // determinística. Isso separa corretamente "existe mais de uma candidata" (fato, sempre guardado)
   // de "qual delas vale" (regra, aplicada na leitura — nunca perdida ao reindexar).
   function rebuildSkuCost() {
+    // Refatoração N5: skuCostMapCache guarda o retorno de resolveSkuCost() por (sku,itemHint) — só
+    // pode sobreviver enquanto skuAliasIndex/skuVarById/skuFamById (dos quais depende) não mudarem.
+    // Este é o único ponto do sistema que reconstrói esses três índices — zerar aqui garante que
+    // nenhuma resolução de custo antiga escape para depois de uma edição de Produto/Família/Custo.
+    skuCostMapCache.clear();
     skuCost = {}; skuAliasIndex = {}; skuConflicts = {}; skuVarById = {}; skuFamById = {};
     if (!Produtos) return;
     var data = Produtos.getData();
@@ -4434,7 +4454,18 @@ buffer/index.js:
     if (inactiveRef.length > 1) { if (sameFamilyAll(inactiveRef)) return finalize(inactiveRef[0], 'MULTIPLE_LISTINGS_SAME_FAMILY'); return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE_HISTORICAL', candidatos: inactiveRef }; }
     return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
   }
-  function resolveSkuCost(sku, itemHint) { return resolveSkuCostByKey(normalizeSkuKey(sku), sku, itemHint); }
+  function resolveSkuCost(sku, itemHint) {
+    // Refatoração N5: cache por (sku bruto + itemHint.variationId) — não pela chave normalizada
+    // sozinha, porque o resultado ecoa requestedSku de volta (usado em mensagens de diagnóstico); só
+    // cachear pela combinação exata que já determina o resultado evita devolver um requestedSku de
+    // uma chamada anterior para um sku bruto diferente que normalize pra mesma chave. Zerado dentro
+    // de rebuildSkuCost() — o único ponto que reconstrói os índices dos quais este resultado depende.
+    var __k = sku + '|' + ((itemHint && itemHint.variationId) || '');
+    if (skuCostMapCache.has(__k)) return skuCostMapCache.get(__k);
+    var __r = resolveSkuCostByKey(normalizeSkuKey(sku), sku, itemHint);
+    skuCostMapCache.set(__k, __r);
+    return __r;
+  }
   // PROMPT "Família de Produto — classificação manual sempre vence": CRUD do override manual de
   // SKU→Família. id determinístico = a própria chave normalizada (nunca duplica registro pro mesmo
   // SKU — salvar de novo apenas atualiza a escolha). Sempre chama rebuildSkuCost() ao final para que
@@ -4719,6 +4750,9 @@ buffer/index.js:
   // ============================================================ RENDER (roteamento)
   function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', minharenda: 'Minha Renda', caixa: 'Caixa', contaspagar: 'Contas a Pagar', contasreceber: 'Contas a Receber', precificacao: 'Precificação', ia: 'Inteligência', fator: 'Fator de Custo' }[route] || ''; }
   function render() {
+    // Refatoração N5: zera os caches por-renderização a cada troca de tela/re-render — nunca deixa
+    // um resultado de uma "foto" de dados anterior vazar para depois de uma importação/edição.
+    ordersByIdCache = null; compByOrderIdCache.clear();
     setActive();
     // Cada módulo é isolado: um erro em um deles mostra a mensagem no lugar de deixar a tela em branco
     // (era isso que fazia "clico e não aparece nada"). Produtos depende do módulo carregado no boot.
@@ -5439,7 +5473,7 @@ buffer/index.js:
     return { status: 'FOUND', row: sameOp[0], requestedOrderId: orderId };
   }
   function pedidoIncomeRow(orderId) {
-    var ord = orders.find(function (x) { return x.id === orderId; });
+    var ord = getOrdersById().get(orderId);
     var opId = (ord && ord.operationId) || opActiveOrNull() || null;
     var res = resolveIncomeOrder(opId, orderId);
     return res.status === 'FOUND' ? res.row : null;
@@ -5525,7 +5559,13 @@ buffer/index.js:
     return { orderId: orderId, comps: comps, subtotalC: subtotalC };
   }
   function pedidoComposicaoFinanceira(orderId) {
-    var ord = orders.find(function (x) { return x.id === orderId; });
+    // Refatoração N5 (Fase 5 — Performance): cache por-renderização — esta função é chamada
+    // repetidamente para o MESMO orderId dentro do mesmo render (Dashboard, DRE do Caixa,
+    // Precificação, exportações), cada chamada custando uma varredura de orders/mrRenda/mrSvc/mrAdj.
+    // O cache é zerado no topo de render() (nunca sobrevive a uma nova importação/troca de operação)
+    // — puramente aditivo, não muda nenhum valor retornado.
+    if (compByOrderIdCache.has(orderId)) return compByOrderIdCache.get(orderId);
+    var ord = getOrdersById().get(orderId);
     var opIdOrd = (ord && ord.operationId) || opActiveOrNull() || null;
     var incomeResolve = resolveIncomeOrder(opIdOrd, orderId);
     var mrRow = incomeResolve.status === 'FOUND' ? incomeResolve.row : null;
@@ -5675,7 +5715,9 @@ buffer/index.js:
     //   lucroC = resultadoC (rendaFinalShopeeC − custoProdutoC)
     var taxasShopeeC = somaGrupo(gTaxas);
     var canonico = { vendaBrutaC: receitaC, ajustesPedidoC: ajustesC, taxasShopeeC: taxasShopeeC, custoProdutoC: custoProdC, lucroC: resultadoC };
-    return Object.assign({ orderId: orderId, operationId: opIdOrd, temIncome: !!mrRow, mrRow: mrRow, incomeResolve: incomeResolve, statusFinanceiro: statusFinanceiro, ord: ord, svcRows: svcRows, svcResolve: svcResolve, serviceFee: serviceFee, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gEnvio: gEnvio, gOutros: gOutros, envio: envio, auditoriaFonte: auditoriaFonte, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), envioC: somaGrupo(gEnvio), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, taxasSomaSemAjusteC: taxasSomaSemAjusteC, ajustesC: ajustesC, receitaAjustadaC: receitaAjustadaC, rendaFinalShopeeC: rendaFinalShopeeC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia }, canonico);
+    var __comp = Object.assign({ orderId: orderId, operationId: opIdOrd, temIncome: !!mrRow, mrRow: mrRow, incomeResolve: incomeResolve, statusFinanceiro: statusFinanceiro, ord: ord, svcRows: svcRows, svcResolve: svcResolve, serviceFee: serviceFee, receitaC: receitaC, custoProdC: custoProdC, custoPendente: custoPendente, taxaRows: taxaRows, gTaxas: gTaxas, gDescontos: gDescontos, gCreditos: gCreditos, gEnvio: gEnvio, gOutros: gOutros, envio: envio, auditoriaFonte: auditoriaFonte, somaGrupo: somaGrupo, taxasCobradasC: somaGrupo(gTaxas), descontosComerciaisC: somaGrupo(gDescontos), creditosC: somaGrupo(gCreditos), envioC: somaGrupo(gEnvio), outrosC: somaGrupo(gOutros), taxasSomaC: taxasSomaC, taxasSomaSemAjusteC: taxasSomaSemAjusteC, ajustesC: ajustesC, receitaAjustadaC: receitaAjustadaC, rendaFinalShopeeC: rendaFinalShopeeC, adjRows: adjRows, resultadoC: resultadoC, margemPct: margemPct, pendencia: pendencia }, canonico);
+    compByOrderIdCache.set(orderId, __comp);
+    return __comp;
   }
   // PROMPT "Unificação do motor financeiro canônico" — auditoria interna: compara, pedido a pedido,
   // o valor ESPERADO (recomposto direto dos grupos já classificados a partir de Order.all/Income —
@@ -7603,7 +7645,8 @@ buffer/index.js:
     if (!orders.length) return head + emptyBox('Importe os Pedidos (Order.all…) para conectar as devoluções às taxas reais de cada venda.');
     var list = occInPeriod();
     var withOrder = [], noOrder = 0;
-    list.forEach(function (o) { var ord = o.orderId ? orders.find(function (x) { return x.id === o.orderId; }) : null; if (ord) withOrder.push({ o: o, ord: ord, f: orderFeeBreakdown(ord) }); else noOrder++; });
+    var __ordersById = getOrdersById();
+    list.forEach(function (o) { var ord = o.orderId ? __ordersById.get(o.orderId) : null; if (ord) withOrder.push({ o: o, ord: ord, f: orderFeeBreakdown(ord) }); else noOrder++; });
     var sum = { req: 0, comissao: 0, servico: 0, transacao: 0, freteRev: 0, total: 0 };
     withOrder.forEach(function (x) { sum.req += x.o.requested || 0; sum.comissao += x.f.comissao; sum.servico += x.f.servico; sum.transacao += x.f.transacao; sum.freteRev += x.f.freteRev; sum.total += x.f.total; });
     Object.keys(sum).forEach(function (k) { sum[k] = r2(sum[k]); });
@@ -7641,7 +7684,8 @@ buffer/index.js:
     var totRecebido = r2(recebidos.reduce(function (s, x) { return s + x.r.sum; }, 0));
     var totAReceberVal = r2(areceber.reduce(function (s, x) { return s + x.val; }, 0));
     // renda na carteira sem pedido importado (dedup: por orderId)
-    var semPedido = 0, semPedidoVal = 0; Object.keys(renda).forEach(function (oid) { if (!orders.find(function (x) { return x.id === oid; })) { semPedido++; semPedidoVal += renda[oid].sum; } });
+    var __ordersById2 = getOrdersById();
+    var semPedido = 0, semPedidoVal = 0; Object.keys(renda).forEach(function (oid) { if (!__ordersById2.has(oid)) { semPedido++; semPedidoVal += renda[oid].sum; } });
     var strip = kstrip([
       { l: 'Pedidos no período', v: nn(list.length), cls: 'blue' },
       { l: 'Já recebidos (carteira)', v: nn(recebidos.length), cls: 'green', s: brl(totRecebido) + ' creditados' },
@@ -12942,6 +12986,7 @@ buffer/index.js:
       // volume de pedidos, mesmo quando nenhum é um problema real. Só um pedido isolado que foge muito
       // do padrão normal (> R$50 sem nenhuma causa conhecida) é sinal real de algo a investigar.
       var maiorDiscrepanciaSemCausaC = 0;
+      var __ordersById3 = getOrdersById();
       origem.pedidosRows.forEach(function (p) {
         var pv = ac.pedidoValores[p.orderId];
         if (!pv || p.liquidoC == null) return;
@@ -12949,7 +12994,7 @@ buffer/index.js:
         // ac.valorBruto, ANTES da taxa de antecipação) — nunca pv.liquido (que já é líquido da taxa),
         // senão a soma dos buckets não bate com a Diferença total mostrada no callout.
         var diffP = p.liquidoC - pv.bruto;
-        var ord2 = orders.find(function (o) { return o.id === p.orderId; });
+        var ord2 = __ordersById3.get(p.orderId);
         var acPedRows2 = acelera.filter(function (r) { return r.pedido === p.orderId; });
         var reembC = acPedRows2.reduce(function (s, r) { return s + (r.reembolsado || 0); }, 0);
         var comp2 = pedidoComposicaoFinanceira(p.orderId);
