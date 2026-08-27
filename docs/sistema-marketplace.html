@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build b9efd1b · 2026-08-27 19:37 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build d062e2f · 2026-08-27 19:45 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -9139,7 +9139,7 @@ buffer/index.js:
     app.innerHTML = devPeriodBar() + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="subtabs" style="margin-bottom:0;overflow-x:auto">' + tabs.map(function (t) { return '<div class="subtab' + (aceleraSub === t[0] ? ' active' : '') + '" data-acsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div><button class="btn-sm primary" data-acimport="1">Importar Shopee Acelera</button></div><div id="acbody" style="margin-top:14px"></div>';
     var body = document.getElementById('acbody');
     try {
-      if (!acelera.length && aceleraSub !== 'expedidos' && aceleraSub !== 'import') body.innerHTML = secHead('SHOPEE ACELERA', 'Antecipação de Recebíveis', 'Expedição → Antecipação → Taxa → Líquido recebido → Conferência.') + emptyBox('Nenhum relatório Shopee Acelera importado. Clique em “Importar Shopee Acelera” e envie o CSV de antecipação de recebíveis.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="acimp">Importar primeiro relatório</button></div>';
+      if (!acelera.length && aceleraSub !== 'expedidos' && aceleraSub !== 'import') body.innerHTML = PageHeader({ variant: 'eyebrow', eyebrow: 'SHOPEE ACELERA', title: 'Antecipação de Recebíveis', description: 'Expedição → Antecipação → Taxa → Líquido recebido → Conferência.' }) + emptyBox('Nenhum relatório Shopee Acelera importado. Clique em “Importar Shopee Acelera” e envie o CSV de antecipação de recebíveis.') + '<div style="text-align:center;margin-top:-8px"><button class="btn-sm primary" id="acimp">Importar primeiro relatório</button></div>';
       else body.innerHTML = ({ visao: aceleraVisao, antecipacoes: aceleraAntecipacoes, expedidos: aceleraExpedidos, divergencias: aceleraDivergencias, auditoria: aceleraAuditoria, import: aceleraImportacoes }[aceleraSub] || aceleraVisao)();
     } catch (e) { body.innerHTML = '<div class="form-err">Erro ao renderizar o Shopee Acelera: ' + esc(e.message || e) + '</div>'; }
     bindDevPeriodBar();
@@ -9160,19 +9160,19 @@ buffer/index.js:
   // recomendação de capital/coorte/custo de oportunidade — só os fatos calculados dos dados.
   function aceleraVisao() {
     var recs = aceleraInPeriod(); var m = aceleraMetrics(recs);
-    var head = secHead('SHOPEE ACELERA', 'Antecipação de Recebíveis', 'Quanto a Shopee antecipou, quanto cobrou de taxa e quanto entrou líquido — dia a dia, resgate a resgate.');
-    var strip1 = kstrip([
-      { l: 'Pedidos antecipados', v: nn(m.nPedidos), cls: 'blue', s: nn(m.nResgates) + ' resgate(s)' },
-      { l: 'Valor bruto resgatado', v: brlC(m.volume), cls: 'blue', s: 'soma dos resgates rápidos (antes da taxa)' },
-      { l: 'Taxa de serviço', v: brlC(m.taxa), cls: 'red' },
-      { l: 'Alíquota efetiva', v: pct(r2(m.aliquota * 100)), cls: 'amber', s: 'taxa ÷ antecipado' },
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'SHOPEE ACELERA', title: 'Antecipação de Recebíveis', description: 'Quanto a Shopee antecipou, quanto cobrou de taxa e quanto entrou líquido — dia a dia, resgate a resgate.' });
+    var strip1 = MetricGrid([
+      MetricCard({ label: 'Pedidos antecipados', value: nn(m.nPedidos), cls: 'blue', sub: nn(m.nResgates) + ' resgate(s)' }),
+      MetricCard({ label: 'Valor bruto resgatado', value: brlC(m.volume), cls: 'blue', sub: 'soma dos resgates rápidos (antes da taxa)' }),
+      MetricCard({ label: 'Taxa de serviço', value: brlC(m.taxa), cls: 'red' }),
+      MetricCard({ label: 'Alíquota efetiva', value: pct(r2(m.aliquota * 100)), cls: 'amber', sub: 'taxa ÷ antecipado' }),
     ]);
     var liqDivergente = Math.abs(m.liquidoDiff) > 100;
-    var strip2 = kstrip([
-      { l: 'Valor líquido recebido', v: brlC(m.receb), cls: 'green', s: liqDivergente ? '⚠ calculado (antecipado − taxa): ' + brlC(m.liquidoCalc) : 'confere com antecipado − taxa' },
-      { l: 'Valor reembolsado', v: brlC(m.reemb), cls: m.reemb ? 'amber' : '' },
-      { l: 'A liquidar', v: brlC(m.pend), cls: m.pend ? 'blue' : '', s: 'ainda a liquidar dentro do ciclo do resgate — não é dinheiro sumido' },
-      { l: 'Resgates', v: nn(m.nResgates), cls: 'blue' },
+    var strip2 = MetricGrid([
+      MetricCard({ label: 'Valor líquido recebido', value: brlC(m.receb), cls: 'green', sub: liqDivergente ? '⚠ calculado (antecipado − taxa): ' + brlC(m.liquidoCalc) : 'confere com antecipado − taxa' }),
+      MetricCard({ label: 'Valor reembolsado', value: brlC(m.reemb), cls: m.reemb ? 'amber' : '' }),
+      MetricCard({ label: 'A liquidar', value: brlC(m.pend), cls: m.pend ? 'blue' : '', sub: 'ainda a liquidar dentro do ciclo do resgate — não é dinheiro sumido' }),
+      MetricCard({ label: 'Resgates', value: nn(m.nResgates), cls: 'blue' }),
     ]);
     var liqWarn = liqDivergente ? callout('warn', '⚠ Líquido recebido diverge do calculado', 'A Shopee informou <b>' + brlC(m.receb) + '</b> de líquido recebido no período; antecipado − taxa calculado pelo sistema dá <b>' + brlC(m.liquidoCalc) + '</b> — diferença de <b>' + brlC(m.liquidoDiff) + '</b>. Veja o detalhe em Divergências.') : '';
     var chart = m.byDia.length ? chartCard('Antecipações dia a dia', legendSwatch([['Líquido recebido', '#1fa971'], ['Taxa', '#d13b3b']]), svgAcDia(m.byDia)) : '';
@@ -9224,19 +9224,23 @@ buffer/index.js:
     var recs = acelera.filter(function (r) { return resgSet[r.resgate]; });
     var pedidosSet = {}; recs.forEach(function (r) { pedidosSet[r.pedido] = 1; });
     var antecTot = recs.reduce(function (s, r) { return s + r.antecipado; }, 0);
-    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '760px'; panel.style.maxWidth = '97vw';
-    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
     var resgateBlocks = gs.map(function (g) {
       return '<div class="panel"><div class="ph"><h3>Resgate <span class="mono">' + esc(g.resgate) + '</span></h3><span class="tag' + (g.divergente ? ' warn' : '') + '">alíquota ' + pct(r2(g.rate * 100)) + '</span></div><div class="pb">' +
         kv('Pedidos', nn(g.n)) + kv('Antecipado', brlC(g.antec)) + kv('Taxa', brlC(g.taxa)) + kv('Líquido', brlC(g.receb)) + (g.reemb ? kv('Reembolsado', brlC(g.reemb)) : '') + (g.pend ? kv('A liquidar', brlC(g.pend)) : '') +
         '<button class="btn-sm primary" data-acresg="' + esc(g.resgate) + '" style="margin-top:8px">Ver pedidos deste resgate</button>' +
         '</div></div>';
     }).join('');
-    panel.innerHTML = '<div class="dh"><div><b>' + esc(acDbr(dateStr)) + '</b></div><button class="x">&times;</button></div><div class="dbd">' +
-      '<div class="kstrip" style="margin-bottom:12px"><div class="kc"><div class="kl">Pedidos</div><div class="kv" style="font-size:18px">' + nn(Object.keys(pedidosSet).length) + '</div></div><div class="kc"><div class="kl">Resgates</div><div class="kv" style="font-size:18px">' + nn(gs.length) + '</div></div><div class="kc"><div class="kl">Antecipado</div><div class="kv" style="font-size:18px">' + brlC(antecTot) + '</div></div></div>' +
-      resgateBlocks + '</div>';
-    panel.querySelector('.x').onclick = function () { d.remove(); };
-    panel.querySelectorAll('[data-acresg]').forEach(function (b) { b.onclick = function () { d.remove(); openAceleraResgate(b.dataset.acresg); }; });
+    var bodyHtml = MetricGrid([
+      MetricCard({ label: 'Pedidos', value: '<span style="font-size:18px">' + nn(Object.keys(pedidosSet).length) + '</span>' }),
+      MetricCard({ label: 'Resgates', value: '<span style="font-size:18px">' + nn(gs.length) + '</span>' }),
+      MetricCard({ label: 'Antecipado', value: '<span style="font-size:18px">' + brlC(antecTot) + '</span>' }),
+    ]) + resgateBlocks;
+    var dw = openDrawer({
+      title: acDbr(dateStr), width: 760, bodyHtml: bodyHtml,
+      onMount: function (panel) {
+        panel.querySelectorAll('[data-acresg]').forEach(function (b) { b.onclick = function () { dw.close(); openAceleraResgate(b.dataset.acresg); }; });
+      },
+    });
   }
   // §1 pergunta 10: os valores calculados pelo sistema batem com o resumo que a própria Shopee
   // escreveu no cabeçalho do arquivo? (usado na aba Auditoria, não mais na Visão Geral.)
@@ -9269,7 +9273,7 @@ buffer/index.js:
     if (aceleraF.aliq) gs = gs.filter(function (g) { return g.aliqLabel === aceleraF.aliq; });
     if (aceleraF.search) { var q = aceleraF.search.toLowerCase(); gs = gs.filter(function (g) { return g.resgate.toLowerCase().indexOf(q) >= 0; }); }
     var pages = Math.max(1, Math.ceil(gs.length / 25)); if (aceleraPage > pages) aceleraPage = pages; var slice = gs.slice((aceleraPage - 1) * 25, aceleraPage * 25);
-    var head = secHead('ACELERA · ANTECIPAÇÕES', 'Auditoria por resgate', 'Cada lote de antecipação: valor, taxa, alíquota efetiva, líquido, reembolsado e valor a liquidar. Clique para ver os pedidos.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'ACELERA · ANTECIPAÇÕES', title: 'Auditoria por resgate', description: 'Cada lote de antecipação: valor, taxa, alíquota efetiva, líquido, reembolsado e valor a liquidar. Clique para ver os pedidos.' });
     var rows = slice.map(function (g) { return '<tr class="rowlink" data-acresg="' + esc(g.resgate) + '"><td class="nowrap">' + esc(acDbr(g.data)) + '</td><td class="mono">' + esc(g.resgate) + '</td><td>' + nn(g.n) + '</td><td class="nowrap">' + brlC(g.disp) + '</td><td class="nowrap">' + brlC(g.antec) + '</td><td class="nowrap">' + brlC(g.taxa) + '</td><td><span class="tag' + (g.divergente ? ' warn' : '') + '">' + g.aliqLabel + '</span></td><td class="nowrap">' + brlC(g.receb) + '</td><td class="nowrap ' + (g.reemb ? 'neg' : '') + '">' + brlC(g.reemb) + '</td><td class="nowrap">' + brlC(g.pend) + '</td><td><button class="btn-sm" data-acresg="' + esc(g.resgate) + '">Abrir</button></td></tr>'; }).join('');
     var dist = aceleraAliquotaDist(recs);
     var aliqOptions = '<option value="">Todas</option>' + dist.map(function (a) { return '<option value="' + esc(a.label) + '"' + (aceleraF.aliq === a.label ? ' selected' : '') + '>' + esc(a.label) + '</option>'; }).join('');
@@ -9291,23 +9295,29 @@ buffer/index.js:
   }
   function openAceleraResgate(rid) {
     var recs = acelera.filter(function (r) { return r.resgate === rid; });
-    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '820px'; panel.style.maxWidth = '97vw';
-    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
     var g = aceleraByResgate(recs)[0] || { antec: 0, taxa: 0, rate: 0, receb: 0, reemb: 0, pend: 0, aliqLabel: '—', divergente: false };
     var rows = recs.sort(function (a, b) { return b.antecipado - a.antecipado; }).slice(0, 400).map(function (r) { return '<tr class="rowlink" data-acped="' + esc(r.pedido) + '"><td class="mono">' + esc(r.pedido) + '</td><td class="nowrap">' + brlC(r.antecipado) + '</td><td class="nowrap">' + brlC(r.taxa) + '</td><td class="nowrap">' + brlC(r.recebido) + '</td><td class="nowrap ' + (r.reembolsado ? 'neg' : '') + '">' + brlC(r.reembolsado) + '</td><td class="nowrap">' + brlC(r.pendente) + '</td><td><span class="tag ' + (acIsReemb(r) ? 'warn' : acIsFullyPaid(r) ? 'ok' : 'neutral') + '">' + esc(acStatusLabel(r.status)) + '</span></td></tr>'; }).join('');
-    panel.innerHTML = '<div class="dh"><div><b>Resgate ' + esc(rid) + '</b> <span class="tag' + (g.divergente ? ' warn' : '') + '" style="margin-left:6px">alíquota ' + g.aliqLabel + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
-      '<div class="kstrip" style="margin-bottom:12px"><div class="kc"><div class="kl">Disponível</div><div class="kv" style="font-size:16px">' + brlC(g.disp) + '</div></div><div class="kc"><div class="kl">Bruto resgatado</div><div class="kv" style="font-size:16px">' + brlC(g.antec) + '</div></div><div class="kc"><div class="kl">Taxa</div><div class="kv" style="font-size:16px">' + brlC(g.taxa) + '</div></div><div class="kc"><div class="kl">Líquido</div><div class="kv" style="font-size:16px">' + brlC(g.receb) + '</div></div><div class="kc"><div class="kl">Reembolsado</div><div class="kv" style="font-size:16px">' + brlC(g.reemb) + '</div></div></div>' +
-      '<div class="panel"><div class="ph"><h3>' + nn(recs.length) + ' pedidos neste resgate</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Bruto resgatado</th><th>Taxa</th><th>Recebido</th><th>Reembolsado</th><th title="Valor ainda a liquidar dentro do ciclo deste resgate — não é dinheiro sumido.">A liquidar ⓘ</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div></div></div>';
-    panel.querySelector('.x').onclick = function () { d.remove(); };
-    panel.querySelectorAll('[data-acped]').forEach(function (b) { b.onclick = function () { openAceleraPedido(b.dataset.acped); }; });
+    var bodyHtml = MetricGrid([
+      MetricCard({ label: 'Disponível', value: '<span style="font-size:16px">' + brlC(g.disp) + '</span>' }),
+      MetricCard({ label: 'Bruto resgatado', value: '<span style="font-size:16px">' + brlC(g.antec) + '</span>' }),
+      MetricCard({ label: 'Taxa', value: '<span style="font-size:16px">' + brlC(g.taxa) + '</span>' }),
+      MetricCard({ label: 'Líquido', value: '<span style="font-size:16px">' + brlC(g.receb) + '</span>' }),
+      MetricCard({ label: 'Reembolsado', value: '<span style="font-size:16px">' + brlC(g.reemb) + '</span>' }),
+    ]) +
+      '<div class="panel"><div class="ph"><h3>' + nn(recs.length) + ' pedidos neste resgate</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Bruto resgatado</th><th>Taxa</th><th>Recebido</th><th>Reembolsado</th><th title="Valor ainda a liquidar dentro do ciclo deste resgate — não é dinheiro sumido.">A liquidar ⓘ</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+    openDrawer({
+      titleHtml: '<b>Resgate ' + esc(rid) + '</b> <span class="tag' + (g.divergente ? ' warn' : '') + '" style="margin-left:6px">alíquota ' + g.aliqLabel + '</span>',
+      width: 820, bodyHtml: bodyHtml,
+      onMount: function (panel) {
+        panel.querySelectorAll('[data-acped]').forEach(function (b) { b.onclick = function () { openAceleraPedido(b.dataset.acped); }; });
+      },
+    });
   }
   // §9/§18/§22: detalhe de um pedido — antecipação (ou "não encontrado", útil para as divergências
   // "expedido sem Acelera"), depois-da-antecipação (reembolso §24), pedido central e Ficha 360º.
   function openAceleraPedido(pid) {
     var recs = acelera.filter(function (r) { return r.pedido === pid; }); var r = recs[0];
     var ord = orders.find(function (o) { return o.id === pid; }); var oc = occ.find(function (o) { return !o.isDemo && o.orderId === pid; }); var expInfo = pedidoExpedidoInfo(ord || pid); var bip = { bipedAt: expInfo.at }; var bipReal = expInfo.expedido;
-    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '640px'; panel.style.maxWidth = '96vw';
-    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
     var antBlock;
     if (r) {
       var liqCalc = acLiquidoCalc(r); var liqDiff = acLiquidoDiff(r); var diverge = acLiquidoDivergente(r);
@@ -9321,11 +9331,15 @@ buffer/index.js:
     var it = ord ? (ord.items || [])[0] || {} : {};
     var pedBlock = ord ? '<div class="panel"><div class="ph"><h3>Pedido (do módulo Pedidos)</h3></div><div class="pb">' + kv('Produto', it.productName || '—') + kv('SKU', it.sku || '—') + kv('Status', S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus || '—') + kv('Valor', brl(ord.totalAmount || 0)) + kv('Expedido', bipReal ? dbr(bip.bipedAt) + (expInfo.isFbs ? ' (Full — confirmado pela Shopee)' : '') : 'não registrado') + '<div style="display:flex;gap:8px;margin-top:8px"><button class="btn-sm" data-goped="' + esc(pid) + '">Ver pedido</button><button class="btn-sm primary" data-goped360="' + esc(pid) + '">Ficha do Pedido</button></div></div></div>' : '<div class="footnote">Pedido ' + esc(pid) + ' não importado no módulo Pedidos — SKU/produto indisponíveis.</div>';
     var devBlock = oc ? '<div class="panel"><div class="ph"><h3>Devolução vinculada</h3><span class="tag info">' + esc(statusLabel(oc.status)) + '</span></div><div class="pb">' + kv('Motivo', oc.reason || '—') + kv('Responsabilidade', (DEV.RESPONSIBILITY[oc.responsibility] || '—')) + '<button class="btn-sm" data-godev="' + esc(oc.id) + '">Ver devolução</button></div></div>' : '';
-    panel.innerHTML = '<div class="dh"><div><b>Pedido ' + esc(pid) + '</b>' + (r ? ' <span class="tag ' + (acIsReemb(r) ? 'warn' : acIsFullyPaid(r) ? 'ok' : 'neutral') + '" style="margin-left:6px">' + esc(acStatusLabel(r.status)) + '</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' + antBlock + pedBlock + devBlock + '</div>';
-    panel.querySelector('.x').onclick = function () { d.remove(); };
-    var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { d.remove(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
-    var g360 = panel.querySelector('[data-goped360]'); if (g360) g360.onclick = function () { d.remove(); openPedidoFicha360(pid); };
-    var gd = panel.querySelector('[data-godev]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev; d.remove(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
+    var dw = openDrawer({
+      titleHtml: '<b>Pedido ' + esc(pid) + '</b>' + (r ? ' <span class="tag ' + (acIsReemb(r) ? 'warn' : acIsFullyPaid(r) ? 'ok' : 'neutral') + '" style="margin-left:6px">' + esc(acStatusLabel(r.status)) + '</span>' : ''),
+      width: 640, bodyHtml: antBlock + pedBlock + devBlock,
+      onMount: function (panel) {
+        var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { dw.close(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
+        var g360 = panel.querySelector('[data-goped360]'); if (g360) g360.onclick = function () { dw.close(); openPedidoFicha360(pid); };
+        var gd = panel.querySelector('[data-godev]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev; dw.close(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
+      },
+    });
   }
 
   // §2/§13 da refatoração — Expedidos × Acelera é a função mais importante do módulo: os pedidos
@@ -9348,9 +9362,15 @@ buffer/index.js:
   // (normal) ∪ confirmação por transição de status Shopee (Full). Isto só estende QUEM entra no
   // cruzamento; a matemática do Acelera (aceleraByResgate/aceleraMetrics/etc.) não é tocada.
   function aceleraExpedidos() {
-    var head = secHead('SHOPEE ACELERA · EXPEDIDOS × ACELERA', 'Os pedidos expedidos foram antecipados?', 'Cruza a expedição (bipe interno para normais, confirmação por status Shopee para Full/FBS) com os registros do Acelera pelo ID do pedido.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'SHOPEE ACELERA · EXPEDIDOS × ACELERA', title: 'Os pedidos expedidos foram antecipados?', description: 'Cruza a expedição (bipe interno para normais, confirmação por status Shopee para Full/FBS) com os registros do Acelera pelo ID do pedido.' });
     var fun = aceleraFunilStages();
-    var funil = '<div class="panel"><div class="ph"><h3>Funil de conciliação (3 estágios, nunca fundidos)</h3></div><div class="pb"><div class="kstrip"><div class="kc"><div class="kl">① A Enviar (Pedidos)</div><div class="kv" style="font-size:16px">' + nn(fun.aEnviar) + '</div></div><div class="kc"><div class="kl">② Expedido (bipe ou Full confirmado)</div><div class="kv" style="font-size:16px">' + nn(fun.bipados) + '</div></div><div class="kc"><div class="kl">③ Encontrado no Acelera</div><div class="kv" style="font-size:16px">' + nn(fun.encontrados) + '</div></div></div><span class="footnote">① nunca aparece no Acelera (ainda não foi enviado); ② confirmação de despacho (bipe interno para normal, status Shopee para Full); ③ cruzamento por ID do pedido no relatório do Acelera — os três estágios nunca são somados nem confundidos entre si.</span></div></div>';
+    var funil = '<div class="panel"><div class="ph"><h3>Funil de conciliação (3 estágios, nunca fundidos)</h3></div><div class="pb">' +
+      MetricGrid([
+        MetricCard({ label: '① A Enviar (Pedidos)', value: '<span style="font-size:16px">' + nn(fun.aEnviar) + '</span>' }),
+        MetricCard({ label: '② Expedido (bipe ou Full confirmado)', value: '<span style="font-size:16px">' + nn(fun.bipados) + '</span>' }),
+        MetricCard({ label: '③ Encontrado no Acelera', value: '<span style="font-size:16px">' + nn(fun.encontrados) + '</span>' }),
+      ]) +
+      '<span class="footnote">① nunca aparece no Acelera (ainda não foi enviado); ② confirmação de despacho (bipe interno para normal, status Shopee para Full); ③ cruzamento por ID do pedido no relatório do Acelera — os três estágios nunca são somados nem confundidos entre si.</span></div></div>';
     var exp = expedidoSet(); var bips = Object.keys(exp);
     if (!bips.length) return head + funil + emptyBox('Nenhum pedido expedido ainda. Registre a expedição em Pedidos → Expedição (bipe) ou aguarde a Shopee confirmar o envio dos pedidos Full para habilitar este cruzamento.');
     var acByOrder = {}; acelera.forEach(function (r) { (acByOrder[r.pedido] = acByOrder[r.pedido] || []).push(r); });
@@ -9371,12 +9391,12 @@ buffer/index.js:
     var conciliados = rows.filter(function (r) { return r.situacao === 'CONCILIADO'; });
     var naoEncontrados = rows.filter(function (r) { return r.situacao === 'NAO_ENCONTRADO'; });
     var pctConc = bips.length ? r2(conciliados.length / bips.length * 100) : 0;
-    var strip = kstrip([
-      { l: 'Pedidos expedidos', v: nn(bips.length), cls: 'blue', s: 'bipe interno + Full confirmado pela Shopee' },
-      { l: 'Encontrados no Acelera', v: nn(conciliados.length), cls: 'green' },
-      { l: 'Não encontrados no Acelera', v: nn(naoEncontrados.length), cls: naoEncontrados.length ? 'red' : 'green' },
-      { l: 'Acelera sem confirmação de expedição', v: nn(acSemExp.length), cls: acSemExp.length ? 'amber' : 'green' },
-      { l: '% conciliado', v: pct(pctConc), cls: 'blue', s: nn(conciliados.length) + ' de ' + nn(bips.length) + ' expedidos (denominador = todos os expedidos)' },
+    var strip = MetricGrid([
+      MetricCard({ label: 'Pedidos expedidos', value: nn(bips.length), cls: 'blue', sub: 'bipe interno + Full confirmado pela Shopee' }),
+      MetricCard({ label: 'Encontrados no Acelera', value: nn(conciliados.length), cls: 'green' }),
+      MetricCard({ label: 'Não encontrados no Acelera', value: nn(naoEncontrados.length), cls: naoEncontrados.length ? 'red' : 'green' }),
+      MetricCard({ label: 'Acelera sem confirmação de expedição', value: nn(acSemExp.length), cls: acSemExp.length ? 'amber' : 'green' }),
+      MetricCard({ label: '% conciliado', value: pct(pctConc), cls: 'blue', sub: nn(conciliados.length) + ' de ' + nn(bips.length) + ' expedidos (denominador = todos os expedidos)' }),
     ]);
     var tableRows = rows.sort(function (a, b) { var ord = { NAO_ENCONTRADO: 0, AGUARDANDO: 1, CONCILIADO: 2 }; return ord[a.situacao] - ord[b.situacao] || (b.at || '').localeCompare(a.at || ''); }).slice(0, 400).map(function (r) {
       var rec = r.recs[0]; var o2 = orders.find(function (o) { return o.id === r.oid; });
@@ -9392,7 +9412,7 @@ buffer/index.js:
   // duplicidade" só porque existem dois resgates na mesma data.
   function aceleraDivergencias() {
     var recs = aceleraInPeriod();
-    var head = secHead('ACELERA · DIVERGÊNCIAS', 'Exceções que precisam de revisão', 'Separadas por categoria — nunca marcamos "possível duplicidade" só porque existem dois resgates na mesma data.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'ACELERA · DIVERGÊNCIAS', title: 'Exceções que precisam de revisão', description: 'Separadas por categoria — nunca marcamos "possível duplicidade" só porque existem dois resgates na mesma data.' });
     var acByOrder = {}; acelera.forEach(function (r) { (acByOrder[r.pedido] = acByOrder[r.pedido] || []).push(r); });
     var exp = expedidoSet(); var bips = Object.keys(exp);
     var expedidosSemAcelera = bips.filter(function (oid) { return !acByOrder[oid]; });
@@ -9417,9 +9437,8 @@ buffer/index.js:
       { key: 'dup', label: 'Possível duplicidade', n: duplicados.length, icon: '🟡' },
       { key: 'income', label: 'Income × Acelera não bate', n: incomeDivergente.length, icon: '🔴' },
     ];
-    var strip = kstrip(cats.map(function (c) { return { l: c.icon + ' ' + c.label, v: nn(c.n), cls: c.n ? 'amber' : 'green' }; }));
     var sel = aceleraF.divCat || 'liq';
-    var chips = cats.map(function (c) { return '<span class="chip' + (sel === c.key ? ' chip-on' : '') + '" data-acdivcat="' + c.key + '">' + c.icon + ' ' + c.label + ' (' + nn(c.n) + ')</span>'; }).join('');
+    var strip = MetricGrid(cats.map(function (c) { return MetricCard({ label: c.icon + ' ' + c.label, value: nn(c.n), cls: c.n ? 'amber' : 'green', variant: 'filter', filterKey: c.key, active: sel === c.key }); }));
     var body;
     if (sel === 'expSemAc') body = aceleraDivTable(expedidosSemAcelera.map(function (oid) { var info = exp[oid]; return { pedido: oid, motivo: (info.isFbs ? 'Full expedido (confirmado pela Shopee) em ' : 'Expedido em ') + (info.at ? dbr(info.at) : '—') + ', sem registro no Acelera' }; }));
     else if (sel === 'acSemExp') body = aceleraDivTable(aceleraSemExpedicao.map(function (oid) { var r = acByOrder[oid][0]; return { pedido: oid, motivo: 'Antecipado em ' + acDbr(r.data) + ', sem expedição/bipe registrado' }; }));
@@ -9428,14 +9447,14 @@ buffer/index.js:
     else if (sel === 'incompleto') body = aceleraDivTable(incompletos.map(function (r) { var faltando = []; if (!r.pedido) faltando.push('ID do pedido'); if (!r.resgate) faltando.push('ID do resgate'); if (!r.data) faltando.push('data'); if (!r.antecipado) faltando.push('valor antecipado'); return { pedido: r.pedido || '—', resgate: r.resgate || '—', motivo: 'Faltando: ' + faltando.join(', ') }; }));
     else if (sel === 'income') body = aceleraDivTable(incomeDivergente.map(function (r) { return { pedido: r.pedido, resgate: '—', motivo: r.motivo }; }));
     else body = aceleraDivTable(duplicados.map(function (r) { return { pedido: r.pedido, resgate: r.resgate, motivo: 'Conflito na chave loja+resgate+pedido' }; }));
-    return head + strip + '<div class="chips" style="margin-top:8px">' + chips + '</div>' + body;
+    return head + strip + body;
   }
   function aceleraDivTable(items) {
     if (!items.length) return callout('green', '✓ Nenhuma divergência nesta categoria', '');
     var rows = items.slice(0, 300).map(function (it) { return '<tr class="rowlink" data-acped="' + esc(it.pedido) + '"><td class="mono">' + esc(it.pedido) + '</td><td class="mono">' + esc(it.resgate || '—') + '</td><td class="cell-text">' + esc(it.motivo) + '</td></tr>'; }).join('');
     return '<div class="panel" style="margin-top:8px"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Resgate</th><th>Motivo</th></tr></thead><tbody>' + rows + '</tbody></table></div><div class="footnote" style="padding:8px 16px">Clique numa linha para ver o detalhe (esperado × encontrado).</div></div>';
   }
-  function bindAceleraDivergencias() { app.querySelectorAll('[data-acdivcat]').forEach(function (c) { c.onclick = function () { aceleraF.divCat = c.dataset.acdivcat; render(); }; }); }
+  function bindAceleraDivergencias() { bindMetricCards(app, { filter: function (key) { aceleraF.divCat = key; render(); } }); }
 
   // §19 da refatoração: auditoria financeira (antecipado−taxa=líquido calculado × informado),
   // de contagem (brutos/únicos/novos/atualizados/inválidos) e de conciliação (expedição × Acelera).
@@ -9474,11 +9493,11 @@ buffer/index.js:
     var results = pedidos.map(function (pid) { return aceleraConciliacaoPedido(pid, mrByOrder); });
     var counts = { OK: 0, RESSALVA: 0, DIVERGENTE: 0, SEM_DADOS: 0 };
     results.forEach(function (r) { if (counts[r.status.code] != null) counts[r.status.code]++; });
-    var strip = kstrip([
-      { l: '🟢 100% conciliado', v: nn(counts.OK), cls: 'green' },
-      { l: '🟡 Conciliado com ressalva', v: nn(counts.RESSALVA), cls: counts.RESSALVA ? 'amber' : '' },
-      { l: '🔴 Divergência financeira', v: nn(counts.DIVERGENTE), cls: counts.DIVERGENTE ? 'red' : 'green' },
-      { l: '⚪ Sem dados suficientes (sem Income)', v: nn(counts.SEM_DADOS), cls: 'blue', s: 'não é erro — Income ainda não importado/não cobre o pedido' },
+    var strip = MetricGrid([
+      MetricCard({ label: '🟢 100% conciliado', value: nn(counts.OK), cls: 'green' }),
+      MetricCard({ label: '🟡 Conciliado com ressalva', value: nn(counts.RESSALVA), cls: counts.RESSALVA ? 'amber' : '' }),
+      MetricCard({ label: '🔴 Divergência financeira', value: nn(counts.DIVERGENTE), cls: counts.DIVERGENTE ? 'red' : 'green' }),
+      MetricCard({ label: '⚪ Sem dados suficientes (sem Income)', value: nn(counts.SEM_DADOS), cls: 'blue', sub: 'não é erro — Income ainda não importado/não cobre o pedido' }),
     ]);
     var divergentes = results.filter(function (r) { return r.status.code === 'DIVERGENTE' || r.status.code === 'RESSALVA'; }).slice(0, 300);
     var rows = divergentes.map(function (r) {
@@ -9490,7 +9509,7 @@ buffer/index.js:
   }
   function aceleraAuditoria() {
     var recs = aceleraInPeriod(); var m = aceleraMetrics(recs);
-    var head = secHead('ACELERA · AUDITORIA', 'Rastreabilidade e qualidade dos dados', 'De onde saiu cada número — financeira, contagem e conciliação.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'ACELERA · AUDITORIA', title: 'Rastreabilidade e qualidade dos dados', description: 'De onde saiu cada número — financeira, contagem e conciliação.' });
     var finDivergentes = recs.filter(acLiquidoDivergente); var finOk = recs.length - finDivergentes.length;
     var diffAcumulada = recs.reduce(function (s, r) { return s + acLiquidoDiff(r); }, 0);
     var finBlock = '<div class="panel"><div class="ph"><h3>Auditoria financeira</h3><span class="footnote" style="margin:0">antecipado − taxa = líquido calculado, comparado ao líquido informado pela Shopee (tolerância de 2 centavos)</span></div><div class="pb">' + kv('Registros corretos', nn(finOk)) + kv('Registros divergentes', nn(finDivergentes.length)) + kv('Diferença acumulada', brlC(diffAcumulada)) + '</div></div>';
@@ -9515,7 +9534,7 @@ buffer/index.js:
   // §20 da refatoração: fala sobre ARQUIVOS (CSV/XLS), não sobre resgates — um mesmo arquivo pode
   // conter vários dias, vários resgates e vários pedidos.
   function aceleraImportacoes() {
-    var head = secHead('ACELERA · IMPORTAÇÕES', 'Arquivos importados', 'Um arquivo pode conter vários dias, vários resgates e vários pedidos — arquivo (CSV/XLS) e resgate (lote financeiro) são conceitos diferentes.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'ACELERA · IMPORTAÇÕES', title: 'Arquivos importados', description: 'Um arquivo pode conter vários dias, vários resgates e vários pedidos — arquivo (CSV/XLS) e resgate (lote financeiro) são conceitos diferentes.' });
     var imps = batches.filter(function (b) { return b.module === 'Shopee Acelera'; });
     if (!imps.length) return head + emptyBox('Nenhum arquivo importado ainda.');
     var rows = imps.map(function (b, i) { return '<tr class="rowlink" data-acimpopen="' + i + '"><td class="nowrap">' + new Date(b.createdAt).toLocaleString('pt-BR') + '</td><td class="cell-text">' + esc(b.filename) + '</td><td>' + nn(b.seen) + '</td><td>' + nn(b.novo) + '</td><td>' + nn(b.upd) + '</td><td>' + nn(b.unch) + '</td><td>' + nn(b.erros || 0) + '</td><td><button class="btn-sm">Detalhe</button></td></tr>'; }).join('');
@@ -9528,12 +9547,8 @@ buffer/index.js:
   }
   function openAceleraImportDetail(batch) {
     if (!batch) return;
-    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '480px'; panel.style.maxWidth = '96vw';
-    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
-    panel.innerHTML = '<div class="dh"><div><b>' + esc(batch.filename) + '</b></div><button class="x">&times;</button></div><div class="dbd">' +
-      kv('Importado em', new Date(batch.createdAt).toLocaleString('pt-BR')) + kv('Linhas lidas', nn(batch.seen)) + kv('Pedidos únicos (neste arquivo)', batch.pedidosUnicos != null ? nn(batch.pedidosUnicos) : '—') + kv('Resgates únicos (neste arquivo)', batch.resgatesUnicos != null ? nn(batch.resgatesUnicos) : '—') + kv('Intervalo de datas', (batch.periodMin ? acDbr(batch.periodMin) : '—') + ' a ' + (batch.periodMax ? acDbr(batch.periodMax) : '—')) + kv('Novos', nn(batch.novo)) + kv('Atualizados', nn(batch.upd)) + kv('Sem alteração', nn(batch.unch)) +
-      '</div>';
-    panel.querySelector('.x').onclick = function () { d.remove(); };
+    var bodyHtml = kv('Importado em', new Date(batch.createdAt).toLocaleString('pt-BR')) + kv('Linhas lidas', nn(batch.seen)) + kv('Pedidos únicos (neste arquivo)', batch.pedidosUnicos != null ? nn(batch.pedidosUnicos) : '—') + kv('Resgates únicos (neste arquivo)', batch.resgatesUnicos != null ? nn(batch.resgatesUnicos) : '—') + kv('Intervalo de datas', (batch.periodMin ? acDbr(batch.periodMin) : '—') + ' a ' + (batch.periodMax ? acDbr(batch.periodMax) : '—')) + kv('Novos', nn(batch.novo)) + kv('Atualizados', nn(batch.upd)) + kv('Sem alteração', nn(batch.unch));
+    openDrawer({ title: batch.filename, width: 480, bodyHtml: bodyHtml });
   }
 
   // ============================= AFILIADOS =============================
