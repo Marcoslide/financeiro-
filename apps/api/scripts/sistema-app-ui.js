@@ -11062,6 +11062,7 @@
   function cpCategoryLabel(id) { var c = cpCategories.find(function (x) { return x.id === id; }); return c ? c.name : '—'; }
   function cpCategoryPathLabel(id) { var c = cpCategories.find(function (x) { return x.id === id; }); if (!c) return '—'; var p = c.parentId ? cpCategories.find(function (x) { return x.id === c.parentId; }) : null; return (p ? p.name + ' › ' : '') + c.name; }
   function cpAccountingLabel(id) { var a = cpAccounting.find(function (x) { return x.id === id; }); return a ? (a.code ? a.code + ' — ' + a.name : a.name) : '—'; }
+  function cpCostCenterLabel(id) { var c = cpCostCenters.find(function (x) { return x.id === id; }); return c ? c.name : '—'; }
   // Fase 5 do prompt "Reestruturação do Caixa": despesas retidas pela Shopee (Comissão, Taxa de
   // Serviço, Taxa Acelera, débitos classificados da Carteira) saem de contas financeiras NOVAS
   // (Recebíveis Shopee / Carteira Shopee), não de um banco — faLabel() resolve as duas famílias sem
@@ -11088,11 +11089,39 @@
     if (!rootId) { rootId = cpUid('CAT'); toCreate.push({ id: rootId, name: CP_CAT_SHOPEE_ROOT, parentId: null }); }
     var filhas = Object.keys(CP_CAT_SHOPEE_TAX_MAP).map(function (k) { return CP_CAT_SHOPEE_TAX_MAP[k]; }).concat([CP_CAT_SHOPEE_ACELERA, CP_CAT_SHOPEE_TRANSFERENCIA]);
     filhas.forEach(function (name) { if (!cpCategoryIdByName(name) && !toCreate.some(function (t) { return t.name === name; })) toCreate.push({ id: cpUid('CAT'), name: name, parentId: rootId }); });
-    if (!toCreate.length) return Promise.resolve();
+    // Fase 9: Categoria sempre precisa de Centro de Custos — mesmo seed idempotente (find-or-create
+    // por nome) usado para as próprias categorias, aplicado aqui ao centro que as abriga.
+    var novosCentros = [];
+    var centro = cpCostCenters.find(function (c) { return c.name === CP_CAT_SHOPEE_ROOT; }); var centroId;
+    if (centro) centroId = centro.id; else { centroId = cpUid('CC'); novosCentros.push({ id: centroId, name: CP_CAT_SHOPEE_ROOT, active: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); }
+    var proms = [];
+    if (novosCentros.length) { cpCostCenters = cpCostCenters.concat(novosCentros); proms.push(putMany('cpcostcenters', novosCentros)); }
+    if (toCreate.length) {
+      var now = new Date().toISOString();
+      var full = toCreate.map(function (t) { return { id: t.id, name: t.name, parentId: t.parentId, type: 'DESPESA', accountingAccountId: null, dreGroup: null, costCenterId: centroId, active: true, createdAt: now, updatedAt: now }; });
+      cpCategories = cpCategories.concat(full);
+      proms.push(putMany('cpcategories', full));
+    }
+    return Promise.all(proms);
+  }
+  // Migração idempotente (mesmo padrão de fatorMigrarTempoProducaoLegado/crMigrarClassificacaoLegadaDeCP):
+  // antes da Fase 9, costCenterId em cpCategories era opcional e a maioria das categorias existentes
+  // não tinha nenhum — passa a ser obrigatório a partir daqui, então toda categoria antiga sem centro
+  // entra automaticamente num centro "A Classificar" (nunca fica órfã, nunca bloqueia a tela, nunca
+  // apaga a categoria) até o operador reclassificar manualmente quando quiser.
+  function cpMigrarCategoriasSemCentro() {
+    var pendentes = cpCategories.filter(function (c) { return !c.costCenterId; });
+    if (!pendentes.length) return Promise.resolve();
+    var centro = cpCostCenters.find(function (c) { return c.name === 'A Classificar'; });
+    var novosCentros = []; var centroId;
+    if (centro) centroId = centro.id; else { centroId = cpUid('CC'); novosCentros.push({ id: centroId, name: 'A Classificar', active: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); }
     var now = new Date().toISOString();
-    var full = toCreate.map(function (t) { return { id: t.id, name: t.name, parentId: t.parentId, type: 'DESPESA', accountingAccountId: null, dreGroup: null, costCenterId: null, active: true, createdAt: now, updatedAt: now }; });
-    cpCategories = cpCategories.concat(full);
-    return putMany('cpcategories', full);
+    pendentes.forEach(function (c) { c.costCenterId = centroId; c.updatedAt = now; });
+    cpCostCenters = cpCostCenters.concat(novosCentros);
+    return Promise.all([
+      novosCentros.length ? putMany('cpcostcenters', novosCentros) : Promise.resolve(),
+      putMany('cpcategories', pendentes),
+    ]);
   }
   // PROMPT "Correção da Base Financeira" §3: "automação nunca sobrescreve Categoria/Conta/Status/Baixa
   // alterados manualmente, só preenche vazios". Status e Baixa já são protegidos por construção (status
@@ -12219,13 +12248,19 @@
   }
 
   // ---- gestão de cadastros (abas Categorias / Plano de contas / Centros de custo / Fornecedores) ----
+  // Fase 9: Categoria passa a exigir Centro de Custos (antes era um ponteiro opcional/decorativo,
+  // nunca lido por nenhuma lógica). "Conta contábil" deixa de ser campo primário — vira metadado
+  // opcional em "Configuração avançada" (Código/Conta Contábil Externa), preparado para uma
+  // integração contábil futura, nunca exigido do operador. O campo "Grupo DRE" (duplicado em
+  // cpCategories e cpAccounting, nunca lido por nenhuma agregação) sai da UI — o dado permanece no
+  // registro (nada é apagado), só não é mais apresentado como um campo de classificação equivalente.
   var CP_DRE_GROUPS = ['Custos dos produtos', 'Despesas operacionais', 'Despesas administrativas', 'Despesas comerciais', 'Despesas com pessoal', 'Despesas financeiras', 'Impostos', 'Outras despesas'];
   function renderCpCategoriasTab() {
     var counts = {}; contasPagar.forEach(function (h) { if (h.categoryId) counts[h.categoryId] = (counts[h.categoryId] || 0) + 1; });
-    var rows = cpCategories.slice().sort(function (a, b) { return (a.parentId ? '1' : '0') + a.name.localeCompare(b.name) < (b.parentId ? '1' : '0') + b.name.localeCompare(a.name) ? -1 : 1; }).map(function (c) {
-      return '<tr><td>' + (c.parentId ? '— ' : '') + '<b>' + esc(c.name) + '</b></td><td>' + esc(cpAccountingLabel(c.accountingAccountId)) + '</td><td>' + esc(c.dreGroup || '—') + '</td><td>' + (counts[c.id] || 0) + '</td><td><span class="badge ' + (c.active ? 'b-ok' : 'b-neutral') + '">' + (c.active ? 'Ativa' : 'Inativa') + '</span></td><td><button class="btn-sm" data-cpcatedit="' + c.id + '">Editar</button></td></tr>';
+    var rows = cpCategories.slice().sort(function (a, b) { return cpCostCenterLabel(a.costCenterId).localeCompare(cpCostCenterLabel(b.costCenterId)) || a.name.localeCompare(b.name); }).map(function (c) {
+      return '<tr><td><b>' + esc(c.name) + '</b></td><td>' + esc(cpCostCenterLabel(c.costCenterId)) + '</td><td>' + (counts[c.id] || 0) + '</td><td><span class="badge ' + (c.active ? 'b-ok' : 'b-neutral') + '">' + (c.active ? 'Ativa' : 'Inativa') + '</span></td><td><button class="btn-sm" data-cpcatedit="' + c.id + '">Editar</button></td></tr>';
     }).join('');
-    return '<div class="panel"><div class="ph"><h3>Categorias</h3><button class="btn-sm primary" id="cp-cat-new">+ Nova categoria</button></div><div class="table-wrap">' + (rows ? '<table><thead><tr><th>Categoria</th><th>Conta contábil</th><th>Grupo DRE</th><th>Contas vinculadas</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="empty"><p>Nenhuma categoria cadastrada.</p></div>') + '</div></div>';
+    return '<div class="panel"><div class="ph"><h3>Categorias</h3><button class="btn-sm primary" id="cp-cat-new">+ Nova categoria</button></div><div class="table-wrap">' + (rows ? '<table><thead><tr><th>Categoria</th><th>Centro de Custos</th><th>Contas vinculadas</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="empty"><p>Nenhuma categoria cadastrada.</p></div>') + '</div></div>';
   }
   function bindCpCategoriasTab() {
     var n = document.getElementById('cp-cat-new'); if (n) n.onclick = function () { openCpCategoryEditor(null); };
@@ -12234,24 +12269,27 @@
   function openCpCategoryEditor(cat) {
     var bodyHtml =
       '<label class="fld">Nome *</label><input class="input" id="cpce-nm" style="width:100%" value="' + esc(cat ? cat.name : '') + '">' +
+      '<label class="fld">Centro de Custos *</label><select class="select" id="cpce-cc" style="width:100%">' + cpCostCenterOptions(cat ? cat.costCenterId : null) + '</select>' +
+      '<label class="fld"><input type="checkbox" id="cpce-ativa"' + (!cat || cat.active ? ' checked' : '') + '> Ativa</label>' +
+      '<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600;font-size:12.5px;color:var(--muted)">Configuração avançada</summary><div style="margin-top:8px">' +
       '<label class="fld">Categoria pai</label><select class="select" id="cpce-parent" style="width:100%">' + cpCategoryOptions(cat ? cat.parentId : null, false) + '</select>' +
-      '<label class="fld">Conta contábil</label><select class="select" id="cpce-cta" style="width:100%">' + cpAccountingOptions(cat ? cat.accountingAccountId : null) + '</select>' +
-      '<label class="fld">Grupo DRE</label><select class="select" id="cpce-dre" style="width:100%"><option value="">—</option>' + CP_DRE_GROUPS.map(function (g) { return '<option value="' + esc(g) + '"' + (cat && cat.dreGroup === g ? ' selected' : '') + '>' + esc(g) + '</option>'; }).join('') + '</select>' +
-      '<label class="fld">Centro de custo padrão</label><select class="select" id="cpce-cc" style="width:100%">' + cpCostCenterOptions(cat ? cat.costCenterId : null) + '</select>' +
-      '<label class="fld"><input type="checkbox" id="cpce-ativa"' + (!cat || cat.active ? ' checked' : '') + '> Ativa</label>';
+      '<label class="fld">Código/Conta Contábil Externa</label><select class="select" id="cpce-cta" style="width:100%">' + cpAccountingOptions(cat ? cat.accountingAccountId : null) + '</select>' +
+      '</div></details>';
     openModal({
       title: cat ? 'Editar categoria' : 'Nova categoria', width: 480, bodyHtml: bodyHtml,
       onConfirm: function (panel) {
         var nm = panel.querySelector('#cpce-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return false; }
-        return cpSaveCategory({ id: cat ? cat.id : null, name: nm, parentId: panel.querySelector('#cpce-parent').value || null, accountingAccountId: panel.querySelector('#cpce-cta').value || null, dreGroup: panel.querySelector('#cpce-dre').value || null, costCenterId: panel.querySelector('#cpce-cc').value || null, active: panel.querySelector('#cpce-ativa').checked, createdAt: cat && cat.createdAt })
+        var ccId = panel.querySelector('#cpce-cc').value || null;
+        if (!ccId) { toast('Centro de Custos obrigatório', 'Toda categoria precisa pertencer a um Centro de Custos.', true); return false; }
+        return cpSaveCategory({ id: cat ? cat.id : null, name: nm, parentId: panel.querySelector('#cpce-parent').value || null, accountingAccountId: panel.querySelector('#cpce-cta').value || null, dreGroup: cat ? cat.dreGroup : null, costCenterId: ccId, active: panel.querySelector('#cpce-ativa').checked, createdAt: cat && cat.createdAt })
           .then(function () { toast('Categoria salva', nm); cpRenderBody(); });
       },
     });
   }
 
   function renderCpPlanoContasTab() {
-    var rows = cpAccounting.slice().sort(function (a, b) { return (a.code || '').localeCompare(b.code || ''); }).map(function (a) { return '<tr><td class="mono">' + esc(a.code || '—') + '</td><td>' + esc(a.name) + '</td><td>' + esc(a.dreGroup || '—') + '</td><td><span class="badge ' + (a.active ? 'b-ok' : 'b-neutral') + '">' + (a.active ? 'Ativa' : 'Inativa') + '</span></td><td><button class="btn-sm" data-cpaccedit="' + a.id + '">Editar</button></td></tr>'; }).join('');
-    return '<div class="panel"><div class="ph"><h3>Plano de contas</h3><button class="btn-sm primary" id="cp-acc-new">+ Nova conta contábil</button></div><div class="table-wrap">' + (rows ? '<table><thead><tr><th>Código</th><th>Nome</th><th>Grupo DRE</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="empty"><p>Nenhuma conta contábil cadastrada.</p></div>') + '</div></div>';
+    var rows = cpAccounting.slice().sort(function (a, b) { return (a.code || '').localeCompare(b.code || ''); }).map(function (a) { return '<tr><td class="mono">' + esc(a.code || '—') + '</td><td>' + esc(a.name) + '</td><td><span class="badge ' + (a.active ? 'b-ok' : 'b-neutral') + '">' + (a.active ? 'Ativa' : 'Inativa') + '</span></td><td><button class="btn-sm" data-cpaccedit="' + a.id + '">Editar</button></td></tr>'; }).join('');
+    return '<div class="panel"><div class="ph"><h3>Código/Conta Contábil Externa</h3><span class="footnote" style="margin:0">opcional — só para integração contábil futura, nunca exigido do operador</span><button class="btn-sm primary" id="cp-acc-new">+ Novo código</button></div><div class="table-wrap">' + (rows ? '<table><thead><tr><th>Código</th><th>Nome</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="empty"><p>Nenhum código contábil cadastrado.</p></div>') + '</div></div>';
   }
   function bindCpPlanoContasTab() {
     var n = document.getElementById('cp-acc-new'); if (n) n.onclick = function () { openCpAccountingEditor(null); };
@@ -12261,13 +12299,12 @@
     var bodyHtml =
       '<label class="fld">Código</label><input class="input" id="cpae-code" style="width:100%" value="' + esc(acc ? acc.code : '') + '" placeholder="Ex.: 3.01.01">' +
       '<label class="fld">Nome *</label><input class="input" id="cpae-nm" style="width:100%" value="' + esc(acc ? acc.name : '') + '" placeholder="Ex.: Matéria-prima">' +
-      '<label class="fld">Grupo DRE</label><select class="select" id="cpae-dre" style="width:100%"><option value="">—</option>' + CP_DRE_GROUPS.map(function (g) { return '<option value="' + esc(g) + '"' + (acc && acc.dreGroup === g ? ' selected' : '') + '>' + esc(g) + '</option>'; }).join('') + '</select>' +
       '<label class="fld"><input type="checkbox" id="cpae-ativa"' + (!acc || acc.active ? ' checked' : '') + '> Ativa</label>';
     openModal({
-      title: acc ? 'Editar conta contábil' : 'Nova conta contábil', width: 420, bodyHtml: bodyHtml,
+      title: acc ? 'Editar código contábil' : 'Novo código contábil', width: 420, bodyHtml: bodyHtml,
       onConfirm: function (panel) {
         var nm = panel.querySelector('#cpae-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return false; }
-        return cpSaveAccounting({ id: acc ? acc.id : null, code: panel.querySelector('#cpae-code').value.trim(), name: nm, dreGroup: panel.querySelector('#cpae-dre').value || null, active: panel.querySelector('#cpae-ativa').checked, createdAt: acc && acc.createdAt }).then(function () { toast('Conta contábil salva', nm); cpRenderBody(); });
+        return cpSaveAccounting({ id: acc ? acc.id : null, code: panel.querySelector('#cpae-code').value.trim(), name: nm, dreGroup: acc ? acc.dreGroup : null, active: panel.querySelector('#cpae-ativa').checked, createdAt: acc && acc.createdAt }).then(function () { toast('Código contábil salvo', nm); cpRenderBody(); });
       },
     });
   }
@@ -13803,6 +13840,7 @@
     fatorRoteiroSkuOverrides = {}; (r[52] || []).forEach(function (rt) { fatorRoteiroSkuOverrides[rt.skuKey] = rt; });
     skuFamilyOverrideHistory = r[53] || [];
     fatorMigrarTempoProducaoLegado();
+    cpMigrarCategoriasSemCentro().catch(function () { });
     crMigrarClassificacaoLegadaDeCP().catch(function () { });
     var activeSetting = settings.filter(function (x) { return x.id === 'activeOperationId'; })[0];
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
