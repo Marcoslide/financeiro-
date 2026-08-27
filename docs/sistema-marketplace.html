@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build c84c6f1 · 2026-08-27 15:12 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build add1057 · 2026-08-27 15:25 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -15345,7 +15345,7 @@ buffer/index.js:
     cpRenderBody();
     app.querySelectorAll('[data-cptab]').forEach(function (t) { t.onclick = function () { cpSub = t.dataset.cptab; cpPage = 1; render(); }; });
   }
-  function cpHead() { return secHead('FINANCEIRO', 'Contas a Pagar', 'Lance, classifique e baixe as despesas da empresa por operação, categoria, conta contábil e conta financeira — alimenta o Caixa, a DRE de Despesas e os relatórios gerenciais.'); }
+  function cpHead() { return PageHeader({ variant: 'eyebrow', eyebrow: 'FINANCEIRO', title: 'Contas a Pagar', description: 'Lance, classifique e baixe as despesas da empresa por operação, categoria, conta contábil e conta financeira — alimenta o Caixa, a DRE de Despesas e os relatórios gerenciais.' }); }
   function cpRenderBody() {
     var body = document.getElementById('cpbody');
     if (cpSub === 'dre') { body.innerHTML = renderCpDre(); bindCpDre(); return; }
@@ -15387,9 +15387,11 @@ buffer/index.js:
     var pageList = all.slice((cpPage - 1) * cpPageSize, cpPage * cpPageSize);
     var basisOpts = [['emissao', 'Emissão'], ['competencia', 'Competência'], ['vencimento', 'Vencimento'], ['pagamento', 'Pagamento']];
 
-    // ---- cabeçalho enxuto: título + resumo (respeita os filtros atuais) + ações ----
-    var header = '<div class="page-head"><div><h2 style="margin:0;font-size:20px">Contas a Pagar</h2>' +
-      '<p style="margin:4px 0 0;color:var(--muted);font-size:13px">' + nn(all.length) + ' conta(s) · ' + brl(all.reduce(function (s, h) { return s + h.valor; }, 0)) + '</p></div>' +
+    // ---- cabeçalho enxuto: resumo (respeita os filtros atuais) + ações — Fase 7.1 (limpeza de
+    // header duplicado): o título "Contas a Pagar" já é mostrado por cpHead() acima desta view em
+    // TODAS as subabas; esta linha mantém só o resumo e as ações, sem repetir o h2.
+    var header = '<div class="page-head" style="align-items:center"><div>' +
+      '<p style="margin:0;color:var(--muted);font-size:13px">' + nn(all.length) + ' conta(s) · ' + brl(all.reduce(function (s, h) { return s + h.valor; }, 0)) + '</p></div>' +
       '<div style="display:flex;gap:8px;position:relative">' +
       '<button class="btn-sm" id="cp-cfg-btn">Configurações ▾</button>' +
       '<button class="btn-sm primary" id="cp-new">+ Incluir conta</button>' +
@@ -15543,50 +15545,51 @@ buffer/index.js:
     var comSerie = selected.filter(function (h) { return !!h.recurrenceGroupId; });
     function confirmarExclusao(finalList) {
       var total = finalList.reduce(function (s, h) { return s + h.valor; }, 0);
-      var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70';
-      o.innerHTML = '<div class="modal" style="width:440px"><div class="mh"><h3>Excluir ' + finalList.length + ' lançamento(s)?</h3><button class="x">×</button></div><div class="mbd">' +
-        '<div class="cx-kv"><span class="cxl">Valor total selecionado</span><span class="cxv"><b>' + brl(total) + '</b></span></div>' +
-        '<p class="footnote" style="margin-top:10px">Esta ação excluirá os lançamentos selecionados do Contas a Pagar. Lançamentos com pagamento vinculado não podem ser excluídos (cancele-os em vez disso) e serão ignorados nesta operação.</p>' +
-        '</div><div class="mf"><button class="btn-sm" id="cpbd-x">Cancelar</button><button class="btn-sm" id="cpbd-ok" style="background:var(--err);border-color:var(--err);color:#fff">Excluir ' + finalList.length + ' lançamento(s)</button></div></div>';
-      o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
-      o.querySelector('.x').onclick = o.querySelector('#cpbd-x').onclick = function () { o.remove(); };
-      o.querySelector('#cpbd-ok').onclick = function () {
-        Promise.all(finalList.map(function (h) { return cpDeleteHeader(h.id).then(function () { return true; }).catch(function () { return false; }); })).then(function (results) {
-          o.remove();
-          var ok = results.filter(Boolean).length, fail = results.length - ok;
-          cpSel.clear();
-          toast(ok + ' lançamento(s) excluído(s)', fail ? (fail + ' não puderam ser excluídos por já terem pagamento vinculado.') : '', fail > 0 && ok === 0);
-          cpPage = 1; cpRenderBody();
-        });
-      };
+      var bodyHtml = '<div class="cx-kv"><span class="cxl">Valor total selecionado</span><span class="cxv"><b>' + brl(total) + '</b></span></div>' +
+        '<p class="footnote" style="margin-top:10px">Esta ação excluirá os lançamentos selecionados do Contas a Pagar. Lançamentos com pagamento vinculado não podem ser excluídos (cancele-os em vez disso) e serão ignorados nesta operação.</p>';
+      openModal({
+        title: 'Excluir ' + finalList.length + ' lançamento(s)?', width: 440, bodyHtml: bodyHtml, confirmLabel: 'Excluir ' + finalList.length + ' lançamento(s)',
+        onMount: function (panel) { var btn = panel.querySelector('#mdl-confirm'); if (btn) btn.style.cssText = 'background:var(--err);border-color:var(--err);color:#fff'; },
+        onConfirm: function () {
+          return Promise.all(finalList.map(function (h) { return cpDeleteHeader(h.id).then(function () { return true; }).catch(function () { return false; }); })).then(function (results) {
+            var ok = results.filter(Boolean).length, fail = results.length - ok;
+            cpSel.clear();
+            toast(ok + ' lançamento(s) excluído(s)', fail ? (fail + ' não puderam ser excluídos por já terem pagamento vinculado.') : '', fail > 0 && ok === 0);
+            cpPage = 1; cpRenderBody();
+          });
+        },
+      });
     }
     if (!comSerie.length) { confirmarExclusao(selected); return; }
-    var o2 = document.createElement('div'); o2.className = 'overlay'; o2.style.zIndex = '70';
-    o2.innerHTML = '<div class="modal" style="width:460px"><div class="mh"><h3>Lançamentos de recorrência/parcelamento</h3><button class="x">×</button></div><div class="mbd">' +
-      '<p>' + comSerie.length + ' de ' + selected.length + ' lançamento(s) selecionado(s) fazem parte de uma recorrência ou parcelamento. O que deseja excluir?</p>' +
+    var bodyHtml2 = '<p>' + comSerie.length + ' de ' + selected.length + ' lançamento(s) selecionado(s) fazem parte de uma recorrência ou parcelamento. O que deseja excluir?</p>' +
       '<label class="fld" style="display:block;margin-top:12px;font-weight:400"><input type="radio" name="cpdelscope" value="only" checked> Somente os lançamentos selecionados</label>' +
-      '<label class="fld" style="display:block;margin-top:6px;font-weight:400"><input type="radio" name="cpdelscope" value="series"> Toda a recorrência (todas as parcelas dessas séries)</label>' +
-      '</div><div class="mf"><button class="btn-sm" id="cpsc-x">Cancelar</button><button class="btn-sm primary" id="cpsc-ok">Continuar</button></div></div>';
-    o2.onclick = function (e) { if (e.target === o2) o2.remove(); }; document.body.appendChild(o2);
-    o2.querySelector('.x').onclick = o2.querySelector('#cpsc-x').onclick = function () { o2.remove(); };
-    o2.querySelector('#cpsc-ok').onclick = function () {
-      var scope = (o2.querySelector('input[name="cpdelscope"]:checked') || {}).value; o2.remove();
-      var finalList = selected;
-      if (scope === 'series') {
-        var groupIds = {}; comSerie.forEach(function (h) { groupIds[h.recurrenceGroupId] = true; });
-        var extra = contasPagar.filter(function (h) { return h.recurrenceGroupId && groupIds[h.recurrenceGroupId] && !cpSel.has(h.id); });
-        finalList = selected.concat(extra);
-      }
-      confirmarExclusao(finalList);
-    };
+      '<label class="fld" style="display:block;margin-top:6px;font-weight:400"><input type="radio" name="cpdelscope" value="series"> Toda a recorrência (todas as parcelas dessas séries)</label>';
+    var scopeModal = openModal({
+      title: 'Lançamentos de recorrência/parcelamento', width: 460, bodyHtml: bodyHtml2, confirmLabel: 'Continuar',
+      onConfirm: function (panel) {
+        var scope = (panel.querySelector('input[name="cpdelscope"]:checked') || {}).value;
+        var finalList = selected;
+        if (scope === 'series') {
+          var groupIds = {}; comSerie.forEach(function (h) { groupIds[h.recurrenceGroupId] = true; });
+          var extra = contasPagar.filter(function (h) { return h.recurrenceGroupId && groupIds[h.recurrenceGroupId] && !cpSel.has(h.id); });
+          finalList = selected.concat(extra);
+        }
+        scopeModal.close();
+        confirmarExclusao(finalList);
+      },
+    });
   }
   // Modal genérico simples de "selecione um valor e confirme" — reaproveitado pelas ações em massa.
+  // Fase 7.1 (migração para componentes padrão): agora um wrapper fino de openModal() — mesmo título/
+  // corpo/confirmação de antes, ganha bloqueio de duplo clique e erro dentro do modal automáticos.
   function cpSimpleOverlay(title, bodyHtml, onOk) {
-    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:420px"><div class="mh"><h3>' + esc(title) + '</h3><button class="x">×</button></div><div class="mbd">' + bodyHtml + '</div><div class="mf"><button class="btn-sm" id="cp-so-cancel">Cancelar</button><button class="btn-sm primary" id="cp-so-ok">Confirmar</button></div></div>';
-    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
-    o.querySelector('.x').onclick = o.querySelector('#cp-so-cancel').onclick = function () { o.remove(); };
-    o.querySelector('#cp-so-ok').onclick = function () { var el = o.querySelector('#cp-bulk-val'); var val = el ? el.value : null; Promise.resolve(onOk(val)).then(function () { o.remove(); }); };
-    return o;
+    return openModal({
+      title: title, width: 420, bodyHtml: bodyHtml,
+      onConfirm: function (panel) {
+        var el = panel.querySelector('#cp-bulk-val'); var val = el ? el.value : null;
+        return Promise.resolve(onOk(val));
+      },
+    });
   }
   function openCpRowMenu(anchor, id) {
     document.querySelectorAll('.cp-dropdown').forEach(function (d) { d.remove(); });
@@ -15620,19 +15623,19 @@ buffer/index.js:
     };
   }
   function openCpBaixaEmMassa(ids) {
-    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:460px"><div class="mh"><h3>Baixar ' + ids.length + ' conta(s)</h3><button class="x">×</button></div><div class="mbd">' +
+    var bodyHtml =
       '<label class="fld">Data do pagamento</label><input class="input" type="date" id="cpm-data" value="' + cpToday() + '">' +
       '<label class="fld">Conta financeira</label><select class="select" id="cpm-conta" style="width:100%">' + cpFinAccountOptions(null).replace('Todas as contas financeiras', 'Escolher…') + '</select>' +
       '<label class="fld">Forma de pagamento</label><select class="select" id="cpm-forma" style="width:100%"><option value="">—</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '">' + esc(f) + '</option>'; }).join('') + '</select>' +
-      '<p class="footnote">Cada conta será baixada pelo seu saldo em aberto integral (valor original − pagamentos já feitos).</p>' +
-      '</div><div class="mf"><button class="btn-sm" id="cpm-x">Cancelar</button><button class="btn-sm primary" id="cpm-ok">Baixar selecionadas</button></div></div>';
-    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
-    o.querySelector('.x').onclick = o.querySelector('#cpm-x').onclick = function () { o.remove(); };
-    o.querySelector('#cpm-ok').onclick = function () {
-      var data = document.getElementById('cpm-data').value, conta = document.getElementById('cpm-conta').value, forma = document.getElementById('cpm-forma').value;
-      Promise.all(ids.map(function (id) { var h = contasPagar.find(function (x) { return x.id === id; }); if (!h) return Promise.resolve(); var saldo = cpSaldo(h); if (saldo <= 0.005) return Promise.resolve(); return cpRegistrarBaixa(id, { valorPago: saldo, date: data, financialAccountId: conta, paymentMethod: forma, juros: 0, multa: 0, desconto: 0, observacao: 'Baixa em massa.' }); }))
-        .then(function () { cpSel.clear(); o.remove(); toast('Baixa em massa concluída', nn(ids.length) + ' conta(s).'); cpRenderBody(); });
-    };
+      '<p class="footnote">Cada conta será baixada pelo seu saldo em aberto integral (valor original − pagamentos já feitos).</p>';
+    openModal({
+      title: 'Baixar ' + ids.length + ' conta(s)', width: 460, bodyHtml: bodyHtml, confirmLabel: 'Baixar selecionadas',
+      onConfirm: function (panel) {
+        var data = panel.querySelector('#cpm-data').value, conta = panel.querySelector('#cpm-conta').value, forma = panel.querySelector('#cpm-forma').value;
+        return Promise.all(ids.map(function (id) { var h = contasPagar.find(function (x) { return x.id === id; }); if (!h) return Promise.resolve(); var saldo = cpSaldo(h); if (saldo <= 0.005) return Promise.resolve(); return cpRegistrarBaixa(id, { valorPago: saldo, date: data, financialAccountId: conta, paymentMethod: forma, juros: 0, multa: 0, desconto: 0, observacao: 'Baixa em massa.' }); }))
+          .then(function () { cpSel.clear(); toast('Baixa em massa concluída', nn(ids.length) + ' conta(s).'); cpRenderBody(); });
+      },
+    });
   }
 
   // ---- DRE de Despesas (§36-38) ----
@@ -16046,37 +16049,37 @@ buffer/index.js:
 
   // ---- quick-create inline (fornecedor / categoria) ----
   function openCpSupplierQuickCreate(prefill, onSaved) {
-    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:480px"><div class="mh"><h3>Cadastrar fornecedor</h3><button class="x">×</button></div><div class="mbd">' +
+    var bodyHtml =
       '<label class="fld">Razão social *</label><input class="input" id="cps-rz" style="width:100%" value="' + esc((prefill && prefill.razaoSocial) || '') + '">' +
       '<label class="fld">Nome fantasia</label><input class="input" id="cps-nf" style="width:100%" value="' + esc((prefill && prefill.nomeFantasia) || '') + '">' +
       '<label class="fld">CNPJ/CPF</label><input class="input" id="cps-doc" style="width:100%" value="' + esc((prefill && prefill.cnpjCpf) || '') + '">' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><div><label class="fld">Telefone</label><input class="input" id="cps-tel" style="width:100%"></div><div><label class="fld">E-mail</label><input class="input" id="cps-mail" style="width:100%"></div></div>' +
-      '</div><div class="mf"><button class="btn-sm" id="cps-x">Cancelar</button><button class="btn-sm primary" id="cps-ok">Salvar</button></div></div>';
-    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
-    o.querySelector('.x').onclick = o.querySelector('#cps-x').onclick = function () { o.remove(); };
-    o.querySelector('#cps-ok').onclick = function () {
-      var rz = o.querySelector('#cps-rz').value.trim(); if (!rz) { toast('Informe a razão social', '', true); return; }
-      cpSaveSupplier({ razaoSocial: rz, nomeFantasia: o.querySelector('#cps-nf').value.trim(), cnpjCpf: o.querySelector('#cps-doc').value.trim(), telefone: o.querySelector('#cps-tel').value.trim(), email: o.querySelector('#cps-mail').value.trim() }).then(function (sup) { o.remove(); toast('Fornecedor cadastrado', rz); onSaved(sup); });
-    };
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><div><label class="fld">Telefone</label><input class="input" id="cps-tel" style="width:100%"></div><div><label class="fld">E-mail</label><input class="input" id="cps-mail" style="width:100%"></div></div>';
+    openModal({
+      title: 'Cadastrar fornecedor', width: 480, bodyHtml: bodyHtml,
+      onConfirm: function (panel) {
+        var rz = panel.querySelector('#cps-rz').value.trim(); if (!rz) { toast('Informe a razão social', '', true); return false; }
+        return cpSaveSupplier({ razaoSocial: rz, nomeFantasia: panel.querySelector('#cps-nf').value.trim(), cnpjCpf: panel.querySelector('#cps-doc').value.trim(), telefone: panel.querySelector('#cps-tel').value.trim(), email: panel.querySelector('#cps-mail').value.trim() }).then(function (sup) { toast('Fornecedor cadastrado', rz); onSaved(sup); });
+      },
+    });
   }
   function openCpCategoryQuickCreate(onSaved) {
-    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:420px"><div class="mh"><h3>Criar categoria</h3><button class="x">×</button></div><div class="mbd">' +
+    var bodyHtml =
       '<label class="fld">Nome *</label><input class="input" id="cpc-nm" style="width:100%">' +
-      '<label class="fld">Categoria pai (opcional)</label><select class="select" id="cpc-parent" style="width:100%">' + cpCategoryOptions(null, false) + '</select>' +
-      '</div><div class="mf"><button class="btn-sm" id="cpc-x">Cancelar</button><button class="btn-sm primary" id="cpc-ok">Criar</button></div></div>';
-    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
-    o.querySelector('.x').onclick = o.querySelector('#cpc-x').onclick = function () { o.remove(); };
-    o.querySelector('#cpc-ok').onclick = function () {
-      var nm = o.querySelector('#cpc-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return; }
-      cpSaveCategory({ name: nm, parentId: o.querySelector('#cpc-parent').value || null }).then(function (cat) { o.remove(); toast('Categoria criada', nm); onSaved(cat); });
-    };
+      '<label class="fld">Categoria pai (opcional)</label><select class="select" id="cpc-parent" style="width:100%">' + cpCategoryOptions(null, false) + '</select>';
+    openModal({
+      title: 'Criar categoria', width: 420, bodyHtml: bodyHtml, confirmLabel: 'Criar',
+      onConfirm: function (panel) {
+        var nm = panel.querySelector('#cpc-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return false; }
+        return cpSaveCategory({ name: nm, parentId: panel.querySelector('#cpc-parent').value || null }).then(function (cat) { toast('Categoria criada', nm); onSaved(cat); });
+      },
+    });
   }
 
   // ---- baixa (total/parcial, §32-33) ----
   function openCpBaixaModal(headerId, mode) {
     var h = contasPagar.find(function (x) { return x.id === headerId; }); if (!h) return;
     var saldo = cpSaldo(h);
-    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:480px"><div class="mh"><h3>' + (mode === 'total' ? 'Baixa total do pagamento' : 'Baixa parcial do pagamento') + '</h3><button class="x">×</button></div><div class="mbd">' +
+    var bodyHtml =
       '<div class="cx-kv"><span class="cxl">Fornecedor</span><span class="cxv">' + esc(cpSupplierLabel(h.supplierId)) + '</span></div>' +
       '<div class="cx-kv"><span class="cxl">Valor em aberto</span><span class="cxv">' + brl(saldo) + '</span></div>' +
       '<label class="fld">Valor pago</label><input class="input" id="cpb-valor" style="width:100%" value="' + (mode === 'total' ? saldo.toFixed(2).replace('.', ',') : '') + '"' + (mode === 'total' ? ' readonly' : '') + '>' +
@@ -16084,16 +16087,16 @@ buffer/index.js:
       '<label class="fld">Conta financeira</label><select class="select" id="cpb-conta" style="width:100%">' + cpFinAccountOptions(h.financialAccountId).replace('Todas as contas financeiras', '— escolher —') + '</select>' +
       '<label class="fld">Forma de pagamento</label><select class="select" id="cpb-forma" style="width:100%"><option value="">—</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '"' + (h.paymentMethod === f ? ' selected' : '') + '>' + esc(f) + '</option>'; }).join('') + '</select>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px"><div><label class="fld">Juros</label><input class="input" id="cpb-juros" value="0"></div><div><label class="fld">Multa</label><input class="input" id="cpb-multa" value="0"></div><div><label class="fld">Desconto</label><input class="input" id="cpb-desc" value="0"></div></div>' +
-      '<label class="fld">Observação</label><input class="input" id="cpb-obs" style="width:100%">' +
-      '</div><div class="mf"><button class="btn-sm" id="cpb-x">Cancelar</button><button class="btn-sm primary" id="cpb-ok">Confirmar baixa</button></div></div>';
-    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
-    o.querySelector('.x').onclick = o.querySelector('#cpb-x').onclick = function () { o.remove(); };
-    o.querySelector('#cpb-ok').onclick = function () {
-      var valorPago = cpParseNum(o.querySelector('#cpb-valor').value);
-      if (!valorPago || valorPago <= 0) { toast('Informe o valor pago', '', true); return; }
-      cpRegistrarBaixa(headerId, { valorPago: valorPago, date: o.querySelector('#cpb-data').value, financialAccountId: o.querySelector('#cpb-conta').value, paymentMethod: o.querySelector('#cpb-forma').value, juros: cpParseNum(o.querySelector('#cpb-juros').value) || 0, multa: cpParseNum(o.querySelector('#cpb-multa').value) || 0, desconto: cpParseNum(o.querySelector('#cpb-desc').value) || 0, observacao: o.querySelector('#cpb-obs').value.trim() || null })
-        .then(function () { o.remove(); toast('Baixa registrada', brl(valorPago)); cpRenderBody(); });
-    };
+      '<label class="fld">Observação</label><input class="input" id="cpb-obs" style="width:100%">';
+    openModal({
+      title: mode === 'total' ? 'Baixa total do pagamento' : 'Baixa parcial do pagamento', width: 480, bodyHtml: bodyHtml, confirmLabel: 'Confirmar baixa',
+      onConfirm: function (panel) {
+        var valorPago = cpParseNum(panel.querySelector('#cpb-valor').value);
+        if (!valorPago || valorPago <= 0) { toast('Informe o valor pago', '', true); return false; }
+        return cpRegistrarBaixa(headerId, { valorPago: valorPago, date: panel.querySelector('#cpb-data').value, financialAccountId: panel.querySelector('#cpb-conta').value, paymentMethod: panel.querySelector('#cpb-forma').value, juros: cpParseNum(panel.querySelector('#cpb-juros').value) || 0, multa: cpParseNum(panel.querySelector('#cpb-multa').value) || 0, desconto: cpParseNum(panel.querySelector('#cpb-desc').value) || 0, observacao: panel.querySelector('#cpb-obs').value.trim() || null })
+          .then(function () { toast('Baixa registrada', brl(valorPago)); cpRenderBody(); });
+      },
+    });
   }
 
   // ---- gestão de cadastros (abas Categorias / Plano de contas / Centros de custo / Fornecedores) ----
@@ -16110,21 +16113,21 @@ buffer/index.js:
     app.querySelectorAll('[data-cpcatedit]').forEach(function (b) { b.onclick = function () { openCpCategoryEditor(cpCategories.find(function (c) { return c.id === b.dataset.cpcatedit; })); }; });
   }
   function openCpCategoryEditor(cat) {
-    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:480px"><div class="mh"><h3>' + (cat ? 'Editar categoria' : 'Nova categoria') + '</h3><button class="x">×</button></div><div class="mbd">' +
+    var bodyHtml =
       '<label class="fld">Nome *</label><input class="input" id="cpce-nm" style="width:100%" value="' + esc(cat ? cat.name : '') + '">' +
       '<label class="fld">Categoria pai</label><select class="select" id="cpce-parent" style="width:100%">' + cpCategoryOptions(cat ? cat.parentId : null, false) + '</select>' +
       '<label class="fld">Conta contábil</label><select class="select" id="cpce-cta" style="width:100%">' + cpAccountingOptions(cat ? cat.accountingAccountId : null) + '</select>' +
       '<label class="fld">Grupo DRE</label><select class="select" id="cpce-dre" style="width:100%"><option value="">—</option>' + CP_DRE_GROUPS.map(function (g) { return '<option value="' + esc(g) + '"' + (cat && cat.dreGroup === g ? ' selected' : '') + '>' + esc(g) + '</option>'; }).join('') + '</select>' +
       '<label class="fld">Centro de custo padrão</label><select class="select" id="cpce-cc" style="width:100%">' + cpCostCenterOptions(cat ? cat.costCenterId : null) + '</select>' +
-      '<label class="fld"><input type="checkbox" id="cpce-ativa"' + (!cat || cat.active ? ' checked' : '') + '> Ativa</label>' +
-      '</div><div class="mf"><button class="btn-sm" id="cpce-x">Cancelar</button><button class="btn-sm primary" id="cpce-ok">Salvar</button></div></div>';
-    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
-    o.querySelector('.x').onclick = o.querySelector('#cpce-x').onclick = function () { o.remove(); };
-    o.querySelector('#cpce-ok').onclick = function () {
-      var nm = o.querySelector('#cpce-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return; }
-      cpSaveCategory({ id: cat ? cat.id : null, name: nm, parentId: o.querySelector('#cpce-parent').value || null, accountingAccountId: o.querySelector('#cpce-cta').value || null, dreGroup: o.querySelector('#cpce-dre').value || null, costCenterId: o.querySelector('#cpce-cc').value || null, active: o.querySelector('#cpce-ativa').checked, createdAt: cat && cat.createdAt })
-        .then(function () { o.remove(); toast('Categoria salva', nm); cpRenderBody(); });
-    };
+      '<label class="fld"><input type="checkbox" id="cpce-ativa"' + (!cat || cat.active ? ' checked' : '') + '> Ativa</label>';
+    openModal({
+      title: cat ? 'Editar categoria' : 'Nova categoria', width: 480, bodyHtml: bodyHtml,
+      onConfirm: function (panel) {
+        var nm = panel.querySelector('#cpce-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return false; }
+        return cpSaveCategory({ id: cat ? cat.id : null, name: nm, parentId: panel.querySelector('#cpce-parent').value || null, accountingAccountId: panel.querySelector('#cpce-cta').value || null, dreGroup: panel.querySelector('#cpce-dre').value || null, costCenterId: panel.querySelector('#cpce-cc').value || null, active: panel.querySelector('#cpce-ativa').checked, createdAt: cat && cat.createdAt })
+          .then(function () { toast('Categoria salva', nm); cpRenderBody(); });
+      },
+    });
   }
 
   function renderCpPlanoContasTab() {
@@ -16136,18 +16139,18 @@ buffer/index.js:
     app.querySelectorAll('[data-cpaccedit]').forEach(function (b) { b.onclick = function () { openCpAccountingEditor(cpAccounting.find(function (a) { return a.id === b.dataset.cpaccedit; })); }; });
   }
   function openCpAccountingEditor(acc) {
-    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:420px"><div class="mh"><h3>' + (acc ? 'Editar conta contábil' : 'Nova conta contábil') + '</h3><button class="x">×</button></div><div class="mbd">' +
+    var bodyHtml =
       '<label class="fld">Código</label><input class="input" id="cpae-code" style="width:100%" value="' + esc(acc ? acc.code : '') + '" placeholder="Ex.: 3.01.01">' +
       '<label class="fld">Nome *</label><input class="input" id="cpae-nm" style="width:100%" value="' + esc(acc ? acc.name : '') + '" placeholder="Ex.: Matéria-prima">' +
       '<label class="fld">Grupo DRE</label><select class="select" id="cpae-dre" style="width:100%"><option value="">—</option>' + CP_DRE_GROUPS.map(function (g) { return '<option value="' + esc(g) + '"' + (acc && acc.dreGroup === g ? ' selected' : '') + '>' + esc(g) + '</option>'; }).join('') + '</select>' +
-      '<label class="fld"><input type="checkbox" id="cpae-ativa"' + (!acc || acc.active ? ' checked' : '') + '> Ativa</label>' +
-      '</div><div class="mf"><button class="btn-sm" id="cpae-x">Cancelar</button><button class="btn-sm primary" id="cpae-ok">Salvar</button></div></div>';
-    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
-    o.querySelector('.x').onclick = o.querySelector('#cpae-x').onclick = function () { o.remove(); };
-    o.querySelector('#cpae-ok').onclick = function () {
-      var nm = o.querySelector('#cpae-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return; }
-      cpSaveAccounting({ id: acc ? acc.id : null, code: o.querySelector('#cpae-code').value.trim(), name: nm, dreGroup: o.querySelector('#cpae-dre').value || null, active: o.querySelector('#cpae-ativa').checked, createdAt: acc && acc.createdAt }).then(function () { o.remove(); toast('Conta contábil salva', nm); cpRenderBody(); });
-    };
+      '<label class="fld"><input type="checkbox" id="cpae-ativa"' + (!acc || acc.active ? ' checked' : '') + '> Ativa</label>';
+    openModal({
+      title: acc ? 'Editar conta contábil' : 'Nova conta contábil', width: 420, bodyHtml: bodyHtml,
+      onConfirm: function (panel) {
+        var nm = panel.querySelector('#cpae-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return false; }
+        return cpSaveAccounting({ id: acc ? acc.id : null, code: panel.querySelector('#cpae-code').value.trim(), name: nm, dreGroup: panel.querySelector('#cpae-dre').value || null, active: panel.querySelector('#cpae-ativa').checked, createdAt: acc && acc.createdAt }).then(function () { toast('Conta contábil salva', nm); cpRenderBody(); });
+      },
+    });
   }
 
   function renderCpCentrosCustoTab() {
@@ -16159,10 +16162,14 @@ buffer/index.js:
     app.querySelectorAll('[data-cpccedit]').forEach(function (b) { b.onclick = function () { openCpCostCenterEditor(cpCostCenters.find(function (c) { return c.id === b.dataset.cpccedit; })); }; });
   }
   function openCpCostCenterEditor(cc) {
-    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:380px"><div class="mh"><h3>' + (cc ? 'Editar centro de custo' : 'Novo centro de custo') + '</h3><button class="x">×</button></div><div class="mbd"><label class="fld">Nome *</label><input class="input" id="cpcce-nm" style="width:100%" value="' + esc(cc ? cc.name : '') + '"><label class="fld"><input type="checkbox" id="cpcce-ativa"' + (!cc || cc.active ? ' checked' : '') + '> Ativo</label></div><div class="mf"><button class="btn-sm" id="cpcce-x">Cancelar</button><button class="btn-sm primary" id="cpcce-ok">Salvar</button></div></div>';
-    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
-    o.querySelector('.x').onclick = o.querySelector('#cpcce-x').onclick = function () { o.remove(); };
-    o.querySelector('#cpcce-ok').onclick = function () { var nm = o.querySelector('#cpcce-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return; } cpSaveCostCenter({ id: cc ? cc.id : null, name: nm, active: o.querySelector('#cpcce-ativa').checked, createdAt: cc && cc.createdAt }).then(function () { o.remove(); toast('Centro de custo salvo', nm); cpRenderBody(); }); };
+    var bodyHtml = '<label class="fld">Nome *</label><input class="input" id="cpcce-nm" style="width:100%" value="' + esc(cc ? cc.name : '') + '"><label class="fld"><input type="checkbox" id="cpcce-ativa"' + (!cc || cc.active ? ' checked' : '') + '> Ativo</label>';
+    openModal({
+      title: cc ? 'Editar centro de custo' : 'Novo centro de custo', width: 380, bodyHtml: bodyHtml,
+      onConfirm: function (panel) {
+        var nm = panel.querySelector('#cpcce-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return false; }
+        return cpSaveCostCenter({ id: cc ? cc.id : null, name: nm, active: panel.querySelector('#cpcce-ativa').checked, createdAt: cc && cc.createdAt }).then(function () { toast('Centro de custo salvo', nm); cpRenderBody(); });
+      },
+    });
   }
 
   function renderCpFornecedoresTab() {
@@ -16177,22 +16184,22 @@ buffer/index.js:
     app.querySelectorAll('[data-cpsupedit]').forEach(function (b) { b.onclick = function () { openCpSupplierFullEditor(cpSuppliers.find(function (s) { return s.id === b.dataset.cpsupedit; })); }; });
   }
   function openCpSupplierFullEditor(s) {
-    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70'; o.innerHTML = '<div class="modal" style="width:480px"><div class="mh"><h3>Editar fornecedor</h3><button class="x">×</button></div><div class="mbd">' +
+    var bodyHtml =
       '<label class="fld">Razão social *</label><input class="input" id="cpsf-rz" style="width:100%" value="' + esc(s.razaoSocial || '') + '">' +
       '<label class="fld">Nome fantasia</label><input class="input" id="cpsf-nf" style="width:100%" value="' + esc(s.nomeFantasia || '') + '">' +
       '<label class="fld">CNPJ/CPF</label><input class="input" id="cpsf-doc" style="width:100%" value="' + esc(s.cnpjCpf || '') + '">' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><div><label class="fld">Telefone</label><input class="input" id="cpsf-tel" style="width:100%" value="' + esc(s.telefone || '') + '"></div><div><label class="fld">E-mail</label><input class="input" id="cpsf-mail" style="width:100%" value="' + esc(s.email || '') + '"></div></div>' +
       '<label class="fld">Endereço</label><input class="input" id="cpsf-end" style="width:100%" value="' + esc(s.endereco || '') + '">' +
       '<label class="fld">Observações</label><input class="input" id="cpsf-obs" style="width:100%" value="' + esc(s.observacoes || '') + '">' +
-      '<label class="fld"><input type="checkbox" id="cpsf-ativa"' + (s.active ? ' checked' : '') + '> Ativo</label>' +
-      '</div><div class="mf"><button class="btn-sm" id="cpsf-x">Cancelar</button><button class="btn-sm primary" id="cpsf-ok">Salvar</button></div></div>';
-    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
-    o.querySelector('.x').onclick = o.querySelector('#cpsf-x').onclick = function () { o.remove(); };
-    o.querySelector('#cpsf-ok').onclick = function () {
-      var rz = o.querySelector('#cpsf-rz').value.trim(); if (!rz) { toast('Informe a razão social', '', true); return; }
-      cpSaveSupplier({ id: s.id, razaoSocial: rz, nomeFantasia: o.querySelector('#cpsf-nf').value.trim(), cnpjCpf: o.querySelector('#cpsf-doc').value.trim(), telefone: o.querySelector('#cpsf-tel').value.trim(), email: o.querySelector('#cpsf-mail').value.trim(), endereco: o.querySelector('#cpsf-end').value.trim(), observacoes: o.querySelector('#cpsf-obs').value.trim(), active: o.querySelector('#cpsf-ativa').checked, createdAt: s.createdAt })
-        .then(function () { o.remove(); toast('Fornecedor salvo', rz); cpRenderBody(); });
-    };
+      '<label class="fld"><input type="checkbox" id="cpsf-ativa"' + (s.active ? ' checked' : '') + '> Ativo</label>';
+    openModal({
+      title: 'Editar fornecedor', width: 480, bodyHtml: bodyHtml,
+      onConfirm: function (panel) {
+        var rz = panel.querySelector('#cpsf-rz').value.trim(); if (!rz) { toast('Informe a razão social', '', true); return false; }
+        return cpSaveSupplier({ id: s.id, razaoSocial: rz, nomeFantasia: panel.querySelector('#cpsf-nf').value.trim(), cnpjCpf: panel.querySelector('#cpsf-doc').value.trim(), telefone: panel.querySelector('#cpsf-tel').value.trim(), email: panel.querySelector('#cpsf-mail').value.trim(), endereco: panel.querySelector('#cpsf-end').value.trim(), observacoes: panel.querySelector('#cpsf-obs').value.trim(), active: panel.querySelector('#cpsf-ativa').checked, createdAt: s.createdAt })
+          .then(function () { toast('Fornecedor salvo', rz); cpRenderBody(); });
+      },
+    });
   }
 
   // ---- exportação / impressão (§8) ----
