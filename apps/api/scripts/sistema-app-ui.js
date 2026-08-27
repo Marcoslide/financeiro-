@@ -973,13 +973,35 @@
     var canceladosRevenue = 0; cancelados.forEach(function (o) { canceladosRevenue += orderFinance(o).revenue || 0; });
     var o = occInPeriod(); var exposure = sumExposure(o);
     var empty = orders.length === 0 && occ.length === 0 && (!Produtos || Produtos.getData().products.length === 0);
+    // Refatoração N9 (Fase 6 — piloto Dashboard): PageHeader()/MetricCard()/MetricGrid() substituem o
+    // .page-head literal e os 3 fcard() manuais — MESMOS rótulos/valores/cores já computados acima,
+    // nenhuma conta refeita. dashboardFunilPanel() continua com seu próprio kstrip local por enquanto
+    // (migração gradual, ver relatório "Mapa de Duplicidades" — não migrar tudo de uma vez).
     app.innerHTML =
-      '<div class="page-head"><div><h2>Visão geral</h2><p>Panorama de vendas e devoluções — números auditáveis, sem estimativas inventadas.</p></div></div>' +
+      PageHeader({ title: 'Visão geral', description: 'Panorama de vendas e devoluções — números auditáveis, sem estimativas inventadas.' }) +
       (empty ? banner('Comece importando planilhas em <b>Produtos</b>, <b>Pedidos</b> e <b>Devolução</b>. Os módulos se conectam automaticamente (SKU→família→custo e pedido↔devolução).') : '') +
       (empty ? '' : dashboardFunilPanel()) +
-      '<div class="cards6">' + fcard('Venda válida', brl(aVenda.revenue), 'blue', nn(aVenda.orders) + ' pedidos (exclui cancelados)') + fcard('Unidades', nn(aVenda.units), '') + fcard('Taxas marketplace', brl(aVenda.fees), 'red') + fcard('Custo produtos', brl(aVenda.cost), 'amber') + fcard('Resultado estimado', resTxt.resultado, resTxt.cls, resTxt.sub + (resTxt.selo ? ' · ' + resTxt.selo : '')) + fcard('Margem estimada', resTxt.margem, resTxt.cls === 'amber' ? 'amber' : '') + '</div>' +
-      '<div class="cards6">' + fcard('A enviar', nn(a.byStatus.A_ENVIAR || 0), 'amber') + fcard('Enviados', nn(a.byStatus.ENVIADO || 0), 'blue') + fcard('Concluídos', nn(a.byStatus.CONCLUIDO || 0), 'green') + fcard('Cancelamentos', nn(cancelados.length), 'red', cancelados.length ? brl(canceladosRevenue) + ' fora do faturamento' : 'nenhum no período') + fcard('Devoluções', nn(o.length), '') + fcard('Prejuízo confirmado', brl(exposure.confirmedLoss), 'red') + '</div>' +
-      '<div class="cards6">' + fcard('SKUs sem vínculo', nn(aVenda.unlinked) + ' pedidos', 'amber') + fcard('Custo pendente', nn(aVenda.costPending) + ' pedidos', 'amber') + fcard('Em risco (devolução)', brl(exposure.atRisk), 'amber') + '</div>' +
+      MetricGrid([
+        MetricCard({ label: 'Venda válida', value: brl(aVenda.revenue), status: 'info', sub: nn(aVenda.orders) + ' pedidos (exclui cancelados)' }),
+        MetricCard({ label: 'Unidades', value: nn(aVenda.units) }),
+        MetricCard({ label: 'Taxas marketplace', value: brl(aVenda.fees), status: 'negative' }),
+        MetricCard({ label: 'Custo produtos', value: brl(aVenda.cost), status: 'warn' }),
+        MetricCard({ label: 'Resultado estimado', value: resTxt.resultado, cls: resTxt.cls, sub: resTxt.sub + (resTxt.selo ? ' · ' + resTxt.selo : ''), tooltip: 'Selo 🟢/🟡 indica se o valor já foi confirmado pela Shopee (Income) ou ainda é estimado a partir do Order.all' }),
+        MetricCard({ label: 'Margem estimada', value: resTxt.margem, cls: resTxt.cls === 'amber' ? 'amber' : '' }),
+      ]) +
+      MetricGrid([
+        MetricCard({ label: 'A enviar', value: nn(a.byStatus.A_ENVIAR || 0), status: 'warn' }),
+        MetricCard({ label: 'Enviados', value: nn(a.byStatus.ENVIADO || 0), status: 'info' }),
+        MetricCard({ label: 'Concluídos', value: nn(a.byStatus.CONCLUIDO || 0), status: 'positive' }),
+        MetricCard({ label: 'Cancelamentos', value: nn(cancelados.length), status: 'negative', sub: cancelados.length ? brl(canceladosRevenue) + ' fora do faturamento' : 'nenhum no período' }),
+        MetricCard({ label: 'Devoluções', value: nn(o.length) }),
+        MetricCard({ label: 'Prejuízo confirmado', value: brl(exposure.confirmedLoss), status: 'negative' }),
+      ]) +
+      MetricGrid([
+        MetricCard({ label: 'SKUs sem vínculo', value: nn(aVenda.unlinked) + ' pedidos', status: 'warn' }),
+        MetricCard({ label: 'Custo pendente', value: nn(aVenda.costPending) + ' pedidos', status: 'warn' }),
+        MetricCard({ label: 'Em risco (devolução)', value: brl(exposure.atRisk), status: 'warn' }),
+      ]) +
       panelImports();
     app.querySelectorAll('[data-dashgo]').forEach(function (b) { b.onclick = function () {
       var go = b.dataset.dashgo;
@@ -7248,6 +7270,51 @@
 
   // ---------- componentes comuns ----------
   function fcard(lbl, val, cls, sub2) { return '<div class="fcard ' + (cls || '') + '"><div class="lbl">' + esc(lbl) + '</div><div class="val">' + val + '</div>' + (sub2 ? '<div class="footnote" style="margin-top:4px">' + esc(sub2) + '</div>' : '') + '</div>'; }
+  // Refatoração N9 (Fase 6 — Criação de componentes base): MetricCard() é o primeiro passo pra
+  // consolidar fcard()/kstrip()/kpi() (ver relatório "Mapa de Duplicidades", Fase 1, Seção A) num
+  // único componente. Reaproveita as MESMAS classes CSS de .fcard (blue/green/red/amber) — nenhum CSS
+  // novo, nenhuma mudança visual — e aceita tanto `status` (positive/warn/negative/info/neutral) quanto
+  // o `cls` antigo (blue/green/red/amber) direto, pra migração ser um find-and-replace sem recalcular
+  // nada: quem já montava a string de cor pra fcard() continua passando o mesmo valor.
+  // Migração é gradual, módulo por módulo (piloto: Dashboard) — o resto do sistema continua usando
+  // fcard()/kstrip() por enquanto, exatamente como o plano de execução do relatório recomenda.
+  function MetricCard(opts) {
+    opts = opts || {};
+    var STATUS_CLS = { positive: 'green', warn: 'amber', negative: 'red', info: 'blue', neutral: '' };
+    var cls = STATUS_CLS.hasOwnProperty(opts.status) ? STATUS_CLS[opts.status] : (opts.status || opts.cls || '');
+    var titleAttr = opts.tooltip ? ' title="' + esc(opts.tooltip) + '"' : '';
+    if (opts.loading) {
+      return '<div class="fcard"' + titleAttr + '><div class="lbl">' + esc(opts.label || '') + '</div><div class="val" style="opacity:.35">…</div></div>';
+    }
+    if (opts.empty) {
+      return '<div class="fcard"' + titleAttr + '><div class="lbl">' + esc(opts.label || '') + '</div><div class="val" style="font-size:13px;color:var(--muted);font-weight:400">' + esc(typeof opts.empty === 'string' ? opts.empty : 'sem dados') + '</div></div>';
+    }
+    var trendMark = '';
+    if (opts.trend) {
+      var arrow = opts.trend === 'up' ? '↑' : opts.trend === 'down' ? '↓' : '→';
+      var trendColor = opts.trend === 'up' ? 'var(--ok)' : opts.trend === 'down' ? 'var(--err)' : 'var(--muted)';
+      trendMark = ' <span style="font-weight:700;color:' + trendColor + '">' + arrow + '</span>';
+    }
+    var pctMark = opts.pct != null ? ' <span class="footnote" style="margin:0">' + pct(opts.pct) + '</span>' : '';
+    var subLine = opts.sub ? '<div class="footnote" style="margin-top:4px">' + (opts.subHtml ? opts.sub : esc(opts.sub)) + '</div>' : '';
+    return '<div class="fcard ' + cls + '"' + titleAttr + '><div class="lbl">' + esc(opts.label || '') + '</div><div class="val">' + opts.value + trendMark + pctMark + '</div>' + subLine + '</div>';
+  }
+  function MetricGrid(cardsHtml) { return '<div class="cards6">' + cardsHtml.join('') + '</div>'; }
+  // PageHeader() — segundo componente base (mesma Fase 6). Cobre a variante "faixa flex com ações à
+  // direita" (.page-head), que é o padrão hoje usado no Dashboard — a variante "eyebrow" de secHead()
+  // fica pra uma migração futura, sem forçar as ~40 telas que já usam secHead() a mudar de estilo
+  // visual nesta passada. Sem breadcrumb "de verdade" hoje (o sistema não tem navegação hierárquica
+  // por trilha) — o campo existe na assinatura pra já cobrir o caso quando/se for necessário.
+  function PageHeader(opts) {
+    opts = opts || {};
+    var breadcrumbHtml = opts.breadcrumb ? '<div class="crumbs">' + esc(opts.breadcrumb) + '</div>' : '';
+    var actionsHtml = opts.actions && opts.actions.length ? '<div style="display:flex;gap:8px;flex-wrap:wrap">' + opts.actions.join('') + '</div>' : '';
+    var filtersHtml = opts.filters ? '<div style="margin-top:10px">' + opts.filters + '</div>' : '';
+    return '<div class="page-head">' +
+      '<div>' + breadcrumbHtml + '<h2>' + esc(opts.title || '') + '</h2>' + (opts.description ? '<p>' + esc(opts.description) + '</p>' : '') + '</div>' +
+      actionsHtml +
+      '</div>' + filtersHtml;
+  }
   function kv(k, v) { return '<label class="fld">' + esc(k) + '</label><div class="ro">' + esc(v || '—') + '</div>'; }
   function rowline(k, v) { return '<div class="row"><span>' + esc(k) + '</span><b>' + v + '</b></div>'; }
   function banner(html) { return '<div class="info-banner">' + html + '</div>'; }
