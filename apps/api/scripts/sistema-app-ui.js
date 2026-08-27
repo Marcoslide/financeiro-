@@ -49,7 +49,14 @@
   var walletCls = {};         // classificação INTERNA por id (separada do dado Shopee; preservada na reimportação) —
   // reaproveitada como o ciclo de vida de pendências (§39/§63): internalStatus/history já são exatamente
   // "status da pendência + quem mudou + quando", nunca recriamos um segundo mecanismo para a mesma coisa.
-  var walletClose = {};       // Fase 3 (§35-38): fechamento de caixa diário, por data (YYYY-MM-DD) — nunca apagado na reimportação
+  // Fase 3 (§35-38): CONFERÊNCIA DE EXTRATO da Carteira, por data (YYYY-MM-DD) — nunca apagado na
+  // reimportação. Fase 7.5 Bloco 4: renomeado de "fechamento de caixa diário" pra tirar a ambiguidade
+  // com caixaClose (abaixo) — walletClose concilia o SALDO/EXTRATO Shopee (o que a Carteira recebeu/
+  // pagou segundo o extrato oficial), nunca a operação financeira do dia como um todo. Estrutura
+  // interna (ABERTO/FECHADO/FECHADO_COM_RESSALVA/REVISAO_NECESSARIA + history) igual à de caixaClose
+  // de propósito (mesmo ciclo de vida já aprovado), mas as duas nunca compartilham registro — são
+  // fechamentos de coisas diferentes, cada um no seu módulo, sem fundir dados.
+  var walletClose = {};
   var walletSub = 'visao';    // sub-aba da Carteira: visao | mov | ajustes | pendencias | fechamento
   // PROMPT "Refazer o Caixa" §11/§12/§14: clicar em CAIXA precisa cair DIRETO no Fechamento (fluxo
   // do dinheiro) — nunca num dashboard antigo escondendo o que foi pedido atrás de mais um clique.
@@ -59,6 +66,11 @@
   // Mesmo ciclo de vida já aprovado em walletClose — ABERTO/FECHADO/FECHADO_COM_RESSALVA/
   // REVISAO_NECESSARIA — mas escopado ao núcleo Pedidos+Expedição+Acelera+Financeiro, nunca só à
   // Carteira. Snapshot nunca é reescrito silenciosamente; evento posterior vira anotação à parte.
+  // Fase 7.5 Bloco 4 (decisão arquitetural — NÃO unificar com walletClose): CAIXA = fechamento /
+  // conciliação OPERACIONAL-FINANCEIRA do dia (venda + custo + taxas + DRE + Contas a Pagar/Receber);
+  // CARTEIRA (walletClose, acima) = fechamento / conciliação do EXTRATO Shopee (saldo recebido ×
+  // saldo esperado). Uma tela nunca fecha a outra — um dia pode estar "fechado" no Caixa e "aberto"
+  // na Conferência de Extrato da Carteira ao mesmo tempo, e isso é esperado, não um bug.
   var caixaClose = {};
   var caixaDashDate = null; // null = hoje
   // Camada 1 (Saldo do Dia): "Transferência para o banco" — evento manual PURO Carteira→Banco.
