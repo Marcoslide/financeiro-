@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 5976b1e · 2026-08-27 21:42 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 80c328d · 2026-08-27 22:18 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -3989,7 +3989,6 @@ buffer/index.js:
   // saldo esperado). Uma tela nunca fecha a outra — um dia pode estar "fechado" no Caixa e "aberto"
   // na Conferência de Extrato da Carteira ao mesmo tempo, e isso é esperado, não um bug.
   var caixaClose = {};
-  var caixaDashDate = null; // null = hoje
   // Camada 1 (Saldo do Dia): "Transferência para o banco" — evento manual PURO Carteira→Banco.
   // Nunca altera Acelera/Pedido/receita/lucro — só registra que dinheiro saiu da carteira para o
   // banco, com histórico. Lista simples (não indexada por dia: pode ser lançada a qualquer momento).
@@ -4019,7 +4018,6 @@ buffer/index.js:
   function opActiveOrNull() { return (activeOperationId && activeOperationId !== OP_ALL) ? activeOperationId : null; }
   var OP_BLOCK_MSG = 'Escolha uma operação específica (empresa/loja) no topo antes de importar este arquivo.';
   var walletF = { search: '', cat: '', flow: '' }; // filtros da tabela de movimentações
-  var walletStamp = null;     // "atualizado até" da carteira
   var Produtos = null;
   var sub = { pedidos: 'pedidos', posvenda: 'visao' };
   var pedTab = 'ALL';
@@ -4035,7 +4033,6 @@ buffer/index.js:
   var aceleraSub = 'visao';         // sub-aba do módulo
   var aceleraPage = 1;
   var aceleraF = { search: '', aliq: '', divCat: '' };
-  var aceleraSel = { resgate: null };
   // Refatoração completa do Acelera: fora vai capital/coorte/custo de oportunidade — o módulo vira
   // conciliação pura (Expedição → Antecipação → Taxa → Líquido → Conferência). Únicas premissas que
   // sobrevivem: tolerância de alíquota (deduplicação de arredondamento) e janela de "aguardando
@@ -4045,7 +4042,6 @@ buffer/index.js:
   var affConv = [], affRpa = [], affVb = [], affMaster = {};
   var affSub = 'visao', affPage = 1;
   var affF = { search: '', channel: '', status: '', ded: '', region: '', basis: 'venda', rateMin: null };
-  var affSel = null;
   var affCfg = { rateAlert: 0.15, tolConcil: 100, minPedidos: 5, margemBoa: 0.15, margemAperta: 0.05 };
   // Minha Renda
   var mrRenda = [], mrShip = [], mrAdj = [], mrSvc = [], mrPdf = [], mrSummary = null;
@@ -4072,7 +4068,6 @@ buffer/index.js:
   // (o dia que a sessão representa) é sempre distinta de "data/hora real do bipe" (quando cada
   // pedido efetivamente saiu, que pode cair no dia seguinte).
   var expSessions = []; // { id, dataOperacional, horaInicio, operador, esperados:[{orderId,modalidade,prazoEnvio,statusNoMomento,isFbs}], resolvidas:[] }
-  var expSessF = { sel: null }; // sessão aberta na tela (id) — null = mostra a lista
   // Resolução manual das Pendências da Conferência (§25-38/§71-78): trilha de auditoria completa,
   // nunca apaga — cada resolução acrescenta ao histórico do pedido. "Reabrir investigação" limpa o
   // estado atual mas preserva o histórico.
@@ -4536,7 +4531,6 @@ buffer/index.js:
   // usados na Ficha do Pedido — declarados no escopo do módulo (não dentro de openPedidoFicha360) para
   // ficarem disponíveis independente da ordem de montagem dos blocos dentro da função.
   var INCOME_STATUS_TXT = { FOUND: '🟢 localizado', NOT_IN_INCOME: '🟡 aguardando lançamento', WRONG_OPERATION: '🔴 encontrado em outra operação — auditar isolamento', DUPLICATE_ORDER_ROWS: '🔴 mais de uma linha para este pedido — auditar planilha', INVALID_ORDER_ID: '🔴 ID do pedido inválido' };
-  var STATUS_FIN_TXT = { CONFIRMADO: '🟢 Confirmado (Income cruzado, composição fecha)', DIVERGENCIA: '🔴 Divergência (Income cruzado, mas a composição não fecha com a Quantia Total Lançada)', PROVISORIO: '🟡 Provisório (composição estimada, aguardando Income)' };
   var SKU_MATCHEDBY_LABEL = { SKU: 'SKU', REFERENCE_SKU: 'SKU de referência' };
   // Rótulos EXATOS de taxaRow que carregam filhos reais do Service Fee Details (§20-21 do prompt
   // "Taxa de Serviço até a raiz") — nunca um regex genérico "^Taxa de serviço", que também bate com
@@ -5524,14 +5518,6 @@ buffer/index.js:
     var opId = (ord && ord.operationId) || opActiveOrNull() || null;
     var res = resolveIncomeOrder(opId, orderId);
     return res.status === 'FOUND' ? res.row : null;
-  }
-  // Variante que também devolve o diagnóstico completo — usada pela Ficha do Pedido (Conciliação)
-  // e pelo status financeiro; pedidoIncomeRow() continua existindo para os consumidores que só
-  // precisam do valor (nunca duplica a busca — delega para a mesma resolveIncomeOrder()).
-  function pedidoIncomeResolve(orderId) {
-    var ord = orders.find(function (x) { return x.id === orderId; });
-    var opId = (ord && ord.operationId) || opActiveOrNull() || null;
-    return resolveIncomeOrder(opId, orderId);
   }
   // resolveServiceFeeDetails(operationId, orderId) — cruzamento canônico do Service Fee Details,
   // espelhando resolveIncomeOrder(): normalizeOrderId() (nunca comparação crua de string — IDs com
@@ -6652,7 +6638,6 @@ buffer/index.js:
   var arF = 'todos';            // filtro da fila de Recebimentos
   var recSearch = '';           // busca da fila de Recebimentos
   var analiseSub = 'problemas'; // sub-aba de "Análises": problemas | financeiro | evolucao | inteligencia
-  var dispChip = 'recorrer';    // filtro operacional de "Disputas" (padrão: para recorrer)
   var finDrill = null;          // categoria de "Financeiro" em drill-down
   var finSub = 'impacto';       // sub-aba do Financeiro: impacto | taxas | areceber | concil
   var analiseReason = null;     // motivo selecionado na investigação (Motivo → Produtos)
@@ -6668,7 +6653,6 @@ buffer/index.js:
     return ['Sem impacto', 'ok'];
   }
 
-  function devReceiptSituation(o) { return RECEIPT_LABELS[o.receiptState] || '—'; }
   function devReturnList() { return occInPeriod().filter(expectsReturn); }
 
   // ---- Jornada operacional (§10-24 do prompt de alterações pontuais) ----
@@ -6680,11 +6664,6 @@ buffer/index.js:
     NOVA: 'Nova solicitação', AVALIACAO: 'Em avaliação', ACAO_NECESSARIA: 'Ação necessária / Recurso', AGUARDANDO_SHOPEE: 'Aguardando Shopee',
     COLETA: 'Aprovada — Organizar coleta', FALHA_IDENTIFICADA: 'Falha identificada', CONCILIACAO: 'Aprovado — Conciliar financeiro',
     TRANSPORTE: 'Em devolução / transporte', VALIDAR: 'Retornada — Validar', BAIXADA: 'Baixada / Concluída', REJEITADA: 'Rejeitada / Cancelada',
-  };
-  var JORNADA_POR_TIPO = {
-    RETURN_REFUND: ['NOVA', 'AVALIACAO', 'ACAO_NECESSARIA', 'AGUARDANDO_SHOPEE', 'COLETA', 'TRANSPORTE', 'VALIDAR', 'BAIXADA', 'REJEITADA'],
-    FAILED_DELIVERY: ['NOVA', 'AVALIACAO', 'FALHA_IDENTIFICADA', 'TRANSPORTE', 'VALIDAR', 'BAIXADA', 'REJEITADA'],
-    ORDER_CANCELLATION: ['NOVA', 'AVALIACAO', 'CONCILIACAO', 'BAIXADA', 'REJEITADA'],
   };
   function casoJornada(o) {
     var b = o.exposure ? o.exposure.bucket : null;
@@ -6715,7 +6694,6 @@ buffer/index.js:
   // MOTIVO (causa declarada pelo cliente/Shopee, o.reason) — dimensão SEPARADA da jornada (§16-17).
   // "Motivo não informado" só aparece quando a fonte importada realmente não trouxe motivo — nunca
   // inventamos um motivo que não existe nos dados.
-  function casoMotivo(o) { return (o.reason || '').trim() || 'Motivo não informado'; }
 
   // ---- Duas visões de tempo (§3-6 do prompt de remodelação de Devolução) — NUNCA confundir: ----
   // "Data da venda/pagamento" vem do módulo PEDIDOS (cruzada por ID do pedido, preferindo a hora do
@@ -6755,20 +6733,6 @@ buffer/index.js:
     return 'EM_ABERTO';
   }
 
-  // ---- Prioridade operacional determinística (§55) — nunca LLM; só prazo + etapa da jornada. ----
-  var PRIORIDADE_META = { CRITICA: '🔴 Crítica', ALTA: '🟠 Alta', MEDIA: '🟡 Média', ACOMPANHAMENTO: '🔵 Acompanhamento', ENCERRADA: '⚪ Encerrada' };
-  function casoPrioridade(o) {
-    var j = casoJornada(o);
-    if (j === 'BAIXADA' || j === 'REJEITADA') return 'ENCERRADA';
-    if (j === 'ACAO_NECESSARIA' && o.disputeDeadline) {
-      var dias = Math.ceil((new Date(o.disputeDeadline) - Date.now()) / 864e5);
-      if (dias <= 0) return 'CRITICA';
-      if (dias <= 2) return 'ALTA';
-    }
-    if (j === 'NOVA') return 'MEDIA';
-    return 'ACOMPANHAMENTO';
-  }
-
   // ---- Controle de prazo (§26-28) — "Ação do Vendedor solicitada até" comanda a fila. Prazo vencido
   // NUNCA vira "disputa perdida" sozinho — é só um alerta operacional (§28).
   function prazoDiasRestantes(deadlineIso) { if (!deadlineIso) return null; return Math.ceil((new Date(deadlineIso) - new Date(new Date().toDateString())) / 864e5); }
@@ -6794,7 +6758,6 @@ buffer/index.js:
 
   // ---- Fase operacional (§8-9,39-41) — a jornada mental de Casos: caixa de entrada → acompanhamento
   // → encerrado. Calculada a partir da jornada já existente, nunca digitada.
-  var FASE_META = { SOLICITACOES: 'Solicitações', EM_ANDAMENTO: 'Em andamento', ENCERRADOS: 'Encerrados' };
   function casoFase(o) {
     var j = casoJornada(o);
     if (j === 'BAIXADA' || j === 'REJEITADA') return 'ENCERRADOS';
@@ -7131,16 +7094,6 @@ buffer/index.js:
     list.forEach(function (o) { var key = o.causeFamily || occGuessCause(o); var c = map[key] = map[key] || { key: key, label: DEV.CAUSE_LABELS[key] || key, cases: 0, loss: 0, atRisk: 0, additional: 0, recovered: 0, reasons: {} }; c.cases++; c.loss += occEffectiveLoss(o); c.atRisk += o.exposure.atRisk; c.additional += o.impact.additionalCostTotal || 0; c.recovered += o.impact.recoveredTotal || 0; var rr = (o.reason || '—').trim(); c.reasons[rr] = (c.reasons[rr] || 0) + 1; });
     return Object.values(map).map(function (c) { var dom = Object.entries(c.reasons).sort(function (a, b) { return b[1] - a[1]; })[0]; return { key: c.key, label: c.label, cases: c.cases, loss: r2(c.loss), atRisk: r2(c.atRisk), additional: r2(c.additional), recovered: r2(c.recovered), net: r2(c.loss + c.additional - c.recovered), dom: dom ? dom[0] : '—', share: r2(c.loss / total * 100) }; }).sort(function (a, b) { return b.loss - a.loss; });
   }
-  function devCausas() {
-    var list = occInPeriod(); if (!list.length) return PageHeader({ variant: 'eyebrow', eyebrow: 'ANÁLISE · CAUSAS', title: 'Onde estamos errando?', description: '' }) + emptyBox('Sem ocorrências no período.');
-    var d = devCausasData(list); var np = devAchadosData(list).notProblems;
-    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'ANÁLISE · CAUSAS', title: 'Onde estamos errando?', description: 'A causa interna (nossa leitura) pode diferir do motivo declarado pelo cliente. É aqui que mora a ação.' });
-    var chart = d.length ? chartCard('Perda por causa', legendSwatch([['Perda R$', '#d13b3b']]), svgHBars(d.map(function (c) { return { label: c.label, value: c.loss, color: c.key === 'AVARIA' ? '#d13b3b' : c.key === 'SEPARACAO' ? '#2b4bd6' : '#8a93a3' }; }), { fmt: function (v) { return brl(v); } })) : '';
-    var naoE = np && np.length ? callout('green', 'O que o problema NÃO é', np.map(function (x) { return '<div class="fin-line"><span><b>' + esc(x.dim) + '</b></span><span class="footnote" style="margin:0">' + esc(x.note) + '</span></div>'; }).join('')) : '';
-    return head + chart +
-      '<div class="panel"><div class="ph"><h3>Causas, uma a uma</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Causa</th><th>Casos</th><th>Perda</th><th>Custo adic.</th><th>Recuperado</th><th>Impacto líq.</th><th>Motivo dominante</th><th>% da perda</th></tr></thead><tbody>' + d.map(function (c) { return '<tr><td><b>' + esc(c.label) + '</b></td><td>' + nn(c.cases) + '</td><td>' + brl(c.loss) + '</td><td>' + brl(c.additional) + '</td><td>' + brl(c.recovered) + '</td><td><b>' + brl(c.net) + '</b></td><td>' + esc((c.dom || '—').slice(0, 28)) + '</td><td><span class="tag">' + pct(c.share) + '</span></td></tr>'; }).join('') + '</tbody></table></div><div class="footnote" style="padding:0 16px 14px">Classifique a causa interna e a família da causa na ficha da ocorrência.</div></div>' + naoE;
-  }
-
   function devAchadosData(list) {
     var n = list.length; var conf = n >= 30 ? 'ALTA' : n >= 10 ? 'MEDIA' : 'BAIXA'; var findings = [], notProblems = [];
     if (!n) return { findings: findings, notProblems: notProblems, sample: 0, conf: conf };
@@ -7207,22 +7160,6 @@ buffer/index.js:
     var list = occInRange(from, to).filter(function (o) { return planMatch(p, o); });
     if (p.indicatorKind === 'taxa_causa') { var ord = ordersInRange(from, to); return ord ? r2(list.length / ord * 100) : null; }
     return r2(list.reduce(function (s, o) { return s + occEffectiveLoss(o); }, 0));
-  }
-  function planWindows(p) {
-    if (!p.implementedAt) return [];
-    var impl = new Date(p.implementedAt).getTime(); var now = Date.now(); var day0 = new Date(new Date().toDateString()).getTime();
-    var obsDays = Math.max(0, Math.floor((now - impl) / 864e5));
-    var mk = function (label, n) {
-      var to = Math.min(impl + n * 864e5, now); var postFrom = impl; var preFrom = impl - n * 864e5;
-      var post = measureWindow(p, new Date(postFrom), new Date(to)); var pre = measureWindow(p, new Date(preFrom), new Date(impl));
-      var obs = Math.min(n, obsDays); var preliminary = obs < n;
-      return { label: label, n: n, post: post, pre: pre, obs: obs, preliminary: preliminary };
-    };
-    return [
-      { label: 'Hoje', n: 1, post: measureWindow(p, new Date(day0), new Date(now)), pre: measureWindow(p, new Date(day0 - 864e5), new Date(day0)), obs: 1, preliminary: false },
-      mk('7 dias', 7), mk('15 dias', 15), mk('30 dias', 30),
-      { label: 'Desde a implantação', n: obsDays || 1, post: measureIndicator(p), pre: p.baselineValue, obs: obsDays, preliminary: false },
-    ];
   }
   // Medição com DENOMINADOR explícito (§27): retorna valor + numerador (ocorrências) + denominador (pedidos).
   function measureWindowFull(p, from, to) {
@@ -7382,7 +7319,6 @@ buffer/index.js:
   }
   // ---- análise client-side (mesmas regras determinísticas do backend) ----
   function devLoss(list) { return list.reduce(function (s, o) { return s + occEffectiveLoss(o); }, 0); }
-  function devCauseBreakdown(list) { var map = {}; var total = devLoss(list) || 1; list.forEach(function (o) { var key = o.causeFamily || occGuessCause(o); var c = map[key] = map[key] || { key: key, label: DEV.CAUSE_LABELS[key] || key, cases: 0, loss: 0, atRisk: 0 }; c.cases++; c.loss += occEffectiveLoss(o); c.atRisk += o.exposure.atRisk; }); return Object.values(map).map(function (c) { c.share = r2(c.loss / total * 100); c.loss = r2(c.loss); c.atRisk = r2(c.atRisk); return c; }).sort(function (a, b) { return b.loss - a.loss; }); }
   function devMotivosData(list) { var map = {}; list.forEach(function (o) { var reason = (o.reason || '(sem motivo informado)').trim(); var c = map[reason] = map[reason] || { reason: reason, cases: 0, approved: 0, analyzing: 0, giveups: 0, loss: 0, atRisk: 0, compensation: 0, ticket: 0, returned: 0 }; c.cases++; if (occApproved(o)) c.approved++; else if (occGiveup(o)) c.giveups++; else c.analyzing++; c.loss += occEffectiveLoss(o); c.atRisk += o.exposure.atRisk; c.compensation += o.compensation; c.ticket += o.requested; if (o.merchandiseStatus === 'RECEBIDO') c.returned++; }); return Object.values(map).map(function (r) { r.giveupRate = r.cases ? r2(r.giveups / r.cases * 100) : 0; r.avgTicket = r.cases ? r2(r.ticket / r.cases) : 0; r.loss = r2(r.loss); r.atRisk = r2(r.atRisk); r.compensation = r2(r.compensation); return r; }).sort(function (a, b) { return b.loss - a.loss || b.cases - a.cases; }); }
   function devCriticosData(list) { var map = {}; var total = devLoss(list) || 1; list.forEach(function (o) { var seen = {}; var skus = []; (o.items || []).forEach(function (i) { if (i.sku && !seen[i.sku]) { seen[i.sku] = 1; skus.push(i.sku); } }); var share = skus.length || 1; var cause = o.causeFamily || occGuessCause(o); skus.forEach(function (sku) { var item = (o.items || []).find(function (i) { return i.sku === sku; }); var c = map[sku] = map[sku] || { sku: sku, product: item ? item.productName : null, occ: 0, loss: 0, additional: 0, recovered: 0, causes: {}, linked: !!(item && item.skuLinked) }; c.occ++; c.loss += occEffectiveLoss(o) / share; c.additional += (o.impact.additionalCostTotal || 0) / share; c.recovered += (o.impact.recoveredTotal || 0) / share; c.causes[cause] = (c.causes[cause] || 0) + 1; }); }); return Object.values(map).map(function (s) { var dom = Object.entries(s.causes).sort(function (a, b) { return b[1] - a[1]; })[0]; return { sku: s.sku, product: s.product, occ: s.occ, loss: r2(s.loss), additional: r2(s.additional), recovered: r2(s.recovered), dominant: dom ? (DEV.CAUSE_LABELS[dom[0]] || dom[0]) : '—', share: r2(s.loss / total * 100), linked: s.linked }; }).sort(function (a, b) { return b.loss - a.loss || b.occ - a.occ; }).slice(0, 50); }
   function devFinanceiroData(list) { var r = { refunded: 0, additional: 0, recovered: 0, compensation: 0, disputeRec: 0, confirmed: 0, atRisk: 0, net: 0 }; list.forEach(function (o) { r.refunded += o.impact.refundedTotal || 0; r.additional += o.impact.additionalCostTotal || 0; r.recovered += o.impact.recoveredTotal || 0; r.compensation += o.compensation; r.disputeRec += o.disputeRecovered || 0; r.confirmed += occEffectiveLoss(o); r.atRisk += o.exposure.atRisk; r.net += occEffectiveLoss(o); }); Object.keys(r).forEach(function (k) { r[k] = r2(r[k]); }); return r; }
@@ -7495,8 +7431,6 @@ buffer/index.js:
     // "Solução" (o.resolution) — mesmo princípio: só valores reais encontrados nos dados (§5).
     var resolCounts = {}; typed.forEach(function (o) { var r = (o.resolution || '').trim(); if (r) resolCounts[r] = (resolCounts[r] || 0) + 1; });
     var resolList = Object.keys(resolCounts).sort();
-    var devLastBatch = batches.filter(function (b) { return b.module && b.module.indexOf('Devolução') === 0; }).sort(function (a, b) { return (b.createdAt || '').localeCompare(a.createdAt || ''); })[0];
-    function occTeveAtualizacao(o) { return !!devLastBatch && o.lastStatusAdvanceAt === devLastBatch.createdAt; }
     var list = typed;
     if (devF.status) list = list.filter(function (o) { return (o.status || '(sem status)') === devF.status; });
     if (devF.resolucao) list = list.filter(function (o) { return (o.resolution || '').trim() === devF.resolucao; });
@@ -7636,36 +7570,6 @@ buffer/index.js:
       bulkApplyDev(selIds, patch, owner).then(function (n) { devSel = {}; render(); toast('Aplicado', n + ' caso(s) atualizados'); });
     };
     var bc = document.getElementById('blkclear'); if (bc) bc.onclick = function () { devSel = {}; render(); };
-  }
-  function devMotivos() {
-    var list = occInPeriod(); if (!list.length) return PageHeader({ variant: 'eyebrow', eyebrow: 'ANÁLISE · MOTIVOS', title: 'Por que os clientes devolvem?', description: '' }) + emptyBox('Sem ocorrências no período.');
-    var agg = computeOrderAgg(); var d = devMotivosData(list);
-    var chart = d.length ? chartCard('Perda por motivo', legendSwatch([['Perda R$', '#d13b3b']]), svgHBars(d.slice(0, 8).map(function (r) { return { label: r.reason, value: r.loss, color: '#d13b3b' }; }), { fmt: function (v) { return brl(v); } })) : '';
-    var giveups = d.reduce(function (s, r) { return s + r.giveups; }, 0); var giveRate = list.length ? r2(giveups / list.length * 100) : 0;
-    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'ANÁLISE · MOTIVOS', title: 'Por que os clientes estão devolvendo?', description: 'Cada motivo do relatório da Shopee — casos, perda e taxa de desistência. Clique num motivo para ver os produtos.' });
-    var hide = callout('', 'Custo escondido: ' + pct(giveRate) + ' desistem sozinhos', 'Um comprador que abre e depois cancela a solicitação não gera perda financeira, mas consome atendimento e reputação. São <b>' + nn(giveups) + '</b> casos no período.');
-    var thPct = agg.orders ? '<th>% dos pedidos</th>' : '';
-    return head + kstrip([
-      { l: 'Motivos distintos', v: nn(d.length), cls: 'blue' },
-      { l: 'Motivo que mais custa', v: d.length ? esc((d[0].reason || '—').slice(0, 18)) : '—', cls: 'red', s: d.length ? brl(d[0].loss) : '' },
-      { l: 'Desistência do comprador', v: pct(giveRate), cls: 'amber', s: nn(giveups) + ' casos' },
-    ]) + chart + hide +
-      '<div class="panel"><div class="ph"><h3>Motivos, um a um</h3><span class="footnote" style="margin:0">clique para ver os produtos</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Motivo</th><th>Casos</th>' + thPct + '<th>Desist.</th><th>Taxa desist.</th><th>Perda</th><th>Em risco</th><th>Ticket médio</th><th>Retornou</th></tr></thead><tbody>' +
-      d.map(function (r) { var tdPct = agg.orders ? '<td>' + pct(r2(r.cases / agg.orders * 100)) + '</td>' : ''; return '<tr class="rowlink" title="Ver produtos deste motivo" data-go="analises" data-asub="produtos" data-reason="' + esc(r.reason) + '"><td><b>' + esc(r.reason) + '</b></td><td>' + nn(r.cases) + '</td>' + tdPct + '<td>' + nn(r.giveups) + '</td><td>' + pct(r.giveupRate) + '</td><td>' + brl(r.loss) + '</td><td>' + brl(r.atRisk) + '</td><td>' + brl(r.avgTicket) + '</td><td>' + nn(r.returned) + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
-  }
-  function devCriticos() {
-    var full = occInPeriod();
-    if (!full.length) return PageHeader({ variant: 'eyebrow', eyebrow: 'ANÁLISE · PRODUTOS', title: 'Quais produtos dão mais problema?', description: '' }) + emptyBox('Sem ocorrências no período.');
-    var list = analiseReason ? full.filter(function (o) { return (o.reason || '(sem motivo informado)').trim() === analiseReason; }) : full;
-    var d = devCriticosData(list);
-    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'ANÁLISE · PRODUTOS', title: 'Quais produtos estão dando problema?', description: 'Produto e variação primeiro; o SKU é o detalhe. Perda, ocorrências e causa dominante.' });
-    var banner = analiseReason ? callout('', 'Filtrando por motivo: ' + esc(analiseReason), '<button class="link-btn" data-go="analises" data-asub="produtos" data-reason="">limpar filtro</button>') : '';
-    // agrega por PRODUTO (não por SKU) para o gráfico — mais legível para o gestor
-    var byProd = {}; d.forEach(function (s) { var k = s.product || s.sku; var p = byProd[k] = byProd[k] || { label: k, value: 0 }; p.value += s.loss; });
-    var prodBars = Object.values(byProd).sort(function (a, b) { return b.value - a.value; }).slice(0, 8);
-    var chart = prodBars.length ? chartCard('Perda por produto (top ' + prodBars.length + ')', legendSwatch([['Perda R$', '#2b4bd6']]), svgHBars(prodBars, { color: '#2b4bd6', fmt: function (v) { return brl(v); } })) : '';
-    return head + banner + chart +
-      '<div class="panel"><div class="ph"><h3>Produtos & SKUs, um a um</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Produto</th><th>SKU</th><th>Ocor.</th><th>Perda</th><th>Custo adic.</th><th>Recuperado</th><th>% da perda</th><th>Causa dominante</th></tr></thead><tbody>' + (d.length ? d.map(function (s) { return '<tr><td>' + esc((s.product || '—').slice(0, 40)) + '</td><td class="mono footnote" style="margin:0">' + esc(s.sku) + (s.linked ? '' : ' <span class="tag warn">não vinc.</span>') + '</td><td>' + nn(s.occ) + '</td><td><b>' + brl(s.loss) + '</b></td><td>' + brl(s.additional) + '</td><td>' + brl(s.recovered) + '</td><td><span class="tag">' + pct(s.share) + '</span></td><td>' + esc(s.dominant) + '</td></tr>'; }).join('') : '<tr><td colspan="8" class="empty">Nenhum produto para este filtro.</td></tr>') + '</tbody></table></div></div>';
   }
   // Categorias clicáveis do Financeiro → drill-down para as ocorrências que compõem o valor.
   var FIN_CATS = {
@@ -7872,45 +7776,6 @@ buffer/index.js:
     bindMetricCards(app, { selected: function (key) { finDrill = finDrill === key ? null : key; render(); } });
     var cl = document.getElementById('finclose'); if (cl) cl.onclick = function () { finDrill = null; render(); };
   }
-  function devDisputas() {
-    var all = occInPeriod();
-    // Só é DISPUTA quem tem janela formal de recurso (vinda da Shopee) ou uma disputa já iniciada (§25).
-    var list = all.filter(function (o) { return o.hasSellerWindow || (o.disputeStatus && o.disputeStatus !== 'NAO_INICIADA'); });
-    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'DEFESA', title: 'Quais casos precisamos recorrer?', description: 'Somente casos com prazo/possibilidade formal de recurso. Onde a loja usa o canal a tempo, recupera; fora do prazo, perde.' });
-    if (!list.length) return head + emptyBox('Nenhum caso com prazo de recurso no período. O sistema identifica automaticamente pela coluna "Ação do Vendedor solicitada até" da Shopee.');
-    var d = devDisputesData(list);
-    var now = new Date(), soon = new Date(now.getTime() + 3 * 864e5);
-    var openWindow = function (o) { return !o.disputeDeadline || new Date(o.disputeDeadline) >= now; };
-    var actionable = function (o) { return ['RESPONDIDA', 'AGUARDANDO_SHOPEE', 'GANHA', 'PARCIAL', 'PERDIDA', 'PRAZO_PERDIDO', 'CANCELADA'].indexOf(o.disputeStatus) < 0 && openWindow(o) && (o.hasSellerWindow || o.disputeStatus === 'POSSIVEL' || o.disputeStatus === 'EM_PREPARACAO'); };
-    var FIL = {
-      recorrer: actionable,
-      hoje: function (o) { return actionable(o) && o.disputeDeadline && new Date(o.disputeDeadline).toDateString() === now.toDateString(); },
-      tresdias: function (o) { return actionable(o) && o.disputeDeadline && new Date(o.disputeDeadline) > now && new Date(o.disputeDeadline) <= soon; },
-      respondidas: function (o) { return o.disputeStatus === 'RESPONDIDA'; },
-      aguardando: function (o) { return o.disputeStatus === 'AGUARDANDO_SHOPEE'; },
-      historico: function (o) { return ['GANHA', 'PARCIAL', 'PERDIDA', 'PRAZO_PERDIDO'].indexOf(o.disputeStatus) >= 0; },
-    };
-    if (!FIL[dispChip]) dispChip = 'recorrer';
-    var chips = [['recorrer', 'Para recorrer'], ['hoje', 'Vence hoje'], ['tresdias', 'Próximos 3 dias'], ['respondidas', 'Respondidas'], ['aguardando', 'Aguardando decisão'], ['historico', 'Histórico']];
-    var count = function (k) { return list.filter(FIL[k]).length; };
-    var view = list.filter(FIL[dispChip]).sort(function (a, b) { var da = a.disputeDeadline || '9999', db = b.disputeDeadline || '9999'; return da.localeCompare(db); });
-    var venc = function (o) { if (!o.disputeDeadline) return '—'; var dl = new Date(o.disputeDeadline); var days = Math.ceil((dl - now) / 864e5); return dbr(o.disputeDeadline) + (days < 0 ? ' <span class="tag warn">vencido</span>' : days === 0 ? ' <span class="tag warn">hoje</span>' : days <= 3 ? ' <span class="tag warn">' + days + 'd</span>' : ''); };
-    var isHist = dispChip === 'historico';
-    var linha = function (o) { var it = (o.items || [])[0] || {}; return '<tr><td class="nowrap">' + venc(o) + '</td><td class="mono">' + esc(o.returnId || o.id.split(':')[1] || '—') + '</td><td class="mono">' + esc(o.orderId || '—') + '</td><td class="cell-text">' + esc(it.productName || '—') + '</td><td class="cell-text">' + esc(o.reason || '—') + '</td><td class="nowrap">' + brl(o.requested) + '</td><td>' + (isHist ? '<span class="tag ' + (['GANHA', 'PARCIAL'].indexOf(o.disputeStatus) >= 0 ? 'ok' : 'warn') + '">' + DEV.DISPUTE_STATUS[o.disputeStatus] + '</span>' : DEV.DISPUTE_STATUS[o.disputeStatus] || o.disputeStatus) + (isHist && o.disputeRecovered ? '<div class="footnote" style="margin:0">recuperado ' + brl(o.disputeRecovered) + '</div>' : '') + '</td><td><button class="btn-sm primary" data-oc="' + esc(o.id) + '" data-focus="disputa">' + (isHist ? 'Ver' : 'Recorrer / Trabalhar') + '</button></td></tr>'; };
-    return head +
-      kstrip([
-        { l: 'Para recorrer', v: nn(count('recorrer')), cls: 'blue' },
-        { l: 'Vencem em 3 dias', v: nn(count('tresdias')), cls: 'amber' },
-        { l: 'Respondidas', v: nn(count('respondidas')), cls: 'blue' },
-        { l: 'Taxa de vitória', v: (d.ganhas + d.perdidas) ? pct(r2(d.ganhas / (d.ganhas + d.perdidas) * 100)) : '—', cls: 'green' },
-        { l: 'Recuperado', v: brl(d.recuperado), cls: 'green' },
-      ]) +
-      '<div class="chips" style="padding:0 0 10px">' + chips.map(function (c) { return '<span class="chip' + (dispChip === c[0] ? ' chip-on' : '') + '" data-disp2="' + c[0] + '">' + c[1] + ' <b>' + count(c[0]) + '</b></span>'; }).join('') + '</div>' +
-      '<div class="panel" style="margin-top:8px"><div class="table-wrap"><table class="report"><thead><tr><th>Prazo</th><th>Devolução</th><th>Pedido</th><th>Produto</th><th>Motivo</th><th>Valor</th><th>Status</th><th>Ação</th></tr></thead><tbody>' +
-      (view.length ? view.map(linha).join('') : '<tr><td colspan="8" class="empty">Nenhuma disputa neste filtro.</td></tr>') + '</tbody></table></div></div>' +
-      '<div class="footnote">"Recorrer / Trabalhar" abre a ficha direto no bloco Disputa para registrar a resposta e depois o resultado.</div>';
-  }
-  function bindDisputas() { app.querySelectorAll('[data-disp2]').forEach(function (c) { c.onclick = function () { dispChip = c.dataset.disp2; render(); }; }); }
 
   // ---- Ficha operacional editável (§8-§19) ----
   function openFicha(id, focusBlock) {
@@ -8019,7 +7884,6 @@ buffer/index.js:
   // Categoria efetiva (manual sobrepõe automática); responsabilidade (manual → devolução vinculada → não definida).
   function wEffCat(t) { var c = wgetCls(t.id); return (c && c.catManual) ? c.catManual : t.category; }
   function wLinkedOcc(t) { var c = wgetCls(t.id); if (c && c.linkedOccId) { var o = occ.find(function (x) { return x.id === c.linkedOccId; }); if (o) return o; } var oid = (c && c.linkedOrderId) || t.orderId; if (!oid) return null; return occ.find(function (x) { return !x.isDemo && x.orderId === oid; }) || null; }
-  function wLinkedOrder(t) { var c = wgetCls(t.id); var oid = (c && c.linkedOrderId) || t.orderId; if (!oid) return null; return orders.find(function (x) { return x.id === oid; }) || null; }
   // Pedido é obrigatório como coluna visível (§15): nunca esconder a ausência — sempre "— Não identificado".
   function wOrderId(t) { var c = wgetCls(t.id); return (c && c.linkedOrderId) || t.orderId || ''; }
   function wOrderCell(t) { var oid = wOrderId(t); return oid ? esc(oid) : '<span class="footnote" style="margin:0">— Não identificado</span>'; }
@@ -8122,7 +7986,7 @@ buffer/index.js:
       parsed.rows.slice().reverse().forEach(function (row) { var id = walletKey(row); if (byId[id]) { unch++; return; } var cat = walletCat(row.tipo, row.desc, row.amount); var orderId = extractWalletOrderId(row.orderId, row.desc); var t = { id: id, operationId: opId, seq: ++maxSeq, origin: 'SHOPEE', date: row.date, dateRaw: row.dateRaw, tipo: row.tipo, desc: row.desc, category: cat, orderId: orderId, dir: row.dir, amount: row.amount, balance: row.balance, adjust: row.adjust, status: row.status, fileName: file.name, importedAt: importedAt }; byId[id] = t; changed.push(t); novo++; });
       wallet = Object.values(byId);
       var batch = { id: 'wb' + Date.now() + Math.round(performance.now()), module: 'Carteira', filename: file.name, createdAt: importedAt, seen: parsed.rows.length, novo: novo, upd: 0, unch: unch, itemsSeen: parsed.rows.length };
-      batches.unshift(batch); walletStamp = importedAt; lastImportStamp = importedAt;
+      batches.unshift(batch); lastImportStamp = importedAt;
       return Promise.all([putMany('wallet', changed), putMany('batches', [batch])]).then(function () { return batch; });
     });
   }
@@ -8302,7 +8166,6 @@ buffer/index.js:
     var arr = Object.keys(byDay).sort().map(function (k) { return byDay[k]; }); var lastA = 0, lastB = 0; arr.forEach(function (p) { if (p.a == null) p.a = lastA; else lastA = p.a; if (p.b == null) p.b = lastB; else lastB = p.b; }); return arr;
   }
   function monthDayLabel(d) { var p = d.split('-'); return p[2] + '/' + p[1]; }
-  var RECON_LABEL = { FECHADO: ['Fechado', 'ok'], EXPLICADO: ['Explicado', 'info'], PROVAVEL: ['Provável ajuste', 'warn'], DIVERGENTE: ['Divergente', 'warn'] };
   // §26-32 — "Origem automática": para cada lançamento real (não reconstruído), tenta achar a origem
   // esperada por ID; classifica 🟢 conciliado / 🔴 diferença de valor / ⚪ sem origem encontrada.
   // Só avalia categorias com fonte de comparação (Acelera/Devolução/Indenização/Renda) — as demais
@@ -8959,11 +8822,8 @@ buffer/index.js:
     var n = parseFloat(t); if (isNaN(n)) return 0; return Math.round(n * 100) * (neg ? -1 : 1);
   }
   function acPct(s) { if (s == null) return null; var t = String(s).replace('%', '').replace(',', '.').trim(); var n = parseFloat(t); return isNaN(n) ? null : n / 100; }
-  function acDays(a, b) { if (!a || !b) return null; var da = new Date(a), db = new Date(b); if (isNaN(da) || isNaN(db)) return null; return Math.round((db - da) / 864e5); }
-  function acAgeDays(d) { if (!d) return null; var x = new Date(d); if (isNaN(x)) return null; return Math.floor((Date.now() - x.getTime()) / 864e5); }
   function acIsReemb(r) { return /reembols/.test(normStatus(r.status)); }
   function acIsFullyPaid(r) { return normStatus(r.status).indexOf('totalmente pago') >= 0; }
-  function acIsSettled(r) { return acIsFullyPaid(r) || acIsReemb(r); }
   // Alíquota agrupada pela taxa efetiva encontrada nos dados (taxa ÷ antecipado) — nunca assumimos
   // faixas fixas como 2,5%/3,5%: a distribuição é sempre a dos dados reais (§21 da refatoração).
   function acAliqKey(rate) { return (rate == null) ? '—' : pct(r2(rate * 100)); }
@@ -9053,8 +8913,6 @@ buffer/index.js:
       return Promise.all([putMany('acelera', changed), putMany('batches', [batch]), putMany('settings', [{ id: 'aceleraSummary', data: aceleraSummary }])]).then(function () { return { batch: batch, novo: novo, upd: upd, unch: unch }; });
     });
   }
-  function saveAceleraCfg() { return putMany('settings', [{ id: 'aceleraCfg', data: aceleraCfg }]); }
-
   // ---- motor determinístico ----
   // §11-13 da correção: chave lógica LOJA + ID_RESGATE + ID_PEDIDO. Agrupar por resgate NUNCA
   // deduplica por data — vários resgates podem cair no mesmo dia, cada um contado uma vez. A data
@@ -9201,7 +9059,7 @@ buffer/index.js:
     app.querySelectorAll('[data-acimport]').forEach(function (b) { b.onclick = imp; });
     var ai = document.getElementById('acimp'); if (ai) ai.onclick = imp;
     app.querySelectorAll('[data-acgo]').forEach(function (b) { b.onclick = function () { aceleraSub = b.dataset.acgo; render(); }; });
-    app.querySelectorAll('[data-acresg]').forEach(function (b) { b.onclick = function () { aceleraSel.resgate = b.dataset.acresg; openAceleraResgate(b.dataset.acresg); }; });
+    app.querySelectorAll('[data-acresg]').forEach(function (b) { b.onclick = function () { openAceleraResgate(b.dataset.acresg); }; });
     app.querySelectorAll('[data-acped]').forEach(function (b) { b.onclick = function () { openAceleraPedido(b.dataset.acped); }; });
     app.querySelectorAll('[data-acdia]').forEach(function (b) { b.onclick = function () { openAceleraDia(b.dataset.acdia); }; });
     if (aceleraSub === 'antecipacoes') bindAceleraAntec();
@@ -10975,14 +10833,6 @@ buffer/index.js:
       return { key: c[0], label: c[1], valor: valor, n: n, media: n ? Math.round(valor / n) : 0, prevValor: prevValor };
     });
   }
-  function mrAjustes() {
-    var head = secHead('MINHA RENDA · AJUSTES', 'Ajustes financeiros', 'Aba Adjustment. Um ajuste de hoje pode se referir a um pedido antigo — a data financeira do ajuste é separada da data do pedido.');
-    if (!mrAdj.length) return head + emptyBox('Sem ajustes importados.');
-    var tot = mrAdj.reduce(function (s, a) { return s + a.valor; }, 0); var pos = mrAdj.filter(function (a) { return a.valor > 0; }).reduce(function (s, a) { return s + a.valor; }, 0); var neg = mrAdj.filter(function (a) { return a.valor < 0; }).reduce(function (s, a) { return s + a.valor; }, 0);
-    var strip = kstrip([{ l: 'Total de ajustes', v: brlC(tot), cls: tot < 0 ? 'red' : 'green' }, { l: 'Créditos', v: brlC(pos), cls: 'green' }, { l: 'Débitos', v: brlC(neg), cls: 'red' }, { l: 'Lançamentos', v: nn(mrAdj.length), cls: 'blue' }]);
-    var rows = mrAdj.slice().sort(function (a, b) { return a.valor - b.valor; }).slice(0, 300).map(function (a) { return '<tr' + (a.orderId ? ' class="rowlink" data-mrped="' + esc(a.orderId) + '"' : '') + '><td class="mono">' + esc(a.orderId || '—') + '</td><td class="cell-text">' + esc(a.desc || '—') + '</td><td class="nowrap ' + (a.valor < 0 ? 'neg' : 'pos') + '"><b>' + brlC(a.valor) + '</b></td></tr>'; }).join('');
-    return head + strip + '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Descrição (original Shopee)</th><th>Valor</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
-  }
   // ---- Categorias financeiras (§7 do prompt de alterações pontuais) ----
   // Agrupamento em 6 blocos, só com o que existe nos dados reais do período — nenhuma categoria
   // sem valor é inventada; "Acelera/Antecipação" fica como link para o módulo (unidades e período
@@ -11249,11 +11099,6 @@ buffer/index.js:
   }
 
   // ---------- componentes de "relatório" (dashboards visuais) ----------
-  function secHead(eyebrow, title, sub) { return '<div class="rhead"><div class="eyebrow">' + esc(eyebrow) + '</div><h3 class="rtitle">' + esc(title) + '</h3>' + (sub ? '<p class="rsub">' + esc(sub) + '</p>' : '') + '<div class="rule"></div></div>'; }
-  // k.sHtml (opt-in, nunca por padrão): quando true, k.s já vem como HTML de confiança (gerado pelo
-  // próprio app, ex.: fmtDelta() — nunca dado importado de planilha) e não passa por esc(), senão as
-  // tags apareciam cruas na tela (ex.: "<span class="footnote">..." visível no card de Faturamento).
-  function kstrip(items) { return '<div class="kstrip">' + items.map(function (k) { return '<div class="kc ' + (k.cls || '') + (k.drill ? ' rowlink' : '') + '"' + (k.drill ? ' data-mrdrill="' + esc(k.drill) + '" data-mrdrilllabel="' + esc(k.drillLabel || k.l) + '"' : '') + '><div class="kl">' + esc(k.l) + '</div><div class="kv">' + k.v + '</div>' + (k.s ? '<div class="ks">' + (k.sHtml ? k.s : esc(k.s)) + '</div>' : '') + '</div>'; }).join('') + '</div>'; }
   function callout(kind, title, bodyHtml) { return '<div class="callout ' + (kind || '') + '"><div class="ct">' + esc(title) + '</div><div class="cbody">' + bodyHtml + '</div></div>'; }
   function chartCard(title, legendHtml, svg) { return '<div class="chartcard"><div class="cch"><h4>' + esc(title) + '</h4>' + (legendHtml ? '<div class="cleg">' + legendHtml + '</div>' : '') + '</div><div style="overflow-x:auto">' + svg + '</div></div>'; }
   // Gráfico combinado barras + linha (barras = eixo esq., linha = eixo dir.). rows: [{label,bar,line}].
@@ -11982,7 +11827,6 @@ buffer/index.js:
   // módulo de origem (Pedidos/Expedição/Acelera) com id único, e o Caixa só resolve usando a MESMA
   // função canônica do módulo que a criou (pendenciaResolver/pendResolucoes) — nunca um segundo
   // estado paralelo.
-  function caixaDayRange(dateKey) { return { from: new Date(dateKey + 'T00:00:00'), to: new Date(dateKey + 'T23:59:59.999') }; }
   // A Pendência de Composição (financeira) NASCE em pedidoComposicaoFinanceira() (Pedidos) — o
   // Caixa só consulta o resultado e aplica a resolução já registrada (chave namespaced 'FIN:'+id no
   // MESMO pendResolucoes/pendenciaResolver da Expedição, nunca um segundo mapa de estado).
@@ -11995,11 +11839,6 @@ buffer/index.js:
     });
     return out;
   }
-  // §AA/§AC do complemento: FONTE ÚNICA de Receita Bruta — Resumo do dia e DRE precisam mostrar
-  // exatamente o mesmo número quando falam do mesmo conceito. Usa sempre pedidoComposicaoFinanceira
-  // (mrRow.preco quando há Income cruzado; senão o valor do próprio Pedido) — nunca o.totalAmount
-  // direto, que podia divergir silenciosamente do que a DRE já usava.
-  function caixaReceitaBrutaPedido(o) { var c = pedidoComposicaoFinanceira(o.id); return c.receitaC != null ? c.receitaC / 100 : (o.totalAmount || 0); }
   // ---- Blocos de dados do dia (cada um lê motores já aprovados; nenhum recalcula) ----
   function caixaDayVendas(dateKey) {
     var pagas = orders.filter(function (o) { return o.paidAt && o.paidAt.slice(0, 10) === dateKey; });
@@ -13030,13 +12869,6 @@ buffer/index.js:
     rec.history = (rec.history || []).concat([{ at: at, user: 'Operador', status: 'ABERTO', justificativa: 'Reaberto manualmente' }]);
     return putMany('caixafechamentos', [rec]);
   }
-  // §21: evento posterior — nunca reabre nem reescreve o snapshot do fechamento original; só
-  // acrescenta uma anotação vinculada à data ORIGINAL do pedido, nunca à data do evento.
-  function caixaRegistrarEventoPosterior(dateKey, orderId, descricao) {
-    var rec = caixaClose[dateKey]; if (!rec) return Promise.resolve();
-    rec.eventosPosteriores = (rec.eventosPosteriores || []).concat([{ at: new Date().toISOString(), orderId: orderId, descricao: descricao }]);
-    return putMany('caixafechamentos', [rec]);
-  }
   // ==================== DASHBOARD GERENCIAL DO CAIXA (por período) ====================
   // Parte 7/8 do prompt "Correção do custo + taxas...": o Dashboard deixa de responder só por
   // "hoje" e passa a agregar QUALQUER período — reaproveitando o MESMO seletor global de período
@@ -13387,13 +13219,6 @@ buffer/index.js:
     var dre = caixaDreDia(dateKey, origem.pedidos);
     var conc = caixaDayLancamentosConciliados(dateKey);
     var saldoCart = caixaDaySaldoCarteira(dateKey);
-    function caixaCartSituacao(t) {
-      if (pendCart.itens.some(function (it) { return it.t.id === t.id; })) return '<span class="tag warn">🔴 Pendência</span>';
-      var cc = conc.itens.find(function (it) { return it.t.id === t.id; });
-      if (cc) return '<span class="tag ok">🟢 ' + esc(CAIXA_CART_CAT_LABEL[cc.categoria] || 'Conciliado') + '</span>';
-      return '<span class="tag neutral">⚪ sem comparação</span>';
-    }
-
     // ---- Cabeçalho: título, seletor de dia, operação, exportar/imprimir — nada além disso ----
     var opLbl = opLabel(opActive());
     var allDays = caixaDiasComMovimento();
@@ -14252,14 +14077,7 @@ buffer/index.js:
   // e travado) — financialAccounts NÃO duplica isso; financialAccountsForSelector() apenas MESCLA os
   // dois catálogos para exibição/seleção unificada, sem criar um segundo cadastro de bancos.
   var financialAccounts = [];
-  var FA_TYPE_LABEL = { MARKETPLACE_RECEIVABLE: 'Recebíveis Shopee', MARKETPLACE_WALLET: 'Saldo Carteira Shopee', BANK: 'Banco', CASH: 'Caixa', OTHER: 'Outra' };
   function faUid() { return 'FA-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8); }
-  function faSave(rec) {
-    var id = rec.id || faUid(); var now = new Date().toISOString();
-    var full = { id: id, companyId: rec.companyId || null, operationId: rec.operationId || null, type: rec.type, name: rec.name, institution: rec.institution || '', active: rec.active !== false, createdAt: rec.createdAt || now, updatedAt: now };
-    financialAccounts = [full].concat(financialAccounts.filter(function (a) { return a.id !== id; }));
-    return putMany('financialaccounts', [full]).then(function () { return full; });
-  }
   // Cria — uma única vez por operação, de forma idempotente — as contas "Carteira Shopee" e
   // "Recebíveis Shopee". Nunca duplica se a operação já tem as contas (roda a cada fechamento/boot
   // sem custo: só grava quando realmente falta algo).
@@ -14317,8 +14135,6 @@ buffer/index.js:
     if (pendingList) pendingList.push(full);
     return full;
   }
-  function feGetByKey(key) { return financialEvents.find(function (e) { return e.sourceEventKey === key; }) || null; }
-
   // Contas a Receber (crheader) + baixas (crreceipts) — Fase 4. Transferências financeiras puras
   // (financialtransfers) — Fase 7. Declarados aqui (junto do resto da camada canônica) mesmo antes de
   // suas telas/engine completas, para que o boot já leia/grave os stores desde já.
@@ -14513,7 +14329,6 @@ buffer/index.js:
     fatorRoteiros[familyId] = rec;
     return putMany('fatorroteiros', [rec]).then(function () { return rec; });
   }
-  function fatorRoteiroFamiliaRemove(familyId) { delete fatorRoteiros[familyId]; return delOne('fatorroteiros', familyId); }
   function fatorRoteiroSkuSave(skuRaw, processosArr) {
     var key = normalizeSkuKey(skuRaw); if (!key) return Promise.resolve();
     var rec = fatorRoteiroSkuOverrides[key] || { id: key, skuKey: key, skuOriginal: skuRaw };
@@ -15159,16 +14974,11 @@ buffer/index.js:
   function cpCategoryLabel(id) { var c = cpCategories.find(function (x) { return x.id === id; }); return c ? c.name : '—'; }
   function cpCategoryPathLabel(id) { var c = cpCategories.find(function (x) { return x.id === id; }); if (!c) return '—'; var p = c.parentId ? cpCategories.find(function (x) { return x.id === c.parentId; }) : null; return (p ? p.name + ' › ' : '') + c.name; }
   function cpAccountingLabel(id) { var a = cpAccounting.find(function (x) { return x.id === id; }); return a ? (a.code ? a.code + ' — ' + a.name : a.name) : '—'; }
-  function cpCostCenterLabel(id) { var c = cpCostCenters.find(function (x) { return x.id === id; }); return c ? c.name : '—'; }
   // Fase 5 do prompt "Reestruturação do Caixa": despesas retidas pela Shopee (Comissão, Taxa de
   // Serviço, Taxa Acelera, débitos classificados da Carteira) saem de contas financeiras NOVAS
   // (Recebíveis Shopee / Carteira Shopee), não de um banco — faLabel() resolve as duas famílias sem
   // duplicar cadastro (financialAccounts + bankAccounts, mesma mescla de financialAccountsForSelector).
   function cpFinAccountLabel(id) { if (!id) return '— sem conta financeira —'; return faLabel(id) || '—'; }
-  // Uma categoria pode ter conta contábil/centro de custo padrão — herdado quando o campo específico
-  // não é informado (§16/§19/§20 do prompt: categoria ≠ conta financeira ≠ conta contábil).
-  function cpCategoryDefaults(categoryId) { var c = cpCategories.find(function (x) { return x.id === categoryId; }); return { accountingAccountId: (c && c.accountingAccountId) || null, costCenterId: (c && c.costCenterId) || null, dreGroup: (c && c.dreGroup) || null }; }
-
   // PROMPT "Correção da Base Financeira": todo lançamento automático de Contas a Pagar/Receber gerado
   // pelo fechamento do Caixa precisa nascer com Categoria financeira preenchida (nunca "—"), senão a
   // DRE por categoria fica incompleta e o operador precisa classificar manualmente item a item.
@@ -15250,12 +15060,6 @@ buffer/index.js:
     return Object.keys(set).sort();
   }
   function cpLookupSupplyLink(supplierId, rawDesc) { var key = cpNorm(rawDesc); var l = cpSupplyLinks.find(function (x) { return x.supplierId === supplierId && x.rawNormalized === key; }); return l ? l.description : null; }
-  function cpLearnSupplyLink(supplierId, rawDesc, canonicalDesc) {
-    var key = cpNorm(rawDesc); if (!key || cpNorm(canonicalDesc) === key) return Promise.resolve(); // nada a aprender se for igual
-    var id = cpUid('SL'); var full = { id: id, supplierId: supplierId, rawNormalized: key, rawOriginal: rawDesc, description: canonicalDesc, createdAt: new Date().toISOString() };
-    cpSupplyLinks = [full].concat(cpSupplyLinks.filter(function (l) { return !(l.supplierId === supplierId && l.rawNormalized === key); }));
-    return putMany('cpsupplylinks', [full]);
-  }
 
   // ---- itens da conta ----
   function cpItemsForHeader(id) { return cpItemsAll.filter(function (i) { return i.accountsPayableId === id; }); }
@@ -15897,7 +15701,6 @@ buffer/index.js:
     refresh();
 
     function itemsTotal() { return cpItemsTotal(items); }
-    function valorCalculado() { return cpValorOriginal(items, cpParseNum(fieldVal('cp-frete')) || draft.freteValor || 0, cpParseNum(fieldVal('cp-outras')) || draft.outrasDespesasValor || 0); }
     function fieldVal(id) { var el = panel.querySelector('#' + id); return el ? el.value : null; }
 
     // ---- edição de itens/valores SEM re-render do formulário (correção da raiz da perda de foco) ----
