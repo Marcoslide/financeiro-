@@ -13208,7 +13208,7 @@
   function precTabsHtml() {
     return '<div class="tabs">' + [['simulador', 'Simulador'], ['familias', 'Famílias & Preços'], ['regras', 'Regras & Custos'], ['equilibrio', 'Ponto de Equilíbrio'], ['meta', 'Meta de Lucro'], ['visaogeral', 'Visão Geral'], ['auditoria', 'Auditoria']].map(function (t) { return '<div class="tab' + (precSub === t[0] ? ' active' : '') + '" data-prectab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>';
   }
-  function precHead() { return secHead('PRECIFICAÇÃO', 'Precificação & Margem', 'Markup, fator, margem e o caminho inverso: para onde vai o seu fator? Simule antes de vender e compare com o resultado realizado.'); }
+  function precHead() { return PageHeader({ variant: 'eyebrow', eyebrow: 'PRECIFICAÇÃO', title: 'Precificação & Margem', description: 'Markup, fator, margem e o caminho inverso: para onde vai o seu fator? Simule antes de vender e compare com o resultado realizado.' }); }
   function renderPrecificacao() {
     app.innerHTML = precHead() + precTabsHtml() + '<div id="precbody" style="margin-top:14px"></div>';
     precRenderBody();
@@ -13360,12 +13360,12 @@
     var roundedCents = (precSim.mode === 'MARGIN' && precSim.round) ? pricingRoundComercial(calc.sellingPrice, precSim.round) : null;
     var calcRounded = roundedCents ? pricingCalculate(Object.assign({}, precSimInput(), { mode: 'PRICE', priceCents: roundedCents })) : null;
     var html = '<div class="panel"><div class="ph"><h3>Resultado</h3><span class="badge ' + st[1] + '">' + st[0] + '</span></div><div class="pb">' +
-      '<div class="kstrip">' +
-      '<div class="kc"><div class="kl">Preço ' + (precSim.mode === 'PRICE' ? 'informado' : 'recomendado') + '</div><div class="kv" style="font-size:20px">' + (calc.sellingPrice != null ? brlC(calc.sellingPrice) : '—') + '</div></div>' +
-      '<div class="kc"><div class="kl">Fator</div><div class="kv" style="font-size:20px">' + (calc.factor != null ? calc.factor.toFixed(2).replace('.', ',') + 'x' : '—') + '</div></div>' +
-      '<div class="kc"><div class="kl">Lucro</div><div class="kv" style="font-size:20px;color:' + (calc.profitAmount != null && calc.profitAmount < 0 ? 'var(--err)' : 'var(--ok)') + '">' + (calc.profitAmount != null ? brlC(calc.profitAmount) : '—') + '</div></div>' +
-      '<div class="kc"><div class="kl">Margem</div><div class="kv" style="font-size:20px">' + (calc.profitPct != null ? pct(calc.profitPct) : '—') + '</div></div>' +
-      '</div>' +
+      MetricGrid([
+        MetricCard({ label: 'Preço ' + (precSim.mode === 'PRICE' ? 'informado' : 'recomendado'), value: '<span style="font-size:20px">' + (calc.sellingPrice != null ? brlC(calc.sellingPrice) : '—') + '</span>' }),
+        MetricCard({ label: 'Fator', value: '<span style="font-size:20px">' + (calc.factor != null ? calc.factor.toFixed(2).replace('.', ',') + 'x' : '—') + '</span>' }),
+        MetricCard({ label: 'Lucro', value: '<span style="font-size:20px;color:' + (calc.profitAmount != null && calc.profitAmount < 0 ? 'var(--err)' : 'var(--ok)') + '">' + (calc.profitAmount != null ? brlC(calc.profitAmount) : '—') + '</span>' }),
+        MetricCard({ label: 'Margem', value: '<span style="font-size:20px">' + (calc.profitPct != null ? pct(calc.profitPct) : '—') + '</span>' }),
+      ]) +
       (roundedCents && roundedCents !== calc.sellingPrice ? ('<div class="callout" style="margin-top:10px"><div class="cbody">Preço matemático: <b>' + brlC(calc.sellingPrice) + '</b> · Preço comercial (' + esc(PRICING_ROUND_OPTS.find(function (o) { return o[0] === precSim.round; })[1]) + '): <b>' + brlC(roundedCents) + '</b> — margem recalculada: <b>' + (calcRounded.profitPct != null ? pct(calcRounded.profitPct) : '—') + '</b></div></div>') : '') +
       '<h4 style="margin:16px 0 8px">Para onde vai o ' + (calc.factor != null ? 'fator ' + calc.factor.toFixed(2).replace('.', ',') + 'x' : 'preço') + '?</h4>' +
       precCompositionBar(calc) +
@@ -13508,19 +13508,18 @@
   }
   function openPrecFamilyRuleEditor(familyId) {
     var fam = skuFamById[familyId]; var rule = pricingFamilyRule(familyId) || {};
-    var o = document.createElement('div'); o.className = 'overlay'; o.style.zIndex = '70';
-    o.innerHTML = '<div class="modal" style="width:460px"><div class="mh"><h3>Regra de precificação — ' + esc(fam ? fam.name : '') + '</h3><button class="x">×</button></div><div class="mbd">' +
-      '<label class="fld">Fator padrão</label><input class="input" id="pfe-fator" value="' + (rule.factorPadrao != null ? String(rule.factorPadrao).replace('.', ',') : '') + '" placeholder="4,00">' +
+    var bodyHtml = '<label class="fld">Fator padrão</label><input class="input" id="pfe-fator" value="' + (rule.factorPadrao != null ? String(rule.factorPadrao).replace('.', ',') : '') + '" placeholder="4,00">' +
       '<label class="fld">Margem de lucro desejada (%)</label><input class="input" id="pfe-margemalvo" value="' + (rule.targetMarginPct != null ? String(rule.targetMarginPct).replace('.', ',') : '') + '">' +
       '<label class="fld">Margem mínima aceitável (%)</label><input class="input" id="pfe-margemmin" value="' + (rule.minMarginPct != null ? String(rule.minMarginPct).replace('.', ',') : '') + '">' +
-      '<label class="fld">Arredondamento comercial</label><select class="select" id="pfe-round" style="width:100%">' + PRICING_ROUND_OPTS.map(function (o2) { return '<option value="' + o2[0] + '"' + (rule.roundRule === o2[0] ? ' selected' : '') + '>' + o2[1] + '</option>'; }).join('') + '</select>' +
-      '</div><div class="mf"><button class="btn-sm" id="pfe-x">Cancelar</button><button class="btn-sm primary" id="pfe-ok">Salvar</button></div></div>';
-    o.onclick = function (e) { if (e.target === o) o.remove(); }; document.body.appendChild(o);
-    o.querySelector('.x').onclick = o.querySelector('#pfe-x').onclick = function () { o.remove(); };
-    o.querySelector('#pfe-ok').onclick = function () {
-      var dto = { factorPadrao: cpParseNum(o.querySelector('#pfe-fator').value), targetMarginPct: cpParseNum(o.querySelector('#pfe-margemalvo').value), minMarginPct: cpParseNum(o.querySelector('#pfe-margemmin').value), roundRule: o.querySelector('#pfe-round').value };
-      pricingSaveFamilyRule(familyId, dto).then(function () { o.remove(); toast('Regra salva', ''); precRenderBody(); });
-    };
+      '<label class="fld">Arredondamento comercial</label><select class="select" id="pfe-round" style="width:100%">' + PRICING_ROUND_OPTS.map(function (o2) { return '<option value="' + o2[0] + '"' + (rule.roundRule === o2[0] ? ' selected' : '') + '>' + o2[1] + '</option>'; }).join('') + '</select>';
+    openModal({
+      title: 'Regra de precificação — ' + (fam ? fam.name : ''), width: 460, bodyHtml: bodyHtml,
+      confirmLabel: 'Salvar',
+      onConfirm: function (panel) {
+        var dto = { factorPadrao: cpParseNum(panel.querySelector('#pfe-fator').value), targetMarginPct: cpParseNum(panel.querySelector('#pfe-margemalvo').value), minMarginPct: cpParseNum(panel.querySelector('#pfe-margemmin').value), roundRule: panel.querySelector('#pfe-round').value };
+        return pricingSaveFamilyRule(familyId, dto).then(function () { toast('Regra salva', ''); precRenderBody(); });
+      },
+    });
   }
 
   // ---- Ponto de Equilíbrio (PROMPT "Precificação & Metas" §6) ----
@@ -13552,12 +13551,12 @@
     var custoIncompletoAviso = calc.eng.diasSemCustoCompleto ? ('<div class="footnote" style="margin-top:6px">⚠ ' + nn(calc.eng.diasSemCustoCompleto) + ' dia(s) do período com custo de produto incompleto — o lucro desses dias entra parcial, nunca estimado.</div>') : '';
     var resultado = '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Ponto de Equilíbrio</h3><span class="badge ' + st[1] + '">' + st[0] + '</span></div><div class="pb">' +
       devPeriodBarAsCp() +
-      '<div class="kstrip" style="margin-top:10px">' +
-      '<div class="kc"><div class="kl">Custos fixos do período</div><div class="kv">' + brlC(calc.totalFixoC) + '</div></div>' +
-      '<div class="kc"><div class="kl">Já coberto (lucro realizado)</div><div class="kv">' + brlC(calc.jaCobertoC) + '</div></div>' +
-      '<div class="kc"><div class="kl">Falta</div><div class="kv">' + brlC(calc.faltaC) + '</div></div>' +
-      '<div class="kc"><div class="kl">% coberto</div><div class="kv">' + (calc.pctCoberto != null ? pct(calc.pctCoberto) : '—') + '</div></div>' +
-      '</div>' +
+      MetricGrid([
+        MetricCard({ label: 'Custos fixos do período', value: brlC(calc.totalFixoC) }),
+        MetricCard({ label: 'Já coberto (lucro realizado)', value: brlC(calc.jaCobertoC) }),
+        MetricCard({ label: 'Falta', value: brlC(calc.faltaC) }),
+        MetricCard({ label: '% coberto', value: calc.pctCoberto != null ? pct(calc.pctCoberto) : '—' }),
+      ]) +
       custoIncompletoAviso +
       '<div class="footnote" style="margin-top:8px">"Já coberto" é o lucro REAL do período selecionado no filtro acima (mesmo motor do Dashboard do Caixa) — nunca uma estimativa. Ajuste o período (ex.: "Este mês") para ver o quanto já cobriu a estrutura fixa do mês.</div>' +
       '</div></div>';
@@ -13598,12 +13597,12 @@
     var faturamentoNecessarioC = (calc.faltaC > 0 && margemMedia != null && margemMedia > 0) ? Math.round(calc.faltaC / (margemMedia / 100)) : null;
     var resultado = '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Meta de Lucro</h3></div><div class="pb">' +
       devPeriodBarAsCp() +
-      '<div class="kstrip" style="margin-top:10px">' +
-      '<div class="kc"><div class="kl">Meta</div><div class="kv">' + (calc.metaC ? brlC(calc.metaC) : '—') + '</div></div>' +
-      '<div class="kc"><div class="kl">Lucro atual</div><div class="kv">' + brlC(calc.lucroAtualC) + '</div></div>' +
-      '<div class="kc"><div class="kl">Falta</div><div class="kv">' + brlC(calc.faltaC) + '</div></div>' +
-      '<div class="kc"><div class="kl">% atingido</div><div class="kv">' + (calc.pctAtingido != null ? pct(calc.pctAtingido) : '—') + '</div></div>' +
-      '</div>' +
+      MetricGrid([
+        MetricCard({ label: 'Meta', value: calc.metaC ? brlC(calc.metaC) : '—' }),
+        MetricCard({ label: 'Lucro atual', value: brlC(calc.lucroAtualC) }),
+        MetricCard({ label: 'Falta', value: brlC(calc.faltaC) }),
+        MetricCard({ label: '% atingido', value: calc.pctAtingido != null ? pct(calc.pctAtingido) : '—' }),
+      ]) +
       (faturamentoNecessarioC != null ? ('<div class="callout" style="margin-top:10px"><div class="cbody">Com a margem média realizada no período (' + pct(margemMedia) + '), você precisa vender aproximadamente <b>' + brlC(faturamentoNecessarioC) + '</b> para atingir sua meta.</div></div>') : (calc.faltaC > 0 ? '<div class="footnote" style="margin-top:8px">Não é possível estimar o faturamento necessário: falta margem média completa no período (custo de produto incompleto em algum dia, ou nenhuma venda com custo conhecido).</div>' : '')) +
       '</div></div>';
     var fams = precFamiliesList();
@@ -13674,13 +13673,13 @@
     // e da Meta de Lucro (precEquilibrioCalc/precMetaCalc, que já leem o MESMO motor) — nunca um
     // terceiro cálculo financeiro.
     var peCalc = precEquilibrioCalc(); var mlCalc = precMetaCalc();
-    var dashboardCards = '<div class="kstrip">' +
-      '<div class="kc"><div class="kl">Faturamento atual (período)</div><div class="kv">' + brlC(peCalc.eng.totFat) + '</div></div>' +
-      '<div class="kc"><div class="kl">Lucro atual (período)</div><div class="kv">' + brlC(peCalc.eng.totLucro || 0) + '</div></div>' +
-      '<div class="kc"><div class="kl">Margem média</div><div class="kv">' + (peCalc.eng.margem != null ? pct(peCalc.eng.margem) : '—') + '</div></div>' +
-      '<div class="kc rowlink" data-prectab="equilibrio"><div class="kl">Ponto de equilíbrio</div><div class="kv">' + (peCalc.pctCoberto != null ? pct(peCalc.pctCoberto) : '—') + '</div></div>' +
-      '<div class="kc rowlink" data-prectab="meta"><div class="kl">Meta de lucro</div><div class="kv">' + (mlCalc.pctAtingido != null ? pct(mlCalc.pctAtingido) : '—') + '</div></div>' +
-      '</div>';
+    var dashboardCards = MetricGrid([
+      MetricCard({ label: 'Faturamento atual (período)', value: brlC(peCalc.eng.totFat) }),
+      MetricCard({ label: 'Lucro atual (período)', value: brlC(peCalc.eng.totLucro || 0) }),
+      MetricCard({ label: 'Margem média', value: peCalc.eng.margem != null ? pct(peCalc.eng.margem) : '—' }),
+      MetricCard({ label: 'Ponto de equilíbrio', value: peCalc.pctCoberto != null ? pct(peCalc.pctCoberto) : '—', drill: { action: 'equilibrio', label: 'Ponto de equilíbrio' } }),
+      MetricCard({ label: 'Meta de lucro', value: mlCalc.pctAtingido != null ? pct(mlCalc.pctAtingido) : '—', drill: { action: 'meta', label: 'Meta de lucro' } }),
+    ]);
     // Produtos críticos (§30): famílias cuja precificação padrão (fator padrão ou 4x) cai em
     // MARGEM_BAIXA/ABAIXO_MINIMO/PREJUÍZO — reaproveita pricingForFamily(), mesma função da aba
     // Famílias & Preços, nunca um cálculo paralelo.
@@ -13695,28 +13694,30 @@
       '</tbody></table></div></div>') : '<div class="callout" style="margin-top:14px"><div class="cbody">Nenhum produto crítico identificado nas famílias com fator/margem configurados.</div></div>';
     return devPeriodBarAsCp() +
       dashboardCards +
-      '<div class="kstrip" style="margin-top:10px">' +
-      '<div class="kc"><div class="kl">Margem média projetada</div><div class="kv">' + (ag.margemProjetadaPct != null ? pct(ag.margemProjetadaPct) : '—') + '</div></div>' +
-      '<div class="kc"><div class="kl">Margem média realizada</div><div class="kv">' + (ag.margemRealizadaPct != null ? pct(ag.margemRealizadaPct) : '—') + '</div></div>' +
-      '<div class="kc"><div class="kl">Fator médio das vendas</div><div class="kv">' + (ag.fatorMedio != null ? ag.fatorMedio.toFixed(2).replace('.', ',') + 'x' : '—') + '</div></div>' +
-      '<div class="kc"><div class="kl">Lucro deixado na mesa</div><div class="kv">' + (ag.lucroDeixadoC ? brlC(ag.lucroDeixadoC) : brl(0)) + '</div></div>' +
-      '</div>' +
-      '<div class="kstrip" style="margin-top:10px">' +
-      '<div class="kc"><div class="kl">Faturamento com preço saudável</div><div class="kv">' + brlC(ag.faturamentoSaudavelC) + '</div></div>' +
-      '<div class="kc"><div class="kl">Faturamento com preço crítico</div><div class="kv">' + brlC(ag.faturamentoCriticoC) + '</div></div>' +
-      '<div class="kc"><div class="kl">Pedidos abaixo do preço recomendado</div><div class="kv">' + nn(ag.pedidosAbaixoRecN) + '</div></div>' +
-      '<div class="kc"><div class="kl">Pedidos pagos com precificação</div><div class="kv">' + nn(ag.pedidosComPrec) + ' / ' + nn(ag.pagosN) + '</div></div>' +
-      '</div>' +
+      MetricGrid([
+        MetricCard({ label: 'Margem média projetada', value: ag.margemProjetadaPct != null ? pct(ag.margemProjetadaPct) : '—' }),
+        MetricCard({ label: 'Margem média realizada', value: ag.margemRealizadaPct != null ? pct(ag.margemRealizadaPct) : '—' }),
+        MetricCard({ label: 'Fator médio das vendas', value: ag.fatorMedio != null ? ag.fatorMedio.toFixed(2).replace('.', ',') + 'x' : '—' }),
+        MetricCard({ label: 'Lucro deixado na mesa', value: ag.lucroDeixadoC ? brlC(ag.lucroDeixadoC) : brl(0) }),
+      ]) +
+      MetricGrid([
+        MetricCard({ label: 'Faturamento com preço saudável', value: brlC(ag.faturamentoSaudavelC) }),
+        MetricCard({ label: 'Faturamento com preço crítico', value: brlC(ag.faturamentoCriticoC) }),
+        MetricCard({ label: 'Pedidos abaixo do preço recomendado', value: nn(ag.pedidosAbaixoRecN) }),
+        MetricCard({ label: 'Pedidos pagos com precificação', value: nn(ag.pedidosComPrec) + ' / ' + nn(ag.pagosN) }),
+      ]) +
       '<div class="footnote" style="margin-top:8px">Só entram na agregação pedidos cuja família tem custo e a operação tem taxas configuradas — nunca estima o que não tem base.</div>' +
       tabelaCriticas +
-      '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Cadastro</h3></div><div class="pb"><div class="kstrip">' +
-      '<div class="kc"><div class="kl">Famílias cadastradas</div><div class="kv">' + nn(fams.length) + '</div></div>' +
-      '<div class="kc"><div class="kl">Famílias com custo</div><div class="kv">' + nn(comCusto) + '</div></div>' +
-      '<div class="kc"><div class="kl">Famílias com regra de precificação</div><div class="kv">' + nn(comRegra) + '</div></div>' +
-      '<div class="kc"><div class="kl">Operações com taxas configuradas</div><div class="kv">' + nn(opsConfig) + ' / ' + nn(ops.length) + '</div></div>' +
-      '</div></div></div>';
+      '<div class="panel" style="margin-top:14px"><div class="ph"><h3>Cadastro</h3></div><div class="pb">' +
+      MetricGrid([
+        MetricCard({ label: 'Famílias cadastradas', value: nn(fams.length) }),
+        MetricCard({ label: 'Famílias com custo', value: nn(comCusto) }),
+        MetricCard({ label: 'Famílias com regra de precificação', value: nn(comRegra) }),
+        MetricCard({ label: 'Operações com taxas configuradas', value: nn(opsConfig) + ' / ' + nn(ops.length) }),
+      ]) +
+      '</div></div>';
   }
-  function bindPrecVisaoGeral() { bindDevPeriodBar(); }
+  function bindPrecVisaoGeral() { bindDevPeriodBar(); bindMetricCards(app, { drill: function (action) { precSub = action; render(); } }); }
 
   // ---- Auditoria (§Parte 18, versão desta fase) ----
   function renderPrecAuditoria() {
