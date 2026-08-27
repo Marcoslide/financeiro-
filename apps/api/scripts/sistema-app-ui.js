@@ -325,7 +325,7 @@
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id', bankaccounts: 'id', companies: 'id', operations: 'id', cpheader: 'id', cpitems: 'id', cppayments: 'id', cpattach: 'id', cpcategories: 'id', cpaccounting: 'id', cpcostcenters: 'id', cpsuppliers: 'id', cpsupplylinks: 'id', pricingopconfig: 'id', pricingfamilyrules: 'id', financialaccounts: 'id', financialevents: 'id', crheader: 'id', crreceipts: 'id', financialtransfers: 'id', fatorfuncionarios: 'id', fatorcustosfixos: 'id', fatorcustosvariaveis: 'id', fatorpedidosnapshots: 'id', skufamilyoverrides: 'id', fatorconfigs: 'id', fatorsetores: 'id', fatorimpostos: 'id', fatorprocessos: 'id', fatorroteiros: 'id', fatorroteirosku: 'id', skufamilyoverridehistory: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id', bankaccounts: 'id', companies: 'id', operations: 'id', cpheader: 'id', cpitems: 'id', cppayments: 'id', cpattach: 'id', cpcategories: 'id', cpaccounting: 'id', cpcostcenters: 'id', cpsuppliers: 'id', cpsupplylinks: 'id', pricingopconfig: 'id', pricingfamilyrules: 'id', financialaccounts: 'id', financialevents: 'id', crheader: 'id', crreceipts: 'id', crcategories: 'id', crcostcenters: 'id', financialtransfers: 'id', fatorfuncionarios: 'id', fatorcustosfixos: 'id', fatorcustosvariaveis: 'id', fatorpedidosnapshots: 'id', skufamilyoverrides: 'id', fatorconfigs: 'id', fatorsetores: 'id', fatorimpostos: 'id', fatorprocessos: 'id', fatorroteiros: 'id', fatorroteirosku: 'id', skufamilyoverridehistory: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -8862,11 +8862,11 @@
       var walletT = faWalletForOperation(opIdT); var opCompId = opCompanyId(opIdT);
       transf.autoTxs.forEach(function (t) {
         transferPlan.push({ sourceEventKey: feKey(opIdT, 'TRANSFER', 'WALLET_AUTO', t.id), operationId: opIdT, companyId: opCompId, fromAccountId: walletT ? walletT.id : null, toAccountId: null, valor: r2(Math.abs(t.amount)), date: t.date ? t.date.slice(0, 10) : dateKey, source: 'WALLET_AUTO', sourceId: t.id, status: 'CONCLUIDO' });
-        arPlan.push({ sourceEventKey: feKey(opIdT, 'CAIXA_TRANSFERENCIA', 'PIX_AUTO', t.id), operationId: opIdT, companyId: opCompId, orderId: null, descricao: 'Fechamento Caixa Shopee — Pix identificado na Carteira (' + dbr(t.date ? t.date.slice(0, 10) : dateKey) + ')', pagador: 'Shopee', origin: 'CAIXA_TRANSFERENCIA', valor: r2(Math.abs(t.amount)), competencia: t.date ? t.date.slice(0, 10) : dateKey, vencimento: t.date ? t.date.slice(0, 10) : dateKey, financialAccountId: null, categoryId: cpCategoryIdByName(CP_CAT_SHOPEE_TRANSFERENCIA), referencia: t.id, __autoBaixa: null });
+        arPlan.push({ sourceEventKey: feKey(opIdT, 'CAIXA_TRANSFERENCIA', 'PIX_AUTO', t.id), operationId: opIdT, companyId: opCompId, orderId: null, descricao: 'Fechamento Caixa Shopee — Pix identificado na Carteira (' + dbr(t.date ? t.date.slice(0, 10) : dateKey) + ')', pagador: 'Shopee', origin: 'CAIXA_TRANSFERENCIA', valor: r2(Math.abs(t.amount)), competencia: t.date ? t.date.slice(0, 10) : dateKey, vencimento: t.date ? t.date.slice(0, 10) : dateKey, financialAccountId: null, categoryId: crCategoryIdByName(CR_CAT_SHOPEE_TRANSFERENCIA), referencia: t.id, __autoBaixa: null });
       });
       transf.manual.forEach(function (bt) {
         transferPlan.push({ sourceEventKey: feKey(opIdT, 'TRANSFER', 'BANK_MANUAL', bt.id), operationId: opIdT, companyId: opCompId, fromAccountId: walletT ? walletT.id : null, toAccountId: bt.contaId || null, valor: r2(bt.valor), date: bt.quando ? bt.quando.slice(0, 10) : dateKey, source: 'BANK_MANUAL', sourceId: bt.id, status: 'CONCLUIDO' });
-        arPlan.push({ sourceEventKey: feKey(opIdT, 'CAIXA_TRANSFERENCIA', 'BANCO', bt.id), operationId: opIdT, companyId: opCompId, orderId: null, descricao: 'Fechamento Caixa Shopee — transferência para ' + (bankAccountLabel(bt.contaId) || 'banco a definir') + ' (' + dbr(bt.quando ? bt.quando.slice(0, 10) : dateKey) + ')', pagador: 'Shopee', origin: 'CAIXA_TRANSFERENCIA', valor: r2(bt.valor), competencia: bt.quando ? bt.quando.slice(0, 10) : dateKey, vencimento: bt.quando ? bt.quando.slice(0, 10) : dateKey, financialAccountId: bt.contaId || null, categoryId: cpCategoryIdByName(CP_CAT_SHOPEE_TRANSFERENCIA), referencia: bt.id, __autoBaixa: bt.contaId ? { valorRecebido: r2(bt.valor), financialAccountId: bt.contaId, date: bt.quando ? bt.quando.slice(0, 10) : dateKey } : null });
+        arPlan.push({ sourceEventKey: feKey(opIdT, 'CAIXA_TRANSFERENCIA', 'BANCO', bt.id), operationId: opIdT, companyId: opCompId, orderId: null, descricao: 'Fechamento Caixa Shopee — transferência para ' + (bankAccountLabel(bt.contaId) || 'banco a definir') + ' (' + dbr(bt.quando ? bt.quando.slice(0, 10) : dateKey) + ')', pagador: 'Shopee', origin: 'CAIXA_TRANSFERENCIA', valor: r2(bt.valor), competencia: bt.quando ? bt.quando.slice(0, 10) : dateKey, vencimento: bt.quando ? bt.quando.slice(0, 10) : dateKey, financialAccountId: bt.contaId || null, categoryId: crCategoryIdByName(CR_CAT_SHOPEE_TRANSFERENCIA), referencia: bt.id, __autoBaixa: bt.contaId ? { valorRecebido: r2(bt.valor), financialAccountId: bt.contaId, date: bt.quando ? bt.quando.slice(0, 10) : dateKey } : null });
       });
     }
     return { ar: arPlan, ap: apPlan, transfers: transferPlan, naoClassificados: { n: naoClassificados.length, valor: r2(naoClassificados.reduce(function (s, t) { return s + Math.abs(t.amount); }, 0)) } };
@@ -8876,10 +8876,11 @@
   // lógica), só grava financialtransfers/financialevents em lote no final.
   function caixaAplicarIntegracaoFinanceira(dateKey) {
     // Categorias Shopee (Comissão/Taxa de Serviço/Acelera/Transferência…) precisam existir ANTES de
-    // montar o plano — cpCategoryIdByName() é lookup síncrono no array em memória; sem isso, no
-    // primeiríssimo fechamento do sistema (cpCategories ainda vazio) todo título nasceria sem
-    // categoria mesmo com o mapeamento correto no código.
-    return cpCategorySeedShopee().then(function () {
+    // montar o plano — cpCategoryIdByName()/crCategoryIdByName() são lookups síncronos nos arrays em
+    // memória; sem isso, no primeiríssimo fechamento do sistema (cpCategories/crCategories ainda
+    // vazios) todo título nasceria sem categoria mesmo com o mapeamento correto no código. CP e CR
+    // são seedados em cadastros separados (Fase 9 — nunca compartilham categoria).
+    return Promise.all([cpCategorySeedShopee(), crCategorySeedShopee()]).then(function () {
     var plano = caixaMontarIntegracaoFinanceira(dateKey);
     var seedOps = {}; plano.ar.concat(plano.ap).forEach(function (r) { if (r.operationId) seedOps[r.operationId] = 1; });
     return Promise.all(Object.keys(seedOps).map(function (opId) { return faSeedForOperation(opId); })).then(function () {
@@ -10222,6 +10223,10 @@
   // (financialtransfers) — Fase 7. Declarados aqui (junto do resto da camada canônica) mesmo antes de
   // suas telas/engine completas, para que o boot já leia/grave os stores desde já.
   var contasReceber = [], crReceipts = [];
+  // Fase 9 — Contas a Receber ganha cadastro de classificação PRÓPRIO (Centro de Recebimentos →
+  // Categoria), nunca compartilhado com o de Contas a Pagar (cpCategories/cpCostCenters), nem por
+  // ID nem por lista — mesmo quando o nome é igual, são registros diferentes.
+  var crCategories = [], crCostCenters = [];
   var financialTransfers = [];
 
   // ============================================================ CONTAS A PAGAR
@@ -12382,6 +12387,110 @@
     // Refatoração M3: mesma correção de cpFinAccountOptions() — "__none" precisa ganhar `selected`.
     return '<option value="">Todas as contas financeiras</option><option value="__none"' + (selectedId === '__none' ? ' selected' : '') + '>Sem conta financeira</option>' + accs.map(function (a) { return '<option value="' + a.id + '"' + (selectedId === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>'; }).join('');
   }
+  // ==================== FASE 9 — Classificação própria de Contas a Receber ====================
+  // Antes desta fase, contasReceber.categoryId apontava DIRETO para cpCategories (mesmo cadastro de
+  // Contas a Pagar). A partir daqui, CR tem seu próprio cadastro hierárquico (Centro de Recebimentos
+  // → Categoria), nunca compartilhado com CP — nem lista, nem ID, mesmo quando o nome é igual (ex.:
+  // "Outros" em CP e "Outros" em CR são dois registros independentes).
+  function crCostCenterLabel(id) { var c = crCostCenters.find(function (x) { return x.id === id; }); return c ? c.name : '—'; }
+  function crCategoryLabel(id) { var c = crCategories.find(function (x) { return x.id === id; }); return c ? c.name : '—'; }
+  function crCategoryPathLabel(id) {
+    var c = crCategories.find(function (x) { return x.id === id; }); if (!c) return '—';
+    var cc = c.costCenterId ? crCostCenters.find(function (x) { return x.id === c.costCenterId; }) : null;
+    return (cc ? cc.name + ' › ' : '') + c.name;
+  }
+  function crCategoryIdByName(name) { var c = crCategories.find(function (x) { return x.name === name; }); return c ? c.id : null; }
+  function crSaveCostCenter(dto) {
+    var id = dto.id || crUid('CRCC'); var now = new Date().toISOString();
+    var full = { id: id, name: dto.name, active: dto.active !== false, createdAt: dto.createdAt || now, updatedAt: now };
+    crCostCenters = [full].concat(crCostCenters.filter(function (c) { return c.id !== id; }));
+    return putMany('crcostcenters', [full]).then(function () { return full; });
+  }
+  // costCenterId é obrigatório (diferente de cpCategories, onde o vínculo com centro é opcional) —
+  // a Fase 9 pede explicitamente que Categoria de CR sempre pertença a um Centro de Recebimentos.
+  function crSaveCategory(dto) {
+    var id = dto.id || crUid('CRCAT'); var now = new Date().toISOString();
+    var full = { id: id, name: dto.name, costCenterId: dto.costCenterId || null, active: dto.active !== false, createdAt: dto.createdAt || now, updatedAt: now, migradoDeCpCategoryId: dto.migradoDeCpCategoryId || null };
+    crCategories = [full].concat(crCategories.filter(function (c) { return c.id !== id; }));
+    return putMany('crcategories', [full]).then(function () { return full; });
+  }
+  // Mesmo formato visual de cpCategoryOptions (grupo = cabeçalho, categoria = filha indentada), só
+  // que o agrupador aqui é o Centro de Recebimentos de verdade (relação obrigatória), não uma
+  // categoria-raiz opcional como em CP.
+  function crCategoryOptions(selectedId, includeNew) {
+    var opts = '<option value="">Todas as categorias</option>';
+    crCostCenters.filter(function (c) { return c.active; }).forEach(function (cc) {
+      var cats = crCategories.filter(function (c) { return c.costCenterId === cc.id && c.active; });
+      if (!cats.length) return;
+      opts += '<optgroup label="' + esc(cc.name) + '">' + cats.map(function (c) { return '<option value="' + c.id + '"' + (selectedId === c.id ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('') + '</optgroup>';
+    });
+    var semCentro = crCategories.filter(function (c) { return !c.costCenterId && c.active; });
+    if (semCentro.length) opts += semCentro.map(function (c) { return '<option value="' + c.id + '"' + (selectedId === c.id ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('');
+    if (includeNew) opts += '<option value="__new">+ Criar categoria…</option>';
+    return opts;
+  }
+  function crCostCenterOptions(selectedId) { return '<option value="">—</option>' + crCostCenters.filter(function (c) { return c.active; }).map(function (c) { return '<option value="' + c.id + '"' + (selectedId === c.id ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join(''); }
+  // Seed nativo de CR para a Shopee — mesmo padrão idempotente de cpCategorySeedShopee() (find-or-
+  // create por nome, nunca duplica). É o único ponto onde uma categoria de CR nasce sem passar pela
+  // lupa/aprovação humana, porque é estrutural: sem ela, todo crédito automático de transferência
+  // bancária (Fase 7, Carteira→Banco) nasceria sem categoria.
+  var CR_CAT_SHOPEE_CENTRO = 'Recebimentos Shopee';
+  var CR_CAT_SHOPEE_TRANSFERENCIA = 'Transferência Shopee → Banco';
+  function crCategorySeedShopee() {
+    var centro = crCostCenters.find(function (c) { return c.name === CR_CAT_SHOPEE_CENTRO; });
+    var novosCentros = []; var centroId;
+    if (centro) centroId = centro.id; else { centroId = crUid('CRCC'); novosCentros.push({ id: centroId, name: CR_CAT_SHOPEE_CENTRO, active: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); }
+    var proms = [];
+    if (novosCentros.length) { crCostCenters = crCostCenters.concat(novosCentros); proms.push(putMany('crcostcenters', novosCentros)); }
+    if (!crCategoryIdByName(CR_CAT_SHOPEE_TRANSFERENCIA)) {
+      var now = new Date().toISOString();
+      var cat = { id: crUid('CRCAT'), name: CR_CAT_SHOPEE_TRANSFERENCIA, costCenterId: centroId, active: true, createdAt: now, updatedAt: now, migradoDeCpCategoryId: null };
+      crCategories = crCategories.concat([cat]);
+      proms.push(putMany('crcategories', [cat]));
+    }
+    return Promise.all(proms);
+  }
+  // Migração idempotente (mesmo padrão de fatorMigrarTempoProducaoLegado(): checagem por existência
+  // do campo, roda todo boot, vira no-op sozinha). Remapeia cada contasReceber.categoryId que ainda
+  // aponta pra fora de crCategories (ou seja, um ID "estrangeiro" — de cpCategories, de antes desta
+  // fase): se o nome bater com a transferência Shopee nativa, reusa a categoria nativa já seedada;
+  // senão cria uma categoria equivalente (mesmo nome) dentro de um centro "Outras Receitas (migrado)",
+  // guardando o ID original de cpCategories em migradoDeCpCategoryId — nunca apaga, nunca perde o
+  // rastro, nunca duplica em execuções futuras (uma vez remapeado, o categoryId já existe em
+  // crCategories e sai da lista de pendentes).
+  function crMigrarClassificacaoLegadaDeCP() {
+    var pendentes = contasReceber.filter(function (h) { return h.categoryId && !crCategories.some(function (c) { return c.id === h.categoryId; }); });
+    if (!pendentes.length) return Promise.resolve();
+    return crCategorySeedShopee().then(function () {
+      var centroMigrado = crCostCenters.find(function (c) { return c.name === 'Outras Receitas (migrado)'; });
+      var centroMigradoId = centroMigrado ? centroMigrado.id : null;
+      var novosCentros = [];
+      var mapa = {}; var novasCategorias = []; var headersMudados = [];
+      pendentes.forEach(function (h) {
+        var cpCatId = h.categoryId;
+        if (mapa[cpCatId]) { h.categoryId = mapa[cpCatId]; headersMudados.push(h); return; }
+        var jaMigrada = crCategories.find(function (c) { return c.migradoDeCpCategoryId === cpCatId; });
+        if (jaMigrada) { mapa[cpCatId] = jaMigrada.id; h.categoryId = jaMigrada.id; headersMudados.push(h); return; }
+        var nomeCp = cpCategoryLabel(cpCatId);
+        if (nomeCp === CR_CAT_SHOPEE_TRANSFERENCIA) {
+          var nativa = crCategoryIdByName(CR_CAT_SHOPEE_TRANSFERENCIA);
+          if (nativa) { mapa[cpCatId] = nativa; h.categoryId = nativa; headersMudados.push(h); return; }
+        }
+        if (!centroMigradoId) { centroMigradoId = crUid('CRCC'); novosCentros.push({ id: centroMigradoId, name: 'Outras Receitas (migrado)', active: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); }
+        var novaId = crUid('CRCAT'); var now = new Date().toISOString();
+        novasCategorias.push({ id: novaId, name: nomeCp === '—' ? 'Outros (migrado)' : nomeCp, costCenterId: centroMigradoId, active: true, createdAt: now, updatedAt: now, migradoDeCpCategoryId: cpCatId });
+        mapa[cpCatId] = novaId; h.categoryId = novaId; headersMudados.push(h);
+      });
+      crCostCenters = crCostCenters.concat(novosCentros);
+      crCategories = crCategories.concat(novasCategorias);
+      return Promise.all([
+        novosCentros.length ? putMany('crcostcenters', novosCentros) : Promise.resolve(),
+        novasCategorias.length ? putMany('crcategories', novasCategorias) : Promise.resolve(),
+        headersMudados.length ? putMany('crheader', headersMudados) : Promise.resolve(),
+      ]);
+    });
+  }
+
   // ---- CRUD manual (Fase 4: Descrição/Pagador/Categoria/Valor/Competência/Vencimento/Empresa/
   // Operação/Conta prevista/Referência/Observação) ----
   function crHeaderSave(draft) {
@@ -13657,7 +13766,7 @@
   // o sistema sempre carrega e Produtos sempre abre (só não salva). Nunca dead-end / tela branca.
   openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers'), getAll('bankaccounts'), getAll('companies'), getAll('operations'), getAll('cpheader'), getAll('cpitems'), getAll('cppayments'), getAll('cpattach'), getAll('cpcategories'), getAll('cpaccounting'), getAll('cpcostcenters'), getAll('cpsuppliers'), getAll('cpsupplylinks'), getAll('pricingopconfig'), getAll('pricingfamilyrules'), getAll('financialaccounts'), getAll('financialevents'), getAll('crheader'), getAll('crreceipts'), getAll('financialtransfers'), getAll('fatorfuncionarios'), getAll('fatorcustosfixos'), getAll('fatorcustosvariaveis'), getAll('fatorpedidosnapshots'), getAll('skufamilyoverrides'), getAll('fatorconfigs'), getAll('fatorsetores'), getAll('fatorimpostos'), getAll('fatorprocessos'), getAll('fatorroteiros'), getAll('fatorroteirosku'), getAll('skufamilyoverridehistory')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers'), getAll('bankaccounts'), getAll('companies'), getAll('operations'), getAll('cpheader'), getAll('cpitems'), getAll('cppayments'), getAll('cpattach'), getAll('cpcategories'), getAll('cpaccounting'), getAll('cpcostcenters'), getAll('cpsuppliers'), getAll('cpsupplylinks'), getAll('pricingopconfig'), getAll('pricingfamilyrules'), getAll('financialaccounts'), getAll('financialevents'), getAll('crheader'), getAll('crreceipts'), getAll('financialtransfers'), getAll('fatorfuncionarios'), getAll('fatorcustosfixos'), getAll('fatorcustosvariaveis'), getAll('fatorpedidosnapshots'), getAll('skufamilyoverrides'), getAll('fatorconfigs'), getAll('fatorsetores'), getAll('fatorimpostos'), getAll('fatorprocessos'), getAll('fatorroteiros'), getAll('fatorroteirosku'), getAll('skufamilyoverridehistory'), getAll('crcategories'), getAll('crcostcenters')]);
   }).then(function (r) {
     orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
     wallet = r[5] || [];
@@ -13685,6 +13794,7 @@
     cpCategories = r[30] || []; cpAccounting = r[31] || []; cpCostCenters = r[32] || []; cpSuppliers = r[33] || []; cpSupplyLinks = r[34] || [];
     pricingOpConfig = r[35] || []; pricingFamilyRules = r[36] || [];
     financialAccounts = r[37] || []; financialEvents = r[38] || []; contasReceber = r[39] || []; crReceipts = r[40] || []; financialTransfers = r[41] || [];
+    crCategories = r[54] || []; crCostCenters = r[55] || [];
     fatorFuncionarios = r[42] || []; fatorCustosFixos = r[43] || []; fatorCustosVariaveis = r[44] || []; fatorPedidoSnapshots = r[45] || [];
     var fatorCfgRow = settings.filter(function (x) { return x.id === 'fatorConfig'; })[0]; if (fatorCfgRow && fatorCfgRow.data) fatorConfig = fatorCfgRow.data;
     skuFamilyOverrides = {}; (r[46] || []).forEach(function (ov) { skuFamilyOverrides[ov.skuKey] = ov; });
@@ -13693,6 +13803,7 @@
     fatorRoteiroSkuOverrides = {}; (r[52] || []).forEach(function (rt) { fatorRoteiroSkuOverrides[rt.skuKey] = rt; });
     skuFamilyOverrideHistory = r[53] || [];
     fatorMigrarTempoProducaoLegado();
+    crMigrarClassificacaoLegadaDeCP().catch(function () { });
     var activeSetting = settings.filter(function (x) { return x.id === 'activeOperationId'; })[0];
     var PLAN_MIGR = { PLANNED: 'PLANEJADO', IN_PROGRESS: 'EM_EXECUCAO', IMPLEMENTED: 'MEDINDO', MEASURING: 'MEDINDO', DONE: 'ENCERRADO', DISCARDED: 'ENCERRADO' };
     plans = (r[4] || []).map(function (p) { if (PLAN_MIGR[p.status]) p.status = PLAN_MIGR[p.status]; if (p.scopeSkus == null && p.relatedSkus) p.scopeSkus = p.relatedSkus; if (p.indicatorKind == null) p.indicatorKind = 'liquido'; return p; });
@@ -13733,6 +13844,7 @@
       // acontecer (cpCategorySeedShopee só era chamado de dentro de caixaAplicarIntegracaoFinanceira) —
       // mesma lógica "roda em background, não atrasa o primeiro render" do seed de contas acima.
       cpCategorySeedShopee().catch(function () { });
+      crCategorySeedShopee().catch(function () { });
       render();
     });
   }).catch(function (e) { app.innerHTML = '<div class="form-err" style="max-width:640px;margin:24px auto"><b>Não foi possível abrir o banco de dados local.</b><br>' + esc(e.message || e) + '<div style="margin-top:12px"><button class="btn-sm primary" onclick="location.reload()">Recarregar</button></div></div>'; });
