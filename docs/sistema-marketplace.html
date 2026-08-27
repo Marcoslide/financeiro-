@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 988a5ca · 2026-08-27 16:43 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 5408eed · 2026-08-27 16:51 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -6015,6 +6015,14 @@ buffer/index.js:
     });
     return { operationId: ord.operationId || null, orderId: orderId, items: items, orderFinance: f, composicao: pedidoComposicaoFinanceira(orderId) };
   }
+  // Fase 7.2: bloco recolhível padronizado da Ficha do Pedido — reagrupa painéis já prontos
+  // (Financeiro/Operação/Expedição/Conciliação/Fator de Custo/Auditoria) sob um rótulo comum, sem
+  // tocar no HTML interno de cada painel nem em nenhum cálculo. Aberto por padrão (nada some da
+  // tela que já era visível antes — só ganha a opção de recolher).
+  function fichaGroup(title, bodyHtml) {
+    if (!bodyHtml) return '';
+    return '<details class="ficha-group" open style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:700;font-size:13px;letter-spacing:.03em;text-transform:uppercase;color:var(--muted);padding:8px 2px;border-bottom:1px solid var(--line)">' + esc(title) + '</summary><div style="padding-top:10px">' + bodyHtml + '</div></details>';
+  }
   // Ficha do Pedido consolidada (Fase 2 da arquitetura) — jornada única, sem "Ficha 360" separada
   // e sem esconder taxas atrás de cliques extras: Venda → Custos → Taxas detalhadas → Margem →
   // Expedição → Acelera → Carteira → Devolução → Resultado final, tudo na mesma tela/scroll.
@@ -6039,9 +6047,6 @@ buffer/index.js:
     // recalcula venda/taxas/custo (motor intocado) — só troca o que é EXIBIDO nesses 3 campos quando
     // o pedido está cancelado, e adiciona um aviso explícito.
     var cancelado = ord && ord.normalizedStatus === 'CANCELADO';
-
-    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '860px'; panel.style.maxWidth = '98vw';
-    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
 
     var receitaC = comp.receitaC, custoProdC = comp.custoProdC, custoPendente = comp.custoPendente;
 
@@ -6235,7 +6240,6 @@ buffer/index.js:
       diagIncomeBlock +
       auditCompBlock +
       '</div></div>';
-    var taxasBlock = bloco3Taxas + bloco4Envio + bloco5Ajustes + bloco6Creditos + bloco7Conciliacao + auditoriaBlock;
 
     // ---- PRECIFICAÇÃO (bloco compacto, Parte 10 do prompt de Precificação & Margem) — nunca
     // recalcula: só formata o que pricingForOrder/pricingActualForOrder/pricingCompareOrder (motor
@@ -6251,13 +6255,13 @@ buffer/index.js:
       var precStatus = (pj.recCalc.minimumPrice != null && pj.precoVendidoC != null) ? (pj.precoVendidoC < pj.recCalc.minimumPrice ? 'ABAIXO_MINIMO' : (pj.recommendedPrice != null && pj.precoVendidoC < pj.recommendedPrice ? 'MARGEM_BAIXA' : 'SAUDAVEL')) : 'DESCONHECIDO';
       var pst = PREC_STATUS_LABEL[precStatus];
       precificacaoBlock = '<div class="panel"><div class="ph"><h3>Precificação</h3><span class="badge ' + pst[1] + '">' + pst[0] + '</span></div><div class="pb">' +
-        '<div class="kstrip">' +
-        '<div class="kc"><div class="kl">Família</div><div class="kv" style="font-size:15px">' + esc(pj.familyName || 'sem família') + (pj.multiplasFamilias ? ' <span class="footnote" style="margin:0">(+outras)</span>' : '') + '</div></div>' +
-        '<div class="kc"><div class="kl">Preço recomendado</div><div class="kv" style="font-size:15px">' + (pj.recommendedPrice != null ? brlC(pj.recommendedPrice) : '—') + '</div></div>' +
-        '<div class="kc"><div class="kl">Preço vendido</div><div class="kv" style="font-size:15px">' + (pj.precoVendidoC != null ? brlC(pj.precoVendidoC) : '—') + '</div></div>' +
-        '<div class="kc"><div class="kl">Fator recomendado</div><div class="kv" style="font-size:15px">' + (pj.factorRecomendado != null ? pj.factorRecomendado.toFixed(2).replace('.', ',') + 'x' : '—') + '</div></div>' +
-        '<div class="kc"><div class="kl">Fator da venda</div><div class="kv" style="font-size:15px">' + (pj.factorVenda != null ? pj.factorVenda.toFixed(2).replace('.', ',') + 'x' : '—') + '</div></div>' +
-        '</div>' +
+        MetricGrid([
+          MetricCard({ label: 'Família', value: '<span style="font-size:15px">' + esc(pj.familyName || 'sem família') + (pj.multiplasFamilias ? ' <span class="footnote" style="margin:0">(+outras)</span>' : '') + '</span>' }),
+          MetricCard({ label: 'Preço recomendado', value: '<span style="font-size:15px">' + (pj.recommendedPrice != null ? brlC(pj.recommendedPrice) : '—') + '</span>' }),
+          MetricCard({ label: 'Preço vendido', value: '<span style="font-size:15px">' + (pj.precoVendidoC != null ? brlC(pj.precoVendidoC) : '—') + '</span>' }),
+          MetricCard({ label: 'Fator recomendado', value: '<span style="font-size:15px">' + (pj.factorRecomendado != null ? pj.factorRecomendado.toFixed(2).replace('.', ',') + 'x' : '—') + '</span>' }),
+          MetricCard({ label: 'Fator da venda', value: '<span style="font-size:15px">' + (pj.factorVenda != null ? pj.factorVenda.toFixed(2).replace('.', ',') + 'x' : '—') + '</span>' }),
+        ]) +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px">' +
         '<div><h4 style="margin:0 0 6px">Previsto</h4>' +
         (pj.projCalc ? ('<div class="fin-line"><span>Margem projetada (no preço vendido)</span><span>' + pct(pj.projCalc.profitPct) + '</span></div><div class="fin-line"><span>Margem alvo da família</span><span>' + (pj.targetMarginPct != null ? pct(pj.targetMarginPct) : 'não definida') + '</span></div>') : '<div class="footnote">Sem taxas configuradas nesta operação (Precificação › Regras & Custos) — não é possível projetar.</div>') +
@@ -6397,15 +6401,15 @@ buffer/index.js:
       fatorCustoBlock = '<div class="panel"><div class="ph"><h3>Rentabilidade Real Industrial</h3>' + congeladoTag + '</div><div class="pb">' +
         '<div class="footnote" style="margin-bottom:8px">Camada complementar de rentabilidade real — não substitui o Resultado do Pedido (regra Shopee) acima. Taxas marketplace nunca são recalculadas: usa exatamente os valores já classificados no bloco 3.</div>' +
         (faltaCfg ? callout('warn', 'Nenhuma configuração ativa do Fator de Custo para a data deste pedido', 'Vá em Financeiro > Fator de Custo > Configuração Geral para criar/ativar uma configuração.') : '') +
-        '<div class="kstrip">' +
-        '<div class="kc"><div class="kl">Venda Bruta</div><div class="kv">' + brlC(fc.vendaBrutaC) + '</div></div>' +
-        '<div class="kc"><div class="kl">Taxas Marketplace</div><div class="kv">' + brlC(fc.taxasMarketplaceC) + '</div></div>' +
-        '<div class="kc"><div class="kl">Custo Produto</div><div class="kv">' + (fc.custoPendente ? '<span class="tag warn" style="font-size:9px">custo pendente</span>' : brlC(-fc.custoProdutoC)) + '</div></div>' +
-        '<div class="kc"><div class="kl">Mão de Obra</div><div class="kv">' + brlC(-horaHomemTotal) + '</div></div>' +
-        '<div class="kc"><div class="kl">Custos Fixos</div><div class="kv">' + brlC(-fixosTotal) + '</div></div>' +
-        '<div class="kc"><div class="kl">Custos Variáveis</div><div class="kv">' + brlC(-fc.custosVariaveisC) + '</div></div>' +
-        '<div class="kc"><div class="kl">Impostos</div><div class="kv">' + brlC(-fc.impostoC) + '</div></div>' +
-        '</div>' +
+        MetricGrid([
+          MetricCard({ label: 'Venda Bruta', value: brlC(fc.vendaBrutaC) }),
+          MetricCard({ label: 'Taxas Marketplace', value: brlC(fc.taxasMarketplaceC) }),
+          MetricCard({ label: 'Custo Produto', value: fc.custoPendente ? '<span class="tag warn" style="font-size:9px">custo pendente</span>' : brlC(-fc.custoProdutoC) }),
+          MetricCard({ label: 'Mão de Obra', value: brlC(-horaHomemTotal) }),
+          MetricCard({ label: 'Custos Fixos', value: brlC(-fixosTotal) }),
+          MetricCard({ label: 'Custos Variáveis', value: brlC(-fc.custosVariaveisC) }),
+          MetricCard({ label: 'Impostos', value: brlC(-fc.impostoC) }),
+        ]) +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">' +
         '<div class="panel" style="border:2px solid #38507a"><div class="pb"><div class="kl">Lucro Financeiro (Shopee)</div><div class="kv" style="font-size:20px">' + (fc.custoPendente ? '<span class="tag warn" style="font-size:11px">Indisponível</span>' : brlC(fc.vendaBrutaC + fc.taxasMarketplaceC - fc.custoProdutoC)) + '</div></div></div>' +
         '<div class="panel" style="border:2px solid ' + (fc.lucroRealC == null ? '#8a6d00' : fc.lucroRealC >= 0 ? 'var(--ok)' : 'var(--err)') + '"><div class="pb"><div class="kl">Lucro Real Industrial</div><div class="kv" style="font-size:20px;color:' + (fc.lucroRealC == null ? '#c99a00' : fc.lucroRealC >= 0 ? 'var(--ok)' : 'var(--err)') + '">' + (fc.lucroRealC == null ? 'Indisponível' : brlC(fc.lucroRealC)) + '</div></div></div>' +
@@ -6469,36 +6473,54 @@ buffer/index.js:
     // produto | Lucro atual.
     var heroBlock = '<div class="panel"><div class="ph"><h3>1. Resumo Financeiro</h3></div><div class="pb" style="padding-top:0">' +
       avisoCanceladoBlock +
-      '<div class="kstrip">' +
-      '<div class="kc"><div class="kl">Valor da venda</div><div class="kv" style="font-size:18px">' + vendaHtmlCancelavel + '</div></div>' +
-      '<div class="kc"><div class="kl">Ajustes do pedido</div><div class="kv" style="font-size:18px">' + (ajustesC != null ? brlC(ajustesC) : '—') + '</div></div>' +
-      '<div class="kc"><div class="kl">Receita ajustada</div><div class="kv" style="font-size:18px">' + (receitaAjustadaC != null ? brlC(receitaAjustadaC) : '—') + '</div></div>' +
-      '<div class="kc"><div class="kl">Taxas</div><div class="kv" style="font-size:18px">' + (taxasShopeeC != null ? brlC(taxasShopeeC) : '—') + '</div></div>' +
-      '<div class="kc"><div class="kl">Renda Final Shopee</div><div class="kv" style="font-size:18px">' + (pagamentoPrevistoC != null ? brlC(pagamentoPrevistoC) : '—') + '</div></div>' +
-      '<div class="kc"><div class="kl">Custo do produto</div><div class="kv" style="font-size:18px">' + (custoProdC != null ? brlC(-custoProdC) : (custoPendente ? '<span class="tag warn">pendente</span>' : '—')) + '</div></div>' +
-      '<div class="kc"><div class="kl">Lucro atual</div><div class="kv" style="font-size:18px;color:' + (lucroAtualSimplesC != null && lucroAtualSimplesC < 0 && !cancelado ? 'var(--err)' : 'var(--ok)') + '">' + lucroHtmlCancelavel + '</div></div>' +
-      '</div></div></div>';
-    panel.innerHTML = '<div class="dh"><div><b>Ficha do Pedido</b> — <span class="mono">' + esc(orderId) + '</span> <span class="tag" style="margin-left:6px">' + st.label + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
-      heroBlock +
-      dadosVendaBlock +
-      taxasBlock +
-      precificacaoBlock +
-      devReaberturaBlock +
-      resultadoBlock +
-      fatorCustoBlock +
-      auditoriaFinPedidoBlock +
-      (ord ? '<button class="btn-sm" data-goped="' + esc(orderId) + '">Ver na lista de Pedidos</button>' : '') +
-      '</div>';
-    panel.querySelector('.x').onclick = function () { d.remove(); };
-    var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { d.remove(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
-    var gd = panel.querySelector('[data-godev360]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev360; d.remove(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
-    var sd = panel.querySelector('[data-selldiag]'); if (sd) sd.onclick = function () { openSellerChargesDiag(orderId); };
-    var gfc = panel.querySelector('[data-gofatorcfg]'); if (gfc) gfc.onclick = function () { d.remove(); route = 'fator'; render(); };
-    panel.querySelectorAll('[data-skucostdiag]').forEach(function (b) { b.onclick = function () { openSkuCostDiag(orderId); }; });
-    var ga = panel.querySelector('[data-acped360]'); if (ga) ga.onclick = function () { d.remove(); route = 'acelera'; aceleraSub = 'antecipacoes'; render(); setTimeout(function () { openAceleraPedido(orderId); }, 60); };
-    var gf = panel.querySelector('[data-affped360]'); if (gf) gf.onclick = function () { d.remove(); route = 'afiliados'; affSub = 'pedidos'; render(); setTimeout(function () { openAffPedido(orderId); }, 60); };
-    panel.querySelectorAll('[data-wtx]').forEach(function (b) { b.onclick = function () { d.remove(); route = 'carteira'; walletSub = 'mov'; render(); setTimeout(function () { openWalletTx(b.dataset.wtx); }, 60); }; });
-    var gprec = panel.querySelector('[data-goprec]'); if (gprec) gprec.onclick = function () { var famId = gprec.dataset.goprec; d.remove(); route = 'precificacao'; precSub = 'simulador'; if (!precSim) precInitSim(); precSim.familyId = famId; var fam = skuFamById[famId]; if (fam && fam.currentCostAmount != null) precSim.custoCents = Math.round(fam.currentCostAmount * 100); var rule = pricingFamilyRule(famId); if (rule) { if (rule.factorPadrao != null) precSim.factor = rule.factorPadrao; if (rule.targetMarginPct != null) precSim.targetMarginPct = rule.targetMarginPct; if (rule.minMarginPct != null) precSim.minMarginPct = rule.minMarginPct; } render(); };
+      MetricGrid([
+        MetricCard({ label: 'Valor da venda', value: '<span style="font-size:18px">' + vendaHtmlCancelavel + '</span>' }),
+        MetricCard({ label: 'Ajustes do pedido', value: '<span style="font-size:18px">' + (ajustesC != null ? brlC(ajustesC) : '—') + '</span>' }),
+        MetricCard({ label: 'Receita ajustada', value: '<span style="font-size:18px">' + (receitaAjustadaC != null ? brlC(receitaAjustadaC) : '—') + '</span>' }),
+        MetricCard({ label: 'Taxas', value: '<span style="font-size:18px">' + (taxasShopeeC != null ? brlC(taxasShopeeC) : '—') + '</span>' }),
+        MetricCard({ label: 'Renda Final Shopee', value: '<span style="font-size:18px">' + (pagamentoPrevistoC != null ? brlC(pagamentoPrevistoC) : '—') + '</span>' }),
+        MetricCard({ label: 'Custo do produto', value: '<span style="font-size:18px">' + (custoProdC != null ? brlC(-custoProdC) : (custoPendente ? '<span class="tag warn">pendente</span>' : '—')) + '</span>' }),
+        MetricCard({ label: 'Lucro atual', value: '<span style="font-size:18px;color:' + (lucroAtualSimplesC != null && lucroAtualSimplesC < 0 && !cancelado ? 'var(--err)' : 'var(--ok)') + '">' + lucroHtmlCancelavel + '</span>' }),
+      ]) + '</div></div>';
+
+    // Fase 7.2 (§4 do prompt): bloco Expedição usando SOMENTE dados já resolvidos no escopo desta
+    // função (ord, bip) — nenhum cálculo novo. A seção "Eventos do Pedido" completa foi retirada da
+    // Ficha por instrução explícita de uma fase anterior; este bloco cobre só o essencial (prazo,
+    // rastreamento, confirmação de bipe) pedido nesta fase de reorganização visual.
+    var expedicaoBlock = ord ? '<div class="panel"><div class="ph"><h3>Expedição</h3></div><div class="pb">' +
+      kv('BR / Rastreamento', ord.tracking) +
+      kv('Modalidade', ord.isFbs ? 'Full/FBS' : (ord.shippingOption || '—')) +
+      kv('Prazo de envio', ord.shipByDate ? dbr(ord.shipByDate) : '—') +
+      kv('Expedido (bipe)', bip ? dbr(bip.bipedAt) : (ord.isFbs ? 'Full — confirmação automática pela Shopee' : 'ainda não bipado')) +
+      kv('Data de envio (Shopee)', ord.shippedAt ? dbr(ord.shippedAt) : '—') +
+      '</div></div>' : '';
+
+    // Blocos recolhíveis padronizados (§4 do prompt Fase 7.2): reagrupa os painéis já prontos acima
+    // — nenhum HTML interno de painel nem cálculo é alterado, só a moldura/rótulo em volta deles.
+    var financeiroGroup = fichaGroup('Financeiro', bloco3Taxas + bloco4Envio + bloco5Ajustes + bloco6Creditos + resultadoBlock + precificacaoBlock + devReaberturaBlock);
+    var operacaoGroup = fichaGroup('Operação', dadosVendaBlock);
+    var expedicaoGroup = fichaGroup('Expedição', expedicaoBlock);
+    var conciliacaoGroup = fichaGroup('Conciliação', bloco7Conciliacao + auditoriaFinPedidoBlock);
+    var fatorCustoGroup = fichaGroup('Fator de Custo', fatorCustoBlock);
+    var auditoriaGroup = fichaGroup('Auditoria', auditoriaBlock);
+
+    var dw = openDrawer({
+      width: 860,
+      titleHtml: '<b>Ficha do Pedido</b> — <span class="mono">' + esc(orderId) + '</span> <span class="tag" style="margin-left:6px">' + st.label + '</span>',
+      bodyHtml: heroBlock + financeiroGroup + operacaoGroup + expedicaoGroup + conciliacaoGroup + fatorCustoGroup + auditoriaGroup +
+        (ord ? '<button class="btn-sm" data-goped="' + esc(orderId) + '">Ver na lista de Pedidos</button>' : ''),
+      onMount: function (panel) {
+        var gp = panel.querySelector('[data-goped]'); if (gp) gp.onclick = function () { dw.close(); route = 'pedidos'; sub.pedidos = 'pedidos'; render(); };
+        var gd = panel.querySelector('[data-godev360]'); if (gd) gd.onclick = function () { var id2 = gd.dataset.godev360; dw.close(); route = 'posvenda'; sub.posvenda = 'casos'; render(); setTimeout(function () { openFicha(id2); }, 60); };
+        var sd = panel.querySelector('[data-selldiag]'); if (sd) sd.onclick = function () { openSellerChargesDiag(orderId); };
+        var gfc = panel.querySelector('[data-gofatorcfg]'); if (gfc) gfc.onclick = function () { dw.close(); route = 'fator'; render(); };
+        panel.querySelectorAll('[data-skucostdiag]').forEach(function (b) { b.onclick = function () { openSkuCostDiag(orderId); }; });
+        var ga = panel.querySelector('[data-acped360]'); if (ga) ga.onclick = function () { dw.close(); route = 'acelera'; aceleraSub = 'antecipacoes'; render(); setTimeout(function () { openAceleraPedido(orderId); }, 60); };
+        var gf = panel.querySelector('[data-affped360]'); if (gf) gf.onclick = function () { dw.close(); route = 'afiliados'; affSub = 'pedidos'; render(); setTimeout(function () { openAffPedido(orderId); }, 60); };
+        panel.querySelectorAll('[data-wtx]').forEach(function (b) { b.onclick = function () { dw.close(); route = 'carteira'; walletSub = 'mov'; render(); setTimeout(function () { openWalletTx(b.dataset.wtx); }, 60); }; });
+        var gprec = panel.querySelector('[data-goprec]'); if (gprec) gprec.onclick = function () { var famId = gprec.dataset.goprec; dw.close(); route = 'precificacao'; precSub = 'simulador'; if (!precSim) precInitSim(); precSim.familyId = famId; var fam = skuFamById[famId]; if (fam && fam.currentCostAmount != null) precSim.custoCents = Math.round(fam.currentCostAmount * 100); var rule = pricingFamilyRule(famId); if (rule) { if (rule.factorPadrao != null) precSim.factor = rule.factorPadrao; if (rule.targetMarginPct != null) precSim.targetMarginPct = rule.targetMarginPct; if (rule.minMarginPct != null) precSim.minMarginPct = rule.minMarginPct; } render(); };
+      },
+    });
   }
   // Botão [Diagnóstico] da seção 3 (só aparece quando ela não está COMPLETA) — abre o trace RUNTIME
   // de auditIncomeOrder() sobre os dados de verdade importados. Não substitui nem duplica a Ficha —
