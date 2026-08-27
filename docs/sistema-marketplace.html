@@ -317,7 +317,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 7f733e3 · 2026-08-27 23:33 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build fd7f545 · 2026-08-27 23:36 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -14954,6 +14954,10 @@ buffer/index.js:
   function cpCategoryPathLabel(id) { var c = cpCategories.find(function (x) { return x.id === id; }); if (!c) return '—'; var p = c.parentId ? cpCategories.find(function (x) { return x.id === c.parentId; }) : null; return (p ? p.name + ' › ' : '') + c.name; }
   function cpAccountingLabel(id) { var a = cpAccounting.find(function (x) { return x.id === id; }); return a ? (a.code ? a.code + ' — ' + a.name : a.name) : '—'; }
   function cpCostCenterLabel(id) { var c = cpCostCenters.find(function (x) { return x.id === id; }); return c ? c.name : '—'; }
+  // Fase 9 V4: o formulário de lançamento nunca deixa o operador escolher Centro de Custos à parte —
+  // ele é sempre derivado da Categoria selecionada (Categoria → pertence a → Centro).
+  function cpCentroIdFromCategoria(categoryId) { var c = cpCategories.find(function (x) { return x.id === categoryId; }); return c ? c.costCenterId : null; }
+  function cpCentroFromCategoria(categoryId) { var id = cpCentroIdFromCategoria(categoryId); return id ? cpCostCenterLabel(id) : '—'; }
   // Fase 5 do prompt "Reestruturação do Caixa": despesas retidas pela Shopee (Comissão, Taxa de
   // Serviço, Taxa Acelera, débitos classificados da Carteira) saem de contas financeiras NOVAS
   // (Recebíveis Shopee / Carteira Shopee), não de um banco — faLabel() resolve as duas famílias sem
@@ -15779,6 +15783,9 @@ buffer/index.js:
         // com o campo cp-cc-pgto da aba Pagamento) — agora vive só dentro de "Avançado" na aba
         // Pagamento, e só aparece quando a empresa realmente cadastrou algum centro de custo.
         '<label class="fld">Categoria financeira *</label><select class="select" id="cp-categoria" style="width:100%">' + cpCategoryOptions(draft.categoryId, true) + '</select>' +
+        // Fase 9: Centro de Custos nunca é escolhido à parte aqui — é sempre o que a Categoria
+        // selecionada já define (Categoria → pertence a → Centro), só exibido como leitura.
+        '<div class="cx-kv" style="margin-top:6px"><span class="cxl">Centro de Custos</span><span class="cxv">' + esc(cpCentroFromCategoria(draft.categoryId)) + '</span></div>' +
         '</div>';
 
       var itensSec = '<div class="dbd" style="border-top:1px solid var(--line)">' +
@@ -15814,13 +15821,14 @@ buffer/index.js:
     // outras despesas — e Centro de custo (só aparece se a empresa cadastrou algum) ficam dentro de um
     // <details> recolhido por padrão, fora do caminho de quem só quer lançar e pagar uma conta.
     function cpTabPagamento() {
-      var temCC = cpCostCenters.length > 0;
-      var avancado = '<details style="margin-top:14px"><summary style="cursor:pointer;font-weight:700;padding:4px 0">Avançado — Plano de Contas' + (temCC ? ' e Centro de Custo' : '') + '</summary>' +
-        '<div style="display:grid;grid-template-columns:1fr 1fr' + (temCC ? ' 1fr' : '') + ';gap:12px;margin-top:10px">' +
+      // Fase 9: Centro de Custos saiu daqui — deixou de ser um campo selecionável independente
+      // (a UX antiga permitia escolher um Centro diferente do que a Categoria já implicava). Agora
+      // "Avançado" só guarda Plano de Contas (metadado opcional, nunca exigido do operador).
+      var avancado = '<details style="margin-top:14px"><summary style="cursor:pointer;font-weight:700;padding:4px 0">Avançado — Plano de Contas</summary>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">' +
         '<div><label class="fld">Conta contábil</label><select class="select" id="cp-cta-pgto" style="width:100%">' + cpAccountingOptions(draft.accountingAccountId) + '</select></div>' +
         '<div><label class="fld">Conta contábil do frete</label><select class="select" id="cp-cta-frete" style="width:100%"><option value="">(herda da conta)</option>' + cpAccountingOptions(draft.freteAccountingAccountId) + '</select></div>' +
         '<div><label class="fld">Conta contábil de outras despesas</label><select class="select" id="cp-cta-outras" style="width:100%"><option value="">(herda da conta)</option>' + cpAccountingOptions(draft.outrasDespesasAccountingAccountId) + '</select></div>' +
-        (temCC ? ('<div><label class="fld">Centro de custo</label><select class="select" id="cp-cc-pgto" style="width:100%">' + cpCostCenterOptions(draft.costCenterId) + '</select></div>') : '') +
         '</div></details>';
       return '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">' +
         '<div><label class="fld">Forma de pagamento</label><select class="select" id="cp-forma-pgto" style="width:100%"><option value="">—</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '"' + (draft.paymentMethod === f ? ' selected' : '') + '>' + esc(f) + '</option>'; }).join('') + '</select></div>' +
@@ -15870,7 +15878,9 @@ buffer/index.js:
       draft.emissao = fieldVal('cp-emissao'); draft.competencia = fieldVal('cp-competencia'); draft.vencimento = fieldVal('cp-vencimento');
       draft.historico = fieldVal('cp-historico');
       draft.categoryId = fieldVal('cp-categoria') || draft.categoryId || null;
-      draft.costCenterId = fieldVal('cp-cc-pgto') || draft.costCenterId || null;
+      // Fase 9: costCenterId nunca é digitado — é sempre derivado da Categoria escolhida (Categoria
+      // → pertence a → Centro), nunca uma segunda decisão do operador.
+      draft.costCenterId = cpCentroIdFromCategoria(draft.categoryId);
       var pForma = fieldVal('cp-forma-pgto'); if (pForma != null) draft.paymentMethod = pForma || null;
       var pConta = fieldVal('cp-conta-fin'); if (pConta != null) draft.financialAccountId = pConta || null;
       var pDoc = fieldVal('cp-docnum'); if (pDoc != null) draft.documentNumber = pDoc;
@@ -16102,14 +16112,20 @@ buffer/index.js:
     });
   }
   function openCpCategoryQuickCreate(onSaved) {
+    // Fase 9: mesmo atalho "+ Criar categoria…" usado no lançamento de Contas a Pagar e na
+    // classificação da Carteira — precisa da mesma exigência do cadastro completo (Centro de Custos
+    // obrigatório), senão nasceria uma categoria "órfã" que o formulário principal nunca permitiria.
     var bodyHtml =
       '<label class="fld">Nome *</label><input class="input" id="cpc-nm" style="width:100%">' +
+      '<label class="fld">Centro de Custos *</label><select class="select" id="cpc-cc" style="width:100%">' + cpCostCenterOptions(null) + '</select>' +
       '<label class="fld">Categoria pai (opcional)</label><select class="select" id="cpc-parent" style="width:100%">' + cpCategoryOptions(null, false) + '</select>';
     openModal({
       title: 'Criar categoria', width: 420, bodyHtml: bodyHtml, confirmLabel: 'Criar',
       onConfirm: function (panel) {
         var nm = panel.querySelector('#cpc-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return false; }
-        return cpSaveCategory({ name: nm, parentId: panel.querySelector('#cpc-parent').value || null }).then(function (cat) { toast('Categoria criada', nm); onSaved(cat); });
+        var ccId = panel.querySelector('#cpc-cc').value || null;
+        if (!ccId) { toast('Centro de Custos obrigatório', 'Toda categoria precisa pertencer a um Centro de Custos.', true); return false; }
+        return cpSaveCategory({ name: nm, parentId: panel.querySelector('#cpc-parent').value || null, costCenterId: ccId }).then(function (cat) { toast('Categoria criada', nm); onSaved(cat); });
       },
     });
   }
