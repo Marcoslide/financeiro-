@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 80c328d · 2026-08-27 22:18 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build e59b94d · 2026-08-27 22:31 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -5202,7 +5202,7 @@ buffer/index.js:
     var chips = cats.map(function (c) { return '<span class="chip' + (sel === c.k ? ' chip-on' : '') + '" data-pendcat="' + c.k + '">' + c.l + ' (' + nn(c.n) + ')</span>'; }).join('');
     var list = (sel === 'RESOLVIDO' ? resolvidas : pendentes.filter(function (i) { return i.situacao === sel; }));
     var rows = list.slice(0, 300).map(function (i) {
-      return '<tr class="rowlink" data-pendped="' + esc(i.orderId) + '"><td class="mono">' + esc(i.orderId) + '</td><td>' + (i.isFbs ? '<span class="tag info">Full</span>' : 'Normal') + '</td><td>' + esc(i.modalidade) + '</td><td class="nowrap">' + (i.expedidoAt ? dbr(i.expedidoAt) : 'não') + '</td><td>' + esc(i.shopeeStatus) + '</td><td class="nowrap">' + (i.noAcelera ? brlC(i.valorAcelera) : '—') + '</td><td class="nowrap">' + (i.valorPedido != null ? brl(i.valorPedido) : '—') + '</td><td class="cell-text">' + esc(i.motivo) + '</td><td><button class="btn-sm" data-pendabrir="' + esc(i.orderId) + '">' + (i.situacao === 'RESOLVIDO' ? 'Ver' : 'Resolver') + '</button></td></tr>';
+      return '<tr class="rowlink" data-pendped="' + esc(i.orderId) + '"><td class="mono">' + esc(i.orderId) + '</td><td>' + (i.isFbs ? '<span class="tag info">Full</span>' : 'Normal') + '</td><td>' + esc(i.modalidade) + '</td><td class="nowrap">' + (i.expedidoAt ? dbr(i.expedidoAt) : 'não') + '</td><td>' + esc(i.shopeeStatus) + '</td><td class="nowrap">' + (i.noAcelera ? brlC(i.valorAcelera) : '—') + '</td><td class="nowrap">' + (i.valorPedido != null ? brl(i.valorPedido) : '—') + '</td><td class="cell-text">' + esc(i.motivo) + '</td><td><button class="btn-sm">' + (i.situacao === 'RESOLVIDO' ? 'Ver' : 'Resolver') + '</button></td></tr>';
     }).join('');
     var table = '<div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Tipo</th><th>Modalidade</th><th>Expedição</th><th>Shopee</th><th>Acelera</th><th>Valor</th><th>Motivo</th><th>Ação</th></tr></thead><tbody>' + (rows || '<tr><td colspan="9" class="empty">Nenhum pedido nesta categoria.</td></tr>') + '</tbody></table></div>';
     return '<div class="panel"><div class="ph"><h3>Pendências da Conferência</h3><span class="footnote" style="margin:0">cruza esperados (sessões), expedidos (bipe/Full) e Acelera num único lugar — nunca "Divergente" genérico</span></div><div class="chips" style="padding:8px 16px 0">' + chips + '</div>' + table + '</div>';
@@ -13411,7 +13411,7 @@ buffer/index.js:
 
     // Ver resgate — mesmos resgates do Acelera já usados antes (aceleraResultadoFechamento), só atrás
     // de um clique — nunca a tela inteira do Acelera reproduzida dentro do Caixa.
-    var resgateRows = ac.resgates.map(function (r) { return '<tr class="rowlink" data-goresgate="' + esc(r.resgate) + '"><td class="mono">' + esc(r.resgate) + '</td><td>' + nn(r.n) + '</td><td class="nowrap">' + brlC(r.bruto) + '</td><td class="nowrap neg">' + brlC(-Math.abs(r.taxa)) + '</td><td class="nowrap pos">' + brlC(r.liquido) + '</td></tr>'; }).join('');
+    var resgateRows = ac.resgates.map(function (r) { return '<tr><td class="mono">' + esc(r.resgate) + '</td><td>' + nn(r.n) + '</td><td class="nowrap">' + brlC(r.bruto) + '</td><td class="nowrap neg">' + brlC(-Math.abs(r.taxa)) + '</td><td class="nowrap pos">' + brlC(r.liquido) + '</td></tr>'; }).join('');
     var resgateDetails = ac.resgates.map(function (r) {
       var pedidosTbl = r.pedidos.map(function (p) { var info = exp[p]; var pv = ac.pedidoValores[p]; return '<tr><td class="mono">' + esc(p) + '</td><td class="nowrap">' + (pv ? brlC(pv.bruto) : '—') + '</td><td class="nowrap neg">' + (pv ? brlC(-Math.abs(pv.taxa)) : '—') + '</td><td class="nowrap pos">' + (pv ? brlC(pv.liquido) : '—') + '</td><td>' + (info ? ((info.isFbs ? '🟢 Full confirmado' : '🟢 Bipado') + (info.at ? ' em ' + dbr(info.at) : '')) : '🔴 sem confirmação de expedição') + '</td></tr>'; }).join('');
       return '<details class="cx-collapse" id="rg-' + esc(r.resgate) + '"><summary>Resgate ' + esc(r.resgate) + ' — ' + nn(r.n) + ' pedido(s)</summary><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Bruto</th><th>Taxa</th><th>Líquido</th><th>Expedição</th></tr></thead><tbody>' + pedidosTbl + '</tbody></table></div></div></details>';
