@@ -344,7 +344,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build d7ac64b · 2026-08-27 01:31 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build a191f2c · 2026-08-27 11:58 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -8463,7 +8463,11 @@ buffer/index.js:
     var conferido = g.divergentes.length === 0;
     var band = kstrip([
       { l: 'Saldo Shopee', v: brl(m.saldoAtual), cls: m.saldoAtual < 0 ? 'red' : 'blue', s: 'último do extrato' },
-      { l: 'Saldo reconstruído', v: brl(m.saldoAtual), cls: 'blue', s: 'via reconciliação' },
+      // Refatoração M2 (auditoria de arquitetura §Carteira): o card "Saldo reconstruído" mostrava
+      // literalmente o mesmo campo m.saldoAtual do card anterior — não existe, em walletMetrics(),
+      // nenhum saldo somado independentemente a partir das transações (a reconciliação real produz
+      // divergências por transação em m.diffs, não um total alternativo). Removido para não sugerir
+      // uma segunda fonte de verdade que não existe — "Diferença" abaixo já comunica a divergência real.
       { l: 'Diferença', v: conferido ? 'R$ 0,00' : nn(g.divergentes.length) + ' aberta(s)', cls: conferido ? 'green' : 'red' },
       { l: 'Valor a ser ajustado', v: brl(m.ajusteAtual), cls: 'amber', s: 'snapshot (não somar)' },
       { l: 'Entradas', v: brl(m.entradas), cls: 'green', s: nn(m.entN) + ' créditos' },
@@ -9919,7 +9923,12 @@ buffer/index.js:
     // Shipping Fee Discrepancy
     var sh = mrAoa(wb, 'Shipping Fee Discrepancy'); out.diag.linhasPorAba['Shipping Fee Discrepancy'] = sh ? sh.length : 0; if (sh) { var shi = sh.findIndex(function (r) { return normStatus(r[0]) === 'id do pedido'; }); if (shi >= 0) { for (var j = shi + 1; j < sh.length; j++) { var s2 = sh[j]; var oid2 = String(s2[0] || '').trim(); if (!oid2) continue; out.ship.push({ orderId: oid2, esperado: mrCents(s2[1]), real: mrCents(s2[2]), motivo: String(s2[3] || '').trim() }); } } }
     // Adjustment
-    var ad = mrAoa(wb, 'Adjustment'); out.diag.linhasPorAba['Adjustment'] = ad ? ad.length : 0; if (ad) { var ahi = ad.findIndex(function (r) { return normStatus(r[0]).indexOf('id do pedido') >= 0 || normStatus(r[0]).indexOf('data') >= 0 && r.length > 3; }); ad.forEach(function (r, idx) { var v = null; for (var c = 0; c < r.length; c++) { if (/-?\d+[.,]\d/.test(String(r[c]))) v = r[c]; } var oid3 = ''; r.forEach(function (c) { if (/^\d{6,}[A-Z0-9]+$/.test(String(c).trim())) oid3 = String(c).trim(); }); if (v != null && (oid3 || normStatus(r[0]).indexOf('valor total') >= 0)) { out.adj.push({ seq: idx, orderId: oid3, desc: r.filter(function (x) { return String(x).trim() && !/^-?\d+[.,]\d+$/.test(String(x).trim()); }).join(' ').slice(0, 80), valor: mrCents(v) }); } }); }
+    // Refatoração M3 (Fase 3 item 3 da auditoria — "Outros Ajustes" não respeitava o período): a
+    // planilha TEM uma data real e confiável por lançamento — "Data de conclusão do ajuste" (1ª coluna
+    // no formato AAAA-MM-DD que aparece na linha) — só nunca tinha sido capturada pelo parser. Pega o
+    // primeiro valor no formato ISO de data da linha (a 2ª data eventual, "conclusão do pagamento", vem
+    // depois e não é usada aqui — data3/dt3 é sempre a primeira, que é a de conclusão do AJUSTE).
+    var ad = mrAoa(wb, 'Adjustment'); out.diag.linhasPorAba['Adjustment'] = ad ? ad.length : 0; if (ad) { var ahi = ad.findIndex(function (r) { return normStatus(r[0]).indexOf('id do pedido') >= 0 || normStatus(r[0]).indexOf('data') >= 0 && r.length > 3; }); ad.forEach(function (r, idx) { var v = null; for (var c = 0; c < r.length; c++) { if (/-?\d+[.,]\d/.test(String(r[c]))) v = r[c]; } var oid3 = ''; r.forEach(function (c) { if (/^\d{6,}[A-Z0-9]+$/.test(String(c).trim())) oid3 = String(c).trim(); }); var dt3 = null; for (var d3 = 0; d3 < r.length; d3++) { if (/^\d{4}-\d{2}-\d{2}$/.test(String(r[d3]).trim())) { dt3 = String(r[d3]).trim(); break; } } if (v != null && (oid3 || normStatus(r[0]).indexOf('valor total') >= 0)) { out.adj.push({ seq: idx, orderId: oid3, data: dt3, desc: r.filter(function (x) { return String(x).trim() && !/^-?\d+[.,]\d+$/.test(String(x).trim()); }).join(' ').slice(0, 80), valor: mrCents(v) }); } }); }
     // Service Fee Details
     var sv = mrAoa(wb, 'Service Fee Details'); out.diag.linhasPorAba['Service Fee Details'] = sv ? sv.length : 0; if (sv) { var vhi = sv.findIndex(function (r) { return normStatus(r[1]) === 'id do pedido'; }); if (vhi >= 0) { for (var k = vhi + 1; k < sv.length; k++) { var v2 = sv[k]; var oid4 = String(v2[1] || '').trim(); if (!oid4) continue; out.svc.push({ seq: k, orderId: oid4, afiliadosVendedor: mrCents(v2[2]), transacao: mrCents(v2[3]), porItem: mrCents(v2[4]) }); } } }
     // Campos financeiros críticos citados no prompt de auditoria — prova, campo a campo, que o
@@ -10131,10 +10140,24 @@ buffer/index.js:
     var descontosComerciais = ajustesTotalC;
     var receitaLiquida = t.preco + descontosComerciais + taxasShopeeTotal + t.afiliado; // deve ≈ t.liberado
     var custoCoveragePct = custoItemsTotal ? r2(custoItemsKnown / custoItemsTotal * 100) : 0;
+    // Refatoração M3 (Fase 3 item 3): adjTot agora respeita o período selecionado (Dia/Semana/Mês/
+    // Personalizado), filtrando mrAdj pela "Data de conclusão do ajuste" real da planilha (ver
+    // mrParseIncome acima). Ajustes sem data reconhecida (importados antes desta correção, ou linha
+    // sem data capturável na fonte) ficam de fora da soma do período — nunca somados "no escuro" — mas
+    // continuam contados em adjSemData para o rótulo nunca esconder essa lacuna.
+    var adjComData = mrAdj.filter(function (a) { return a.data; });
+    var adjNoPeriodoArr = adjComData.filter(function (a) { return within(a.data); });
+    var adjTotPeriodo = adjNoPeriodoArr.reduce(function (s, a) { return s + a.valor; }, 0);
+    var adjSemData = mrAdj.length - adjComData.length;
+    // adjPos/adjNeg period-scoped (mesma lista adjNoPeriodoArr) — usados por mrCategoriasFinanceiras()/
+    // mrFechamentoPeriodo() para não recalcular do zero a partir do mrAdj global (que divergiria de
+    // pe.adjTot logo acima na mesma tela).
+    var adjPosPeriodo = adjNoPeriodoArr.filter(function (a) { return a.valor > 0; }).reduce(function (s, a) { return s + a.valor; }, 0);
+    var adjNegPeriodo = adjNoPeriodoArr.filter(function (a) { return a.valor < 0; }).reduce(function (s, a) { return s + a.valor; }, 0);
     return {
       range: within, n: list.length, t: t, faturamento: faturamento, lucro: lucro, lucroN: lucroN, pendN: pendN,
       custoProd: custoProd, custoProdN: custoOrdersFullN, custoItemsKnown: custoItemsKnown, custoItemsTotal: custoItemsTotal, custoCoveragePct: custoCoveragePct,
-      skuList: skuList, adjTot: e.adjTot, taxasShopeeTotal: taxasShopeeTotal, descontosComerciais: descontosComerciais, receitaLiquida: receitaLiquida, cross: cross, rows: mrRows,
+      skuList: skuList, adjTot: adjTotPeriodo, adjN: adjNoPeriodoArr.length, adjSemData: adjSemData, adjPos: adjPosPeriodo, adjNeg: adjNegPeriodo, taxasShopeeTotal: taxasShopeeTotal, descontosComerciais: descontosComerciais, receitaLiquida: receitaLiquida, cross: cross, rows: mrRows,
       nIncomeExtra: incomeExtra.length,
     };
   }
@@ -10195,7 +10218,11 @@ buffer/index.js:
         rows.push({ orderId: r.orderId, data: r.dataConclusao || r.dataCriacao, sku: sk && sk[0] ? sk[0].sku : '—', produto: sk && sk[0] ? sk[0].produto : (r.produto || '—'), descricao: r.tipoPedido || '—', valor: r[mrKind] });
       });
     } else if (kind === 'adjustes') {
-      mrAdj.forEach(function (a) { rows.push({ orderId: a.orderId || '—', data: null, sku: '—', produto: '—', descricao: a.desc || 'Ajuste', valor: a.valor }); });
+      // Refatoração M3 (Fase 3 item 3): agora respeita o mesmo período da linha "Outros Ajustes/
+      // Descontos" da DRE (pe.adjTot) — filtra por a.data (Data de conclusão do ajuste), a mesma
+      // regra de mrPeriodEngine(). Ajustes sem data reconhecida na fonte não entram aqui (mesmo
+      // motivo do valor da DRE) — mas continuam visíveis, sem filtro, na aba própria "Ajustes".
+      mrAdj.filter(function (a) { return a.data && pe.range(a.data); }).forEach(function (a) { rows.push({ orderId: a.orderId || '—', data: a.data, sku: '—', produto: '—', descricao: a.desc || 'Ajuste', valor: a.valor }); });
     } else if (kind === 'custoProdutos') {
       // §16/§24: pedidos PAGOS do período, cobertura parcial por item (nunca tudo-ou-nada por pedido)
       // — mesma base de pedidos e mesma soma parcial de mrPeriodEngine().
@@ -10220,7 +10247,7 @@ buffer/index.js:
     var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '820px'; panel.style.maxWidth = '97vw';
     d.appendChild(panel); d.onclick = function (ev) { if (ev.target === d) d.remove(); }; document.body.appendChild(d);
     var trs = rows.slice(0, 500).map(function (r) { return '<tr class="rowlink" data-drillped="' + esc(r.orderId) + '"><td class="mono">' + esc(r.orderId) + '</td><td class="nowrap">' + (r.data ? dbr(r.data) : '—') + '</td><td class="mono">' + esc(r.sku) + '</td><td class="cell-text">' + esc((r.produto || '—').slice(0, 26)) + '</td><td class="cell-text">' + esc(r.descricao) + '</td><td class="nowrap ' + (r.valor < 0 ? 'neg' : 'pos') + '">' + brlC(r.valor) + '</td></tr>'; }).join('');
-    var periodNote = kind === 'adjustes' ? 'Ajustes (Adjustment) não têm data confiável na fonte — lista mostra o total importado, não filtrado por período.' : 'Respeita o período selecionado no topo da tela.';
+    var periodNote = kind === 'adjustes' ? ('Filtrado pela Data de conclusão do ajuste, dentro do período selecionado no topo da tela.' + (pe.adjSemData ? ' ' + nn(pe.adjSemData) + ' lançamento(s) sem data reconhecida na fonte não aparecem aqui.' : '')) : 'Respeita o período selecionado no topo da tela.';
     panel.innerHTML = '<div class="dh"><div><b>' + esc(label) + '</b></div><button class="x">&times;</button></div><div class="dbd">' +
       '<div class="kstrip" style="margin-bottom:12px"><div class="kc"><div class="kl">Total exibido</div><div class="kv">' + brlC(total) + '</div></div><div class="kc"><div class="kl">Pedidos envolvidos</div><div class="kv">' + nn(rows.length) + '</div></div></div>' +
       (rows.length ? '<div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Data</th><th>SKU</th><th>Produto</th><th>Descrição</th><th>Valor</th></tr></thead><tbody>' + trs + '</tbody></table></div>' + (rows.length > 500 ? '<div class="footnote" style="padding:8px 0">Mostrando os 500 maiores lançamentos de ' + nn(rows.length) + '.</div>' : '') : emptyBox('Nenhum lançamento encontrado para este valor no período selecionado.')) +
@@ -10372,7 +10399,7 @@ buffer/index.js:
       line('Descontos Comerciais do Vendedor', descComerciais, { op: '−', note: 'cupom + PIX + vouchers/cashback subsidiados pelo vendedor + incentivo de cupom', warn: mrParcial }) +
       line('Taxas Shopee', taxasShopee, { op: '−', note: taxasNote, drill: 'taxasShopee', warn: mrParcial }) + splitNote +
       line('Devoluções e Reembolsos', devolucoes, { op: '−', drill: 'reembolso', warn: mrParcial }) +
-      line('Outros Ajustes/Descontos', outrosAj, { op: '−', note: 'aba Adjustment — total importado, sem data confiável para restringir ao período', drill: 'adjustes' }) +
+      line('Outros Ajustes/Descontos', outrosAj, { op: '−', note: 'aba Adjustment, filtrado pela Data de conclusão do ajuste no período selecionado' + (pe.adjSemData ? ' — ' + nn(pe.adjSemData) + ' lançamento(s) sem data reconhecida na fonte, não incluído(s) aqui' : ''), drill: 'adjustes' }) +
       line('Receita Líquida', receitaLiquida, { total: true, op: '=', drill: 'receitaLiquida', warn: mrParcial }) +
       line('Custo dos Produtos', custoProdutos, { op: '−', note: custoNote, drill: custoTemDado ? 'custoProdutos' : null, warn: custoParcial }) +
       (temAcelera ? line('Taxa de Antecipação — Shopee Acelera', acTaxa, { op: '−', note: 'descontada no resgate da Carteira, fora do Pagamento Liberado — mesmo valor do Caixa' }) : '') +
@@ -10382,7 +10409,13 @@ buffer/index.js:
     var mrCheck = t.liberado - (t.preco + descComerciais + taxasShopee + devolucoes);
     var conf = t.nMR ? callout(Math.abs(mrCheck) <= 100 ? 'green' : 'warn', Math.abs(mrCheck) <= 100 ? '✓ Conferência: bate com o Pagamento Liberado real' : '⚠ Diferença na conferência', 'Só para os ' + nn(t.nMR) + ' pedidos com dados da Shopee (Income): pagamento liberado real <b>' + brlC(t.liberado) + '</b> · calculado (preço − descontos − taxas − devoluções) <b>' + brlC(t.preco + descComerciais + taxasShopee + devolucoes) + '</b> · diferença <b>' + brlC(mrCheck) + '</b>.') : '';
     var body = '<div class="pb" style="padding-top:0">' + cascata + '</div>' + conf;
-    return asDetails ? '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Resultado detalhado (DRE completo)</summary>' + body + '</details>' : '<div class="panel"><div class="ph"><h3>DRE — Demonstração do Resultado</h3></div>' + body + '</div>';
+    // Refatoração M3 (Fase 3 item 2 — "explicar população" das duas DREs do sistema, sem alterar
+    // nenhum cálculo): esta DRE usa pedidos PAGOS do período (t.n/list em mrPeriodEngine, "Hora do
+    // pagamento"), diferente da DRE Operacional do Caixa/Fechamento, que usa os pedidos vinculados ao
+    // resgate/antecipação do Acelera do dia (ver comentário equivalente em caixaFechamentoBodyHtml).
+    // Populações genuinamente diferentes — a nota só existe para nunca parecer uma divergência.
+    var popNote = '<div class="footnote" style="margin:-4px 0 8px">Esta DRE considera todos pedidos pagos do período.</div>';
+    return asDetails ? '<details class="panel" style="padding:0"><summary style="cursor:pointer;padding:12px 16px;font-weight:700">Resultado detalhado (DRE completo)</summary>' + popNote + body + '</details>' : '<div class="panel"><div class="ph"><h3>DRE — Demonstração do Resultado</h3></div>' + popNote + body + '</div>';
   }
   // ---- Taxas Shopee, todas abertas por categoria — usada na Visão Geral (recolhida) e no Financeiro (expandida) ----
   function mrTaxasPorCategoriaBlock(pe, asDetails) {
@@ -10442,7 +10475,7 @@ buffer/index.js:
       ['Ação comercial', Math.abs(t.incentivoAcaoComercial + t.ajusteAcaoComercial), pe.rows.filter(function (r) { return (r.incentivoAcaoComercial || 0) + (r.ajusteAcaoComercial || 0) !== 0; }).length],
       ['Custo do produto', pe.custoProd, pe.custoItemsKnown ? pe.custoProdN : 0],
       ['Devoluções', Math.abs(t.reembolso), afetados('reembolso')],
-      ['Ajustes (Adjustment)', Math.abs(pe.adjTot), mrAdj.length],
+      ['Ajustes (Adjustment)', Math.abs(pe.adjTot), pe.adjN],
       // PROMPT "Correção da composição financeira por pedido": inclui vouchers/cashback/incentivo de
       // cupom (antes ficavam fora desta soma, mesmo já contando no total geral de descontos).
       ['Outros (cupom + PIX + vouchers/cashback + incentivo de cupom)', Math.abs(t.cupom + t.pix + t.voucherSeller + t.voucherCompartilhado + t.coinCashbackSeller + t.coinCashbackCompartilhado + t.incentivoCupom), pe.rows.filter(function (r) { return (r.cupom || 0) + (r.pix || 0) + (r.voucherSeller || 0) + (r.voucherCompartilhado || 0) + (r.coinCashbackSeller || 0) + (r.coinCashbackCompartilhado || 0) + (r.incentivoCupom || 0) !== 0; }).length],
@@ -10455,8 +10488,10 @@ buffer/index.js:
   // aprovada (t/pe.custoProd/mrAdj); "Acelera" fica de fora (base/período próprios, ver módulo Acelera). ----
   function mrCategoriasFinanceiras(pe) {
     var t = pe.t;
-    var adjPos = mrAdj.filter(function (a) { return a.valor > 0; }).reduce(function (s, a) { return s + a.valor; }, 0);
-    var adjNeg = mrAdj.filter(function (a) { return a.valor < 0; }).reduce(function (s, a) { return s + a.valor; }, 0);
+    // Refatoração M3 (Fase 3 item 3): pe.adjPos/pe.adjNeg já vêm filtrados pelo período (mrPeriodEngine)
+    // — evita recalcular do mrAdj global aqui, o que divergiria da DRE logo acima na mesma tela.
+    var adjPos = pe.adjPos;
+    var adjNeg = pe.adjNeg;
     var custoProdutos = pe.custoItemsKnown > 0 ? pe.custoProd : 0;
     function grp(title, items) {
       var rows = items.filter(function (it) { return it[1] !== 0; }).map(function (it) { var drillAttr = it[2] ? ' rowlink" data-mrdrill="' + esc(it[2]) + '" data-mrdrilllabel="' + esc(it[0]) : ''; return '<div class="fin-line' + drillAttr + '"><span>' + esc(it[0]) + '</span><b class="' + (it[1] < 0 ? 'neg' : 'pos') + '">' + brlC(it[1]) + '</b></div>'; }).join('');
@@ -10494,9 +10529,10 @@ buffer/index.js:
     var pedidosPagos = orders.filter(function (o) { return o.paidAt && pe.range(o.paidAt); });
     var fatConciliado = 0, fatNaoConciliado = 0;
     pedidosPagos.forEach(function (o) { var f = orderFinance(o); var v = Math.round(f.revenue * 100); if (mrByOrderF[o.id]) fatConciliado += v; else fatNaoConciliado += v; });
-    var adjPos = mrAdj.filter(function (a) { return a.valor > 0; }).reduce(function (s, a) { return s + a.valor; }, 0);
-    var recuperacoes = adjPos + (t.descontoFrete > 0 ? t.descontoFrete : 0);
-    var outrosCustos = Math.abs(t.afiliado) + Math.abs(t.cupom + t.pix + t.voucherSeller + t.voucherCompartilhado + t.coinCashbackSeller + t.coinCashbackCompartilhado + t.incentivoCupom) + Math.abs(t.envioReverso) + Math.abs(mrAdj.filter(function (a) { return a.valor < 0; }).reduce(function (s, a) { return s + a.valor; }, 0));
+    // Refatoração M3 (Fase 3 item 3): mesma correção — usa pe.adjPos/pe.adjNeg (já filtrados pelo
+    // período), não mais o mrAdj global.
+    var recuperacoes = pe.adjPos + (t.descontoFrete > 0 ? t.descontoFrete : 0);
+    var outrosCustos = Math.abs(t.afiliado) + Math.abs(t.cupom + t.pix + t.voucherSeller + t.voucherCompartilhado + t.coinCashbackSeller + t.coinCashbackCompartilhado + t.incentivoCupom) + Math.abs(t.envioReverso) + Math.abs(pe.adjNeg);
     var temLucro = pe.lucroN > 0;
     var margem = (temLucro && pe.faturamento) ? r2(pe.lucro / pe.faturamento * 100) : null;
     var pctConciliado = pe.n ? r2(t.nMR / pe.n * 100) : 0;
@@ -13134,7 +13170,16 @@ buffer/index.js:
     // (pedidos pagos neste dia, caixaDreDia) — intencionalmente um conjunto de pedidos diferente do
     // fluxo de conciliação acima (que usa caixaOrigemAntecipacao/ac.pedidosAcelera) — "quanto vendi
     // hoje" é uma pergunta diferente de "de onde veio o dinheiro que chegou hoje".
+    // Refatoração M3 (achado da auditoria — "explicar população" das duas DREs do sistema): dentro do
+    // Fechamento, `dre` acima é sempre calculada com pedidosOverride = caixaOrigemAntecipacao(dateKey).
+    // pedidos (ver comentário "PROMPT Correção Caixa ... §4", linhas ~7662-7668) — ou seja, esta DRE
+    // Operacional usa os MESMOS pedidos do Bloco 1 (vinculados ao resgate do Acelera do dia), não
+    // "todos os pedidos pagos no dia". O comentário logo acima desta linha (§"DRE DO DIA SEPARADO")
+    // descreve uma versão anterior do comportamento e está desatualizado — mantido por histórico, mas
+    // não reflete mais o cálculo atual. A nota abaixo é só texto explicativo (não altera nenhum valor)
+    // para a DRE do Caixa nunca parecer divergente da DRE da Minha Renda (que usa outra população).
     var dreResumo = '<div class="cx-section"><h4>DRE Operacional' + h4sub(dre.n ? (dre.lucro != null ? brlC(dre.lucro) : 'aguardando custo') : null) + '</h4>' +
+      '<div class="footnote" style="margin:-4px 0 8px">Esta DRE considera pedidos vinculados ao fechamento/resgate do período.</div>' +
       (dre.n ? (
         '<div class="cx-kv"><span class="cxl">Venda Bruta</span><span class="cxv">' + brlC(dre.receitaBruta) + '</span></div>' +
         '<div class="cx-kv"><span class="cxl">(-) Taxas Shopee (DRE completa)</span><span class="cxv neg">' + brlC(dre.taxasCobradas) + '</span></div>' +
@@ -14720,9 +14765,23 @@ buffer/index.js:
       cpItemsAll = cpItemsAll.filter(function (it) { return it.accountsPayableId !== headerId; }).concat(toSave);
     });
   }
+  // Refatoração M3 (achado da auditoria de duplicidade — "anexos de Contas a Pagar não são
+  // persistidos"): mesmo padrão de cpSaveItemsDiff, um nível abaixo — o `blob` (File/Blob) vai direto
+  // no registro; IndexedDB clona File/Blob nativamente via structured clone, então não precisa de
+  // nenhuma serialização extra aqui.
+  function cpSaveAttachmentsDiff(headerId, originalIds, currentAtts) {
+    var curIds = currentAtts.map(function (a) { return a.id; });
+    var removed = originalIds.filter(function (id) { return curIds.indexOf(id) < 0; });
+    var toSave = currentAtts.map(function (a) { return Object.assign({}, a, { accountsPayableId: headerId }); });
+    return Promise.all(removed.map(function (id) { return delOne('cpattach', id); })).then(function () {
+      return toSave.length ? putMany('cpattach', toSave) : Promise.resolve();
+    }).then(function () {
+      cpAttachments = cpAttachments.filter(function (a) { return a.accountsPayableId !== headerId; }).concat(toSave);
+    });
+  }
   // Cria/atualiza o título. `andBaixa` (§31) já registra a baixa total imediatamente após salvar,
   // gerando EXATAMENTE um movimento — nunca duplicado (mesma chamada, uma promise encadeada).
-  function cpSaveHeader(draft, items, originalItemIds, andBaixa) {
+  function cpSaveHeader(draft, items, originalItemIds, andBaixa, atts, originalAttIds) {
     var isNew = !draft.id;
     var id = draft.id || cpUid('CP'); var now = new Date().toISOString();
     var op = opActive(); var comp = op ? opCompany(op) : null;
@@ -14750,6 +14809,8 @@ buffer/index.js:
     cpPushHistory(full, isNew ? 'CRIACAO' : 'EDICAO', isNew ? 'Conta criada.' : 'Conta editada.');
     contasPagar = [full].concat(contasPagar.filter(function (h) { return h.id !== id; }));
     return cpSaveItemsDiff(id, originalItemIds || [], items).then(function () {
+      return cpSaveAttachmentsDiff(id, originalAttIds || [], atts || []);
+    }).then(function () {
       return putMany('cpheader', [full]);
     }).then(function () {
       if (andBaixa) return cpRegistrarBaixa(id, { valorPago: cpSaldo(full), date: cpToday(), financialAccountId: full.financialAccountId, paymentMethod: full.paymentMethod, juros: 0, multa: 0, desconto: 0, observacao: 'Baixa automática — "Salvar e Dar Baixa".' }).then(function () { return full; });
@@ -14991,7 +15052,11 @@ buffer/index.js:
   // ---- UI: listagem principal (§3-9) ----
   function cpFinAccountOptions(selectedId) {
     var accs = financialAccountsForSelector(opActiveOrNull());
-    return '<option value="">Todas as contas financeiras</option><option value="__none">Sem conta financeira</option>' + accs.map(function (a) { return '<option value="' + a.id + '"' + (selectedId === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>'; }).join('');
+    // Refatoração M3: a opção "Sem conta financeira" (__none) nunca ganhava `selected` — reabrir um
+    // título salvo com essa escolha fazia o <select> renderizar sem nada marcado, o navegador cai
+    // para a 1ª opção da lista ("") e o próximo collectDraftFromForm() lê essa string vazia e
+    // sobrescreve silenciosamente draft.financialAccountId para null, corrompendo uma escolha válida.
+    return '<option value="">Todas as contas financeiras</option><option value="__none"' + (selectedId === '__none' ? ' selected' : '') + '>Sem conta financeira</option>' + accs.map(function (a) { return '<option value="' + a.id + '"' + (selectedId === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>'; }).join('');
   }
   function cpCategoryOptions(selectedId, includeNew) {
     var roots = cpCategories.filter(function (c) { return !c.parentId; });
@@ -15286,6 +15351,7 @@ buffer/index.js:
     var items = existing ? cpItemsForHeader(existing.id).map(function (it) { return Object.assign({}, it); }) : [];
     var originalItemIds = items.map(function (it) { return it.id; });
     var atts = existing ? cpAttachmentsForHeader(existing.id).map(function (a) { return Object.assign({}, a); }) : [];
+    var originalAttIds = atts.map(function (a) { return a.id; });
     var cpEdTab = 'pagamento'; // pagamento | ocorrencia | anexos
 
     var d = document.createElement('div'); d.className = 'drawer drawer-wide'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '920px'; panel.style.maxWidth = '98vw';
@@ -15418,7 +15484,13 @@ buffer/index.js:
     }
     function cpTabAnexos() {
       return '<div class="dz" id="cp-dz"><div style="font-size:26px;opacity:.4">⭱</div><div class="footnote" style="margin-top:6px">Solte seus arquivos aqui ou clique para adicionar (PDF, XML, JPG, PNG)</div><input type="file" multiple accept=".pdf,.xml,.jpg,.jpeg,.png" class="hidden" id="cp-file"></div><div id="cp-xml-confirm"></div>' +
-        (atts.length ? ('<div class="table-wrap" style="margin-top:10px"><table class="report"><thead><tr><th>Arquivo</th><th>Tipo</th><th></th></tr></thead><tbody>' + atts.map(function (a, idx) { return '<tr><td>' + esc(a.filename) + '</td><td>' + esc(a.kind) + '</td><td><button class="btn-sm" data-attdel="' + idx + '">Remover</button></td></tr>'; }).join('') + '</tbody></table></div>') : '<div class="footnote" style="margin-top:8px">Nenhum anexo ainda.</div>');
+        (atts.length ? ('<div class="table-wrap" style="margin-top:10px"><table class="report"><thead><tr><th>Arquivo</th><th>Tipo</th><th></th></tr></thead><tbody>' + atts.map(function (a, idx) {
+          return '<tr><td>' + esc(a.filename) + '</td><td>' + esc(a.kind) + '</td><td>' +
+            '<button class="btn-sm" data-attview="' + idx + '">Visualizar</button> ' +
+            '<button class="btn-sm" data-attreplace="' + idx + '">Substituir</button> ' +
+            '<button class="btn-sm" data-attdel="' + idx + '">Remover</button></td></tr>';
+        }).join('') + '</tbody></table></div>') : '<div class="footnote" style="margin-top:8px">Nenhum anexo ainda.</div>') +
+        '<input type="file" class="hidden" id="cp-att-replace-input" accept=".pdf,.xml,.jpg,.jpeg,.png">';
     }
     function cpHistoryHtml(h) {
       var hist = h.history || []; if (!hist.length) return '<div class="footnote">Sem eventos registrados.</div>';
@@ -15488,9 +15560,9 @@ buffer/index.js:
       var chain;
       if (isNewSeries) {
         var drafts = cpGenerateOccurrenceDrafts(Object.assign({}, draft, { valor: cpValorOriginal(items, draft.freteValor, draft.outrasDespesasValor) }), draft.occurrence);
-        chain = drafts.reduce(function (p, dft, i) { return p.then(function () { return cpSaveHeader(dft, i === 0 ? items : [], [], false); }); }, Promise.resolve());
+        chain = drafts.reduce(function (p, dft, i) { return p.then(function () { return cpSaveHeader(dft, i === 0 ? items : [], [], false, i === 0 ? atts : [], []); }); }, Promise.resolve());
       } else {
-        chain = cpSaveHeader(draft, items, originalItemIds, andBaixa);
+        chain = cpSaveHeader(draft, items, originalItemIds, andBaixa, atts, originalAttIds);
       }
       chain.then(function (saved) {
         d.remove(); toast(isNewSeries ? 'Série criada' : (andBaixa ? 'Conta salva e baixada' : 'Conta salva'), isNewSeries ? (draft.occurrence.installments + ' título(s) gerado(s).') : ''); cpRenderBody();
@@ -15568,6 +15640,24 @@ buffer/index.js:
       }
       if (fi) fi.onchange = function () { handleFiles(fi.files); };
       panel.querySelectorAll('[data-attdel]').forEach(function (b) { b.onclick = function () { collectDraftFromForm(); atts.splice(parseInt(b.dataset.attdel, 10), 1); refresh(); }; });
+      // Refatoração M3 (achado da auditoria — anexos precisam ser vistos/removidos/substituídos, além
+      // de persistidos — ver cpSaveAttachmentsDiff acima). "Visualizar" abre o Blob direto (funciona
+      // tanto para um File recém-solto quanto para um Blob já lido de volta do IndexedDB — o
+      // navegador clona File/Blob nativamente, então createObjectURL funciona nos dois casos).
+      panel.querySelectorAll('[data-attview]').forEach(function (b) { b.onclick = function () {
+        var a = atts[parseInt(b.dataset.attview, 10)]; if (!a || !a.blob) { toast('Arquivo indisponível para visualização', '', true); return; }
+        window.open(URL.createObjectURL(a.blob), '_blank');
+      }; });
+      var replaceInput = panel.querySelector('#cp-att-replace-input'); var replaceIdx = null;
+      panel.querySelectorAll('[data-attreplace]').forEach(function (b) { b.onclick = function () { replaceIdx = parseInt(b.dataset.attreplace, 10); if (replaceInput) replaceInput.click(); }; });
+      if (replaceInput) replaceInput.onchange = function () {
+        var file = replaceInput.files[0]; if (!file || replaceIdx == null) return;
+        var name = file.name || ''; var ext = name.split('.').pop().toLowerCase();
+        var kind = ext === 'xml' ? 'XML' : ext === 'pdf' ? 'PDF' : (ext === 'jpg' || ext === 'jpeg' || ext === 'png') ? 'IMAGE' : 'OUTRO';
+        collectDraftFromForm(); readItemsFromForm();
+        atts[replaceIdx] = Object.assign({}, atts[replaceIdx], { filename: name, kind: kind, blob: file, createdAt: new Date().toISOString() });
+        replaceIdx = null; refresh();
+      };
       panel.querySelectorAll('[data-estornar]').forEach(function (b) { b.onclick = function () { if (!confirm('Estornar esta baixa? A conta volta a ficar (parcial ou totalmente) em aberto.')) return; collectDraftFromForm(); cpEstornarBaixa(b.dataset.estornar).then(function () { toast('Baixa estornada', ''); refresh(); }); }; });
       function handleFiles(fileList) {
         collectDraftFromForm(); readItemsFromForm();
@@ -15848,7 +15938,8 @@ buffer/index.js:
   function crFinAccountLabel(id) { if (!id) return '— sem conta financeira —'; return faLabel(id) || '—'; }
   function crFinAccountOptions(selectedId, opId) {
     var accs = financialAccountsForSelector(opId || opActiveOrNull());
-    return '<option value="">Todas as contas financeiras</option><option value="__none">Sem conta financeira</option>' + accs.map(function (a) { return '<option value="' + a.id + '"' + (selectedId === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>'; }).join('');
+    // Refatoração M3: mesma correção de cpFinAccountOptions() — "__none" precisa ganhar `selected`.
+    return '<option value="">Todas as contas financeiras</option><option value="__none"' + (selectedId === '__none' ? ' selected' : '') + '>Sem conta financeira</option>' + accs.map(function (a) { return '<option value="' + a.id + '"' + (selectedId === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>'; }).join('');
   }
   // ---- CRUD manual (Fase 4: Descrição/Pagador/Categoria/Valor/Competência/Vencimento/Empresa/
   // Operação/Conta prevista/Referência/Observação) ----
