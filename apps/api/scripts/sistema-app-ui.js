@@ -6504,7 +6504,12 @@
     app.querySelectorAll('[data-mrsku]').forEach(function (b) { b.onclick = function () { openMrSku(b.dataset.mrsku); }; });
     app.querySelectorAll('[data-mrped]').forEach(function (b) { b.onclick = function () { openMrPedido(b.dataset.mrped); }; });
     app.querySelectorAll('[data-goped360]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.goped360); }; });
-    app.querySelectorAll('[data-goacbip]').forEach(function (b) { b.onclick = function () { route = 'acelera'; aceleraSub = 'bipados'; render(); }; });
+    // Fase 7.5 Bloco 3: 'bipados' nunca foi uma aba válida do Acelera (dispatch só reconhece visao/
+    // antecipacoes/expedidos/divergencias/auditoria/import) — o link caía sempre em Visão Geral. O
+    // alerta é "N pedido(s) expedidos não encontrados no Acelera", que é exatamente o que
+    // aceleraExpedidos() (aba "Expedidos × Acelera") mostra — inclusive com o card "Não encontrados
+    // no Acelera" e a tabela ordenada por 🔴 NAO_ENCONTRADO primeiro.
+    app.querySelectorAll('[data-goacbip]').forEach(function (b) { b.onclick = function () { route = 'acelera'; aceleraSub = 'expedidos'; render(); }; });
     app.querySelectorAll('[data-gorecb]').forEach(function (b) { b.onclick = function () { route = 'posvenda'; sub.posvenda = 'recebimentos'; render(); }; });
     app.querySelectorAll('[data-gowal]').forEach(function (b) { b.onclick = function () { route = 'carteira'; walletSub = 'mov'; render(); }; });
     app.querySelectorAll('[data-golink]').forEach(function (b) { b.onclick = function () { route = b.dataset.golink; render(); }; });
