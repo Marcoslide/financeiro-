@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build fa9a314 · 2026-08-27 20:03 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 5df2945 · 2026-08-27 21:29 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -7701,36 +7701,68 @@ buffer/index.js:
     return head + '<div class="count-line"><b>' + nn(list.length) + '</b> pedidos' + (list.length > 300 ? ' · mostrando os 300 mais recentes' : '') + '</div>' +
       '<div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Pedido</th><th>SKU</th><th>Venda Bruta</th><th>Custo Produto</th><th>Tx. Transação</th><th>Comissão</th><th>Afiliado</th><th>Acelera</th><th>Devolução</th><th>Outros</th><th>Receita Líquida</th><th>Lucro</th><th>Margem</th><th>Recebido</th><th>Diferença</th><th>Conciliação</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
   }
-  // Taxas que a Shopee cobra por venda e o que acontece com elas quando há devolução. Fontes: Pedidos (taxas) × Devoluções.
-  function orderFeeBreakdown(o) { return { comissao: r2(o.commissionNet || 0), servico: r2(o.serviceFeeNet || 0), transacao: r2(o.transactionFee || 0), freteRev: r2(o.reverseShippingFee || 0), total: r2((o.commissionNet || 0) + (o.serviceFeeNet || 0) + (o.transactionFee || 0) + (o.reverseShippingFee || 0)) }; }
+  // Taxas que a Shopee cobra por venda e o que acontece com elas quando há devolução — DELEGADO ao
+  // motor canônico (pedidoComposicaoFinanceira), nunca recalculado à parte.
+  // PROMPT "Fase 7.5 — Hardening Financeiro" Bloco 1: auditoria pedido a pedido (30 devoluções reais,
+  // Order.all + Order.return_refund + Income) provou que a versão anterior desta função lia direto
+  // ord.commissionNet/ord.serviceFeeNet/ord.transactionFee/ord.reverseShippingFee — os MESMOS campos
+  // que o motor canônico usa só como fallback PROVISIONAL_ORDER (pedido sem Income ainda). Quando o
+  // Income confirma o pedido, o motor canônico passa a somar também mrRow.transacao (nível pedido —
+  // diferente do filho "Taxa de Transação" do Service Fee Details), mrRow.afiliado ("Taxa de comissão
+  // Afiliados do Vendedor"), mrRow.taxaDevolucaoFacil e mrRow.taxaRecargaAutomatica — 4 campos que
+  // esta função nunca lia, em nenhuma versão. Causa raiz classificada como "B) CAMPO OMITIDO": 12 de
+  // 30 pedidos reais divergiam (40%), com o total antigo até 6x menor que o oficial (ex.: pedido
+  // 260727S54SHWVS — antigo R$ 51,96 × canônico R$ 339,71). ord.commissionNet/serviceFeeNet, por si
+  // só, já batiam 100% com mrRow.comissao/mrRow.servico nos 30 casos — não eram o problema.
+  function orderFeeBreakdown(orderId) {
+    var comp = pedidoComposicaoFinanceira(orderId);
+    var byKey = function (key) { var r = comp.gTaxas.find(function (x) { return x.fieldKey === key; }); return r ? r.valor : 0; };
+    var comissaoC = byKey('comissao');
+    var servicoC = byKey('servico');
+    // "Frete reverso" (envioSubtotal) é IMPACTO DA DEVOLUÇÃO, não taxa da venda (Bloco 1.3 do
+    // prompt) — por isso sai do bucket "Taxas Shopee" desta tela, mesmo que o motor canônico o some
+    // dentro de taxasShopeeC quando é custo (débito do vendedor). Nunca recalculado: é o MESMO valor
+    // de comp.gTaxas, só reagrupado para esta apresentação.
+    var envioC = byKey('envioSubtotal');
+    var taxasShopeeSemEnvioC = comp.gTaxas.filter(function (r) { return r.fieldKey !== 'envioSubtotal'; }).reduce(function (s, r) { return s + r.valor; }, 0);
+    return {
+      comissao: r2(comissaoC / 100), servico: r2(servicoC / 100),
+      // demais taxas Shopee cobradas do vendedor: transação (nível pedido), afiliados, devolução
+      // fácil, recarga automática — cada uma já classificada DEBITO_VENDEDOR pelo motor canônico.
+      outrasTaxas: r2((taxasShopeeSemEnvioC - comissaoC - servicoC) / 100),
+      taxasShopeeTotal: r2(taxasShopeeSemEnvioC / 100),
+      freteReverso: r2(envioC / 100),
+      total: r2(comp.taxasShopeeC / 100), // valor oficial usado em todo o sistema (Ficha/Caixa/Minha Renda) — só para conferência cruzada
+    };
+  }
   function devFinTaxas() {
-    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'FINANCEIRO · TAXAS DA VENDA', title: 'O que a Shopee cobra — e o que acontece na devolução', description: 'Cruzamos cada devolução com as taxas reais do pedido em Pedidos. O que não existe na fonte é declarado, não estimado.' });
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'FINANCEIRO · TAXAS DA VENDA', title: 'O que a Shopee cobra — e o que acontece na devolução', description: 'Cruzamos cada devolução com as taxas reais do pedido, direto do motor financeiro canônico (Pedidos/Income). Frete reverso aparece à parte, como impacto da devolução — nunca somado às Taxas Shopee.' });
     if (!orders.length) return head + emptyBox('Importe os Pedidos (Order.all…) para conectar as devoluções às taxas reais de cada venda.');
     var list = occInPeriod();
     var withOrder = [], noOrder = 0;
     var __ordersById = getOrdersById();
-    list.forEach(function (o) { var ord = o.orderId ? __ordersById.get(o.orderId) : null; if (ord) withOrder.push({ o: o, ord: ord, f: orderFeeBreakdown(ord) }); else noOrder++; });
-    var sum = { req: 0, comissao: 0, servico: 0, transacao: 0, freteRev: 0, total: 0 };
-    withOrder.forEach(function (x) { sum.req += x.o.requested || 0; sum.comissao += x.f.comissao; sum.servico += x.f.servico; sum.transacao += x.f.transacao; sum.freteRev += x.f.freteRev; sum.total += x.f.total; });
+    list.forEach(function (o) { var ord = o.orderId ? __ordersById.get(o.orderId) : null; if (ord) withOrder.push({ o: o, ord: ord, f: orderFeeBreakdown(ord.id) }); else noOrder++; });
+    var sum = { req: 0, comissao: 0, servico: 0, outrasTaxas: 0, taxasShopeeTotal: 0, freteReverso: 0 };
+    withOrder.forEach(function (x) { sum.req += x.o.requested || 0; sum.comissao += x.f.comissao; sum.servico += x.f.servico; sum.outrasTaxas += x.f.outrasTaxas; sum.taxasShopeeTotal += x.f.taxasShopeeTotal; sum.freteReverso += x.f.freteReverso; });
     Object.keys(sum).forEach(function (k) { sum[k] = r2(sum[k]); });
     var strip = MetricGrid([
       MetricCard({ label: 'Devoluções com pedido', value: nn(withOrder.length), cls: 'blue', sub: noOrder ? nn(noOrder) + ' sem pedido importado' : 'todas conectadas' }),
       MetricCard({ label: 'Reembolso solicitado', value: brl(sum.req), cls: 'red' }),
-      MetricCard({ label: 'Taxas do pedido (total)', value: brl(sum.total), cls: 'amber', sub: 'comissão+serviço+transação+frete rev.' }),
+      MetricCard({ label: 'Taxas Shopee (total)', value: brl(sum.taxasShopeeTotal), cls: 'amber', sub: 'comissão+serviço+outras taxas — sem frete reverso' }),
       MetricCard({ label: 'Comissão', value: brl(sum.comissao), cls: 'amber' }),
-      MetricCard({ label: 'Frete reverso', value: brl(sum.freteRev), cls: 'amber' }),
+      MetricCard({ label: 'Impacto do frete reverso', value: brl(sum.freteReverso), cls: 'red', sub: 'impacto da devolução — não é taxa da venda' }),
     ]);
     var gaps = callout('warn', 'O que ainda não temos fonte para afirmar (não inventamos)',
       '<div class="fin-line"><span><b>Estorno de taxas na devolução</b> — a Shopee às vezes devolve a comissão/taxa quando reembolsa um pedido.</span><span class="tag warn">AGUARDANDO FONTE</span></div>' +
       '<div class="footnote" style="margin:2px 0 8px">Nenhuma coluna dos relatórios atuais informa esse estorno por pedido. Quando ele existe, aparece como <b>crédito no extrato da carteira</b> — a aba <b>Conciliação</b> aponta candidatos, mas não confirmamos por caso.</div>' +
-      '<div class="fin-line"><span><b>Comissão de afiliado</b> e <b>Antecipação de recebíveis</b></span><span class="tag warn">NÃO DISPONÍVEL</span></div>' +
-      '<div class="footnote" style="margin:2px 0 0">Não há coluna para esses valores nas planilhas importadas. Ficam como lacuna explícita — nunca como “R$ 0”.</div>');
+      '<div class="fin-line"><span><b>Antecipação de recebíveis</b></span><span class="tag warn">NÃO DISPONÍVEL</span></div>' +
+      '<div class="footnote" style="margin:2px 0 0">Não há coluna para esse valor nas planilhas importadas. Fica como lacuna explícita — nunca como “R$ 0”.</div>');
     var noOrderNote = noOrder ? callout('', nn(noOrder) + ' devolução(ões) sem o pedido em Pedidos', 'Para essas, as taxas da venda são desconhecidas até importar o pedido correspondente. Elas não entram nos totais acima.') : '';
-    var rows = withOrder.sort(function (a, b) { return b.f.total - a.f.total; }).slice(0, 300).map(function (x) {
+    var rows = withOrder.sort(function (a, b) { return b.f.taxasShopeeTotal - a.f.taxasShopeeTotal; }).slice(0, 300).map(function (x) {
       var it = (x.o.items || [])[0] || {};
-      return '<tr><td class="mono">' + esc(x.o.returnId || '—') + '<div class="footnote" style="margin:0">' + esc(x.o.orderId || '') + '</div></td><td class="cell-text">' + esc(it.productName || '—') + '</td><td class="nowrap">' + brl(x.o.requested) + '</td><td class="nowrap">' + brl(x.f.comissao) + '</td><td class="nowrap">' + brl(x.f.servico) + '</td><td class="nowrap">' + brl(x.f.transacao) + '</td><td class="nowrap">' + brl(x.f.freteRev) + '</td><td class="nowrap"><b>' + brl(x.f.total) + '</b></td><td><span class="tag warn">aguardando fonte</span></td><td><button class="btn-sm" data-oc="' + esc(x.o.id) + '">Abrir</button></td></tr>';
+      return '<tr><td class="mono">' + esc(x.o.returnId || '—') + '<div class="footnote" style="margin:0">' + esc(x.o.orderId || '') + '</div></td><td class="cell-text">' + esc(it.productName || '—') + '</td><td class="nowrap">' + brl(x.o.requested) + '</td><td class="nowrap">' + brl(x.f.comissao) + '</td><td class="nowrap">' + brl(x.f.servico) + '</td><td class="nowrap">' + brl(x.f.outrasTaxas) + '</td><td class="nowrap"><b>' + brl(x.f.taxasShopeeTotal) + '</b></td><td class="nowrap">' + brl(x.f.freteReverso) + '</td><td><span class="tag warn">aguardando fonte</span></td><td><button class="btn-sm" data-oc="' + esc(x.o.id) + '">Abrir</button></td></tr>';
     }).join('');
-    var table = '<div class="panel"><div class="ph"><h3>Taxas por devolução</h3><span class="footnote" style="margin:0">taxas reais do pedido · estorno pendente de fonte</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Devolução / Pedido</th><th>Produto</th><th>Reembolso</th><th>Comissão</th><th>Serviço</th><th>Transação</th><th>Frete rev.</th><th>Taxas total</th><th>Estorno</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="10" class="empty">Nenhuma devolução com pedido importado no período.</td></tr>') + '</tbody></table></div></div>';
+    var table = '<div class="panel"><div class="ph"><h3>Taxas por devolução</h3><span class="footnote" style="margin:0">motor financeiro canônico · estorno pendente de fonte</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Devolução / Pedido</th><th>Produto</th><th>Reembolso</th><th>Comissão</th><th>Serviço</th><th>Outras taxas</th><th>Taxas Shopee</th><th>Frete reverso</th><th>Estorno</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="10" class="empty">Nenhuma devolução com pedido importado no período.</td></tr>') + '</tbody></table></div><div class="footnote" style="padding:8px 16px 0">"Outras taxas" agrupa transação/afiliados/devolução fácil/recarga automática — mesmos campos e valores do Resumo Financeiro da Ficha do Pedido. "Frete reverso" é o impacto da devolução no envio, mostrado à parte — nunca somado nas Taxas Shopee.</div></div>';
     return head + strip + gaps + noOrderNote + table;
   }
   // A Receber da Shopee: cruza Pedidos (o que deveria pingar) × Carteira (renda efetivamente creditada). Sem prazo oficial → "há X dias", nunca "atrasado".
