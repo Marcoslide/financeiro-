@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build f89b634 · 2026-08-27 18:25 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build b9efd1b · 2026-08-27 19:37 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -6813,26 +6813,27 @@ buffer/index.js:
   // objetos alterados, então funciona também a partir do histórico de importações (§20/§61-63).
   function openDevImportResumo(batch) {
     var changed = occ.filter(function (o) { return (o.activities || []).some(function (a) { return a.batchId === batch.id; }); });
-    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '640px'; panel.style.maxWidth = '96vw';
-    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
     var atualizados = changed.filter(function (o) { return o.activities && o.activities.some(function (a) { return a.kind === 'SOURCE' && a.batchId === batch.id && a.field; }); });
-    var strip = kstrip([
-      { l: 'Casos novos', v: nn(batch.novo), cls: 'blue' },
-      { l: 'Casos atualizados', v: nn(batch.upd), cls: 'blue' },
-      { l: 'Mudança de status', v: nn(batch.statusChanged || 0), cls: (batch.statusChanged ? 'amber' : '') },
-      { l: 'Novas compensações', v: nn(batch.novaCompensacao || 0), cls: (batch.novaCompensacao ? 'green' : '') },
-      { l: 'Rastreio atualizado', v: nn(batch.rastreioAtualizado || 0), cls: '' },
-      { l: 'Dados internos preservados', v: nn(batch.dadosInternosPreservados || 0), cls: 'green', s: 'notas/status/decisões nunca apagados' },
+    var strip = MetricGrid([
+      MetricCard({ label: 'Casos novos', value: nn(batch.novo), cls: 'blue' }),
+      MetricCard({ label: 'Casos atualizados', value: nn(batch.upd), cls: 'blue' }),
+      MetricCard({ label: 'Mudança de status', value: nn(batch.statusChanged || 0), cls: (batch.statusChanged ? 'amber' : '') }),
+      MetricCard({ label: 'Novas compensações', value: nn(batch.novaCompensacao || 0), cls: (batch.novaCompensacao ? 'green' : '') }),
+      MetricCard({ label: 'Rastreio atualizado', value: nn(batch.rastreioAtualizado || 0), cls: '' }),
+      MetricCard({ label: 'Dados internos preservados', value: nn(batch.dadosInternosPreservados || 0), cls: 'green', sub: 'notas/status/decisões nunca apagados' }),
     ]);
     var rows = atualizados.slice(0, 200).map(function (o) {
       var diffsTxt = (o.activities || []).filter(function (a) { return a.kind === 'SOURCE' && a.batchId === batch.id && a.field; }).map(function (a) { return a.field + ': ' + a.oldValue + ' → ' + a.newValue; }).join(' · ');
       return '<tr class="rowlink" data-oc="' + esc(o.id) + '"><td class="mono">' + esc(o.orderId || o.returnId || o.id) + '</td><td class="cell-text">' + esc(diffsTxt || '—') + '</td></tr>';
     }).join('');
-    panel.innerHTML = '<div class="dh"><div><b>Atualização concluída</b></div><button class="x">&times;</button></div><div class="dbd">' + strip +
-      (rows ? '<div class="panel"><div class="ph"><h3>O que mudou</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Alterações</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>' : callout('green', '✓ Nenhum caso existente teve alteração de dados da Shopee', 'Só casos novos entraram nesta importação.')) +
-      '</div>';
-    panel.querySelector('.x').onclick = function () { d.remove(); };
-    panel.querySelectorAll('[data-oc]').forEach(function (b) { b.onclick = function () { d.remove(); openFicha(b.dataset.oc); }; });
+    var bodyHtml = strip +
+      (rows ? '<div class="panel"><div class="ph"><h3>O que mudou</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Alterações</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>' : callout('green', '✓ Nenhum caso existente teve alteração de dados da Shopee', 'Só casos novos entraram nesta importação.'));
+    var dw = openDrawer({
+      title: 'Atualização concluída', width: 640, bodyHtml: bodyHtml,
+      onMount: function (panel) {
+        panel.querySelectorAll('[data-oc]').forEach(function (b) { b.onclick = function () { dw.close(); openFicha(b.dataset.oc); }; });
+      },
+    });
   }
 
   function renderPosVenda() {
@@ -6904,7 +6905,7 @@ buffer/index.js:
     var counts = { aguardando: 0, transito: 0, conferir: 0, recebidos: 0, divergencia: 0, naoretornou: 0 };
     list.forEach(function (o) { counts[recGroup(o)]++; });
     var confPct = total ? Math.round(counts.recebidos / total * 100) : 0;
-    var head = secHead('RECEBIMENTOS', 'Recebimentos de devolução', 'O que ainda precisa chegar e a baixa manual de quem chegou — no mesmo fluxo. A baixa é sempre manual: "Concluído" na Shopee não é "recebido na empresa".');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'RECEBIMENTOS', title: 'Recebimentos de devolução', description: 'O que ainda precisa chegar e a baixa manual de quem chegou — no mesmo fluxo. A baixa é sempre manual: "Concluído" na Shopee não é "recebido na empresa".' });
     var search = '<div class="panel"><div class="pb"><div style="display:flex;gap:8px;max-width:640px"><input class="input" id="recq" placeholder="Buscar ID da devolução, pedido ou rastreio" style="flex:1" value="' + esc(recSearch) + '"><button class="btn-sm primary" id="recbtn">Buscar</button>' + (recSearch ? '<button class="btn-sm" id="recclear">Limpar</button>' : '') + '</div></div></div>';
     if (!total) return head + search + emptyBox('Nenhuma devolução com retorno físico esperado no período. Importe os relatórios de Devoluções/Reembolsos.');
     var chips = [['todos', 'Todos'], ['aguardando', 'Aguardando'], ['transito', 'Em trânsito'], ['conferir', 'Chegou / conferir'], ['recebidos', 'Recebidos'], ['divergencia', 'Divergência'], ['naoretornou', 'Não retornou']];
@@ -6920,12 +6921,12 @@ buffer/index.js:
       return '<tr><td class="mono">' + esc(o.returnId || (o.id.split(':')[1] || '—')) + '</td><td class="mono">' + esc(o.orderId || '—') + '</td><td class="cell-text">' + esc(prod) + '<div class="footnote" style="margin:0">' + esc(it.sku || '—') + '</div></td><td>' + qt + '</td><td class="nowrap">' + esc(o.status || '—') + '</td><td><span class="tag ' + rl[1] + '">' + rl[0] + '</span></td><td class="mono footnote" style="margin:0">' + esc(o.tracking || '—') + '</td><td>' + daysWaiting(o) + '</td><td class="nowrap">' + brl(o.requested) + '</td><td>' + action(o) + '</td></tr>';
     }).join('') : '<tr><td colspan="10" class="empty">Nenhuma devolução neste filtro.</td></tr>';
     return head + search +
-      kstrip([
-        { l: 'Deveriam retornar', v: nn(total), cls: 'blue' },
-        { l: 'Recebidas', v: nn(counts.recebidos), cls: 'green' },
-        { l: 'A caminho', v: nn(counts.aguardando + counts.transito), cls: 'blue' },
-        { l: 'Chegaram / conferir', v: nn(counts.conferir), cls: 'amber' },
-        { l: 'Divergência', v: nn(counts.divergencia), cls: 'red' },
+      MetricGrid([
+        MetricCard({ label: 'Deveriam retornar', value: nn(total), cls: 'blue' }),
+        MetricCard({ label: 'Recebidas', value: nn(counts.recebidos), cls: 'green' }),
+        MetricCard({ label: 'A caminho', value: nn(counts.aguardando + counts.transito), cls: 'blue' }),
+        MetricCard({ label: 'Chegaram / conferir', value: nn(counts.conferir), cls: 'amber' }),
+        MetricCard({ label: 'Divergência', value: nn(counts.divergencia), cls: 'red' }),
       ]) +
       '<div class="chartcard"><div class="cch"><h4>Recebimento físico</h4><div class="cleg">' + confPct + '% recebido / conferido</div></div><div style="height:14px;border-radius:8px;background:var(--line);overflow:hidden"><div style="height:100%;width:' + confPct + '%;background:var(--ok)"></div></div></div>' +
       '<div class="panel"><div class="chips" style="padding:12px 12px 4px">' + chips.map(function (c) { return '<span class="chip' + (arF === c[0] ? ' chip-on' : '') + '" data-arf="' + c[0] + '">' + c[1] + (c[0] !== 'todos' ? ' <b>' + nn(counts[c[0]] || 0) + '</b>' : '') + '</span>'; }).join('') + '</div>' +
@@ -6957,11 +6958,9 @@ buffer/index.js:
       var custoUnit = itemCustoUnit(it.sku); var custoTotal = custoUnit != null ? Math.round(custoUnit * (it.qty || 1) * 100) / 100 : null;
       return { idx: i, sku: it.sku, productName: it.productName, variationName: it.variationName, expected: it.qty || 1, received: it.qty || 1, condition: 'REAPROVEITAVEL', reaproveitavel: 'SIM', destino: 'ESTOQUE', custoUnit: custoUnit, custoTotal: custoTotal, valorReaproveitavel: custoTotal };
     });
-    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '860px'; panel.style.maxWidth = '98vw';
-    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
     // valor sugerido de reaproveitamento a partir de reaproveitável+condição — o operador pode sobrescrever.
     function sugestaoReaproveitavel(it) { if (it.custoTotal == null) return null; if (it.reaproveitavel === 'NAO') return 0; if (it.reaproveitavel === 'PARCIAL') return Math.round(it.custoTotal / 2 * 100) / 100; return it.custoTotal; }
-    function draw() {
+    function body() {
       var totExp = items.reduce(function (s, i) { return s + i.expected; }, 0), totRec = items.reduce(function (s, i) { return s + i.received; }, 0);
       var custoTotalGeral = items.reduce(function (s, i) { return s + (i.custoTotal || 0); }, 0);
       var reaprovTotalGeral = items.reduce(function (s, i) { return s + (i.valorReaproveitavel || 0); }, 0);
@@ -6976,24 +6975,32 @@ buffer/index.js:
           '<td class="nowrap">' + (it.custoTotal != null ? brl(it.custoTotal) : '<span class="tag warn">sem custo</span>') + '</td>' +
           '<td><input class="input sm" data-valreap="' + it.idx + '" style="width:90px" value="' + (it.valorReaproveitavel != null ? it.valorReaproveitavel : '') + '" placeholder="—"></td></tr>';
       }).join('');
-      panel.innerHTML = '<div class="dh"><div><b>Conferir e dar baixa · devolução ' + esc(o.returnId || o.id) + '</b> <span class="tag info" style="margin-left:6px">Shopee: ' + esc(o.status || '—') + '</span></div><button class="x">&times;</button></div><div class="dbd">' +
-        '<div class="footnote" style="margin:0 0 10px">Pedido ' + esc(o.orderId || '—') + ' · Valor envolvido ' + brl(o.requested) + ' · Motivo: ' + esc(o.reason || '—') + '</div>' +
+      return '<div class="footnote" style="margin:0 0 10px">Pedido ' + esc(o.orderId || '—') + ' · Valor envolvido ' + brl(o.requested) + ' · Motivo: ' + esc(o.reason || '—') + '</div>' +
         '<div class="table-wrap"><table><thead><tr><th>Produto / SKU</th><th>Esperado</th><th>Recebido</th><th>Condição</th><th>Reaproveitável?</th><th>Destino</th><th>Custo do produto</th><th>Valor reaproveitável</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
         (semCusto ? '<div class="footnote" style="margin-top:6px">⚠ Algum item não tem custo cadastrado em Produtos — o valor de perda confirmada abaixo fica parcial para esses itens.</div>' : '') +
-        '<div class="kstrip" style="margin-top:12px"><div class="kc"><div class="kl">Custo total dos itens</div><div class="kv">' + brl(custoTotalGeral) + '</div></div><div class="kc"><div class="kl">Valor reaproveitável</div><div class="kv">' + brl(reaprovTotalGeral) + '</div></div><div class="kc"><div class="kl">Perda confirmada (se der baixa agora)</div><div class="kv" style="color:var(--err)">' + brl(perdaGeral) + '</div></div></div>' +
+        MetricGrid([
+          MetricCard({ label: 'Custo total dos itens', value: brl(custoTotalGeral) }),
+          MetricCard({ label: 'Valor reaproveitável', value: brl(reaprovTotalGeral) }),
+          MetricCard({ label: 'Perda confirmada (se der baixa agora)', value: '<span style="color:var(--err)">' + brl(perdaGeral) + '</span>' }),
+        ]) +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;flex-wrap:wrap;gap:10px"><div><b>Esperado ' + totExp + '</b> · <b>Recebido ' + totRec + '</b></div>' +
         '<div style="display:flex;gap:8px"><input class="input sm" id="cnote" placeholder="Observação (opcional)" style="width:220px"><button class="btn-sm primary" id="cok">Confirmar recebimento e dar baixa</button></div></div>' +
-        '<div class="footnote" style="margin-top:8px">A baixa é manual. O produto só fica "recebido" quando você confirma aqui — e o resultado da devolução passa de provisório para confirmado.</div></div>';
-      panel.querySelector('.x').onclick = function () { d.remove(); };
-      panel.querySelectorAll('[data-dec]').forEach(function (b) { b.onclick = function () { var it = items[+b.dataset.dec]; it.received = Math.max(0, it.received - 1); draw(); }; });
-      panel.querySelectorAll('[data-inc]').forEach(function (b) { b.onclick = function () { var it = items[+b.dataset.inc]; it.received = it.received + 1; draw(); }; });
-      panel.querySelectorAll('[data-cond]').forEach(function (s) { s.onchange = function () { items[+s.dataset.cond].condition = s.value; }; });
-      panel.querySelectorAll('[data-reap]').forEach(function (s) { s.onchange = function () { var it = items[+s.dataset.reap]; it.reaproveitavel = s.value; it.valorReaproveitavel = sugestaoReaproveitavel(it); draw(); }; });
-      panel.querySelectorAll('[data-dest]').forEach(function (s) { s.onchange = function () { items[+s.dataset.dest].destino = s.value; }; });
-      panel.querySelectorAll('[data-valreap]').forEach(function (inp) { inp.onchange = function () { var it = items[+inp.dataset.valreap]; var v = parseFloat((inp.value || '').replace(',', '.')); it.valorReaproveitavel = isNaN(v) ? null : v; draw(); }; });
-      panel.querySelector('#cok').onclick = function () { confirmReceive(o, items, (panel.querySelector('#cnote') || {}).value || null, d, onDone); };
+        '<div class="footnote" style="margin-top:8px">A baixa é manual. O produto só fica "recebido" quando você confirma aqui — e o resultado da devolução passa de provisório para confirmado.</div>';
     }
-    draw();
+    var dw = openDrawer({
+      titleHtml: '<b>Conferir e dar baixa · devolução ' + esc(o.returnId || o.id) + '</b> <span class="tag info" style="margin-left:6px">Shopee: ' + esc(o.status || '—') + '</span>',
+      width: 860,
+      renderBody: body,
+      onMount: function (panel, refresh) {
+        panel.querySelectorAll('[data-dec]').forEach(function (b) { b.onclick = function () { var it = items[+b.dataset.dec]; it.received = Math.max(0, it.received - 1); refresh(); }; });
+        panel.querySelectorAll('[data-inc]').forEach(function (b) { b.onclick = function () { var it = items[+b.dataset.inc]; it.received = it.received + 1; refresh(); }; });
+        panel.querySelectorAll('[data-cond]').forEach(function (s) { s.onchange = function () { items[+s.dataset.cond].condition = s.value; }; });
+        panel.querySelectorAll('[data-reap]').forEach(function (s) { s.onchange = function () { var it = items[+s.dataset.reap]; it.reaproveitavel = s.value; it.valorReaproveitavel = sugestaoReaproveitavel(it); refresh(); }; });
+        panel.querySelectorAll('[data-dest]').forEach(function (s) { s.onchange = function () { items[+s.dataset.dest].destino = s.value; }; });
+        panel.querySelectorAll('[data-valreap]').forEach(function (inp) { inp.onchange = function () { var it = items[+inp.dataset.valreap]; var v = parseFloat((inp.value || '').replace(',', '.')); it.valorReaproveitavel = isNaN(v) ? null : v; refresh(); }; });
+        panel.querySelector('#cok').onclick = function () { confirmReceive(o, items, (panel.querySelector('#cnote') || {}).value || null, dw, onDone); };
+      },
+    });
   }
   function confirmReceive(o, items, note, drawerEl, onDone) {
     var totExp = items.reduce(function (s, i) { return s + i.expected; }, 0), totRec = items.reduce(function (s, i) { return s + i.received; }, 0);
@@ -7012,7 +7019,7 @@ buffer/index.js:
     addActivity(o, 'RECEIPT', { message: 'Recebimento: ' + totRec + ' de ' + totExp + ' item(ns) · ' + RECEIPT_LABELS[state] + ' · perda confirmada ' + brl(o.recuperacao.perdaConfirmada) + (note ? ' · ' + note : ''), userName: 'Operador' });
     recomputeOccImpact(o);
     saveOcc(o).then(function () {
-      if (drawerEl) drawerEl.remove(); render();
+      if (drawerEl) drawerEl.close(); render();
       toast('Recebimento registrado', (o.returnId || o.id) + ' · ' + totRec + ' de ' + totExp + ' · ' + RECEIPT_LABELS[state]);
       if (onDone) onDone();
     });
@@ -7037,8 +7044,8 @@ buffer/index.js:
   }
   // ANÁLISE · PROBLEMAS — investigação contínua motivo → produto → SKU → causa (e o inverso).
   function devProblemas() {
-    var base = occInPeriod(); if (!base.length) return secHead('ANÁLISE · PROBLEMAS', 'Por que estamos perdendo dinheiro?', '') + emptyBox('Sem ocorrências no período.');
-    var head = secHead('ANÁLISE · PROBLEMAS', 'Por que estamos perdendo dinheiro?', 'Motivo → produto → SKU → causa numa investigação contínua. Clique numa linha para aprofundar.');
+    var base = occInPeriod(); if (!base.length) return PageHeader({ variant: 'eyebrow', eyebrow: 'ANÁLISE · PROBLEMAS', title: 'Por que estamos perdendo dinheiro?', description: '' }) + emptyBox('Sem ocorrências no período.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'ANÁLISE · PROBLEMAS', title: 'Por que estamos perdendo dinheiro?', description: 'Motivo → produto → SKU → causa numa investigação contínua. Clique numa linha para aprofundar.' });
     // --- caminho MOTIVO → produtos/SKUs/causa ---
     if (analiseReason) {
       var lr = base.filter(function (o) { return (o.reason || '(sem motivo informado)').trim() === analiseReason; });
@@ -7071,18 +7078,18 @@ buffer/index.js:
   }
   // Evolução por COORTE (mês do pedido). Barras = devoluções; linha = taxa % (ou perda se não houver pedidos).
   function devEvolucao() {
-    if (!occInPeriod().length) return secHead('ANÁLISE · EVOLUÇÃO', 'Estamos melhorando?', '') + emptyBox('Sem ocorrências no período.');
+    if (!occInPeriod().length) return PageHeader({ variant: 'eyebrow', eyebrow: 'ANÁLISE · EVOLUÇÃO', title: 'Estamos melhorando?', description: '' }) + emptyBox('Sem ocorrências no período.');
     var cohort = devCohortData(); var hasTaxa = cohort.some(function (m) { return m.taxa != null; });
-    var head = secHead('ANÁLISE · EVOLUÇÃO', 'Estamos melhorando?', 'Cada devolução é atribuída ao mês do pedido que a originou — a única forma de comparar com as vendas. Barras = devoluções, linha = ' + (hasTaxa ? 'taxa de devolução' : 'perda R$') + '.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'ANÁLISE · EVOLUÇÃO', title: 'Estamos melhorando?', description: 'Cada devolução é atribuída ao mês do pedido que a originou — a única forma de comparar com as vendas. Barras = devoluções, linha = ' + (hasTaxa ? 'taxa de devolução' : 'perda R$') + '.' });
     if (cohort.length < 2) return head + callout('', 'Ainda não dá para desenhar a tendência', 'São necessários pelo menos 2 meses com data. Meses disponíveis: <b>' + nn(cohort.length) + '</b>. Importe mais períodos de Pedidos e Devoluções.');
     var rows = cohort.map(function (m) { return { label: monthLabel(m.k), bar: m.occ, line: hasTaxa ? (m.taxa || 0) : m.loss }; });
     var chart = chartCard('Volume e ' + (hasTaxa ? 'taxa' : 'perda') + ' por mês do pedido', legendSwatch([['Devoluções', '#2b4bd6'], [hasTaxa ? 'Taxa %' : 'Perda R$', '#d13b3b']]), svgBarLine(rows, { barFmt: nn, lineFmt: hasTaxa ? function (v) { return pct(v); } : function (v) { return brl(v); } }));
     var f = cohort[0], l = cohort[cohort.length - 1];
     var dOcc = l.occ - f.occ; var dTaxa = (hasTaxa && f.taxa != null && l.taxa != null) ? r2(l.taxa - f.taxa) : null;
-    var strip = kstrip([
-      { l: 'Devoluções (1º→último)', v: (dOcc > 0 ? '+' : '') + nn(dOcc), cls: dOcc > 0 ? 'red' : dOcc < 0 ? 'green' : '', s: monthLabel(f.k) + ' → ' + monthLabel(l.k) },
-      hasTaxa ? { l: 'Taxa (1º→último)', v: dTaxa == null ? '—' : (dTaxa > 0 ? '+' : '') + pct(dTaxa), cls: dTaxa > 0 ? 'red' : dTaxa < 0 ? 'green' : '' } : { l: 'Perda (1º→último)', v: brl(r2(l.loss - f.loss)), cls: l.loss > f.loss ? 'red' : 'green' },
-      { l: 'Meses na série', v: nn(cohort.length), cls: 'blue' },
+    var strip = MetricGrid([
+      MetricCard({ label: 'Devoluções (1º→último)', value: (dOcc > 0 ? '+' : '') + nn(dOcc), cls: dOcc > 0 ? 'red' : dOcc < 0 ? 'green' : '', sub: monthLabel(f.k) + ' → ' + monthLabel(l.k) }),
+      hasTaxa ? MetricCard({ label: 'Taxa (1º→último)', value: dTaxa == null ? '—' : (dTaxa > 0 ? '+' : '') + pct(dTaxa), cls: dTaxa > 0 ? 'red' : dTaxa < 0 ? 'green' : '' }) : MetricCard({ label: 'Perda (1º→último)', value: brl(r2(l.loss - f.loss)), cls: l.loss > f.loss ? 'red' : 'green' }),
+      MetricCard({ label: 'Meses na série', value: nn(cohort.length), cls: 'blue' }),
     ]);
     var matur = callout('', 'Cuidado com o mês mais recente', 'O último mês tende a parecer melhor do que é: parte das devoluções daquele pedido ainda não foi aberta (a defasagem mediana costuma passar de 10 dias). Só compare meses já “fechados”.');
     var tbl = '<div class="panel"><div class="ph"><h3>Mês a mês (por mês do pedido)</h3></div><div class="table-wrap"><table class="report"><thead><tr><th>Mês do pedido</th><th>Pedidos</th><th>Devoluções</th><th>Taxa</th><th>Perda</th></tr></thead><tbody>' +
@@ -7094,7 +7101,7 @@ buffer/index.js:
   function devImportacoes() {
     var TYPES = [['RETURN_REFUND', 'Devoluções / Reembolsos'], ['ORDER_CANCELLATION', 'Cancelamentos'], ['FAILED_DELIVERY', 'Falhas de Entrega']];
     var list = batches.filter(function (b) { return b.module.indexOf('Devolução') === 0 || b.module.indexOf('Pós-venda') === 0; });
-    return secHead('DADOS', 'Importações', 'Carregue os três relatórios da Shopee. A reimportação é idempotente — nunca duplica ocorrências.') +
+    return PageHeader({ variant: 'eyebrow', eyebrow: 'DADOS', title: 'Importações', description: 'Carregue os três relatórios da Shopee. A reimportação é idempotente — nunca duplica ocorrências.' }) +
       '<div class="cards6">' + TYPES.map(function (x) { return '<div class="fcard"><div class="lbl">' + x[1] + '</div><button class="btn-sm primary" style="margin-top:10px" data-pv="' + x[0] + '">Importar</button></div>'; }).join('') + '</div>' +
       '<div class="panel"><div class="ph"><h3>Histórico de importações</h3></div><div class="table-wrap"><table><thead><tr><th>Relatório</th><th>Arquivo</th><th>Ocorrências</th><th>Novas</th><th>Atualizadas</th><th>Mudança de status</th><th>Itens</th><th>Data</th><th></th></tr></thead><tbody>' +
       (list.length ? list.map(function (b, i) { return '<tr><td>' + esc(b.module.replace(/^Devolução · |^Pós-venda · /, '')) + '</td><td>' + esc(b.filename) + '</td><td>' + nn(b.seen) + '</td><td>' + nn(b.novo) + '</td><td>' + nn(b.upd) + '</td><td>' + nn(b.statusChanged || 0) + '</td><td>' + nn(b.itemsSeen || 0) + '</td><td class="footnote" style="margin:0">' + new Date(b.createdAt).toLocaleString('pt-BR') + '</td><td>' + (b.upd ? '<button class="btn-sm" data-devresumo="' + i + '">Ver o que mudou</button>' : '') + '</td></tr>'; }).join('') : '<tr><td colspan="9" class="empty">Nenhuma importação ainda.</td></tr>') +
@@ -7113,9 +7120,9 @@ buffer/index.js:
     return Object.values(map).map(function (c) { var dom = Object.entries(c.reasons).sort(function (a, b) { return b[1] - a[1]; })[0]; return { key: c.key, label: c.label, cases: c.cases, loss: r2(c.loss), atRisk: r2(c.atRisk), additional: r2(c.additional), recovered: r2(c.recovered), net: r2(c.loss + c.additional - c.recovered), dom: dom ? dom[0] : '—', share: r2(c.loss / total * 100) }; }).sort(function (a, b) { return b.loss - a.loss; });
   }
   function devCausas() {
-    var list = occInPeriod(); if (!list.length) return secHead('ANÁLISE · CAUSAS', 'Onde estamos errando?', '') + emptyBox('Sem ocorrências no período.');
+    var list = occInPeriod(); if (!list.length) return PageHeader({ variant: 'eyebrow', eyebrow: 'ANÁLISE · CAUSAS', title: 'Onde estamos errando?', description: '' }) + emptyBox('Sem ocorrências no período.');
     var d = devCausasData(list); var np = devAchadosData(list).notProblems;
-    var head = secHead('ANÁLISE · CAUSAS', 'Onde estamos errando?', 'A causa interna (nossa leitura) pode diferir do motivo declarado pelo cliente. É aqui que mora a ação.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'ANÁLISE · CAUSAS', title: 'Onde estamos errando?', description: 'A causa interna (nossa leitura) pode diferir do motivo declarado pelo cliente. É aqui que mora a ação.' });
     var chart = d.length ? chartCard('Perda por causa', legendSwatch([['Perda R$', '#d13b3b']]), svgHBars(d.map(function (c) { return { label: c.label, value: c.loss, color: c.key === 'AVARIA' ? '#d13b3b' : c.key === 'SEPARACAO' ? '#2b4bd6' : '#8a93a3' }; }), { fmt: function (v) { return brl(v); } })) : '';
     var naoE = np && np.length ? callout('green', 'O que o problema NÃO é', np.map(function (x) { return '<div class="fin-line"><span><b>' + esc(x.dim) + '</b></span><span class="footnote" style="margin:0">' + esc(x.note) + '</span></div>'; }).join('')) : '';
     return head + chart +
@@ -7139,7 +7146,7 @@ buffer/index.js:
   // ===================== ANÁLISES · INTELIGÊNCIA (achado → evidência → ação → sugestão de plano) =====================
   function devAchados() {
     var list = occInPeriod(); var d = devAchadosData(list);
-    var head = secHead('ANÁLISE · INTELIGÊNCIA', 'O que o sistema descobriu', 'Cada achado traz evidência, por que importa e a ação sugerida. "Sugerir plano" cria um rascunho em Plano de Ação — nada é implantado sem sua aprovação.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'ANÁLISE · INTELIGÊNCIA', title: 'O que o sistema descobriu', description: 'Cada achado traz evidência, por que importa e a ação sugerida. "Sugerir plano" cria um rascunho em Plano de Ação — nada é implantado sem sua aprovação.' });
     if (!list.length) return head + emptyBox('Sem ocorrências no período.');
     var already = {}; plans.forEach(function (p) { (p.relatedFindings || []).forEach(function (t) { already[t] = true; }); });
     return head +
@@ -7330,13 +7337,13 @@ buffer/index.js:
     var semEfeito = official.filter(function (p) { var r = planResult(p).k; return r === 'SEM' || r === 'PIOROU'; });
     var chips = [['todos', 'Todos'], ['PLANEJADO', 'Planejado'], ['EM_EXECUCAO', 'Em execução'], ['MEDINDO', 'Medindo'], ['ENCERRADO', 'Encerrado']];
     var view = planFilter === 'todos' ? official : official.filter(function (p) { return p.status === planFilter; });
-    return secHead('CORREÇÃO', 'Plano de ação', 'Corrija e meça. Metas em percentual, medição antes/depois com maturidade, e sugestões da inteligência para aprovar.') +
-      kstrip([
-        { l: 'Sugestões da IA', v: nn(suggestions.length), cls: 'orange' },
-        { l: 'Planejado', v: nn(counts.PLANEJADO), cls: 'blue' },
-        { l: 'Em execução', v: nn(counts.EM_EXECUCAO), cls: 'blue' },
-        { l: 'Medindo', v: nn(counts.MEDINDO), cls: 'amber' },
-        { l: 'Encerrado', v: nn(counts.ENCERRADO), cls: 'green' },
+    return PageHeader({ variant: 'eyebrow', eyebrow: 'CORREÇÃO', title: 'Plano de ação', description: 'Corrija e meça. Metas em percentual, medição antes/depois com maturidade, e sugestões da inteligência para aprovar.' }) +
+      MetricGrid([
+        MetricCard({ label: 'Sugestões da IA', value: nn(suggestions.length), cls: 'orange' }),
+        MetricCard({ label: 'Planejado', value: nn(counts.PLANEJADO), cls: 'blue' }),
+        MetricCard({ label: 'Em execução', value: nn(counts.EM_EXECUCAO), cls: 'blue' }),
+        MetricCard({ label: 'Medindo', value: nn(counts.MEDINDO), cls: 'amber' }),
+        MetricCard({ label: 'Encerrado', value: nn(counts.ENCERRADO), cls: 'green' }),
       ]) +
       (suggestions.length ? '<div class="panel"><div class="ph"><h3>Sugestões da inteligência</h3><span class="footnote" style="margin:0">rascunhos — não são planos oficiais até aprovar</span></div><div class="pb">' + suggestions.map(function (p) { return '<div class="callout warn" style="margin-bottom:10px"><div class="ct">' + esc(p.title) + '</div><div class="cbody">' + (p.problem ? '<div class="fin-line"><span>Problema</span><b>' + esc(p.problem) + '</b></div>' : '') + '<div class="fin-line"><span>Indicador</span><span>' + esc(p.indicator) + '</span></div>' + (p.scopeSkus && p.scopeSkus.length ? '<div class="fin-line"><span>Escopo</span><span class="mono footnote" style="margin:0">' + esc(p.scopeSkus.join(', ')) + '</span></div>' : '') + '<div style="display:flex;gap:8px;margin-top:8px"><button class="btn-sm primary" data-plapprove="' + p.id + '">Aprovar plano</button><button class="btn-sm" data-plignore="' + p.id + '">Ignorar</button></div></div></div>'; }).join('') + '</div></div>' : '') +
       '<div class="importbar"><div style="flex:1;display:flex;gap:8px;flex-wrap:wrap"><input class="input sm" id="plt" style="flex:2;min-width:200px" placeholder="Nova ação (ex.: novo padrão de embalagem 80x120)"><input class="input sm" id="pls" style="flex:1;min-width:150px" placeholder="SKUs (vírgula) — escopo"><button class="btn-sm primary" id="plnew">Criar plano</button></div></div>' +
@@ -7395,7 +7402,7 @@ buffer/index.js:
   function monthLabel(k) { var p = k.split('-'); var mm = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']; return p[1] ? (mm[+p[1] - 1] + '/' + p[0].slice(2)) : k; }
 
   function devExec() {
-    var list = occInPeriod(); if (!list.length) return secHead('PANORAMA', 'Devolução', 'Receba, confira e defenda suas devoluções.') + emptyBox('Nenhuma ocorrência. Importe os relatórios na aba Importações.');
+    var list = occInPeriod(); if (!list.length) return PageHeader({ variant: 'eyebrow', eyebrow: 'PANORAMA', title: 'Devolução', description: 'Receba, confira e defenda suas devoluções.' }) + emptyBox('Nenhuma ocorrência. Importe os relatórios na aba Importações.');
     var agg = computeOrderAgg();
     var confirmed = r2(devLoss(list)); var atRisk = r2(list.reduce(function (s, o) { return s + o.exposure.atRisk; }, 0)); var recovered = r2(list.reduce(function (s, o) { return s + (o.impact.recoveredTotal || 0); }, 0));
     var motivos = devMotivosData(list); var crit = devCriticosData(list); var fin = devFinanceiroData(list);
@@ -7424,31 +7431,31 @@ buffer/index.js:
     // Devolução × Expedição (§4 do prompt de reorganização): quanto representa sobre o que
     // realmente SAIU da empresa (bipe), não só sobre o que foi vendido.
     var totalExpedidos = Object.keys(shipBip).length;
-    var expKpi = totalExpedidos ? (function () { var devExpedidos = list.filter(function (o) { return o.orderId && pedIsExpedido(o.orderId); }).length; return { l: 'Taxa sobre expedidos', v: pct(r2(devExpedidos / totalExpedidos * 100)), cls: 'blue', s: nn(devExpedidos) + ' de ' + nn(totalExpedidos) + ' expedidos' }; })() : null;
+    var expKpi = totalExpedidos ? (function () { var devExpedidos = list.filter(function (o) { return o.orderId && pedIsExpedido(o.orderId); }).length; return MetricCard({ label: 'Taxa sobre expedidos', value: pct(r2(devExpedidos / totalExpedidos * 100)), cls: 'blue', sub: nn(devExpedidos) + ' de ' + nn(totalExpedidos) + ' expedidos' }); })() : null;
     // §43: em poucos segundos — "tenho N casos novos, X vencem hoje, Y aguardando Shopee..."
-    var opStrip = kstrip([
-      { l: 'Novos casos', v: nn(list.filter(function (o) { return casoJornada(o) === 'NOVA'; }).length), cls: 'blue' },
-      { l: 'Precisam de ação', v: nn(list.filter(function (o) { return casoJornada(o) === 'ACAO_NECESSARIA'; }).length), cls: 'amber' },
-      { l: 'Prazo vencendo (≤3d)', v: nn(list.filter(function (o) { return ['hoje', 'amanha', 'ate3'].indexOf(prazoChip(o)) >= 0; }).length), cls: 'red' },
-      { l: 'Em disputa', v: nn(list.filter(function (o) { return o.hasDispute && ['POSSIVEL', 'EM_PREPARACAO', 'RESPONDIDA', 'AGUARDANDO_SHOPEE'].indexOf(o.disputeStatus) >= 0; }).length), cls: 'blue' },
-      { l: 'Aguardando Shopee', v: nn(list.filter(function (o) { return casoJornada(o) === 'AGUARDANDO_SHOPEE'; }).length), cls: 'blue' },
-      { l: '🟣 Novo retorno', v: nn(list.filter(casoNovoRetorno).length), cls: 'amber', s: 'desde a última vez que você abriu o caso' },
+    var opStrip = MetricGrid([
+      MetricCard({ label: 'Novos casos', value: nn(list.filter(function (o) { return casoJornada(o) === 'NOVA'; }).length), cls: 'blue' }),
+      MetricCard({ label: 'Precisam de ação', value: nn(list.filter(function (o) { return casoJornada(o) === 'ACAO_NECESSARIA'; }).length), cls: 'amber' }),
+      MetricCard({ label: 'Prazo vencendo (≤3d)', value: nn(list.filter(function (o) { return ['hoje', 'amanha', 'ate3'].indexOf(prazoChip(o)) >= 0; }).length), cls: 'red' }),
+      MetricCard({ label: 'Em disputa', value: nn(list.filter(function (o) { return o.hasDispute && ['POSSIVEL', 'EM_PREPARACAO', 'RESPONDIDA', 'AGUARDANDO_SHOPEE'].indexOf(o.disputeStatus) >= 0; }).length), cls: 'blue' }),
+      MetricCard({ label: 'Aguardando Shopee', value: nn(list.filter(function (o) { return casoJornada(o) === 'AGUARDANDO_SHOPEE'; }).length), cls: 'blue' }),
+      MetricCard({ label: '🟣 Novo retorno', value: nn(list.filter(casoNovoRetorno).length), cls: 'amber', sub: 'desde a última vez que você abriu o caso' }),
     ]);
-    var opStrip2 = kstrip([
-      { l: 'Compensações identificadas', v: nn(list.filter(function (o) { return o.compensation > 0; }).length), cls: 'green', s: brl(list.reduce(function (s, o) { return s + (o.compensation || 0); }, 0)) },
-      { l: 'Aguardando retorno físico', v: nn(list.filter(function (o) { return ['EM_TRANSITO', 'CHEGOU_CONFERIR'].indexOf(o.receiptState) >= 0; }).length), cls: 'amber' },
-      { l: 'Valor em risco', v: brl(atRisk), cls: 'amber' },
-      { l: 'Valor recuperado', v: brl(recovered), cls: 'green' },
-      { l: 'Valor perdido (confirmado)', v: brl(confirmed), cls: 'red' },
+    var opStrip2 = MetricGrid([
+      MetricCard({ label: 'Compensações identificadas', value: nn(list.filter(function (o) { return o.compensation > 0; }).length), cls: 'green', sub: brl(list.reduce(function (s, o) { return s + (o.compensation || 0); }, 0)) }),
+      MetricCard({ label: 'Aguardando retorno físico', value: nn(list.filter(function (o) { return ['EM_TRANSITO', 'CHEGOU_CONFERIR'].indexOf(o.receiptState) >= 0; }).length), cls: 'amber' }),
+      MetricCard({ label: 'Valor em risco', value: brl(atRisk), cls: 'amber' }),
+      MetricCard({ label: 'Valor recuperado', value: brl(recovered), cls: 'green' }),
+      MetricCard({ label: 'Valor perdido (confirmado)', value: brl(confirmed), cls: 'red' }),
     ]);
-    return secHead('PANORAMA', 'Como estamos?', 'Estamos melhorando ou piorando, quanto perdemos, por quê e quanto recuperamos.') +
+    return PageHeader({ variant: 'eyebrow', eyebrow: 'PANORAMA', title: 'Como estamos?', description: 'Estamos melhorando ou piorando, quanto perdemos, por quê e quanto recuperamos.' }) +
       opStrip + opStrip2 +
-      kstrip([
-        { l: 'Taxa sobre vendidos', v: agg.orders ? pct(list.length / agg.orders * 100) : '—', cls: 'blue', s: agg.orders ? nn(list.length) + ' de ' + nn(agg.orders) + ' pedidos' : 'sem base de pedidos' },
+      MetricGrid([
+        MetricCard({ label: 'Taxa sobre vendidos', value: agg.orders ? pct(list.length / agg.orders * 100) : '—', cls: 'blue', sub: agg.orders ? nn(list.length) + ' de ' + nn(agg.orders) + ' pedidos' : 'sem base de pedidos' }),
       ].concat(expKpi ? [expKpi] : []).concat([
-        { l: 'Perda confirmada', v: brl(confirmed), cls: 'red', s: agg.revenue ? pct(confirmed / agg.revenue * 100) + ' do faturamento' : '' },
-        { l: 'Em risco', v: brl(atRisk), cls: 'amber' },
-        { l: 'Recuperado', v: brl(recovered), cls: 'green' },
+        MetricCard({ label: 'Perda confirmada', value: brl(confirmed), cls: 'red', sub: agg.revenue ? pct(confirmed / agg.revenue * 100) + ' do faturamento' : '' }),
+        MetricCard({ label: 'Em risco', value: brl(atRisk), cls: 'amber' }),
+        MetricCard({ label: 'Recuperado', value: brl(recovered), cls: 'green' }),
       ])) +
       (!totalExpedidos ? callout('', 'Taxa sobre expedidos ainda não disponível', 'Registre a expedição (bipe) em Pedidos → Expedição para ver a devolução como % do que realmente saiu da empresa — não só do que foi vendido.') : '') +
       denomWarn + achadosHtml + trend +
@@ -7467,7 +7474,7 @@ buffer/index.js:
   function devPrecisaAcao(o) { return casoFase(o) === 'SOLICITACOES'; }
   function devOcc() {
     var all = occInPeriodAll().slice();
-    if (!all.length) return secHead('CASOS', 'Casos', 'Todos os casos de devolução, cancelamento e falha de entrega em um só lugar.') + emptyBox('Nenhum caso. Importe os relatórios na aba Importações.');
+    if (!all.length) return PageHeader({ variant: 'eyebrow', eyebrow: 'CASOS', title: 'Casos', description: 'Todos os casos de devolução, cancelamento e falha de entrega em um só lugar.' }) + emptyBox('Nenhum caso. Importe os relatórios na aba Importações.');
     var typeCounts = { RETURN_REFUND: 0, ORDER_CANCELLATION: 0, FAILED_DELIVERY: 0 }; all.forEach(function (o) { if (typeCounts[o.type] != null) typeCounts[o.type]++; });
     var typed = devF.type ? all.filter(function (o) { return o.type === devF.type; }) : all;
     // Status Shopee real presente na fonte — nunca inventado (§5).
@@ -7528,7 +7535,7 @@ buffer/index.js:
       '<button class="btn-sm primary" id="blkapply">Aplicar aos ' + nn(selIds.length) + '</button><button class="btn-sm" id="blkclear">Limpar seleção</button></div></div>' : '';
     var allSelectable = slice.filter(function (o) { return !o.isDemo; });
     var allChecked = allSelectable.length && allSelectable.every(function (o) { return devSel[o.id]; });
-    return secHead('CASOS', 'Casos', 'Qual caso eu preciso tratar agora?') +
+    return PageHeader({ variant: 'eyebrow', eyebrow: 'CASOS', title: 'Casos', description: 'Qual caso eu preciso tratar agora?' }) +
       '<div class="chips">' + typeChips.map(function (c) { return '<span class="chip' + (devF.type === c[0] ? ' chip-on' : '') + '" data-octype="' + c[0] + '">' + c[1] + ' <b>' + nn(c[2]) + '</b></span>'; }).join('') + '</div>' +
       '<div class="toolbar2" style="margin-top:10px;flex-wrap:wrap">' +
       '<input class="input sm" id="devq" style="width:280px" placeholder="Buscar pedido, devolução, rastreio, SKU ou produto…" value="' + esc(devF.search) + '">' +
@@ -7561,34 +7568,34 @@ buffer/index.js:
     return putMany('occ', changed).then(function () { return changed.length; });
   }
   function openManageStatus() {
-    var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '520px'; panel.style.maxWidth = '96vw';
-    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
-    function draw() {
+    function body() {
       var fixed = Object.keys(DEV.INTERNAL_STATUS).map(function (k) { return '<div class="fin-line"><span>' + esc(DEV.INTERNAL_STATUS[k]) + '</span><span class="footnote" style="margin:0">fixo</span></div>'; }).join('');
       var custom = devCustomStatus.length ? devCustomStatus.map(function (s, i) { return '<div class="fin-line"><span>' + esc(s.label) + ' <span class="tag info">personalizado</span></span><button class="btn-sm" data-delst="' + i + '">Remover</button></div>'; }).join('') : '<div class="footnote">Nenhum status personalizado ainda.</div>';
-      panel.innerHTML = '<div class="dh"><div><b>Gerenciar status internos</b></div><button class="x">&times;</button></div><div class="dbd">' +
-        callout('', 'Como funciona', 'Os status <b>fixos</b> são usados por automações (recebimento, disputa) e não podem ser removidos. Crie <b>status personalizados</b> para o fluxo da sua operação — eles aparecem em Casos (linha, filtro e ações em massa) e na ficha.') +
+      return callout('', 'Como funciona', 'Os status <b>fixos</b> são usados por automações (recebimento, disputa) e não podem ser removidos. Crie <b>status personalizados</b> para o fluxo da sua operação — eles aparecem em Casos (linha, filtro e ações em massa) e na ficha.') +
         '<div class="panel"><div class="ph"><h3>Status fixos</h3></div><div class="pb">' + fixed + '</div></div>' +
-        '<div class="panel"><div class="ph"><h3>Personalizados</h3></div><div class="pb">' + custom + '<div style="display:flex;gap:8px;margin-top:10px"><input class="input sm" id="newst" style="flex:1" placeholder="Nome do novo status (ex.: Aguardando NF)"><button class="btn-sm primary" id="addst">Adicionar</button></div></div></div>' +
-        '</div>';
-      panel.querySelector('.x').onclick = function () { d.remove(); };
-      panel.querySelector('#addst').onclick = function () {
-        var v = (panel.querySelector('#newst').value || '').trim(); if (!v) return;
-        var key = istSlug(v); var map = internalStatusMap();
-        if (map[key] || Object.keys(DEV.INTERNAL_STATUS).indexOf(key) >= 0) { toast('Já existe', 'Um status com esse nome já existe.', true); return; }
-        devCustomStatus.push({ key: key, label: v });
-        saveDevSettings().then(function () { draw(); render(); toast('Status criado', v); });
-      };
-      panel.querySelectorAll('[data-delst]').forEach(function (b) { b.onclick = function () {
-        var i = +b.dataset.delst; var s = devCustomStatus[i]; if (!s) return;
-        var inUse = occ.filter(function (o) { return !o.isDemo && o.internalStatus === s.key; }).length;
-        if (inUse && !confirm(inUse + ' caso(s) usam "' + s.label + '". Ao remover, eles voltam para "Nova". Continuar?')) return;
-        if (inUse) { var ch = []; occ.forEach(function (o) { if (!o.isDemo && o.internalStatus === s.key) { o.internalStatus = 'NOVA'; ch.push(o); } }); putMany('occ', ch); }
-        devCustomStatus.splice(i, 1);
-        saveDevSettings().then(function () { draw(); render(); toast('Status removido', s.label); });
-      }; });
+        '<div class="panel"><div class="ph"><h3>Personalizados</h3></div><div class="pb">' + custom + '<div style="display:flex;gap:8px;margin-top:10px"><input class="input sm" id="newst" style="flex:1" placeholder="Nome do novo status (ex.: Aguardando NF)"><button class="btn-sm primary" id="addst">Adicionar</button></div></div></div>';
     }
-    draw();
+    openDrawer({
+      title: 'Gerenciar status internos', width: 520,
+      renderBody: body,
+      onMount: function (panel, refresh) {
+        panel.querySelector('#addst').onclick = function () {
+          var v = (panel.querySelector('#newst').value || '').trim(); if (!v) return;
+          var key = istSlug(v); var map = internalStatusMap();
+          if (map[key] || Object.keys(DEV.INTERNAL_STATUS).indexOf(key) >= 0) { toast('Já existe', 'Um status com esse nome já existe.', true); return; }
+          devCustomStatus.push({ key: key, label: v });
+          saveDevSettings().then(function () { refresh(); render(); toast('Status criado', v); });
+        };
+        panel.querySelectorAll('[data-delst]').forEach(function (b) { b.onclick = function () {
+          var i = +b.dataset.delst; var s = devCustomStatus[i]; if (!s) return;
+          var inUse = occ.filter(function (o) { return !o.isDemo && o.internalStatus === s.key; }).length;
+          if (inUse && !confirm(inUse + ' caso(s) usam "' + s.label + '". Ao remover, eles voltam para "Nova". Continuar?')) return;
+          if (inUse) { var ch = []; occ.forEach(function (o) { if (!o.isDemo && o.internalStatus === s.key) { o.internalStatus = 'NOVA'; ch.push(o); } }); putMany('occ', ch); }
+          devCustomStatus.splice(i, 1);
+          saveDevSettings().then(function () { refresh(); render(); toast('Status removido', s.label); });
+        }; });
+      },
+    });
   }
   function bindDevOcc() {
     var q = document.getElementById('devq'); if (q) { var t; q.oninput = function () { clearTimeout(t); t = setTimeout(function () { var v = q.value; devF.search = v; devPage = 1; render(); var el = document.getElementById('devq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
@@ -7619,11 +7626,11 @@ buffer/index.js:
     var bc = document.getElementById('blkclear'); if (bc) bc.onclick = function () { devSel = {}; render(); };
   }
   function devMotivos() {
-    var list = occInPeriod(); if (!list.length) return secHead('ANÁLISE · MOTIVOS', 'Por que os clientes devolvem?', '') + emptyBox('Sem ocorrências no período.');
+    var list = occInPeriod(); if (!list.length) return PageHeader({ variant: 'eyebrow', eyebrow: 'ANÁLISE · MOTIVOS', title: 'Por que os clientes devolvem?', description: '' }) + emptyBox('Sem ocorrências no período.');
     var agg = computeOrderAgg(); var d = devMotivosData(list);
     var chart = d.length ? chartCard('Perda por motivo', legendSwatch([['Perda R$', '#d13b3b']]), svgHBars(d.slice(0, 8).map(function (r) { return { label: r.reason, value: r.loss, color: '#d13b3b' }; }), { fmt: function (v) { return brl(v); } })) : '';
     var giveups = d.reduce(function (s, r) { return s + r.giveups; }, 0); var giveRate = list.length ? r2(giveups / list.length * 100) : 0;
-    var head = secHead('ANÁLISE · MOTIVOS', 'Por que os clientes estão devolvendo?', 'Cada motivo do relatório da Shopee — casos, perda e taxa de desistência. Clique num motivo para ver os produtos.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'ANÁLISE · MOTIVOS', title: 'Por que os clientes estão devolvendo?', description: 'Cada motivo do relatório da Shopee — casos, perda e taxa de desistência. Clique num motivo para ver os produtos.' });
     var hide = callout('', 'Custo escondido: ' + pct(giveRate) + ' desistem sozinhos', 'Um comprador que abre e depois cancela a solicitação não gera perda financeira, mas consome atendimento e reputação. São <b>' + nn(giveups) + '</b> casos no período.');
     var thPct = agg.orders ? '<th>% dos pedidos</th>' : '';
     return head + kstrip([
@@ -7636,10 +7643,10 @@ buffer/index.js:
   }
   function devCriticos() {
     var full = occInPeriod();
-    if (!full.length) return secHead('ANÁLISE · PRODUTOS', 'Quais produtos dão mais problema?', '') + emptyBox('Sem ocorrências no período.');
+    if (!full.length) return PageHeader({ variant: 'eyebrow', eyebrow: 'ANÁLISE · PRODUTOS', title: 'Quais produtos dão mais problema?', description: '' }) + emptyBox('Sem ocorrências no período.');
     var list = analiseReason ? full.filter(function (o) { return (o.reason || '(sem motivo informado)').trim() === analiseReason; }) : full;
     var d = devCriticosData(list);
-    var head = secHead('ANÁLISE · PRODUTOS', 'Quais produtos estão dando problema?', 'Produto e variação primeiro; o SKU é o detalhe. Perda, ocorrências e causa dominante.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'ANÁLISE · PRODUTOS', title: 'Quais produtos estão dando problema?', description: 'Produto e variação primeiro; o SKU é o detalhe. Perda, ocorrências e causa dominante.' });
     var banner = analiseReason ? callout('', 'Filtrando por motivo: ' + esc(analiseReason), '<button class="link-btn" data-go="analises" data-asub="produtos" data-reason="">limpar filtro</button>') : '';
     // agrega por PRODUTO (não por SKU) para o gráfico — mais legível para o gestor
     var byProd = {}; d.forEach(function (s) { var k = s.product || s.sku; var p = byProd[k] = byProd[k] || { label: k, value: 0 }; p.value += s.loss; });
@@ -7667,7 +7674,7 @@ buffer/index.js:
   // Financeiro = auditoria PEDIDO A PEDIDO (granular). Minha Renda = visão gerencial/consolidada.
   // Mesma missão que a Ficha 360, em formato de tabela — cada linha abre a mesma ficha. §13/§18.
   function devFinPedidoAPedido() {
-    var head = secHead('FINANCEIRO · PEDIDO A PEDIDO', 'Tabela completa por pedido', 'Auditoria detalhada — cada pedido com sua composição financeira. Minha Renda mostra a visão gerencial consolidada; aqui é o detalhe, linha a linha. Clique em qualquer pedido para abrir a Ficha Financeira 360º.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'FINANCEIRO · PEDIDO A PEDIDO', title: 'Tabela completa por pedido', description: 'Auditoria detalhada — cada pedido com sua composição financeira. Minha Renda mostra a visão gerencial consolidada; aqui é o detalhe, linha a linha. Clique em qualquer pedido para abrir a Ficha Financeira 360º.' });
     var list = pedidosInPeriod(); if (!list.length) return head + emptyBox('Nenhum pedido no período.');
     var profitOf = mrOrderProfitEngine(); var mr = mrEngine(); var mrByOrder = {}; mr.orders.forEach(function (r) { mrByOrder[r.orderId] = r; });
     var affEng = affEngine(); var acByOrder = {}; acelera.forEach(function (r) { (acByOrder[r.pedido] = acByOrder[r.pedido] || []).push(r); });
@@ -7697,7 +7704,7 @@ buffer/index.js:
   // Taxas que a Shopee cobra por venda e o que acontece com elas quando há devolução. Fontes: Pedidos (taxas) × Devoluções.
   function orderFeeBreakdown(o) { return { comissao: r2(o.commissionNet || 0), servico: r2(o.serviceFeeNet || 0), transacao: r2(o.transactionFee || 0), freteRev: r2(o.reverseShippingFee || 0), total: r2((o.commissionNet || 0) + (o.serviceFeeNet || 0) + (o.transactionFee || 0) + (o.reverseShippingFee || 0)) }; }
   function devFinTaxas() {
-    var head = secHead('FINANCEIRO · TAXAS DA VENDA', 'O que a Shopee cobra — e o que acontece na devolução', 'Cruzamos cada devolução com as taxas reais do pedido em Pedidos. O que não existe na fonte é declarado, não estimado.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'FINANCEIRO · TAXAS DA VENDA', title: 'O que a Shopee cobra — e o que acontece na devolução', description: 'Cruzamos cada devolução com as taxas reais do pedido em Pedidos. O que não existe na fonte é declarado, não estimado.' });
     if (!orders.length) return head + emptyBox('Importe os Pedidos (Order.all…) para conectar as devoluções às taxas reais de cada venda.');
     var list = occInPeriod();
     var withOrder = [], noOrder = 0;
@@ -7706,12 +7713,12 @@ buffer/index.js:
     var sum = { req: 0, comissao: 0, servico: 0, transacao: 0, freteRev: 0, total: 0 };
     withOrder.forEach(function (x) { sum.req += x.o.requested || 0; sum.comissao += x.f.comissao; sum.servico += x.f.servico; sum.transacao += x.f.transacao; sum.freteRev += x.f.freteRev; sum.total += x.f.total; });
     Object.keys(sum).forEach(function (k) { sum[k] = r2(sum[k]); });
-    var strip = kstrip([
-      { l: 'Devoluções com pedido', v: nn(withOrder.length), cls: 'blue', s: noOrder ? nn(noOrder) + ' sem pedido importado' : 'todas conectadas' },
-      { l: 'Reembolso solicitado', v: brl(sum.req), cls: 'red' },
-      { l: 'Taxas do pedido (total)', v: brl(sum.total), cls: 'amber', s: 'comissão+serviço+transação+frete rev.' },
-      { l: 'Comissão', v: brl(sum.comissao), cls: 'amber' },
-      { l: 'Frete reverso', v: brl(sum.freteRev), cls: 'amber' },
+    var strip = MetricGrid([
+      MetricCard({ label: 'Devoluções com pedido', value: nn(withOrder.length), cls: 'blue', sub: noOrder ? nn(noOrder) + ' sem pedido importado' : 'todas conectadas' }),
+      MetricCard({ label: 'Reembolso solicitado', value: brl(sum.req), cls: 'red' }),
+      MetricCard({ label: 'Taxas do pedido (total)', value: brl(sum.total), cls: 'amber', sub: 'comissão+serviço+transação+frete rev.' }),
+      MetricCard({ label: 'Comissão', value: brl(sum.comissao), cls: 'amber' }),
+      MetricCard({ label: 'Frete reverso', value: brl(sum.freteRev), cls: 'amber' }),
     ]);
     var gaps = callout('warn', 'O que ainda não temos fonte para afirmar (não inventamos)',
       '<div class="fin-line"><span><b>Estorno de taxas na devolução</b> — a Shopee às vezes devolve a comissão/taxa quando reembolsa um pedido.</span><span class="tag warn">AGUARDANDO FONTE</span></div>' +
@@ -7730,7 +7737,7 @@ buffer/index.js:
   function walletRendaByOrder() { var map = {}; wallet.forEach(function (t) { if (t.category === 'RENDA' && t.amount > 0 && t.orderId) { var g = map[t.orderId] = map[t.orderId] || { sum: 0, lines: 0, last: '' }; g.sum = r2(g.sum + t.amount); g.lines++; if ((t.date || '') > g.last) g.last = t.date; } }); return map; }
   function daysSince(d) { if (!d) return null; var x = new Date(d); if (isNaN(x)) return null; return Math.max(0, Math.floor((Date.now() - x.getTime()) / 864e5)); }
   function devFinAReceber() {
-    var head = secHead('FINANCEIRO · A RECEBER DA SHOPEE', 'O que já entrou e o que ainda falta pingar', 'Cruzamos os pedidos com a renda creditada no extrato da carteira. Sem o prazo oficial de liberação da Shopee, mostramos “há X dias”, nunca “atrasado”.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'FINANCEIRO · A RECEBER DA SHOPEE', title: 'O que já entrou e o que ainda falta pingar', description: 'Cruzamos os pedidos com a renda creditada no extrato da carteira. Sem o prazo oficial de liberação da Shopee, mostramos “há X dias”, nunca “atrasado”.' });
     if (!orders.length) return head + emptyBox('Importe os Pedidos para saber o que deveria ser recebido.');
     if (!wallet.length) return head + callout('warn', 'Importe o extrato da carteira', 'A conciliação de recebimentos precisa do relatório de transações do saldo Shopee (módulo <b>Saldo da Carteira</b>). Sem ele, não dá para dizer o que já pingou — e não vamos supor.');
     var renda = walletRendaByOrder();
@@ -7742,11 +7749,11 @@ buffer/index.js:
     // renda na carteira sem pedido importado (dedup: por orderId)
     var __ordersById2 = getOrdersById();
     var semPedido = 0, semPedidoVal = 0; Object.keys(renda).forEach(function (oid) { if (!__ordersById2.has(oid)) { semPedido++; semPedidoVal += renda[oid].sum; } });
-    var strip = kstrip([
-      { l: 'Pedidos no período', v: nn(list.length), cls: 'blue' },
-      { l: 'Já recebidos (carteira)', v: nn(recebidos.length), cls: 'green', s: brl(totRecebido) + ' creditados' },
-      { l: 'Ainda sem renda', v: nn(areceber.length), cls: 'amber', s: brl(totAReceberVal) + ' em valor de pedido' },
-      { l: 'Renda sem pedido', v: nn(semPedido), cls: semPedido ? 'red' : 'green', s: brl(r2(semPedidoVal)) },
+    var strip = MetricGrid([
+      MetricCard({ label: 'Pedidos no período', value: nn(list.length), cls: 'blue' }),
+      MetricCard({ label: 'Já recebidos (carteira)', value: nn(recebidos.length), cls: 'green', sub: brl(totRecebido) + ' creditados' }),
+      MetricCard({ label: 'Ainda sem renda', value: nn(areceber.length), cls: 'amber', sub: brl(totAReceberVal) + ' em valor de pedido' }),
+      MetricCard({ label: 'Renda sem pedido', value: nn(semPedido), cls: semPedido ? 'red' : 'green', sub: brl(r2(semPedidoVal)) }),
     ]);
     var honesty = callout('', 'Como ler estes números (com honestidade)', 'O <b>valor de pedido</b> é o total da venda, não o líquido exato que a Shopee libera (o líquido depende de taxas e de estornos que não temos por pedido). Por isso comparamos <b>presença</b> de renda na carteira, não centavo a centavo. Vários créditos do mesmo pedido são somados (dedup por pedido).');
     var agingRow = function (x) { var it = (x.o.items || [])[0] || {}; var dias = x.dias; var tag = dias == null ? '' : (dias > 30 ? ' <span class="tag warn">há ' + dias + ' dias</span>' : ' <span class="tag">há ' + dias + ' dias</span>'); return '<tr><td class="mono">' + esc(x.o.id) + '</td><td class="cell-text">' + esc(it.productName || '—') + '</td><td>' + esc(S.pedidos.labels[x.o.normalizedStatus] || x.o.orderStatus || '—') + '</td><td class="nowrap">' + brl(x.val) + '</td><td class="nowrap">' + dbr(x.o.createdAt) + tag + '</td></tr>'; };
@@ -7760,7 +7767,7 @@ buffer/index.js:
   // Conciliação determinística em duas frentes: Pedidos×Renda(carteira) e Devoluções×Débito(carteira). Sem inventar regra.
   function walletDevDebitByOrder() { var map = {}; wallet.forEach(function (t) { if (t.category === 'DEVOLUCAO' && t.amount < 0 && t.orderId) { var g = map[t.orderId] = map[t.orderId] || { sum: 0, lines: 0 }; g.sum = r2(g.sum + t.amount); g.lines++; } }); return map; }
   function devFinConcil() {
-    var head = secHead('FINANCEIRO · CONCILIAÇÃO', 'Tudo bate? Pedidos, carteira e devoluções lado a lado', 'Conciliação determinística: o que casa, o que sobra de cada lado. Nenhuma regra financeira é inventada — o que não casa é mostrado para investigação.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'FINANCEIRO · CONCILIAÇÃO', title: 'Tudo bate? Pedidos, carteira e devoluções lado a lado', description: 'Conciliação determinística: o que casa, o que sobra de cada lado. Nenhuma regra financeira é inventada — o que não casa é mostrado para investigação.' });
     if (!wallet.length || !orders.length) return head + callout('warn', 'Faltam fontes para conciliar', 'A conciliação cruza <b>Pedidos</b> × <b>extrato da Carteira</b> × <b>Devoluções</b>. Importe ' + (!orders.length ? 'os Pedidos' : '') + (!orders.length && !wallet.length ? ' e ' : '') + (!wallet.length ? 'o extrato da carteira' : '') + ' para começar.');
     var renda = walletRendaByOrder();
     var orderIds = {}; orders.forEach(function (o) { orderIds[o.id] = o; });
@@ -7774,12 +7781,12 @@ buffer/index.js:
     var occByOrder = {}; occ.forEach(function (o) { if (!o.isDemo && o.orderId) occByOrder[o.orderId] = o; });
     var devComDeb = 0, devSemDeb = 0; occInPeriod().forEach(function (o) { if (o.orderId && deb[o.orderId]) devComDeb++; else devSemDeb++; });
     var debSemDev = 0, debSemDevVal = 0, debSemDevList = []; Object.keys(deb).forEach(function (oid) { if (!occByOrder[oid]) { debSemDev++; debSemDevVal += deb[oid].sum; debSemDevList.push({ oid: oid, d: deb[oid] }); } });
-    var strip = kstrip([
-      { l: 'Pedidos com renda', v: nn(pedComRenda), cls: 'green' },
-      { l: 'Pedidos sem renda', v: nn(pedSemRenda), cls: 'amber' },
-      { l: 'Renda sem pedido', v: nn(rendaSemPed), cls: rendaSemPed ? 'red' : 'green', s: brl(r2(rendaSemPedVal)) },
-      { l: 'Devoluções com débito', v: nn(devComDeb), cls: 'blue' },
-      { l: 'Débito sem devolução', v: nn(debSemDev), cls: debSemDev ? 'red' : 'green', s: brl(r2(debSemDevVal)) },
+    var strip = MetricGrid([
+      MetricCard({ label: 'Pedidos com renda', value: nn(pedComRenda), cls: 'green' }),
+      MetricCard({ label: 'Pedidos sem renda', value: nn(pedSemRenda), cls: 'amber' }),
+      MetricCard({ label: 'Renda sem pedido', value: nn(rendaSemPed), cls: rendaSemPed ? 'red' : 'green', sub: brl(r2(rendaSemPedVal)) }),
+      MetricCard({ label: 'Devoluções com débito', value: nn(devComDeb), cls: 'blue' }),
+      MetricCard({ label: 'Débito sem devolução', value: nn(debSemDev), cls: debSemDev ? 'red' : 'green', sub: brl(r2(debSemDevVal)) }),
     ]);
     var f1 = '<div class="panel"><div class="ph"><h3>Pedidos × Renda da carteira</h3></div><div class="pb">' +
       '<div class="fin-line"><span>Pedidos com renda creditada</span><b>' + nn(pedComRenda) + '</b></div>' +
@@ -7796,8 +7803,8 @@ buffer/index.js:
   }
   function devFinImpacto() {
     var list = occInPeriod(); if (!list.length) return emptyBox('Sem ocorrências no período.'); var f = devFinanceiroData(list);
-    var card = function (key, valor, sub2) { return '<div class="fcard ' + FIN_CATS[key].cls + '" style="cursor:pointer' + (finDrill === key ? ';outline:2px solid var(--brand)' : '') + '" data-fin="' + key + '"><div class="lbl">' + esc(FIN_CATS[key].label) + '</div><div class="val">' + brl(valor) + '</div>' + (sub2 ? '<div class="footnote" style="margin-top:4px">' + esc(sub2) + '</div>' : '') + '<div class="footnote" style="margin-top:4px">clique p/ detalhar</div></div>'; };
-    var head = secHead('FINANCEIRO', 'Quanto isso está nos custando?', 'Custos conhecidos menos recuperações conhecidas. Clique numa categoria para ver as ocorrências que a compõem.');
+    var card = function (key, valor, sub2) { return MetricCard({ label: FIN_CATS[key].label, value: brl(valor), cls: FIN_CATS[key].cls, variant: 'selected', selectKey: key, selected: finDrill === key, sub: (sub2 ? esc(sub2) + '<br>' : '') + 'clique p/ detalhar', subHtml: true }); };
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'FINANCEIRO', title: 'Quanto isso está nos custando?', description: 'Custos conhecidos menos recuperações conhecidas. Clique numa categoria para ver as ocorrências que a compõem.' });
     var compBars = chartCard('Composição do impacto', legendSwatch([['Custo', '#d13b3b'], ['Recuperação', '#0f9d6b']]), svgHBars([
       { label: 'Reembolso pago', value: f.refunded, color: '#d13b3b' },
       { label: 'Custos adicionais', value: f.additional, color: '#e0662a' },
@@ -7818,14 +7825,14 @@ buffer/index.js:
   function bindFinanceiro() {
     app.querySelectorAll('[data-finsub]').forEach(function (c) { c.onclick = function () { finSub = c.dataset.finsub; finDrill = null; render(); }; });
     app.querySelectorAll('[data-finsubgo]').forEach(function (c) { c.onclick = function () { finSub = c.dataset.finsubgo; render(); }; });
-    app.querySelectorAll('[data-fin]').forEach(function (c) { c.onclick = function () { finDrill = finDrill === c.dataset.fin ? null : c.dataset.fin; render(); }; });
+    bindMetricCards(app, { selected: function (key) { finDrill = finDrill === key ? null : key; render(); } });
     var cl = document.getElementById('finclose'); if (cl) cl.onclick = function () { finDrill = null; render(); };
   }
   function devDisputas() {
     var all = occInPeriod();
     // Só é DISPUTA quem tem janela formal de recurso (vinda da Shopee) ou uma disputa já iniciada (§25).
     var list = all.filter(function (o) { return o.hasSellerWindow || (o.disputeStatus && o.disputeStatus !== 'NAO_INICIADA'); });
-    var head = secHead('DEFESA', 'Quais casos precisamos recorrer?', 'Somente casos com prazo/possibilidade formal de recurso. Onde a loja usa o canal a tempo, recupera; fora do prazo, perde.');
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'DEFESA', title: 'Quais casos precisamos recorrer?', description: 'Somente casos com prazo/possibilidade formal de recurso. Onde a loja usa o canal a tempo, recupera; fora do prazo, perde.' });
     if (!list.length) return head + emptyBox('Nenhum caso com prazo de recurso no período. O sistema identifica automaticamente pela coluna "Ação do Vendedor solicitada até" da Shopee.');
     var d = devDisputesData(list);
     var now = new Date(), soon = new Date(now.getTime() + 3 * 864e5);
@@ -7867,12 +7874,9 @@ buffer/index.js:
     // §25: abrir a Ficha marca o "novo retorno" como visto — o badge não persegue o operador depois
     // que ele já revisou o caso, mas o histórico do que mudou continua na Timeline.
     if (casoNovoRetorno(o) || o.needsReview) { o.lastViewedAt = new Date().toISOString(); o.needsReview = false; saveOcc(o); }
-    var d = document.createElement('div'); d.className = 'drawer drawer-wide';
-    var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '940px'; panel.style.maxWidth = '97vw';
-    d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
-    function persist(activity) { if (activity) addActivity(o, activity.kind, activity); recomputeOccImpact(o); saveOcc(o).then(draw); }
-    function setField(field, value) { var old = o[field]; if ((old == null ? '' : old) === (value == null ? '' : value)) return; o[field] = value; addActivity(o, 'CHANGE', { field: field, oldValue: old == null ? '' : String(old), newValue: value == null ? '' : String(value), userName: 'Operador' }); recomputeOccImpact(o); saveOcc(o).then(function () { draw(); render(); }); }
-    function draw() {
+    function persist(activity) { if (activity) addActivity(o, activity.kind, activity); recomputeOccImpact(o); saveOcc(o).then(function () { dw.refresh(); }); }
+    function setField(field, value) { var old = o[field]; if ((old == null ? '' : old) === (value == null ? '' : value)) return; o[field] = value; addActivity(o, 'CHANGE', { field: field, oldValue: old == null ? '' : String(old), newValue: value == null ? '' : String(value), userName: 'Operador' }); recomputeOccImpact(o); saveOcc(o).then(function () { dw.refresh(); render(); }); }
+    function body() {
       var ord = orders.find(function (x) { return x.id === o.orderId; });
       var sel = function (label, val, map, field) { return '<label class="fld">' + label + '</label><select class="select" data-set="' + field + '" style="width:100%">' + Object.keys(map).map(function (k) { return '<option value="' + k + '"' + (val === k ? ' selected' : '') + '>' + map[k] + '</option>'; }).join('') + '</select>'; };
       var inp = function (label, val, field, ph) { return '<label class="fld">' + label + '</label><input class="input" data-inp="' + field + '" style="width:100%" value="' + esc(val || '') + '" placeholder="' + (ph || '') + '">'; };
@@ -7881,8 +7885,7 @@ buffer/index.js:
       var vendaData = occVendaData(o), aberturaData = occAberturaData(o), diasDepois = occDiasVendaAteAbertura(o);
       var resultado = casoResultado(o); var jornadaTxt = casoProximaAcao(o);
       var prazoTxt = o.disputeDeadline ? prazoTexto(o.disputeDeadline) : null;
-      panel.innerHTML = '<div class="dh"><div><b>Ficha — ' + esc(o.orderId || o.id) + '</b> <span class="pill st-int" style="margin-left:8px">' + istLabel(o.internalStatus) + '</span>' + (casoNovoRetorno(o) ? ' <span class="tag" style="background:#8a5cf6;color:#fff">🟣 Novo retorno</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' +
-        (function () { var pa = casoProximaAcao(o); return callout(pa.jornada === 'BAIXADA' || pa.jornada === 'REJEITADA' ? 'green' : 'warn', 'Etapa: ' + pa.label, 'Próxima ação: <b>' + esc(pa.text) + '</b>' + (o.needsReview ? ' · <span class="tag warn">⚠ Mudança Shopee detectada — revisar caso</span>' : '')); })() +
+      return (function () { var pa = casoProximaAcao(o); return callout(pa.jornada === 'BAIXADA' || pa.jornada === 'REJEITADA' ? 'green' : 'warn', 'Etapa: ' + pa.label, 'Próxima ação: <b>' + esc(pa.text) + '</b>' + (o.needsReview ? ' · <span class="tag warn">⚠ Mudança Shopee detectada — revisar caso</span>' : '')); })() +
         '<div class="split"><div>' +
         // ---- VENDA ----
         '<div class="panel"><div class="ph"><h3>Venda</h3></div><div class="pb">' + kv('Pedido', o.orderId) + kv('Data de criação', dbr(o.orderCreatedAt)) + kv('Data de pagamento', vendaData ? dbr(vendaData) : 'não localizada em Pedidos') + kv('Produto', it0.productName || '—') + kv('SKU', it0.sku || '—') + kv('Família', fam || '—') + kv('Valor', brl(o.requested)) + (ord ? kv('Status do pedido', S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus || '—') : '') + '</div></div>' +
@@ -7920,23 +7923,28 @@ buffer/index.js:
             : '✏️ Manual — Operação · ' + esc(a.field || '') + ': ' + esc(a.oldValue || '∅') + ' → ' + esc(a.newValue || '∅');
           var who = a.userName === 'Shopee' ? '' : (a.userName ? ' — ' + esc(a.userName) : '');
           return '<div class="fin-line"><span>' + body + who + '</span><span class="footnote" style="margin:0">' + new Date(a.createdAt).toLocaleString('pt-BR') + '</span></div>';
-        }).join('') : '<div class="footnote">Sem atividade ainda.</div>') + '</div></div>' +
-        '</div>';
-      panel.querySelector('.x').onclick = function () { d.remove(); };
-      var g360 = panel.querySelector('[data-goped360]'); if (g360) g360.onclick = function () { d.remove(); openPedidoFicha360(o.orderId); };
-      var fb = panel.querySelector('#fichabaixa'); if (fb) fb.onclick = function () { openConferir(o.id, draw); };
-      var fb2 = panel.querySelector('#fichabaixa2'); if (fb2) fb2.onclick = function () { openConferir(o.id, draw); };
-      panel.querySelectorAll('[data-set]').forEach(function (s) { s.onchange = function () { setField(s.dataset.set, s.value || (s.dataset.set === 'merchandiseCondition' ? null : s.value)); }; });
-      panel.querySelectorAll('[data-inp]').forEach(function (i) { var ev = i.tagName === 'TEXTAREA' ? 'onblur' : 'onblur'; i[ev] = function () { var field = i.dataset.inp; var val = field === 'recoverableValue' ? (i.value === '' ? null : Number(i.value.replace(',', '.'))) : (i.value || null); setField(field, val); }; });
-      var evadd = panel.querySelector('#evadd'); evadd.onclick = function () { var type = panel.querySelector('#evtype').value; var amt = Number((panel.querySelector('#evamt').value || '').replace(',', '.')); if (!amt || amt < 0) { toast('Valor inválido', 'Informe um valor.', true); return; } putEvent(o, 'manual:' + type + ':' + Date.now(), type, EVENT_META[type].direction, amt, 'MANUAL'); persist({ kind: 'FINANCIAL', message: (EVENT_META[type].label) + ': ' + brl(amt), userName: 'Operador' }); toast('Movimentação lançada', EVENT_META[type].label + ' · ' + brl(amt)); };
-      var dispsel = panel.querySelector('#dispsel'); var dispExtra = panel.querySelector('#dispextra');
-      function drawDisp() { dispExtra.innerHTML = (dispsel.value === 'GANHA' || dispsel.value === 'PARCIAL') ? '<div style="display:flex;gap:6px;margin-top:6px"><input class="input sm" id="drec" style="flex:1" placeholder="valor recuperado"><input class="input sm" id="dcomp" style="flex:1" placeholder="compensação"></div>' : ''; }
-      dispsel.onchange = drawDisp; drawDisp();
-      panel.querySelector('#dispsave').onclick = function () { var res = dispsel.value; var prev = o.disputeStatus; o.hasDispute = true; o.disputeStatus = res; var rec = panel.querySelector('#drec'); var comp = panel.querySelector('#dcomp'); if (rec && rec.value) { o.disputeRecovered = Number(rec.value.replace(',', '.')); putEvent(o, 'dispute:recovery', 'RECUPERACAO_DISPUTA', 'RECOVERY', o.disputeRecovered, 'MANUAL', 'Recuperação de disputa'); } if (comp && comp.value) { putEvent(o, 'dispute:compensation', 'COMPENSACAO_SHOPEE', 'RECOVERY', Number(comp.value.replace(',', '.')), 'MANUAL', 'Compensação (disputa)'); } if (['GANHA', 'PARCIAL', 'PERDIDA', 'PRAZO_PERDIDO'].indexOf(res) >= 0) o.internalStatus = 'RESOLVIDA'; else if (['POSSIVEL', 'EM_PREPARACAO', 'RESPONDIDA', 'AGUARDANDO_SHOPEE'].indexOf(res) >= 0) o.internalStatus = 'EM_DISPUTA'; addActivity(o, 'DISPUTE', { field: 'disputeStatus', oldValue: prev, newValue: res, message: o.disputeRecovered ? 'Recuperado ' + brl(o.disputeRecovered) : '', userName: 'Operador' }); recomputeOccImpact(o); saveOcc(o).then(function () { draw(); render(); }); toast('Disputa atualizada', DEV.DISPUTE_STATUS[res]); };
-      var cmtadd = panel.querySelector('#cmtadd'); var cmt = panel.querySelector('#cmt'); cmtadd.onclick = function () { if (!cmt.value.trim()) return; addActivity(o, 'COMMENT', { message: cmt.value.trim(), userName: 'Operador' }); saveOcc(o).then(draw); }; cmt.onkeydown = function (e) { if (e.key === 'Enter' && cmt.value.trim()) { addActivity(o, 'COMMENT', { message: cmt.value.trim(), userName: 'Operador' }); saveOcc(o).then(draw); } };
+        }).join('') : '<div class="footnote">Sem atividade ainda.</div>') + '</div></div>';
     }
-    draw();
-    if (focusBlock === 'disputa') { var fd = panel.querySelector('#fichaDisputa'); if (fd) fd.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+    var dw = openDrawer({
+      titleHtml: '<b>Ficha — ' + esc(o.orderId || o.id) + '</b>', width: 940,
+      renderBody: body,
+      onMount: function (panel, refresh) {
+        var dhTitle = panel.querySelector('.dh > div');
+        if (dhTitle) dhTitle.innerHTML = '<b>Ficha — ' + esc(o.orderId || o.id) + '</b> <span class="pill st-int" style="margin-left:8px">' + istLabel(o.internalStatus) + '</span>' + (casoNovoRetorno(o) ? ' <span class="tag" style="background:#8a5cf6;color:#fff">🟣 Novo retorno</span>' : '');
+        var g360 = panel.querySelector('[data-goped360]'); if (g360) g360.onclick = function () { dw.close(); openPedidoFicha360(o.orderId); };
+        var fb = panel.querySelector('#fichabaixa'); if (fb) fb.onclick = function () { openConferir(o.id, refresh); };
+        var fb2 = panel.querySelector('#fichabaixa2'); if (fb2) fb2.onclick = function () { openConferir(o.id, refresh); };
+        panel.querySelectorAll('[data-set]').forEach(function (s) { s.onchange = function () { setField(s.dataset.set, s.value || (s.dataset.set === 'merchandiseCondition' ? null : s.value)); }; });
+        panel.querySelectorAll('[data-inp]').forEach(function (i) { var ev = i.tagName === 'TEXTAREA' ? 'onblur' : 'onblur'; i[ev] = function () { var field = i.dataset.inp; var val = field === 'recoverableValue' ? (i.value === '' ? null : Number(i.value.replace(',', '.'))) : (i.value || null); setField(field, val); }; });
+        var evadd = panel.querySelector('#evadd'); evadd.onclick = function () { var type = panel.querySelector('#evtype').value; var amt = Number((panel.querySelector('#evamt').value || '').replace(',', '.')); if (!amt || amt < 0) { toast('Valor inválido', 'Informe um valor.', true); return; } putEvent(o, 'manual:' + type + ':' + Date.now(), type, EVENT_META[type].direction, amt, 'MANUAL'); persist({ kind: 'FINANCIAL', message: (EVENT_META[type].label) + ': ' + brl(amt), userName: 'Operador' }); toast('Movimentação lançada', EVENT_META[type].label + ' · ' + brl(amt)); };
+        var dispsel = panel.querySelector('#dispsel'); var dispExtra = panel.querySelector('#dispextra');
+        function drawDisp() { dispExtra.innerHTML = (dispsel.value === 'GANHA' || dispsel.value === 'PARCIAL') ? '<div style="display:flex;gap:6px;margin-top:6px"><input class="input sm" id="drec" style="flex:1" placeholder="valor recuperado"><input class="input sm" id="dcomp" style="flex:1" placeholder="compensação"></div>' : ''; }
+        dispsel.onchange = drawDisp; drawDisp();
+        panel.querySelector('#dispsave').onclick = function () { var res = dispsel.value; var prev = o.disputeStatus; o.hasDispute = true; o.disputeStatus = res; var rec = panel.querySelector('#drec'); var comp = panel.querySelector('#dcomp'); if (rec && rec.value) { o.disputeRecovered = Number(rec.value.replace(',', '.')); putEvent(o, 'dispute:recovery', 'RECUPERACAO_DISPUTA', 'RECOVERY', o.disputeRecovered, 'MANUAL', 'Recuperação de disputa'); } if (comp && comp.value) { putEvent(o, 'dispute:compensation', 'COMPENSACAO_SHOPEE', 'RECOVERY', Number(comp.value.replace(',', '.')), 'MANUAL', 'Compensação (disputa)'); } if (['GANHA', 'PARCIAL', 'PERDIDA', 'PRAZO_PERDIDO'].indexOf(res) >= 0) o.internalStatus = 'RESOLVIDA'; else if (['POSSIVEL', 'EM_PREPARACAO', 'RESPONDIDA', 'AGUARDANDO_SHOPEE'].indexOf(res) >= 0) o.internalStatus = 'EM_DISPUTA'; addActivity(o, 'DISPUTE', { field: 'disputeStatus', oldValue: prev, newValue: res, message: o.disputeRecovered ? 'Recuperado ' + brl(o.disputeRecovered) : '', userName: 'Operador' }); recomputeOccImpact(o); saveOcc(o).then(function () { refresh(); render(); }); toast('Disputa atualizada', DEV.DISPUTE_STATUS[res]); };
+        var cmtadd = panel.querySelector('#cmtadd'); var cmt = panel.querySelector('#cmt'); cmtadd.onclick = function () { if (!cmt.value.trim()) return; addActivity(o, 'COMMENT', { message: cmt.value.trim(), userName: 'Operador' }); saveOcc(o).then(refresh); }; cmt.onkeydown = function (e) { if (e.key === 'Enter' && cmt.value.trim()) { addActivity(o, 'COMMENT', { message: cmt.value.trim(), userName: 'Operador' }); saveOcc(o).then(refresh); } };
+      },
+    });
+    if (focusBlock === 'disputa') { var fd = dw.panel.querySelector('#fichaDisputa'); if (fd) fd.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
   }
 
   // ==================================================================================
