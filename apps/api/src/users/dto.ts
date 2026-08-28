@@ -1,11 +1,19 @@
+import { Transform } from 'class-transformer';
 import { IsArray, IsBoolean, IsEmail, IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
 import { Role } from '@financeiro/shared';
+import { normalizeEmail } from '../common/email';
+
+// item 8 da correção urgente — normaliza ANTES do @IsEmail() rodar, senão um
+// e-mail com espaço nas pontas é rejeitado em vez de simplesmente aparado.
+const normalizeEmailField = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? normalizeEmail(value) : value;
 
 export class CreateUserDto {
   @IsString()
   @MinLength(2)
   name!: string;
 
+  @Transform(normalizeEmailField)
   @IsEmail()
   email!: string;
 
@@ -42,6 +50,13 @@ export class UpdateUserDto {
   @IsString()
   @MinLength(2)
   name?: string;
+
+  // item 16 — editar também permite trocar o e-mail (re-validado quanto a
+  // duplicidade no service, já normalizado).
+  @IsOptional()
+  @Transform(normalizeEmailField)
+  @IsEmail()
+  email?: string;
 
   @IsOptional()
   @IsEnum(Role)

@@ -1,6 +1,15 @@
+import { Transform } from 'class-transformer';
 import { IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
+import { normalizeEmail } from '../common/email';
+
+// item 8 da correção urgente — normaliza ANTES do @IsEmail() rodar, senão um
+// e-mail com espaço nas pontas ou caixa diferente é rejeitado/tratado como
+// outro usuário em vez de ser reconhecido como o mesmo login.
+const normalizeEmailField = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? normalizeEmail(value) : value;
 
 export class LoginDto {
+  @Transform(normalizeEmailField)
   @IsEmail({}, { message: 'E-mail inválido.' })
   email!: string;
 
@@ -28,6 +37,7 @@ export class BootstrapDto {
   @MinLength(2)
   name!: string;
 
+  @Transform(normalizeEmailField)
   @IsEmail({}, { message: 'E-mail inválido.' })
   email!: string;
 

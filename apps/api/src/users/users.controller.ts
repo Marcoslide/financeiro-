@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post } from '@nestjs/common';
 import { Role, AuthUser } from '@financeiro/shared';
 import { UsersService } from './users.service';
 import { CreateUserDto, UpdateUserDto } from './dto';
@@ -34,5 +34,14 @@ export class UsersController {
   @RequirePermission('users.disable')
   deactivate(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.users.deactivate(user.organizationId, user.id, id);
+  }
+
+  /** item 18/19 — reativa (nunca exclui). Mesma permissão de desativar. */
+  @Post(':id/activate')
+  @HttpCode(200)
+  @Roles(Role.ADMIN)
+  @RequirePermission('users.disable')
+  activate(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.users.activate(user.organizationId, user.id, id);
   }
 }

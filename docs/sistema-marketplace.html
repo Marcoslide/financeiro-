@@ -337,7 +337,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 654004a · 2026-08-28 03:42 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build d5a5529 · 2026-08-28 12:52 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -421,9 +421,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     mod
   ));
 
-  // ../../node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js
+  // node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js
   var require_base64_js = __commonJS({
-    "../../node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js"(exports) {
+    "node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js"(exports) {
       "use strict";
       exports.byteLength = byteLength;
       exports.toByteArray = toByteArray;
@@ -522,9 +522,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // ../../node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js
+  // node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js
   var require_ieee754 = __commonJS({
-    "../../node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js"(exports) {
+    "node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js"(exports) {
       exports.read = function(buffer, offset, isLE, mLen, nBytes) {
         var e, m;
         var eLen = nBytes * 8 - mLen - 1;
@@ -605,9 +605,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // ../../node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js
+  // node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js
   var require_buffer = __commonJS({
-    "../../node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js"(exports) {
+    "node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js"(exports) {
       "use strict";
       var base64 = require_base64_js();
       var ieee754 = require_ieee754();
@@ -1976,9 +1976,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // ../../packages/shared/dist/index.js
+  // packages/shared/dist/index.js
   var require_dist = __commonJS({
-    "../../packages/shared/dist/index.js"(exports) {
+    "packages/shared/dist/index.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.ImportIssueSeverity = exports.IMPORT_ROW_STATUS_LABELS = exports.ImportRowStatus = exports.IMPORT_BATCH_STATUS_LABELS = exports.ImportBatchStatus = exports.FileFormat = exports.REPORT_TYPE_LABELS = exports.ReportType = exports.AuditAction = exports.TemporalStatus = exports.ReconciliationState = exports.IngestionSource = exports.EntityStatus = exports.ROLE_LABELS = exports.Role = void 0;
@@ -2034,6 +2034,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         AuditAction2["USER_CREATE"] = "USER_CREATE";
         AuditAction2["USER_UPDATE"] = "USER_UPDATE";
         AuditAction2["USER_DEACTIVATE"] = "USER_DEACTIVATE";
+        AuditAction2["USER_ENABLE"] = "USER_ENABLE";
+        AuditAction2["USER_ROLE_CHANGE"] = "USER_ROLE_CHANGE";
         AuditAction2["MARKETPLACE_ACCOUNT_UPDATE"] = "MARKETPLACE_ACCOUNT_UPDATE";
         AuditAction2["IMPORT_ANALYZE"] = "IMPORT_ANALYZE";
         AuditAction2["IMPORT_CONFIRM"] = "IMPORT_CONFIRM";
@@ -2154,19 +2156,19 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // src/imports/parsing/browser/shim-xlsx.js
+  // apps/api/src/imports/parsing/browser/shim-xlsx.js
   var require_shim_xlsx = __commonJS({
-    "src/imports/parsing/browser/shim-xlsx.js"(exports, module) {
+    "apps/api/src/imports/parsing/browser/shim-xlsx.js"(exports, module) {
       "use strict";
       var XLSX2 = typeof globalThis !== "undefined" && globalThis.XLSX || {};
       module.exports = XLSX2;
     }
   });
 
-  // src/all/entry.ts
+  // apps/api/src/all/entry.ts
   var import_buffer = __toESM(require_buffer());
 
-  // src/imports/parsing/format.ts
+  // apps/api/src/imports/parsing/format.ts
   var import_shared = __toESM(require_dist());
   function detectFileFormat(buffer) {
     if (buffer.length >= 4) {
@@ -2189,7 +2191,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return !(ext === "csv" || ext === "txt" || ext === "tsv" || ext === "");
   }
 
-  // src/imports/parsing/workbook.ts
+  // apps/api/src/imports/parsing/workbook.ts
   var XLSX = __toESM(require_shim_xlsx());
   var import_shared2 = __toESM(require_dist());
   function sniffDelimiter(sample) {
@@ -2330,7 +2332,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { sheets };
   }
 
-  // src/imports/parsing/value-parsers.ts
+  // apps/api/src/imports/parsing/value-parsers.ts
   var NULLISH = /* @__PURE__ */ new Set(["", "-", "--", "\u2014", "n/a", "na", "null"]);
   function stripCurrency(input) {
     let s = input.trim().replace(/\u00a0/g, " ").trim();
@@ -2449,7 +2451,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return label.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
   }
 
-  // src/imports/parsing/row-accessor.ts
+  // apps/api/src/imports/parsing/row-accessor.ts
   var RowAccessor = class {
     constructor(headers, cells) {
       this.headers = headers;
@@ -2498,7 +2500,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   };
 
-  // src/imports/parsing/browser/shim-crypto.js
+  // apps/api/src/imports/parsing/browser/shim-crypto.js
   function sha256(bytes) {
     const K = [
       1116352408,
@@ -2650,7 +2652,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // src/imports/parsing/hashing.ts
+  // apps/api/src/imports/parsing/hashing.ts
   function sha2562(value) {
     return createHash("sha256").update(value).digest("hex");
   }
@@ -2658,7 +2660,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return sha2562(buffer);
   }
 
-  // src/products/parsing/product-sheet.ts
+  // apps/api/src/products/parsing/product-sheet.ts
   var SCAN_LIMIT = 40;
   var REQUIRED_LABELS = ["ID do Produto", "Nome do Produto"].map(normalizeLabel);
   var STRONG_LABELS = ["SKU", "Variante Identificador", "Pre\xE7o", "Estoque do Vendedor"].map(normalizeLabel);
@@ -2832,10 +2834,10 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // src/orders/parsing/orders-rows.ts
+  // apps/api/src/orders/parsing/orders-rows.ts
   var import_shared6 = __toESM(require_dist());
 
-  // src/imports/parsing/report-specs.ts
+  // apps/api/src/imports/parsing/report-specs.ts
   var import_shared3 = __toESM(require_dist());
   function canonicalDecimal(s) {
     if (s == null) return "";
@@ -3303,7 +3305,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return REPORT_SPECS.find((s) => s.type === type);
   }
 
-  // src/imports/parsing/detect.ts
+  // apps/api/src/imports/parsing/detect.ts
   var import_shared4 = __toESM(require_dist());
   var SCAN_LIMIT2 = 40;
   var ORDER_FAMILY = [
@@ -3453,7 +3455,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { columns, headerNames, dataStartRow: headerRow + 1 };
   }
 
-  // src/imports/parsing/analyze.ts
+  // apps/api/src/imports/parsing/analyze.ts
   var import_shared5 = __toESM(require_dist());
   var PERSONAL_DATA_LABELS = [
     "Telefone",
@@ -3533,7 +3535,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // src/orders/parsing/orders-rows.ts
+  // apps/api/src/orders/parsing/orders-rows.ts
   function first(acc, labels) {
     for (const l of labels) {
       const v = acc.get(l);
@@ -3692,7 +3694,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return null;
   }
 
-  // src/orders/status.ts
+  // apps/api/src/orders/status.ts
   var NORMALIZED_LABELS = {
     NAO_PAGO: "N\xE3o pago",
     A_ENVIAR: "A enviar",
@@ -3723,7 +3725,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return "OUTRO";
   }
 
-  // src/orders/finance.ts
+  // apps/api/src/orders/finance.ts
   var round2 = (n) => Math.round(n * 100) / 100;
   function computeOrderFinance(input) {
     const fees = round2(
@@ -3756,7 +3758,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // src/postsale/parsing/postsale-rows.ts
+  // apps/api/src/postsale/parsing/postsale-rows.ts
   var import_shared7 = __toESM(require_dist());
   var REPORT_OF = {
     RETURN_REFUND: import_shared7.ReportType.RETURN_REFUND,
@@ -3886,7 +3888,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { ...base, rows, periodStart, periodEnd };
   }
 
-  // src/postsale/exposure.ts
+  // apps/api/src/postsale/exposure.ts
   var norm2 = (s) => (s != null ? s : "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   function classifyExposureNumbers(status, requested, compensation) {
     const s = norm2(status);
@@ -3908,7 +3910,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
   var EXPOSURE_METHODOLOGY = "Classifica\xE7\xE3o por status Shopee: CANCELADA/RECUSADA/DESIST\xCANCIA = sem perda; COMPENSA\xC7\xC3O ao vendedor = recuperado; CONCLU\xCDDA/APROVADA/REEMBOLSADA = preju\xEDzo confirmado (solicitado \u2212 compensa\xE7\xE3o); EM AN\xC1LISE/PENDENTE/DISPUTA = em risco. Valor solicitado nunca \xE9 tratado automaticamente como preju\xEDzo.";
 
-  // src/all/entry.ts
+  // apps/api/src/all/entry.ts
   globalThis.Buffer = import_buffer.Buffer;
   var toBuf = (ab) => import_buffer.Buffer.from(new Uint8Array(ab));
   globalThis.SISTEMA = {
@@ -18301,7 +18303,7 @@ buffer/index.js:
   }
   function authFetchJson(path, opts) {
     return authFetch(path, opts).then(function (res) {
-      if (!res.ok) return res.json().catch(function () { return {}; }).then(function (b) { throw new Error(b.message || ('Erro ' + res.status)); });
+      if (!res.ok) return res.json().catch(function () { return {}; }).then(function (b) { var m = Array.isArray(b.message) ? b.message.join('; ') : b.message; throw new Error(m || ('Erro ' + res.status)); });
       if (res.status === 204) return null;
       return res.json();
     });
@@ -18581,6 +18583,7 @@ buffer/index.js:
         (hasPermission('users.edit') ? '<button class="btn-sm" data-admedit="' + esc(u.id) + '">Editar</button> ' : '') +
         (hasPermission('users.edit') && !isOwner ? '<button class="btn-sm" data-admreset="' + esc(u.id) + '">Redefinir senha</button> ' : '') +
         (hasPermission('users.disable') && !isOwner && u.status === 'ACTIVE' ? '<button class="btn-sm" data-admdeactivate="' + esc(u.id) + '" style="color:var(--err)">Desativar</button>' : '') +
+        (hasPermission('users.disable') && !isOwner && u.status !== 'ACTIVE' ? '<button class="btn-sm" data-admactivate="' + esc(u.id) + '">Ativar</button>' : '') +
         '</td></tr>';
     }).join('');
     return '<div class="toolbar2">' + (canCreate ? '<button class="btn-sm primary" id="admin-new-user">+ Novo usuário</button>' : '') + '</div>' +
@@ -18590,8 +18593,10 @@ buffer/index.js:
     var roleOpts = (adminS.roles || []).filter(function (r) { return r.status !== 'INACTIVE' || (u && u.appRoleId === r.id); }).map(function (r) { return '<option value="' + esc(r.id) + '"' + (u && u.appRoleId === r.id ? ' selected' : '') + '>' + esc(r.name) + '</option>'; }).join('');
     var legacyOpts = ['ADMIN', 'FINANCIAL', 'VIEWER'].map(function (k) { return '<option value="' + k + '"' + (u ? (u.role === k ? ' selected' : '') : (k === 'VIEWER' ? ' selected' : '')) + '>' + esc(ROLE_LABEL_LEGACY[k]) + '</option>'; }).join('');
     return '<label class="fld">Nome</label><input class="input" id="af-name" style="width:100%;margin-bottom:10px" value="' + (u ? esc(u.name) : '') + '">' +
-      '<label class="fld">E-mail</label><input class="input" id="af-email" type="email" style="width:100%;margin-bottom:10px" value="' + (u ? esc(u.email) : '') + '"' + (u ? ' disabled' : '') + '>' +
-      (u ? '' : '<label class="fld">Senha inicial (mínimo 8 caracteres)</label><input class="input" id="af-password" type="password" style="width:100%;margin-bottom:10px">') +
+      '<label class="fld">E-mail (é o login — item 6)</label><input class="input" id="af-email" type="email" style="width:100%;margin-bottom:10px" value="' + (u ? esc(u.email) : '') + '">' +
+      (u ? '' :
+        '<label class="fld">Senha inicial (mínimo 8 caracteres)</label><input class="input" id="af-password" type="password" style="width:100%;margin-bottom:10px">' +
+        '<label class="fld">Confirmar senha inicial</label><input class="input" id="af-password2" type="password" style="width:100%;margin-bottom:10px">') +
       '<label class="fld">Perfil de acesso (granular — item 8)</label><select class="select" id="af-approle" style="width:100%;margin-bottom:10px"><option value="">— nenhum (usa só o perfil legado abaixo) —</option>' + roleOpts + '</select>' +
       '<label class="fld">Perfil legado (compatibilidade com apps/web)</label><select class="select" id="af-role" style="width:100%;margin-bottom:10px">' + legacyOpts + '</select>' +
       (u ? '' : '<label class="fld" style="display:flex;align-items:center;gap:6px;margin-top:2px"><input type="checkbox" id="af-mustchange" checked> Exigir troca de senha no primeiro acesso (item 18)</label>');
@@ -18605,17 +18610,22 @@ buffer/index.js:
         confirmLabel: u ? 'Salvar' : 'Criar usuário',
         onConfirm: function (panel) {
           var name = panel.querySelector('#af-name').value.trim();
+          // item 8 — normaliza no cliente também (trim+lowercase); o backend normaliza de novo e é
+          // a fonte de verdade, mas isso já evita mandar "Marcos@Empresa.com" pro servidor.
+          var email = panel.querySelector('#af-email').value.trim().toLowerCase();
           var appRoleId = panel.querySelector('#af-approle').value || null;
           var roleSel = panel.querySelector('#af-role').value;
           if (!name) { toast('Preencha o nome', '', true); return false; }
+          if (!email) { toast('Preencha o e-mail', '', true); return false; }
           if (u) {
-            return authFetchJson('/users/' + u.id, { method: 'PATCH', body: JSON.stringify({ name: name, role: roleSel, appRoleId: appRoleId }) })
+            return authFetchJson('/users/' + u.id, { method: 'PATCH', body: JSON.stringify({ name: name, email: email, role: roleSel, appRoleId: appRoleId }) })
               .then(function () { adminS.users = null; toast('Usuário atualizado', name); render(); });
           }
-          var email = panel.querySelector('#af-email').value.trim();
           var password = panel.querySelector('#af-password').value;
+          var password2 = panel.querySelector('#af-password2').value;
           var mustChange = panel.querySelector('#af-mustchange').checked;
-          if (!email || !password) { toast('Preencha e-mail e senha', '', true); return false; }
+          if (!password) { toast('Preencha a senha inicial', '', true); return false; }
+          if (password !== password2) { toast('As senhas não conferem', 'Confirme a senha inicial digitando exatamente igual.', true); return false; }
           return authFetchJson('/users', { method: 'POST', body: JSON.stringify({ name: name, email: email, password: password, role: roleSel, appRoleId: appRoleId, mustChangePassword: mustChange }) })
             .then(function () { adminS.users = null; toast('Usuário criado', email); render(); });
         },
@@ -18631,6 +18641,12 @@ buffer/index.js:
       b.onclick = function () {
         if (!confirm('Desativar este usuário? Ele não vai conseguir mais entrar no sistema.')) return;
         authFetchJson('/users/' + b.dataset.admdeactivate, { method: 'DELETE' }).then(function () { adminS.users = null; toast('Usuário desativado', ''); render(); }).catch(function (e) { toast('Erro', e.message, true); });
+      };
+    });
+    app.querySelectorAll('[data-admactivate]').forEach(function (b) {
+      b.onclick = function () {
+        if (!confirm('Reativar este usuário? Ele volta a conseguir entrar no sistema.')) return;
+        authFetchJson('/users/' + b.dataset.admactivate + '/activate', { method: 'POST' }).then(function () { adminS.users = null; toast('Usuário reativado', ''); render(); }).catch(function (e) { toast('Erro', e.message, true); });
       };
     });
     app.querySelectorAll('[data-admreset]').forEach(function (b) {

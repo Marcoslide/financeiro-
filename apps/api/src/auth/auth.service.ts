@@ -8,6 +8,7 @@ import { EntityStatus, seedPermissionsAndRoles } from '@financeiro/database';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { PermissionsService } from './permissions.service';
+import { normalizeEmail } from '../common/email';
 
 export interface AuthTokens {
   accessToken: string;
@@ -71,9 +72,17 @@ export class AuthService {
 
   async validateUser(email: string, password: string, throttleKey?: string): Promise<AuthUser> {
     if (throttleKey) this.checkThrottle(throttleKey);
-    const user = await this.prisma.user.findUnique({ where: { email } });
-    if (!user || user.status !== 'ACTIVE') {
+    // item 8 da correção urgente — e-mail é o login: busca sempre
+    // case-insensitive (o DTO já normaliza, mas aqui é a defesa final).
+    const normalized = normalizeEmail(email);
+    const user = await this.prisma.user.findFirst({
+      where: { email: { equals: normalized, mode: 'insensitive' } },
+    });
+    if (!user) {
       throw new UnauthorizedException('Credenciais inválidas.');
+    }
+    if (user.status !== 'ACTIVE') {
+      throw new UnauthorizedException('Usuário inativo. Procure o administrador.');
     }
     const ok = await argon2.verify(user.passwordHash, password);
     if (!ok) {
@@ -214,6 +223,7 @@ export class AuthService {
       throw new BadRequestException('A senha deve ter ao menos 8 caracteres.');
     }
 
+    const normalizedEmail = normalizeEmail(email);
     const passwordHash = await argon2.hash(password);
     const created = await this.prisma.$transaction(async (tx) => {
       const org = await tx.organization.create({
@@ -227,7 +237,7 @@ export class AuthService {
         data: {
           organizationId: org.id,
           name,
-          email,
+          email: normalizedEmail,
           passwordHash,
           role: Role.OWNER,
           appRoleId: ownerRole.id,

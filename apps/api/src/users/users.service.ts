@@ -4,6 +4,7 @@ import { AuditAction, Role } from '@financeiro/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CreateUserDto, UpdateUserDto } from './dto';
+import { normalizeEmail } from '../common/email';
 
 const PUBLIC_FIELDS = {
   id: true,
@@ -41,9 +42,15 @@ export class UsersService {
     if (dto.role === Role.OWNER) {
       throw new ForbiddenException('O Proprietário não pode ser criado por aqui.');
     }
-    const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    // item 8 da correção urgente — o DTO já normaliza (trim+lowercase), mas a
+    // checagem de duplicidade é case-insensitive por segurança extra: cobre
+    // qualquer linha antiga que ainda tenha caixa diferente da normalizada.
+    const email = normalizeEmail(dto.email);
+    const existing = await this.prisma.user.findFirst({
+      where: { organizationId, email: { equals: email, mode: 'insensitive' } },
+    });
     if (existing) {
-      throw new ConflictException('Já existe um usuário com este e-mail.');
+      throw new ConflictException('Já existe um usuário cadastrado com este e-mail.');
     }
     if (dto.appRoleId) {
       const role = await this.prisma.appRole.findFirst({ where: { id: dto.appRoleId, organizationId } });
@@ -54,7 +61,7 @@ export class UsersService {
       data: {
         organizationId,
         name: dto.name,
-        email: dto.email,
+        email,
         role: dto.role,
         appRoleId: dto.appRoleId ?? null,
         passwordHash,
@@ -100,10 +107,24 @@ export class UsersService {
       const role = await this.prisma.appRole.findFirst({ where: { id: dto.appRoleId, organizationId } });
       if (!role) throw new BadRequestException('Perfil não encontrado nesta organização.');
     }
+    // item 16 — trocar e-mail passa pela mesma checagem de duplicidade
+    // case-insensitive que a criação usa.
+    let email = before.email;
+    if (dto.email !== undefined) {
+      email = normalizeEmail(dto.email);
+      if (email !== before.email.toLowerCase()) {
+        const dupe = await this.prisma.user.findFirst({
+          where: { organizationId, email: { equals: email, mode: 'insensitive' }, id: { not: id } },
+        });
+        if (dupe) throw new ConflictException('Já existe um usuário cadastrado com este e-mail.');
+      }
+    }
+    const roleChanged = dto.role !== undefined && dto.role !== before.role;
     const updated = await this.prisma.user.update({
       where: { id },
       data: {
         name: dto.name ?? before.name,
+        email,
         role: (dto.role ?? before.role) as Role,
         appRoleId: dto.appRoleId !== undefined ? dto.appRoleId : before.appRoleId,
         allowedCompanyNames: dto.allowedCompanyNames ?? before.allowedCompanyNames,
@@ -118,9 +139,23 @@ export class UsersService {
       module: 'admin',
       entityType: 'User',
       entityId: id,
-      before: { name: before.name, role: before.role, appRoleId: before.appRoleId },
-      after: { name: updated.name, role: updated.role, appRoleId: updated.appRoleId },
+      before: { name: before.name, email: before.email, role: before.role, appRoleId: before.appRoleId },
+      after: { name: updated.name, email: updated.email, role: updated.role, appRoleId: updated.appRoleId },
     });
+    // item 20 — troca de perfil (role) é auditada também com uma ação própria,
+    // separada do USER_UPDATE genérico, para facilitar auditoria de acesso.
+    if (roleChanged) {
+      await this.audit.record({
+        organizationId,
+        userId: actorId,
+        action: AuditAction.USER_ROLE_CHANGE,
+        module: 'admin',
+        entityType: 'User',
+        entityId: id,
+        before: { role: before.role },
+        after: { role: updated.role },
+      });
+    }
     return updated;
   }
 
@@ -139,6 +174,27 @@ export class UsersService {
       organizationId,
       userId: actorId,
       action: AuditAction.USER_DEACTIVATE,
+      module: 'admin',
+      entityType: 'User',
+      entityId: id,
+      before: { status: before.status },
+      after: { status: updated.status },
+    });
+    return updated;
+  }
+
+  /** item 18/19 — reativa um usuário desativado (nunca exclui fisicamente). */
+  async activate(organizationId: string, actorId: string, id: string) {
+    const before = await this.getOwned(organizationId, id);
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data: { status: 'ACTIVE', updatedBy: actorId },
+      select: PUBLIC_FIELDS,
+    });
+    await this.audit.record({
+      organizationId,
+      userId: actorId,
+      action: AuditAction.USER_ENABLE,
       module: 'admin',
       entityType: 'User',
       entityId: id,

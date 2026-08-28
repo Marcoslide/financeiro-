@@ -14356,7 +14356,7 @@
   }
   function authFetchJson(path, opts) {
     return authFetch(path, opts).then(function (res) {
-      if (!res.ok) return res.json().catch(function () { return {}; }).then(function (b) { throw new Error(b.message || ('Erro ' + res.status)); });
+      if (!res.ok) return res.json().catch(function () { return {}; }).then(function (b) { var m = Array.isArray(b.message) ? b.message.join('; ') : b.message; throw new Error(m || ('Erro ' + res.status)); });
       if (res.status === 204) return null;
       return res.json();
     });
@@ -14636,6 +14636,7 @@
         (hasPermission('users.edit') ? '<button class="btn-sm" data-admedit="' + esc(u.id) + '">Editar</button> ' : '') +
         (hasPermission('users.edit') && !isOwner ? '<button class="btn-sm" data-admreset="' + esc(u.id) + '">Redefinir senha</button> ' : '') +
         (hasPermission('users.disable') && !isOwner && u.status === 'ACTIVE' ? '<button class="btn-sm" data-admdeactivate="' + esc(u.id) + '" style="color:var(--err)">Desativar</button>' : '') +
+        (hasPermission('users.disable') && !isOwner && u.status !== 'ACTIVE' ? '<button class="btn-sm" data-admactivate="' + esc(u.id) + '">Ativar</button>' : '') +
         '</td></tr>';
     }).join('');
     return '<div class="toolbar2">' + (canCreate ? '<button class="btn-sm primary" id="admin-new-user">+ Novo usuário</button>' : '') + '</div>' +
@@ -14645,8 +14646,10 @@
     var roleOpts = (adminS.roles || []).filter(function (r) { return r.status !== 'INACTIVE' || (u && u.appRoleId === r.id); }).map(function (r) { return '<option value="' + esc(r.id) + '"' + (u && u.appRoleId === r.id ? ' selected' : '') + '>' + esc(r.name) + '</option>'; }).join('');
     var legacyOpts = ['ADMIN', 'FINANCIAL', 'VIEWER'].map(function (k) { return '<option value="' + k + '"' + (u ? (u.role === k ? ' selected' : '') : (k === 'VIEWER' ? ' selected' : '')) + '>' + esc(ROLE_LABEL_LEGACY[k]) + '</option>'; }).join('');
     return '<label class="fld">Nome</label><input class="input" id="af-name" style="width:100%;margin-bottom:10px" value="' + (u ? esc(u.name) : '') + '">' +
-      '<label class="fld">E-mail</label><input class="input" id="af-email" type="email" style="width:100%;margin-bottom:10px" value="' + (u ? esc(u.email) : '') + '"' + (u ? ' disabled' : '') + '>' +
-      (u ? '' : '<label class="fld">Senha inicial (mínimo 8 caracteres)</label><input class="input" id="af-password" type="password" style="width:100%;margin-bottom:10px">') +
+      '<label class="fld">E-mail (é o login — item 6)</label><input class="input" id="af-email" type="email" style="width:100%;margin-bottom:10px" value="' + (u ? esc(u.email) : '') + '">' +
+      (u ? '' :
+        '<label class="fld">Senha inicial (mínimo 8 caracteres)</label><input class="input" id="af-password" type="password" style="width:100%;margin-bottom:10px">' +
+        '<label class="fld">Confirmar senha inicial</label><input class="input" id="af-password2" type="password" style="width:100%;margin-bottom:10px">') +
       '<label class="fld">Perfil de acesso (granular — item 8)</label><select class="select" id="af-approle" style="width:100%;margin-bottom:10px"><option value="">— nenhum (usa só o perfil legado abaixo) —</option>' + roleOpts + '</select>' +
       '<label class="fld">Perfil legado (compatibilidade com apps/web)</label><select class="select" id="af-role" style="width:100%;margin-bottom:10px">' + legacyOpts + '</select>' +
       (u ? '' : '<label class="fld" style="display:flex;align-items:center;gap:6px;margin-top:2px"><input type="checkbox" id="af-mustchange" checked> Exigir troca de senha no primeiro acesso (item 18)</label>');
@@ -14660,17 +14663,22 @@
         confirmLabel: u ? 'Salvar' : 'Criar usuário',
         onConfirm: function (panel) {
           var name = panel.querySelector('#af-name').value.trim();
+          // item 8 — normaliza no cliente também (trim+lowercase); o backend normaliza de novo e é
+          // a fonte de verdade, mas isso já evita mandar "Marcos@Empresa.com" pro servidor.
+          var email = panel.querySelector('#af-email').value.trim().toLowerCase();
           var appRoleId = panel.querySelector('#af-approle').value || null;
           var roleSel = panel.querySelector('#af-role').value;
           if (!name) { toast('Preencha o nome', '', true); return false; }
+          if (!email) { toast('Preencha o e-mail', '', true); return false; }
           if (u) {
-            return authFetchJson('/users/' + u.id, { method: 'PATCH', body: JSON.stringify({ name: name, role: roleSel, appRoleId: appRoleId }) })
+            return authFetchJson('/users/' + u.id, { method: 'PATCH', body: JSON.stringify({ name: name, email: email, role: roleSel, appRoleId: appRoleId }) })
               .then(function () { adminS.users = null; toast('Usuário atualizado', name); render(); });
           }
-          var email = panel.querySelector('#af-email').value.trim();
           var password = panel.querySelector('#af-password').value;
+          var password2 = panel.querySelector('#af-password2').value;
           var mustChange = panel.querySelector('#af-mustchange').checked;
-          if (!email || !password) { toast('Preencha e-mail e senha', '', true); return false; }
+          if (!password) { toast('Preencha a senha inicial', '', true); return false; }
+          if (password !== password2) { toast('As senhas não conferem', 'Confirme a senha inicial digitando exatamente igual.', true); return false; }
           return authFetchJson('/users', { method: 'POST', body: JSON.stringify({ name: name, email: email, password: password, role: roleSel, appRoleId: appRoleId, mustChangePassword: mustChange }) })
             .then(function () { adminS.users = null; toast('Usuário criado', email); render(); });
         },
@@ -14686,6 +14694,12 @@
       b.onclick = function () {
         if (!confirm('Desativar este usuário? Ele não vai conseguir mais entrar no sistema.')) return;
         authFetchJson('/users/' + b.dataset.admdeactivate, { method: 'DELETE' }).then(function () { adminS.users = null; toast('Usuário desativado', ''); render(); }).catch(function (e) { toast('Erro', e.message, true); });
+      };
+    });
+    app.querySelectorAll('[data-admactivate]').forEach(function (b) {
+      b.onclick = function () {
+        if (!confirm('Reativar este usuário? Ele volta a conseguir entrar no sistema.')) return;
+        authFetchJson('/users/' + b.dataset.admactivate + '/activate', { method: 'POST' }).then(function () { adminS.users = null; toast('Usuário reativado', ''); render(); }).catch(function (e) { toast('Erro', e.message, true); });
       };
     });
     app.querySelectorAll('[data-admreset]').forEach(function (b) {
