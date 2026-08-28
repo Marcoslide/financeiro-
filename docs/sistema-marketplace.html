@@ -317,7 +317,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 38ca415 · 2026-08-28 00:16 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build c20e41d · 2026-08-28 00:30 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -8587,7 +8587,10 @@ buffer/index.js:
     // cadastro (cpCategories) que Contas a Pagar/Receber já usam, nunca cls.apCategoria/arCategoria
     // (campos legados do WCAT, nunca escritos pelo modal atual) — causa raiz do "Categoria: —".
     if (vaiAP) {
-      var recAP = { sourceEventKey: key, operationId: opId, companyId: companyId, orderId: wOrderId(t) || null, historico: label, valor: r2(Math.abs(t.amount)), valorManualOverride: true, emissao: competencia, competencia: competencia, vencimento: cls.apVencimento || competencia, origin: 'CAIXA_MANUAL', financialAccountId: contaFinId, categoryId: cls.categoriaFinanceiraId || cls.apCategoria || null, paymentMethod: cls.paymentMethod || null };
+      // Fase 10 Item 5: classificar aqui é sempre um ato manual do operador (mesmo raciocínio do save
+      // no editor de CP/CR) — protege a competência escolhida contra a próxima integração automática
+      // do fechamento, que antes sobrescrevia silenciosamente com a data do dia fechado.
+      var recAP = { sourceEventKey: key, operationId: opId, companyId: companyId, orderId: wOrderId(t) || null, historico: label, valor: r2(Math.abs(t.amount)), valorManualOverride: true, emissao: competencia, competencia: competencia, vencimento: cls.apVencimento || competencia, origin: 'CAIXA_MANUAL', financialAccountId: contaFinId, categoryId: cls.categoriaFinanceiraId || cls.apCategoria || null, paymentMethod: cls.paymentMethod || null, manualFields: CP_CAMPOS_PROTEGIVEIS_MANUAL.slice() };
       var fullAP = cpUpsertBySourceKey(null, recAP);
       tasks.push(putMany('cpheader', [fullAP]));
       if (cls.apStatusManual === 'PAGO' && !cpPaymentsForHeader(fullAP.id).some(function (p) { return !p.estornado; })) {
@@ -8595,7 +8598,7 @@ buffer/index.js:
       }
     }
     if (vaiAR) {
-      var recAR = { sourceEventKey: key, operationId: opId, companyId: companyId, orderId: wOrderId(t) || null, descricao: label, pagador: 'Shopee', origin: 'MANUAL', valor: r2(Math.abs(t.amount)), competencia: competencia, vencimento: cls.arPrevisao || competencia, financialAccountId: contaFinId, categoryId: cls.categoriaFinanceiraId || null, referencia: t.id };
+      var recAR = { sourceEventKey: key, operationId: opId, companyId: companyId, orderId: wOrderId(t) || null, descricao: label, pagador: 'Shopee', origin: 'MANUAL', valor: r2(Math.abs(t.amount)), competencia: competencia, vencimento: cls.arPrevisao || competencia, financialAccountId: contaFinId, categoryId: cls.categoriaFinanceiraId || null, referencia: t.id, manualFields: CP_CAMPOS_PROTEGIVEIS_MANUAL.slice() };
       var fullAR = crUpsertBySourceKey(null, recAR);
       tasks.push(putMany('crheader', [fullAR]));
       if (cls.arStatusManual === 'RECEBIDO' && !crReceiptsForHeader(fullAR.id).some(function (p) { return !p.estornado; })) {
@@ -12652,10 +12655,15 @@ buffer/index.js:
     var transf = caixaDayTransferenciasBancarias(dateKey);
     var arPlan = [], apPlan = [], transferPlan = [], naoClassificados = [];
     function opCompanyId(opId) { var op = operations.find(function (o) { return o.id === opId; }); return op ? op.companyId : null; }
-    function apRow(opId, orderId, source, cat, label, valorC, contaId, categoryId) {
+    function apRow(opId, orderId, source, cat, label, valorC, contaId, categoryId, dataOrigemEvento) {
       // cpUpsertBySourceKey grava os campos direto (não passa por cpValorOriginal) — por isso `valor`
       // já vai pronto aqui; valorManualOverride só documenta a origem (nunca recalculado por item).
-      var rec = { sourceEventKey: feKey(opId, source, cat, orderId || dateKey), operationId: opId, companyId: opCompanyId(opId), orderId: orderId || null, historico: label, valor: r2(Math.abs(valorC) / 100), valorManualOverride: true, emissao: dateKey, competencia: dateKey, vencimento: dateKey, origin: 'FECHAMENTO_CAIXA', financialAccountId: contaId || null };
+      // Fase 10 Item 2: competência é a data do EVENTO ECONÔMICO de origem (pedido pago, movimento da
+      // Carteira), não a data do fechamento — dateKey só entra como fallback quando a origem não tem
+      // data própria identificável. Vencimento continua dateKey: título automático nasce já baixado no
+      // dia do fechamento, então "quando deveria ser pago" e "dia do fechamento" coincidem de verdade.
+      var dataComp = dataOrigemEvento || dateKey;
+      var rec = { sourceEventKey: feKey(opId, source, cat, orderId || dateKey), operationId: opId, companyId: opCompanyId(opId), orderId: orderId || null, historico: label, valor: r2(Math.abs(valorC) / 100), valorManualOverride: true, emissao: dataComp, competencia: dataComp, vencimento: dateKey, origin: 'FECHAMENTO_CAIXA', financialAccountId: contaId || null };
       // categoryId (8º param, opcional): PROMPT "Correção — Integração Classificação da Carteira/
       // Caixa → Contas a Pagar/Receber → DRE" — só o branch de movimentos da Carteira já classificados
       // manualmente (abaixo) tem uma categoriaFinanceiraId real pra propagar; os demais chamadores
@@ -12681,6 +12689,11 @@ buffer/index.js:
       if (comp.receitaC == null) return;
       var opId = comp.operationId; if (!opId) return;
       var recebAcc = faReceivableForOperation(opId);
+      // Fase 10 Item 2: data canônica do evento de origem para as taxas deste pedido — a data em que o
+      // pedido foi efetivamente pago na Shopee (mesmo campo que caixaDayVendas já usa pra decidir que
+      // o pedido pertence a este fechamento). Sempre bate com dateKey na prática (é o próprio filtro),
+      // mas nasce da origem, não do parâmetro do fechamento.
+      var dataOrigemPedido = o.paidAt ? o.paidAt.slice(0, 10) : null;
       // PROMPT "ALTERAÇÃO DE REGRA — MOTOR DE TAXAS SHOPEE COM FALLBACK E CONCILIAÇÃO AUTOMÁTICA":
       // Contas a Pagar nasce de UMA ÚNICA lista (sellerCharges.items), independente de Income ter
       // sido encontrado ou não — nunca mais um branch separado lendo comp.gTaxas. Quando o pedido está
@@ -12700,14 +12713,14 @@ buffer/index.js:
           var sf = sellerCharges.serviceFee;
           var catServico = cpCategoryIdByName('Taxa de Serviço Shopee');
           if (sf.children && sf.children.length) {
-            sf.children.forEach(function (c) { if (c.valor) apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', c.key.toUpperCase(), c.label + ' — Pedido ' + o.id + ' (Confirmado — Income)', c.valor, recebAcc ? recebAcc.id : null, catServico)); });
+            sf.children.forEach(function (c) { if (c.valor) apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', c.key.toUpperCase(), c.label + ' — Pedido ' + o.id + ' (Confirmado — Income)', c.valor, recebAcc ? recebAcc.id : null, catServico, dataOrigemPedido)); });
           } else {
-            apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', 'TOTAL', it.label + ' — Pedido ' + o.id + origemSufixo(it), it.knownContribution, recebAcc ? recebAcc.id : null, catServico));
+            apPlan.push(apRow(opId, o.id, 'SERVICE_FEE', 'TOTAL', it.label + ' — Pedido ' + o.id + origemSufixo(it), it.knownContribution, recebAcc ? recebAcc.id : null, catServico, dataOrigemPedido));
           }
           return;
         }
         var cat = it.key === 'comissao' ? 'COMMISSION' : it.key.toUpperCase();
-        apPlan.push(apRow(opId, o.id, 'INCOME', cat, it.label + ' — Pedido ' + o.id + origemSufixo(it), it.valor, recebAcc ? recebAcc.id : null, cpCategoriaShopeeTax(it.key)));
+        apPlan.push(apRow(opId, o.id, 'INCOME', cat, it.label + ' — Pedido ' + o.id + origemSufixo(it), it.valor, recebAcc ? recebAcc.id : null, cpCategoriaShopeeTax(it.key), dataOrigemPedido));
       });
       // PROMPT "Unificação do motor financeiro canônico": voucher/cashback subsidiado pelo vendedor
       // saiu de resolveSellerCharges (dupla contagem com comp.ajustesPedidoC — ver comentário na
@@ -12716,7 +12729,7 @@ buffer/index.js:
       // sistema, nunca uma soma paralela.
       comp.gDescontos.forEach(function (r) {
         if (!r.valor || ['voucherSeller', 'voucherCompartilhado', 'coinCashbackSeller', 'coinCashbackCompartilhado'].indexOf(r.fieldKey) < 0) return;
-        apPlan.push(apRow(opId, o.id, 'INCOME', r.fieldKey.toUpperCase(), r.label + ' — Pedido ' + o.id + ' (Confirmado — Income)', r.valor, recebAcc ? recebAcc.id : null, cpCategoriaShopeeTax(r.fieldKey)));
+        apPlan.push(apRow(opId, o.id, 'INCOME', r.fieldKey.toUpperCase(), r.label + ' — Pedido ' + o.id + ' (Confirmado — Income)', r.valor, recebAcc ? recebAcc.id : null, cpCategoriaShopeeTax(r.fieldKey), dataOrigemPedido));
       });
     });
     // ---- Fase 5c — Taxa de Antecipação do Acelera (descontada no resgate, saída = Carteira Shopee) ----
@@ -12749,7 +12762,10 @@ buffer/index.js:
       // Conta financeira: prioriza a que o operador já escolheu no modal de classificação
       // (manCls.financialAccountId) — mesma conta que a baixa manual usaria — cai pra Carteira Shopee
       // automática só quando o lançamento nunca passou pelo modal (natureza inferida pelo sinal).
-      if (vaiAP) apPlan.push(apRow(opId, wOrderId(t), 'WALLET', k, label, Math.abs(t.amount) * 100, manCls.financialAccountId || (walletAcc ? walletAcc.id : null), manCls.categoriaFinanceiraId));
+      // Fase 10 Item 2: antes, este caminho (fechamento de Caixa) sempre gravava dateKey como
+      // competência, mesmo quando o movimento da Carteira era de outro dia — divergindo do caminho
+      // manual (walletApplyClassificacao), que já usava t.date. Agora os dois caminhos concordam.
+      if (vaiAP) apPlan.push(apRow(opId, wOrderId(t), 'WALLET', k, label, Math.abs(t.amount) * 100, manCls.financialAccountId || (walletAcc ? walletAcc.id : null), manCls.categoriaFinanceiraId, t.date ? t.date.slice(0, 10) : null));
     });
     var movTodosDoDia = caixaDayMovimentosCarteira(dateKey); var movTodos = movTodosDoDia.creditos.concat(movTodosDoDia.debitos);
     movTodos.forEach(function (t) { var k = caixaMovCategoria(t, ac); if (!k || k === 'NAO_IDENTIFICADOS') naoClassificados.push(t); });
@@ -15044,7 +15060,11 @@ buffer/index.js:
   // ao salvar) marca quais desses campos um humano já definiu — o upsert automático pula exatamente
   // esses (só quando full[k] já tem valor: um campo manual limpo/vazio ainda pode ser auto-preenchido),
   // nunca os demais (valor, vencimento, histórico continuam sempre a fonte real).
-  var CP_CAMPOS_PROTEGIVEIS_MANUAL = ['categoryId', 'financialAccountId'];
+  // Fase 10 Item 5: 'competencia' entrou na lista — a partir do momento que um humano salva o título
+  // (editor de CP/CR, ou a classificação manual da Carteira), a competência escolhida (ou já vigente)
+  // fica protegida contra a próxima integração automática do fechamento, exatamente como já acontecia
+  // com Categoria/Conta financeira. Precedência final: MANUAL > origem automática > fallback fechamento.
+  var CP_CAMPOS_PROTEGIVEIS_MANUAL = ['categoryId', 'financialAccountId', 'competencia'];
   function cpAplicarUpsertProtegido(full, rec) {
     var protegidos = full.manualFields || [];
     Object.keys(rec).forEach(function (k) {
@@ -15325,6 +15345,21 @@ buffer/index.js:
   // muda de { categoria: valor } para { centro: { categoria: valor } }; a SOMA total continua
   // exatamente igual — nenhum valor é somado, filtrado ou arredondado de forma diferente, só a forma
   // de agrupar na apresentação.
+  // Fase 10 Item 1: valor econômico do título quando NÃO existem itens detalhados. h.valor já é o
+  // valor final gravado no cabeçalho — mesmo quando valorManualOverride é true, a sobrescrita já foi
+  // aplicada em h.valor no momento do save (11268-11280); não existe um campo numérico separado pra
+  // ela. BUG CORRIGIDO: as duas DREs somavam cpItemsTotal(items) mesmo com items=[], e
+  // cpItemsTotal([])===0 — todo título automático (FECHAMENTO_CAIXA/CAIXA_MANUAL, que nunca têm
+  // cpitems) entrava como R$0,00 na DRE de Despesas, mascarando taxas Shopee/comissão/Acelera reais.
+  function cpValorEconomicoTitulo(h, items) {
+    if (items && items.length) return cpItemsTotal(items);
+    // h.valor é o TOTAL do título — inclui frete/outras despesas quando presentes (mesma composição de
+    // cpValorOriginal: itens + frete + outras, ou a sobrescrita manual que substitui esse total).
+    // Ambas as DREs somam freteValor/outrasDespesasValor como linhas PRÓPRIAS logo depois desta
+    // chamada — subtrair aqui evita contar o frete duas vezes (uma dentro da categoria principal,
+    // outra na linha "(frete)").
+    return r2((h.valor || 0) - (h.freteValor || 0) - (h.outrasDespesasValor || 0));
+  }
   function cpDreDespesasCompetencia(from, to) {
     var buckets = {};
     function add(catId, suffix, v) {
@@ -15335,7 +15370,7 @@ buffer/index.js:
       if (h.canceledAt) return; if (!h.competencia || h.competencia < from || h.competencia > to) return;
       var items = cpItemsForHeader(h.id);
       if (items.length) items.forEach(function (it) { add(it.categoryId || h.categoryId, '', it.total || 0); });
-      else add(h.categoryId, '', cpItemsTotal(items));
+      else add(h.categoryId, '', cpValorEconomicoTitulo(h, items));
       if (h.freteValor) add(h.freteCategoryId || h.categoryId, ' (frete)', h.freteValor);
       if (h.outrasDespesasValor) add(h.outrasDespesasCategoryId || h.categoryId, ' (outras despesas)', h.outrasDespesasValor);
     });
@@ -15354,7 +15389,7 @@ buffer/index.js:
       var fraction = h.valor > 0 ? cpAmortizado(p) / h.valor : 0;
       var items = cpItemsForHeader(h.id);
       if (items.length) items.forEach(function (it) { add(it.categoryId || h.categoryId, '', (it.total || 0) * fraction); });
-      else add(h.categoryId, '', cpItemsTotal(items) * fraction);
+      else add(h.categoryId, '', cpValorEconomicoTitulo(h, items) * fraction);
       if (h.freteValor) add(h.freteCategoryId || h.categoryId, ' (frete)', h.freteValor * fraction);
       if (h.outrasDespesasValor) add(h.outrasDespesasCategoryId || h.categoryId, ' (outras despesas)', h.outrasDespesasValor * fraction);
       if (p.juros) addRaw('Despesas financeiras (juros)', p.juros);
@@ -15726,9 +15761,13 @@ buffer/index.js:
       var subRows = Object.keys(buckets[c]).sort(function (a, b) { return buckets[c][b] - buckets[c][a]; }).map(function (k) { return '<tr><td style="padding-left:24px">' + esc(k) + '</td><td class="nowrap">' + brl(buckets[c][k]) + '</td><td>' + (total ? pct(r2(buckets[c][k] / total * 100)) : '—') + '</td></tr>'; }).join('');
       return { subtotal: subtotal, html: '<tr class="dre-centro" style="font-weight:700"><td>' + esc(c) + '</td><td class="nowrap">' + brl(subtotal) + '</td><td>' + (total ? pct(r2(subtotal / total * 100)) : '—') + '</td></tr>' + subRows };
     }).sort(function (a, b) { return b.subtotal - a.subtotal; }).map(function (r) { return r.html; }).join('');
+    // Fase 10 Item 7: "DRE por Caixa" confundia dois conceitos diferentes — quando a despesa pertence
+    // economicamente (competência) não é a mesma pergunta de quando o dinheiro saiu (realizado/caixa).
+    // "Realizado por Caixa" deixa claro que essa visão não é uma segunda DRE, é o mesmo título olhado
+    // pelo desembolso.
     return devPeriodBarAsCp() +
-      '<div class="toolbar2"><b style="font-size:12.5px;color:var(--muted)">Visão:</b><div class="chips"><span class="chip' + (cpDreBasis === 'competencia' ? ' chip-on' : '') + '" data-cpdrebasis="competencia">Por competência</span><span class="chip' + (cpDreBasis === 'caixa' ? ' chip-on' : '') + '" data-cpdrebasis="caixa">Por caixa</span></div></div>' +
-      '<div class="callout' + (cpDreBasis === 'caixa' ? '' : '') + '" style="margin-bottom:12px">' + (cpDreBasis === 'competencia' ? 'Despesa reconhecida na data de <b>competência</b> do título, independente de já ter sido paga.' : 'Despesa reconhecida na data de <b>cada baixa</b> — o valor amortizado é alocado proporcionalmente à classificação original do título; juros/multas pagos entram como despesa financeira à parte.') + '</div>' +
+      '<div class="toolbar2"><b style="font-size:12.5px;color:var(--muted)">Visão:</b><div class="chips"><span class="chip' + (cpDreBasis === 'competencia' ? ' chip-on' : '') + '" data-cpdrebasis="competencia">DRE por Competência</span><span class="chip' + (cpDreBasis === 'caixa' ? ' chip-on' : '') + '" data-cpdrebasis="caixa">Realizado por Caixa</span></div></div>' +
+      '<div class="callout' + (cpDreBasis === 'caixa' ? '' : '') + '" style="margin-bottom:12px">' + (cpDreBasis === 'competencia' ? '<b>DRE por Competência</b> — quando a despesa pertence economicamente, na data de <b>competência</b> do título, independente de já ter sido paga.' : '<b>Realizado por Caixa</b> — quando o dinheiro efetivamente saiu, na data de <b>cada baixa</b>; o valor amortizado é alocado proporcionalmente à classificação original do título; juros/multas pagos entram como despesa financeira à parte.') + '</div>' +
       '<div class="panel"><div class="ph"><h3>Despesas por Centro de Custos e Categoria</h3><span class="footnote" style="margin:0">Total: ' + brl(total) + '</span></div><div class="table-wrap">' + (rows ? '<table class="report"><thead><tr><th>Centro de Custos / Categoria</th><th>Valor</th><th>% do total</th></tr></thead><tbody>' + rows + '<tr class="total"><td>TOTAL</td><td>' + brl(total) + '</td><td>100%</td></tr></tbody></table>' : '<div class="empty" style="border:none"><p>Nenhuma despesa classificada neste período.</p></div>') + '</div></div>';
   }
   function bindCpDre() { bindDevPeriodBar(); app.querySelectorAll('[data-cpdrebasis]').forEach(function (c) { c.onclick = function () { cpDreBasis = c.dataset.cpdrebasis; cpRenderBody(); }; }); }
@@ -16108,6 +16147,11 @@ buffer/index.js:
       function applyNfe(parsed) {
         draft.nfe = { chave: parsed.chave, numero: parsed.numero, serie: parsed.serie, cnpjFornecedor: parsed.cnpjFornecedor, razaoSocial: parsed.razaoSocial, valorNfe: parsed.valorNfe, freteNfe: parsed.freteNfe, outrasDespesasNfe: parsed.outrasDespesasNfe, descontosNfe: parsed.descontosNfe, dataEmissao: parsed.dataEmissao };
         draft.origin = 'XML_NFE'; draft.documentNumber = parsed.numero || draft.documentNumber; draft.emissao = parsed.dataEmissao || draft.emissao;
+        // Fase 10 Item 3: competência só copia a emissão da NF-e na CRIAÇÃO do título (existing==null,
+        // ou seja, esta importação está dando origem ao título pela primeira vez). Reabrir um título já
+        // salvo pra reimportar/corrigir o XML nunca mexe na competência — mesmo que o operador nunca a
+        // tenha alterado manualmente, ela já é um dado do título, não mais um default vazio.
+        if (!existing && parsed.dataEmissao) draft.competencia = parsed.dataEmissao;
         if (parsed.freteNfe) draft.freteValor = parsed.freteNfe; if (parsed.outrasDespesasNfe) draft.outrasDespesasValor = parsed.outrasDespesasNfe;
         // §43: fornecedor não cadastrado a partir do CNPJ da NF-e — pergunta antes de cadastrar.
         var supExisting = parsed.cnpjFornecedor ? cpSuppliers.find(function (s) { return s.cnpjCpf === parsed.cnpjFornecedor; }) : null;
@@ -17087,7 +17131,11 @@ buffer/index.js:
   function openCrEditor(id) {
     var h = id ? contasReceber.find(function (x) { return x.id === id; }) : null;
     var isNew = !h;
-    var draft = h ? Object.assign({}, h) : { descricao: '', pagador: '', categoryId: null, valor: 0, competencia: cpToday(), vencimento: cpToday(), financialAccountId: '', referencia: '', observacao: '' };
+    // Fase 10 Item 6: emissao é opcional e nunca ganha um default de "hoje" — ao contrário de
+    // competência/vencimento (que sempre precisam de algum valor pra baixa/status funcionar), emissão é
+    // só um dado de auditoria/rastreabilidade; título novo nasce sem ela até o operador preencher, e
+    // título legado sem emissao nunca ganha uma data inventada.
+    var draft = h ? Object.assign({}, h) : { descricao: '', pagador: '', categoryId: null, valor: 0, emissao: null, competencia: cpToday(), vencimento: cpToday(), financialAccountId: '', referencia: '', observacao: '' };
     var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '560px'; panel.style.maxWidth = '96vw';
     d.appendChild(panel); d.onclick = function (e) { if (e.target === d) d.remove(); }; document.body.appendChild(d);
     function draw() {
@@ -17105,7 +17153,8 @@ buffer/index.js:
         '<label class="fld">Categoria financeira *</label><select class="select" id="cr-categoria" style="width:100%"' + (readOnlyOrigin ? ' disabled' : '') + '>' + crCategoryOptions(draft.categoryId, !readOnlyOrigin).replace('<option value="">Todas as categorias</option>', '<option value="">— selecionar —</option>') + '</select>' +
         (draft.categoryId ? '<div class="cx-kv" style="margin-top:6px"><span class="cxl">Centro de Recebimentos</span><span class="cxv">' + esc(crCentroFromCategoria(draft.categoryId)) + '</span></div>' : '') +
         '<div style="display:flex;gap:8px"><div style="flex:1"><label class="fld">Valor *</label><input class="input" id="cr-valor" style="width:100%" value="' + (draft.valor || 0) + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div>' +
-        '<div style="flex:1"><label class="fld">Competência</label><input type="date" class="input" id="cr-competencia" style="width:100%" value="' + (draft.competencia || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div>' +
+        '<div style="flex:1"><label class="fld">Emissão <span class="footnote" style="margin:0">(opcional)</span></label><input type="date" class="input" id="cr-emissao" style="width:100%" value="' + (draft.emissao || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div></div>' +
+        '<div style="display:flex;gap:8px"><div style="flex:1"><label class="fld">Competência</label><input type="date" class="input" id="cr-competencia" style="width:100%" value="' + (draft.competencia || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div>' +
         '<div style="flex:1"><label class="fld">Vencimento</label><input type="date" class="input" id="cr-vencimento" style="width:100%" value="' + (draft.vencimento || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div></div>' +
         '<label class="fld">Conta prevista *</label><select class="select" id="cr-conta-fin" style="width:100%">' + crFinAccountOptions(draft.financialAccountId).replace('Todas as contas financeiras', '— escolher —') + '</select>' +
         '<label class="fld">Referência</label><input class="input" id="cr-referencia" style="width:100%" value="' + esc(draft.referencia || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '>' +
@@ -17126,6 +17175,7 @@ buffer/index.js:
         if (f('cr-descricao') != null) draft.descricao = f('cr-descricao');
         if (f('cr-pagador') != null) draft.pagador = f('cr-pagador');
         if (f('cr-valor') != null) draft.valor = cpParseNum(f('cr-valor'));
+        if (f('cr-emissao') != null) draft.emissao = f('cr-emissao') || null;
         if (f('cr-competencia') != null) draft.competencia = f('cr-competencia');
         if (f('cr-vencimento') != null) draft.vencimento = f('cr-vencimento');
         if (f('cr-conta-fin') != null) draft.financialAccountId = f('cr-conta-fin');
@@ -17158,7 +17208,7 @@ buffer/index.js:
         // cpAplicarUpsertProtegido em crUpsertBySourceKey).
         var toSave = Object.assign({}, draft, {
           id: h ? h.id : null, descricao: desc, pagador: panel.querySelector('#cr-pagador').value.trim(), categoryId: categoryId,
-          valor: valor, competencia: panel.querySelector('#cr-competencia').value || null, vencimento: panel.querySelector('#cr-vencimento').value || null,
+          valor: valor, emissao: panel.querySelector('#cr-emissao').value || null, competencia: panel.querySelector('#cr-competencia').value || null, vencimento: panel.querySelector('#cr-vencimento').value || null,
           financialAccountId: financialAccountId, referencia: panel.querySelector('#cr-referencia').value.trim(), observacao: panel.querySelector('#cr-obs').value.trim(),
           manualFields: CP_CAMPOS_PROTEGIVEIS_MANUAL.slice(),
         });
