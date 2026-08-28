@@ -837,7 +837,7 @@
   function fileInput(cb) { var inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.xlsx,.xls,.csv'; inp.onchange = function () { if (inp.files[0]) cb(inp.files[0]); }; inp.click(); }
 
   // ============================================================ RENDER (roteamento)
-  function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', minharenda: 'Minha Renda', caixa: 'Caixa', contaspagar: 'Contas a Pagar', contasreceber: 'Contas a Receber', precificacao: 'Precificação', ia: 'Inteligência', fator: 'Fator de Custo' }[route] || ''; }
+  function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', minharenda: 'Minha Renda', caixa: 'Caixa', contaspagar: 'Contas a Pagar', contasreceber: 'Contas a Receber', precificacao: 'Precificação', ia: 'Inteligência', fator: 'Fator de Custo', 'admin-usuarios': 'Usuários e Acessos' }[route] || ''; }
   function render() {
     // item 14 — bloqueio de rota direta: mesmo se alguém forçar `route` (console, item de menu que
     // ficou "solto"), a tela do módulo nunca chega a montar sem a permissão de ver aquele módulo.
@@ -866,6 +866,7 @@
       if (route === 'precificacao') return renderPrecificacao();
       if (route === 'fator') return renderFatorCusto();
       if (route === 'ia') return renderIA();
+      if (route === 'admin-usuarios') return renderAdminUsuarios();
     } catch (e) { app.innerHTML = renderErrBox('Erro ao abrir esta tela: ' + esc(e && (e.message || e)) + '. Os dados estão salvos — recarregue a página.'); }
   }
   function renderErrBox(msg) { return '<div class="form-err" style="max-width:640px;margin:24px auto"><b>Ops.</b><br>' + msg + '<div style="margin-top:12px"><button class="btn-sm primary" onclick="location.reload()">Recarregar</button></div></div>'; }
@@ -14362,6 +14363,7 @@
     carteira: 'wallet.view', acelera: 'income.view', afiliados: 'affiliates.view',
     minharenda: 'income.view', caixa: 'cash.view', contaspagar: 'ap.view',
     contasreceber: 'ar.view', precificacao: 'pricing.view', fator: 'industrial_cost.view',
+    'admin-usuarios': 'users.view',
   };
   function canAccessRoute(r) { var perm = ROUTE_PERMISSION[r]; return !perm || hasPermission(perm); }
   function firstAccessibleRoute() {
@@ -14538,6 +14540,195 @@
       authSession = { accessToken: null, user: null, permissions: [] };
       location.reload(); // reboot limpo — evita qualquer estado de tela anterior vazar pro próximo login
     });
+  }
+
+  // ============================================================ Fase 10.2 Commit 6 — Configurações >
+  // Usuários e Acessos (itens 16-22). Única tela do sistema que fala com o backend pra dado de
+  // negócio (usuários/perfis/auditoria) — de propósito: é o próprio cadastro de acesso, não dado
+  // operacional da loja (que continua 100% IndexedDB). Mesma API real testada nos Commits 1/2, sem
+  // nenhuma simulação local — cada ação aqui é uma chamada HTTP de verdade contra o Postgres.
+  var adminS = { tab: 'usuarios', users: null, roles: null, catalog: null, audit: null, loadingTab: null };
+  var ROLE_LABEL_LEGACY = { OWNER: 'Proprietário (legado)', ADMIN: 'Administrador (legado)', FINANCIAL: 'Financeiro (legado)', VIEWER: 'Consulta (legado)' };
+  var MODULE_LABEL_PT = { orders: 'Pedidos', expedition: 'Expedição', products: 'Produtos', returns: 'Devoluções', affiliates: 'Afiliados', income: 'Minha Renda', wallet: 'Carteira', cash: 'Caixa', ap: 'Contas a Pagar', ar: 'Contas a Receber', dre: 'DRE', industrial_cost: 'Fator de Custo', admin: 'Administração', general: 'Geral', sensitive: 'Dados sensíveis (item 11)' };
+  function adminUsersById() { var m = {}; (adminS.users || []).forEach(function (u) { m[u.id] = u; }); return m; }
+
+  function renderAdminUsuarios() {
+    var tabsDef = [{ k: 'usuarios', label: 'Usuários' }, { k: 'perfis', label: 'Perfis' }];
+    if (hasPermission('audit.view')) tabsDef.push({ k: 'auditoria', label: 'Auditoria' });
+    var tabsHtml = '<div class="tabs">' + tabsDef.map(function (t) { return '<div class="tab ' + (adminS.tab === t.k ? 'active' : '') + '" data-admintab="' + t.k + '">' + t.label + '</div>'; }).join('') + '</div>';
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'Configurações', title: 'Usuários e Acessos', description: 'Login, perfis de acesso e trilha de auditoria — dados reais do servidor (Postgres), não do IndexedDB local desta loja.' });
+    var tab = adminS.tab;
+    var needData = (tab === 'usuarios' && !adminS.users) || (tab === 'perfis' && !adminS.roles) || (tab === 'auditoria' && !adminS.audit);
+    if (needData) {
+      app.innerHTML = head + tabsHtml + '<div class="panel"><div class="pb"><span class="footnote">Carregando…</span></div></div>';
+      bindAdminTabs();
+      adminLoadTab(tab);
+      return;
+    }
+    var body = tab === 'usuarios' ? adminUsuariosTabHtml() : tab === 'perfis' ? adminPerfisTabHtml() : adminAuditoriaTabHtml();
+    app.innerHTML = head + tabsHtml + body;
+    bindAdminTabs();
+    if (tab === 'usuarios') bindAdminUsuariosTab();
+    else if (tab === 'perfis') bindAdminPerfisTab();
+  }
+  function bindAdminTabs() {
+    app.querySelectorAll('[data-admintab]').forEach(function (b) { b.onclick = function () { adminS.tab = b.dataset.admintab; render(); }; });
+  }
+  function adminLoadTab(tab) {
+    if (adminS.loadingTab === tab) return;
+    adminS.loadingTab = tab;
+    var req;
+    if (tab === 'usuarios') req = authFetchJson('/users').then(function (list) { adminS.users = list; });
+    else if (tab === 'perfis') req = Promise.all([authFetchJson('/roles'), authFetchJson('/roles/permissions-catalog')]).then(function (r) { adminS.roles = r[0]; adminS.catalog = r[1]; });
+    else req = authFetchJson('/audit-logs?take=200').then(function (list) { adminS.audit = list; });
+    req.then(function () { adminS.loadingTab = null; render(); })
+      .catch(function (e) {
+        adminS.loadingTab = null;
+        if (tab === 'usuarios') adminS.users = [];
+        else if (tab === 'perfis') { adminS.roles = adminS.roles || []; adminS.catalog = adminS.catalog || []; }
+        else adminS.audit = [];
+        toast('Erro ao carregar', e.message || 'Falha de rede com o servidor.', true);
+        render();
+      });
+  }
+
+  // ---- Usuários ----
+  function adminUsuariosTabHtml() {
+    var canCreate = hasPermission('users.create');
+    var rows = (adminS.users || []).map(function (u) {
+      var roleLbl = (u.appRole && u.appRole.name) || ROLE_LABEL_LEGACY[u.role] || u.role;
+      var statusTag = u.status === 'ACTIVE' ? '<span class="tag ok">Ativo</span>' : '<span class="tag warn">Inativo</span>';
+      var isOwner = u.role === 'OWNER';
+      return '<tr><td>' + esc(u.name) + (isOwner ? ' <span class="tag info">Proprietário</span>' : '') + '</td><td class="mono">' + esc(u.email) + '</td><td>' + esc(roleLbl) + '</td><td>' + statusTag + (u.mustChangePassword ? ' <span class="tag warn">troca pendente</span>' : '') + '</td><td>' + (u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString('pt-BR') : '— nunca entrou —') + '</td>' +
+        '<td style="white-space:nowrap">' +
+        (hasPermission('users.edit') ? '<button class="btn-sm" data-admedit="' + esc(u.id) + '">Editar</button> ' : '') +
+        (hasPermission('users.edit') && !isOwner ? '<button class="btn-sm" data-admreset="' + esc(u.id) + '">Redefinir senha</button> ' : '') +
+        (hasPermission('users.disable') && !isOwner && u.status === 'ACTIVE' ? '<button class="btn-sm" data-admdeactivate="' + esc(u.id) + '" style="color:var(--err)">Desativar</button>' : '') +
+        '</td></tr>';
+    }).join('');
+    return '<div class="toolbar2">' + (canCreate ? '<button class="btn-sm primary" id="admin-new-user">+ Novo usuário</button>' : '') + '</div>' +
+      '<div class="panel"><div class="table-wrap"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Status</th><th>Último login</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="footnote">Nenhum usuário cadastrado ainda.</td></tr>') + '</tbody></table></div></div>';
+  }
+  function adminUserFormBody(u) {
+    var roleOpts = (adminS.roles || []).filter(function (r) { return r.status !== 'INACTIVE' || (u && u.appRoleId === r.id); }).map(function (r) { return '<option value="' + esc(r.id) + '"' + (u && u.appRoleId === r.id ? ' selected' : '') + '>' + esc(r.name) + '</option>'; }).join('');
+    var legacyOpts = ['ADMIN', 'FINANCIAL', 'VIEWER'].map(function (k) { return '<option value="' + k + '"' + (u ? (u.role === k ? ' selected' : '') : (k === 'VIEWER' ? ' selected' : '')) + '>' + esc(ROLE_LABEL_LEGACY[k]) + '</option>'; }).join('');
+    return '<label class="fld">Nome</label><input class="input" id="af-name" style="width:100%;margin-bottom:10px" value="' + (u ? esc(u.name) : '') + '">' +
+      '<label class="fld">E-mail</label><input class="input" id="af-email" type="email" style="width:100%;margin-bottom:10px" value="' + (u ? esc(u.email) : '') + '"' + (u ? ' disabled' : '') + '>' +
+      (u ? '' : '<label class="fld">Senha inicial (mínimo 8 caracteres)</label><input class="input" id="af-password" type="password" style="width:100%;margin-bottom:10px">') +
+      '<label class="fld">Perfil de acesso (granular — item 8)</label><select class="select" id="af-approle" style="width:100%;margin-bottom:10px"><option value="">— nenhum (usa só o perfil legado abaixo) —</option>' + roleOpts + '</select>' +
+      '<label class="fld">Perfil legado (compatibilidade com apps/web)</label><select class="select" id="af-role" style="width:100%;margin-bottom:10px">' + legacyOpts + '</select>' +
+      (u ? '' : '<label class="fld" style="display:flex;align-items:center;gap:6px;margin-top:2px"><input type="checkbox" id="af-mustchange" checked> Exigir troca de senha no primeiro acesso (item 18)</label>');
+  }
+  function openAdminUserModal(u) {
+    var proceed = function () {
+      openModal({
+        title: u ? 'Editar usuário — ' + u.name : 'Novo usuário',
+        width: 480,
+        bodyHtml: adminUserFormBody(u),
+        confirmLabel: u ? 'Salvar' : 'Criar usuário',
+        onConfirm: function (panel) {
+          var name = panel.querySelector('#af-name').value.trim();
+          var appRoleId = panel.querySelector('#af-approle').value || null;
+          var roleSel = panel.querySelector('#af-role').value;
+          if (!name) { toast('Preencha o nome', '', true); return false; }
+          if (u) {
+            return authFetchJson('/users/' + u.id, { method: 'PATCH', body: JSON.stringify({ name: name, role: roleSel, appRoleId: appRoleId }) })
+              .then(function () { adminS.users = null; toast('Usuário atualizado', name); render(); });
+          }
+          var email = panel.querySelector('#af-email').value.trim();
+          var password = panel.querySelector('#af-password').value;
+          var mustChange = panel.querySelector('#af-mustchange').checked;
+          if (!email || !password) { toast('Preencha e-mail e senha', '', true); return false; }
+          return authFetchJson('/users', { method: 'POST', body: JSON.stringify({ name: name, email: email, password: password, role: roleSel, appRoleId: appRoleId, mustChangePassword: mustChange }) })
+            .then(function () { adminS.users = null; toast('Usuário criado', email); render(); });
+        },
+      });
+    };
+    if (!adminS.roles) { authFetchJson('/roles').then(function (r) { adminS.roles = r; proceed(); }).catch(function () { adminS.roles = []; proceed(); }); }
+    else proceed();
+  }
+  function bindAdminUsuariosTab() {
+    var newBtn = document.getElementById('admin-new-user'); if (newBtn) newBtn.onclick = function () { openAdminUserModal(null); };
+    app.querySelectorAll('[data-admedit]').forEach(function (b) { b.onclick = function () { openAdminUserModal(adminUsersById()[b.dataset.admedit]); }; });
+    app.querySelectorAll('[data-admdeactivate]').forEach(function (b) {
+      b.onclick = function () {
+        if (!confirm('Desativar este usuário? Ele não vai conseguir mais entrar no sistema.')) return;
+        authFetchJson('/users/' + b.dataset.admdeactivate, { method: 'DELETE' }).then(function () { adminS.users = null; toast('Usuário desativado', ''); render(); }).catch(function (e) { toast('Erro', e.message, true); });
+      };
+    });
+    app.querySelectorAll('[data-admreset]').forEach(function (b) {
+      b.onclick = function () {
+        var id = b.dataset.admreset;
+        if (!confirm('Gerar uma nova senha temporária para este usuário? A senha antiga para de funcionar imediatamente (item 26).')) return;
+        authFetchJson('/auth/users/' + id + '/reset-password', { method: 'POST' }).then(function (res) {
+          openModal({
+            title: 'Senha redefinida', width: 440, confirmLabel: 'Entendido',
+            bodyHtml: '<p style="margin-top:0">Nova senha temporária — mostre para o colaborador agora, ela não aparece de novo nesta tela:</p>' +
+              '<div class="mono" style="font-size:19px;font-weight:700;background:var(--bg2,#f2f4f8);padding:12px;border-radius:8px;text-align:center;margin:12px 0;letter-spacing:.03em">' + esc(res.tempPassword) + '</div>' +
+              '<p class="footnote">O colaborador vai precisar trocar essa senha no próximo login (item 18).</p>',
+            onConfirm: function () { return Promise.resolve(); },
+          });
+        }).catch(function (e) { toast('Erro', e.message, true); });
+      };
+    });
+  }
+
+  // ---- Perfis ----
+  function adminPerfisTabHtml() {
+    var canEdit = hasPermission('roles.edit');
+    var rows = (adminS.roles || []).map(function (r) {
+      return '<tr><td>' + esc(r.name) + (r.isSystem ? ' <span class="tag info">padrão</span>' : '') + '</td><td>' + nn(r.permissionKeys.length) + ' permissões</td><td>' + nn(r.userCount) + ' usuário(s)</td><td>' + (r.status === 'ACTIVE' ? '<span class="tag ok">Ativo</span>' : '<span class="tag warn">Inativo</span>') + '</td>' +
+        '<td>' + (canEdit ? '<button class="btn-sm" data-admroleedit="' + esc(r.id) + '">Editar permissões</button>' : '') + '</td></tr>';
+    }).join('');
+    return '<div class="toolbar2">' + (canEdit ? '<button class="btn-sm primary" id="admin-new-role">+ Novo perfil</button>' : '') + '</div>' +
+      '<div class="panel"><div class="table-wrap"><table><thead><tr><th>Perfil</th><th>Permissões</th><th>Usuários</th><th>Status</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="5" class="footnote">Nenhum perfil cadastrado.</td></tr>') + '</tbody></table></div></div>';
+  }
+  function adminRoleFormBody(r) {
+    var current = r ? r.permissionKeys : [];
+    var groups = (adminS.catalog || []).map(function (g) {
+      var items = g.permissions.map(function (p) { return '<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:13px"><input type="checkbox" class="af-perm" value="' + esc(p.key) + '"' + (current.indexOf(p.key) >= 0 ? ' checked' : '') + '> ' + esc(p.label) + '</label>'; }).join('');
+      return '<div style="margin-bottom:12px"><b style="font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted)">' + esc(MODULE_LABEL_PT[g.module] || g.module) + '</b>' + items + '</div>';
+    }).join('');
+    return '<label class="fld">Nome do perfil</label><input class="input" id="rf-name" style="width:100%;margin-bottom:10px" value="' + (r ? esc(r.name) : '') + '"' + (r && r.isSystem ? ' disabled title="Perfis padrão (item 8) não podem ser renomeados"' : '') + '>' +
+      (r ? '<label class="fld" style="display:flex;align-items:center;gap:6px;margin-bottom:10px"><input type="checkbox" id="rf-active"' + (r.status === 'ACTIVE' ? ' checked' : '') + '> Perfil ativo</label>' : '') +
+      '<label class="fld">Permissões (item 10)</label>' +
+      '<div style="max-height:340px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:10px">' + groups + '</div>';
+  }
+  function openAdminRoleModal(r) {
+    var proceed = function () {
+      openModal({
+        title: r ? 'Editar perfil — ' + r.name : 'Novo perfil', width: 520,
+        bodyHtml: adminRoleFormBody(r), confirmLabel: 'Salvar',
+        onConfirm: function (panel) {
+          var name = panel.querySelector('#rf-name').value.trim();
+          var keys = Array.prototype.slice.call(panel.querySelectorAll('.af-perm:checked')).map(function (c) { return c.value; });
+          if (!name) { toast('Dê um nome ao perfil', '', true); return false; }
+          if (!keys.length) { toast('Selecione ao menos uma permissão', '', true); return false; }
+          var body = { name: name, permissionKeys: keys };
+          if (r) {
+            var activeEl = panel.querySelector('#rf-active'); if (activeEl) body.active = activeEl.checked;
+            return authFetchJson('/roles/' + r.id, { method: 'PATCH', body: JSON.stringify(body) }).then(function () { adminS.roles = null; toast('Perfil atualizado', name); render(); });
+          }
+          return authFetchJson('/roles', { method: 'POST', body: JSON.stringify(body) }).then(function () { adminS.roles = null; toast('Perfil criado', name); render(); });
+        },
+      });
+    };
+    if (!adminS.catalog) { authFetchJson('/roles/permissions-catalog').then(function (c) { adminS.catalog = c; proceed(); }).catch(function () { adminS.catalog = []; proceed(); }); }
+    else proceed();
+  }
+  function bindAdminPerfisTab() {
+    var newBtn = document.getElementById('admin-new-role'); if (newBtn) newBtn.onclick = function () { openAdminRoleModal(null); };
+    app.querySelectorAll('[data-admroleedit]').forEach(function (b) { b.onclick = function () { var r = (adminS.roles || []).filter(function (x) { return x.id === b.dataset.admroleedit; })[0]; openAdminRoleModal(r); }; });
+  }
+
+  // ---- Auditoria (item 21/22, só leitura — nunca altera dado financeiro, item 23) ----
+  function adminAuditoriaTabHtml() {
+    var rows = (adminS.audit || []).map(function (a) {
+      var who = a.userNameSnapshot || (a.user && a.user.name) || '—';
+      return '<tr><td style="white-space:nowrap">' + new Date(a.createdAt).toLocaleString('pt-BR') + '</td><td>' + esc(who) + '</td><td class="mono" style="font-size:12px">' + esc(a.action) + '</td><td>' + esc(a.module || '—') + '</td><td class="mono" style="font-size:12px">' + esc(a.entityType) + (a.entityId ? ' · ' + esc(a.entityId) : '') + '</td></tr>';
+    }).join('');
+    return '<div class="panel"><div class="table-wrap"><table><thead><tr><th>Quando</th><th>Quem</th><th>Ação</th><th>Módulo</th><th>Entidade</th></tr></thead><tbody>' + (rows || '<tr><td colspan="5" class="footnote">Nenhum evento de auditoria ainda.</td></tr>') + '</tbody></table></div></div>' +
+      '<div class="footnote" style="margin-top:8px">Mostrando os ' + nn((adminS.audit || []).length) + ' eventos mais recentes — trilha paralela e imutável (item 23): nunca altera nenhum cálculo financeiro, só registra quem fez o quê.</div>';
   }
 
   var bootedOnce = false;
