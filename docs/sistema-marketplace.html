@@ -337,7 +337,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 5f8cb97 · 2026-08-28 03:15 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build c5996fc · 2026-08-28 03:22 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -421,9 +421,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     mod
   ));
 
-  // ../../node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js
+  // node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js
   var require_base64_js = __commonJS({
-    "../../node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js"(exports) {
+    "node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js"(exports) {
       "use strict";
       exports.byteLength = byteLength;
       exports.toByteArray = toByteArray;
@@ -522,9 +522,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // ../../node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js
+  // node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js
   var require_ieee754 = __commonJS({
-    "../../node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js"(exports) {
+    "node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js"(exports) {
       exports.read = function(buffer, offset, isLE, mLen, nBytes) {
         var e, m;
         var eLen = nBytes * 8 - mLen - 1;
@@ -605,9 +605,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // ../../node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js
+  // node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js
   var require_buffer = __commonJS({
-    "../../node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js"(exports) {
+    "node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js"(exports) {
       "use strict";
       var base64 = require_base64_js();
       var ieee754 = require_ieee754();
@@ -1976,9 +1976,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // ../../packages/shared/dist/index.js
+  // packages/shared/dist/index.js
   var require_dist = __commonJS({
-    "../../packages/shared/dist/index.js"(exports) {
+    "packages/shared/dist/index.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.ImportIssueSeverity = exports.IMPORT_ROW_STATUS_LABELS = exports.ImportRowStatus = exports.IMPORT_BATCH_STATUS_LABELS = exports.ImportBatchStatus = exports.FileFormat = exports.REPORT_TYPE_LABELS = exports.ReportType = exports.AuditAction = exports.TemporalStatus = exports.ReconciliationState = exports.IngestionSource = exports.EntityStatus = exports.ROLE_LABELS = exports.Role = void 0;
@@ -2154,19 +2154,19 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // src/imports/parsing/browser/shim-xlsx.js
+  // apps/api/src/imports/parsing/browser/shim-xlsx.js
   var require_shim_xlsx = __commonJS({
-    "src/imports/parsing/browser/shim-xlsx.js"(exports, module) {
+    "apps/api/src/imports/parsing/browser/shim-xlsx.js"(exports, module) {
       "use strict";
       var XLSX2 = typeof globalThis !== "undefined" && globalThis.XLSX || {};
       module.exports = XLSX2;
     }
   });
 
-  // src/all/entry.ts
+  // apps/api/src/all/entry.ts
   var import_buffer = __toESM(require_buffer());
 
-  // src/imports/parsing/format.ts
+  // apps/api/src/imports/parsing/format.ts
   var import_shared = __toESM(require_dist());
   function detectFileFormat(buffer) {
     if (buffer.length >= 4) {
@@ -2189,7 +2189,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return !(ext === "csv" || ext === "txt" || ext === "tsv" || ext === "");
   }
 
-  // src/imports/parsing/workbook.ts
+  // apps/api/src/imports/parsing/workbook.ts
   var XLSX = __toESM(require_shim_xlsx());
   var import_shared2 = __toESM(require_dist());
   function sniffDelimiter(sample) {
@@ -2330,7 +2330,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { sheets };
   }
 
-  // src/imports/parsing/value-parsers.ts
+  // apps/api/src/imports/parsing/value-parsers.ts
   var NULLISH = /* @__PURE__ */ new Set(["", "-", "--", "\u2014", "n/a", "na", "null"]);
   function stripCurrency(input) {
     let s = input.trim().replace(/\u00a0/g, " ").trim();
@@ -2449,7 +2449,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return label.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
   }
 
-  // src/imports/parsing/row-accessor.ts
+  // apps/api/src/imports/parsing/row-accessor.ts
   var RowAccessor = class {
     constructor(headers, cells) {
       this.headers = headers;
@@ -2498,7 +2498,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   };
 
-  // src/imports/parsing/browser/shim-crypto.js
+  // apps/api/src/imports/parsing/browser/shim-crypto.js
   function sha256(bytes) {
     const K = [
       1116352408,
@@ -2650,7 +2650,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // src/imports/parsing/hashing.ts
+  // apps/api/src/imports/parsing/hashing.ts
   function sha2562(value) {
     return createHash("sha256").update(value).digest("hex");
   }
@@ -2658,7 +2658,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return sha2562(buffer);
   }
 
-  // src/products/parsing/product-sheet.ts
+  // apps/api/src/products/parsing/product-sheet.ts
   var SCAN_LIMIT = 40;
   var REQUIRED_LABELS = ["ID do Produto", "Nome do Produto"].map(normalizeLabel);
   var STRONG_LABELS = ["SKU", "Variante Identificador", "Pre\xE7o", "Estoque do Vendedor"].map(normalizeLabel);
@@ -2832,10 +2832,10 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // src/orders/parsing/orders-rows.ts
+  // apps/api/src/orders/parsing/orders-rows.ts
   var import_shared6 = __toESM(require_dist());
 
-  // src/imports/parsing/report-specs.ts
+  // apps/api/src/imports/parsing/report-specs.ts
   var import_shared3 = __toESM(require_dist());
   function canonicalDecimal(s) {
     if (s == null) return "";
@@ -3303,7 +3303,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return REPORT_SPECS.find((s) => s.type === type);
   }
 
-  // src/imports/parsing/detect.ts
+  // apps/api/src/imports/parsing/detect.ts
   var import_shared4 = __toESM(require_dist());
   var SCAN_LIMIT2 = 40;
   var ORDER_FAMILY = [
@@ -3453,7 +3453,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { columns, headerNames, dataStartRow: headerRow + 1 };
   }
 
-  // src/imports/parsing/analyze.ts
+  // apps/api/src/imports/parsing/analyze.ts
   var import_shared5 = __toESM(require_dist());
   var PERSONAL_DATA_LABELS = [
     "Telefone",
@@ -3533,7 +3533,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // src/orders/parsing/orders-rows.ts
+  // apps/api/src/orders/parsing/orders-rows.ts
   function first(acc, labels) {
     for (const l of labels) {
       const v = acc.get(l);
@@ -3692,7 +3692,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return null;
   }
 
-  // src/orders/status.ts
+  // apps/api/src/orders/status.ts
   var NORMALIZED_LABELS = {
     NAO_PAGO: "N\xE3o pago",
     A_ENVIAR: "A enviar",
@@ -3723,7 +3723,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return "OUTRO";
   }
 
-  // src/orders/finance.ts
+  // apps/api/src/orders/finance.ts
   var round2 = (n) => Math.round(n * 100) / 100;
   function computeOrderFinance(input) {
     const fees = round2(
@@ -3756,7 +3756,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // src/postsale/parsing/postsale-rows.ts
+  // apps/api/src/postsale/parsing/postsale-rows.ts
   var import_shared7 = __toESM(require_dist());
   var REPORT_OF = {
     RETURN_REFUND: import_shared7.ReportType.RETURN_REFUND,
@@ -3886,7 +3886,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { ...base, rows, periodStart, periodEnd };
   }
 
-  // src/postsale/exposure.ts
+  // apps/api/src/postsale/exposure.ts
   var norm2 = (s) => (s != null ? s : "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   function classifyExposureNumbers(status, requested, compensation) {
     const s = norm2(status);
@@ -3908,7 +3908,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
   var EXPOSURE_METHODOLOGY = "Classifica\xE7\xE3o por status Shopee: CANCELADA/RECUSADA/DESIST\xCANCIA = sem perda; COMPENSA\xC7\xC3O ao vendedor = recuperado; CONCLU\xCDDA/APROVADA/REEMBOLSADA = preju\xEDzo confirmado (solicitado \u2212 compensa\xE7\xE3o); EM AN\xC1LISE/PENDENTE/DISPUTA = em risco. Valor solicitado nunca \xE9 tratado automaticamente como preju\xEDzo.";
 
-  // src/all/entry.ts
+  // apps/api/src/all/entry.ts
   globalThis.Buffer = import_buffer.Buffer;
   var toBuf = (ab) => import_buffer.Buffer.from(new Uint8Array(ab));
   globalThis.SISTEMA = {
@@ -4942,9 +4942,9 @@ buffer/index.js:
         MetricCard({ label: 'Venda válida', value: brl(aVenda.revenue), status: 'info', sub: nn(aVenda.orders) + ' pedidos (exclui cancelados)' }),
         MetricCard({ label: 'Unidades', value: nn(aVenda.units) }),
         MetricCard({ label: 'Taxas marketplace', value: brl(aVenda.fees), status: 'negative' }),
-        MetricCard({ label: 'Custo produtos', value: brl(aVenda.cost), status: 'warn' }),
-        MetricCard({ label: 'Resultado estimado', value: resTxt.resultado, cls: resTxt.cls, sub: resTxt.sub + (resTxt.selo ? ' · ' + resTxt.selo : ''), tooltip: 'Selo 🟢/🟡 indica se o valor já foi confirmado pela Shopee (Income) ou ainda é estimado a partir do Order.all' }),
-        MetricCard({ label: 'Margem estimada', value: resTxt.margem, cls: resTxt.cls === 'amber' ? 'amber' : '' }),
+        MetricCard({ label: 'Custo produtos', value: maskSensitive(brl(aVenda.cost), 'product_cost.view'), status: 'warn' }),
+        MetricCard({ label: 'Resultado estimado', value: maskSensitive(resTxt.resultado, 'profit.view'), cls: resTxt.cls, sub: resTxt.sub + (resTxt.selo ? ' · ' + resTxt.selo : ''), tooltip: 'Selo 🟢/🟡 indica se o valor já foi confirmado pela Shopee (Income) ou ainda é estimado a partir do Order.all' }),
+        MetricCard({ label: 'Margem estimada', value: maskSensitive(resTxt.margem, 'profit.view'), cls: resTxt.cls === 'amber' ? 'amber' : '' }),
       ]) +
       MetricGrid([
         MetricCard({ label: 'A enviar', value: nn(a.byStatus.A_ENVIAR || 0), status: 'warn' }),
@@ -5389,8 +5389,8 @@ buffer/index.js:
     var rows = list.slice(0, 300).map(function (o) {
       var f = orderFinance(o); var prod = o.items.length > 1 ? o.items.length + ' produtos' : (o.items[0] ? esc((o.items[0].productName || '').slice(0, 40)) : '—');
       return '<tr><td class="mono">' + esc(o.id) + '</td><td class="mono">' + esc(o.tracking || '—') + '</td><td>' + dbr(o.createdAt) + '</td><td><span class="pill ' + o.normalizedStatus + '">' + esc(S.pedidos.labels[o.normalizedStatus] || o.normalizedStatus) + '</span></td>' +
-        '<td>' + prod + (o.items.length > 1 ? ' <span class="tag">multi</span>' : '') + '</td><td>' + (o.isFbs ? '<span class="tag info">Full</span>' : esc(o.shippingOption || '—')) + '</td><td>' + brl(f.revenue) + '</td><td style="color:var(--err)">' + brl(f.marketplaceFeesTotal) + '</td>' +
-        '<td>' + (f.estimatedResult == null ? '<span class="tag warn">pendente</span>' : '<b style="color:var(--ok)">' + brl(f.estimatedResult) + '</b>') + '</td><td>' + (f.estimatedMarginPct == null ? '—' : pct(f.estimatedMarginPct)) + '</td>' +
+        '<td>' + prod + (o.items.length > 1 ? ' <span class="tag">multi</span>' : '') + '</td><td>' + (o.isFbs ? '<span class="tag info">Full</span>' : esc(o.shippingOption || '—')) + '</td><td>' + brl(f.revenue) + '</td><td style="color:var(--err)">' + maskSensitive(brl(f.marketplaceFeesTotal), 'financial.view') + '</td>' +
+        '<td>' + maskSensitive(f.estimatedResult == null ? '<span class="tag warn">pendente</span>' : '<b style="color:var(--ok)">' + brl(f.estimatedResult) + '</b>', 'profit.view') + '</td><td>' + maskSensitive(f.estimatedMarginPct == null ? '—' : pct(f.estimatedMarginPct), 'profit.view') + '</td>' +
         '<td>' + (occByOrder[o.id] ? '<span class="tag warn">devolução</span>' : '') + '</td><td><button class="btn-sm" data-open="' + esc(o.id) + '">Abrir</button></td></tr>';
     }).join('');
     var temFiltro = !!(q || pedTab !== 'ALL');
@@ -5434,9 +5434,9 @@ buffer/index.js:
         MetricCard({ label: 'Ticket médio', value: brl(ticket) }),
         MetricCard({ label: 'Unidades vendidas', value: nn(aBase.units) }),
         MetricCard({ label: 'Taxas marketplace', value: brl(aBase.fees), cls: 'red' }),
-        MetricCard({ label: 'Custo produtos', value: brl(aBase.cost), cls: 'amber' }),
-        MetricCard({ label: 'Resultado estimado', value: resTxt.resultado, cls: resTxt.cls, sub: resTxt.sub + (resTxt.selo ? ' · ' + resTxt.selo : '') }),
-        MetricCard({ label: 'Margem estimada', value: resTxt.margem, cls: resTxt.cls === 'amber' ? 'amber' : '' }),
+        MetricCard({ label: 'Custo produtos', value: maskSensitive(brl(aBase.cost), 'product_cost.view'), cls: 'amber' }),
+        MetricCard({ label: 'Resultado estimado', value: maskSensitive(resTxt.resultado, 'profit.view'), cls: resTxt.cls, sub: resTxt.sub + (resTxt.selo ? ' · ' + resTxt.selo : '') }),
+        MetricCard({ label: 'Margem estimada', value: maskSensitive(resTxt.margem, 'profit.view'), cls: resTxt.cls === 'amber' ? 'amber' : '' }),
       ]) +
       MetricGrid([
         MetricCard({ label: 'A enviar', value: nn(aFeitos.byStatus.A_ENVIAR || 0), cls: 'amber' }),
@@ -6055,6 +6055,22 @@ buffer/index.js:
     if (!bodyHtml) return '';
     return '<details class="ficha-group" open style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:700;font-size:13px;letter-spacing:.03em;text-transform:uppercase;color:var(--muted);padding:8px 2px;border-bottom:1px solid var(--line)">' + esc(title) + '</summary><div style="padding-top:10px">' + bodyHtml + '</div></details>';
   }
+  /**
+   * item 11/12 — mascara valor sensível da Ficha do Pedido por permissão (financial.view/
+   * profit.view/product_cost.view/payroll.view). NÃO é "esconder por CSS" (item 12): o valor real
+   * nunca chega a entrar na string HTML quando falta a permissão — vira um placeholder fixo desde
+   * a montagem do card. MESMA ressalva do bloco de auth: como o dado já está inteiro no IndexedDB
+   * do navegador, isto impede a EXIBIÇÃO na tela — não é um cofre; DevTools ainda enxerga tudo.
+   */
+  function maskSensitive(html, permKey) {
+    if (hasPermission(permKey)) return html;
+    return '<span class="tag" title="Requer permissão: ' + esc(permKey) + '">🔒 Restrito</span>';
+  }
+  function fichaGroupGuarded(title, bodyHtml, permKey) {
+    if (!bodyHtml) return '';
+    if (hasPermission(permKey)) return fichaGroup(title, bodyHtml);
+    return fichaGroup(title, '<div class="footnote">🔒 Você não tem permissão para ver os dados deste bloco (requer ' + esc(permKey) + ').</div>');
+  }
   // Ficha do Pedido consolidada (Fase 2 da arquitetura) — jornada única, sem "Ficha 360" separada
   // e sem esconder taxas atrás de cliques extras: Venda → Custos → Taxas detalhadas → Margem →
   // Expedição → Acelera → Carteira → Devolução → Resultado final, tudo na mesma tela/scroll.
@@ -6509,10 +6525,10 @@ buffer/index.js:
         MetricCard({ label: 'Valor da venda', value: '<span style="font-size:18px">' + vendaHtmlCancelavel + '</span>' }),
         MetricCard({ label: 'Ajustes do pedido', value: '<span style="font-size:18px">' + (ajustesC != null ? brlC(ajustesC) : '—') + '</span>' }),
         MetricCard({ label: 'Receita ajustada', value: '<span style="font-size:18px">' + (receitaAjustadaC != null ? brlC(receitaAjustadaC) : '—') + '</span>' }),
-        MetricCard({ label: 'Taxas', value: '<span style="font-size:18px">' + (taxasShopeeC != null ? brlC(taxasShopeeC) : '—') + '</span>' }),
-        MetricCard({ label: 'Renda Final Shopee', value: '<span style="font-size:18px">' + (pagamentoPrevistoC != null ? brlC(pagamentoPrevistoC) : '—') + '</span>' }),
-        MetricCard({ label: 'Custo do produto', value: '<span style="font-size:18px">' + (custoProdC != null ? brlC(-custoProdC) : (custoPendente ? '<span class="tag warn">pendente</span>' : '—')) + '</span>' }),
-        MetricCard({ label: 'Lucro atual', value: '<span style="font-size:18px;color:' + (lucroAtualSimplesC != null && lucroAtualSimplesC < 0 && !cancelado ? 'var(--err)' : 'var(--ok)') + '">' + lucroHtmlCancelavel + '</span>' }),
+        MetricCard({ label: 'Taxas', value: maskSensitive('<span style="font-size:18px">' + (taxasShopeeC != null ? brlC(taxasShopeeC) : '—') + '</span>', 'financial.view') }),
+        MetricCard({ label: 'Renda Final Shopee', value: maskSensitive('<span style="font-size:18px">' + (pagamentoPrevistoC != null ? brlC(pagamentoPrevistoC) : '—') + '</span>', 'financial.view') }),
+        MetricCard({ label: 'Custo do produto', value: maskSensitive('<span style="font-size:18px">' + (custoProdC != null ? brlC(-custoProdC) : (custoPendente ? '<span class="tag warn">pendente</span>' : '—')) + '</span>', 'product_cost.view') }),
+        MetricCard({ label: 'Lucro atual', value: maskSensitive('<span style="font-size:18px;color:' + (lucroAtualSimplesC != null && lucroAtualSimplesC < 0 && !cancelado ? 'var(--err)' : 'var(--ok)') + '">' + lucroHtmlCancelavel + '</span>', 'profit.view') }),
       ]) + '</div></div>';
 
     // Fase 7.2 (§4 do prompt): bloco Expedição usando SOMENTE dados já resolvidos no escopo desta
@@ -6529,11 +6545,11 @@ buffer/index.js:
 
     // Blocos recolhíveis padronizados (§4 do prompt Fase 7.2): reagrupa os painéis já prontos acima
     // — nenhum HTML interno de painel nem cálculo é alterado, só a moldura/rótulo em volta deles.
-    var financeiroGroup = fichaGroup('Financeiro', bloco3Taxas + bloco4Envio + bloco5Ajustes + bloco6Creditos + resultadoBlock + precificacaoBlock + devReaberturaBlock);
+    var financeiroGroup = fichaGroupGuarded('Financeiro', bloco3Taxas + bloco4Envio + bloco5Ajustes + bloco6Creditos + resultadoBlock + precificacaoBlock + devReaberturaBlock, 'financial.view');
     var operacaoGroup = fichaGroup('Operação', dadosVendaBlock);
     var expedicaoGroup = fichaGroup('Expedição', expedicaoBlock);
-    var conciliacaoGroup = fichaGroup('Conciliação', bloco7Conciliacao + auditoriaFinPedidoBlock);
-    var fatorCustoGroup = fichaGroup('Fator de Custo', fatorCustoBlock);
+    var conciliacaoGroup = fichaGroupGuarded('Conciliação', bloco7Conciliacao + auditoriaFinPedidoBlock, 'financial.view');
+    var fatorCustoGroup = fichaGroupGuarded('Fator de Custo', fatorCustoBlock, 'product_cost.view');
     var auditoriaGroup = fichaGroup('Auditoria', auditoriaBlock);
 
     var dw = openDrawer({

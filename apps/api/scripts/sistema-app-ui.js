@@ -997,9 +997,9 @@
         MetricCard({ label: 'Venda válida', value: brl(aVenda.revenue), status: 'info', sub: nn(aVenda.orders) + ' pedidos (exclui cancelados)' }),
         MetricCard({ label: 'Unidades', value: nn(aVenda.units) }),
         MetricCard({ label: 'Taxas marketplace', value: brl(aVenda.fees), status: 'negative' }),
-        MetricCard({ label: 'Custo produtos', value: brl(aVenda.cost), status: 'warn' }),
-        MetricCard({ label: 'Resultado estimado', value: resTxt.resultado, cls: resTxt.cls, sub: resTxt.sub + (resTxt.selo ? ' · ' + resTxt.selo : ''), tooltip: 'Selo 🟢/🟡 indica se o valor já foi confirmado pela Shopee (Income) ou ainda é estimado a partir do Order.all' }),
-        MetricCard({ label: 'Margem estimada', value: resTxt.margem, cls: resTxt.cls === 'amber' ? 'amber' : '' }),
+        MetricCard({ label: 'Custo produtos', value: maskSensitive(brl(aVenda.cost), 'product_cost.view'), status: 'warn' }),
+        MetricCard({ label: 'Resultado estimado', value: maskSensitive(resTxt.resultado, 'profit.view'), cls: resTxt.cls, sub: resTxt.sub + (resTxt.selo ? ' · ' + resTxt.selo : ''), tooltip: 'Selo 🟢/🟡 indica se o valor já foi confirmado pela Shopee (Income) ou ainda é estimado a partir do Order.all' }),
+        MetricCard({ label: 'Margem estimada', value: maskSensitive(resTxt.margem, 'profit.view'), cls: resTxt.cls === 'amber' ? 'amber' : '' }),
       ]) +
       MetricGrid([
         MetricCard({ label: 'A enviar', value: nn(a.byStatus.A_ENVIAR || 0), status: 'warn' }),
@@ -1444,8 +1444,8 @@
     var rows = list.slice(0, 300).map(function (o) {
       var f = orderFinance(o); var prod = o.items.length > 1 ? o.items.length + ' produtos' : (o.items[0] ? esc((o.items[0].productName || '').slice(0, 40)) : '—');
       return '<tr><td class="mono">' + esc(o.id) + '</td><td class="mono">' + esc(o.tracking || '—') + '</td><td>' + dbr(o.createdAt) + '</td><td><span class="pill ' + o.normalizedStatus + '">' + esc(S.pedidos.labels[o.normalizedStatus] || o.normalizedStatus) + '</span></td>' +
-        '<td>' + prod + (o.items.length > 1 ? ' <span class="tag">multi</span>' : '') + '</td><td>' + (o.isFbs ? '<span class="tag info">Full</span>' : esc(o.shippingOption || '—')) + '</td><td>' + brl(f.revenue) + '</td><td style="color:var(--err)">' + brl(f.marketplaceFeesTotal) + '</td>' +
-        '<td>' + (f.estimatedResult == null ? '<span class="tag warn">pendente</span>' : '<b style="color:var(--ok)">' + brl(f.estimatedResult) + '</b>') + '</td><td>' + (f.estimatedMarginPct == null ? '—' : pct(f.estimatedMarginPct)) + '</td>' +
+        '<td>' + prod + (o.items.length > 1 ? ' <span class="tag">multi</span>' : '') + '</td><td>' + (o.isFbs ? '<span class="tag info">Full</span>' : esc(o.shippingOption || '—')) + '</td><td>' + brl(f.revenue) + '</td><td style="color:var(--err)">' + maskSensitive(brl(f.marketplaceFeesTotal), 'financial.view') + '</td>' +
+        '<td>' + maskSensitive(f.estimatedResult == null ? '<span class="tag warn">pendente</span>' : '<b style="color:var(--ok)">' + brl(f.estimatedResult) + '</b>', 'profit.view') + '</td><td>' + maskSensitive(f.estimatedMarginPct == null ? '—' : pct(f.estimatedMarginPct), 'profit.view') + '</td>' +
         '<td>' + (occByOrder[o.id] ? '<span class="tag warn">devolução</span>' : '') + '</td><td><button class="btn-sm" data-open="' + esc(o.id) + '">Abrir</button></td></tr>';
     }).join('');
     var temFiltro = !!(q || pedTab !== 'ALL');
@@ -1489,9 +1489,9 @@
         MetricCard({ label: 'Ticket médio', value: brl(ticket) }),
         MetricCard({ label: 'Unidades vendidas', value: nn(aBase.units) }),
         MetricCard({ label: 'Taxas marketplace', value: brl(aBase.fees), cls: 'red' }),
-        MetricCard({ label: 'Custo produtos', value: brl(aBase.cost), cls: 'amber' }),
-        MetricCard({ label: 'Resultado estimado', value: resTxt.resultado, cls: resTxt.cls, sub: resTxt.sub + (resTxt.selo ? ' · ' + resTxt.selo : '') }),
-        MetricCard({ label: 'Margem estimada', value: resTxt.margem, cls: resTxt.cls === 'amber' ? 'amber' : '' }),
+        MetricCard({ label: 'Custo produtos', value: maskSensitive(brl(aBase.cost), 'product_cost.view'), cls: 'amber' }),
+        MetricCard({ label: 'Resultado estimado', value: maskSensitive(resTxt.resultado, 'profit.view'), cls: resTxt.cls, sub: resTxt.sub + (resTxt.selo ? ' · ' + resTxt.selo : '') }),
+        MetricCard({ label: 'Margem estimada', value: maskSensitive(resTxt.margem, 'profit.view'), cls: resTxt.cls === 'amber' ? 'amber' : '' }),
       ]) +
       MetricGrid([
         MetricCard({ label: 'A enviar', value: nn(aFeitos.byStatus.A_ENVIAR || 0), cls: 'amber' }),
@@ -2110,6 +2110,22 @@
     if (!bodyHtml) return '';
     return '<details class="ficha-group" open style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:700;font-size:13px;letter-spacing:.03em;text-transform:uppercase;color:var(--muted);padding:8px 2px;border-bottom:1px solid var(--line)">' + esc(title) + '</summary><div style="padding-top:10px">' + bodyHtml + '</div></details>';
   }
+  /**
+   * item 11/12 — mascara valor sensível da Ficha do Pedido por permissão (financial.view/
+   * profit.view/product_cost.view/payroll.view). NÃO é "esconder por CSS" (item 12): o valor real
+   * nunca chega a entrar na string HTML quando falta a permissão — vira um placeholder fixo desde
+   * a montagem do card. MESMA ressalva do bloco de auth: como o dado já está inteiro no IndexedDB
+   * do navegador, isto impede a EXIBIÇÃO na tela — não é um cofre; DevTools ainda enxerga tudo.
+   */
+  function maskSensitive(html, permKey) {
+    if (hasPermission(permKey)) return html;
+    return '<span class="tag" title="Requer permissão: ' + esc(permKey) + '">🔒 Restrito</span>';
+  }
+  function fichaGroupGuarded(title, bodyHtml, permKey) {
+    if (!bodyHtml) return '';
+    if (hasPermission(permKey)) return fichaGroup(title, bodyHtml);
+    return fichaGroup(title, '<div class="footnote">🔒 Você não tem permissão para ver os dados deste bloco (requer ' + esc(permKey) + ').</div>');
+  }
   // Ficha do Pedido consolidada (Fase 2 da arquitetura) — jornada única, sem "Ficha 360" separada
   // e sem esconder taxas atrás de cliques extras: Venda → Custos → Taxas detalhadas → Margem →
   // Expedição → Acelera → Carteira → Devolução → Resultado final, tudo na mesma tela/scroll.
@@ -2564,10 +2580,10 @@
         MetricCard({ label: 'Valor da venda', value: '<span style="font-size:18px">' + vendaHtmlCancelavel + '</span>' }),
         MetricCard({ label: 'Ajustes do pedido', value: '<span style="font-size:18px">' + (ajustesC != null ? brlC(ajustesC) : '—') + '</span>' }),
         MetricCard({ label: 'Receita ajustada', value: '<span style="font-size:18px">' + (receitaAjustadaC != null ? brlC(receitaAjustadaC) : '—') + '</span>' }),
-        MetricCard({ label: 'Taxas', value: '<span style="font-size:18px">' + (taxasShopeeC != null ? brlC(taxasShopeeC) : '—') + '</span>' }),
-        MetricCard({ label: 'Renda Final Shopee', value: '<span style="font-size:18px">' + (pagamentoPrevistoC != null ? brlC(pagamentoPrevistoC) : '—') + '</span>' }),
-        MetricCard({ label: 'Custo do produto', value: '<span style="font-size:18px">' + (custoProdC != null ? brlC(-custoProdC) : (custoPendente ? '<span class="tag warn">pendente</span>' : '—')) + '</span>' }),
-        MetricCard({ label: 'Lucro atual', value: '<span style="font-size:18px;color:' + (lucroAtualSimplesC != null && lucroAtualSimplesC < 0 && !cancelado ? 'var(--err)' : 'var(--ok)') + '">' + lucroHtmlCancelavel + '</span>' }),
+        MetricCard({ label: 'Taxas', value: maskSensitive('<span style="font-size:18px">' + (taxasShopeeC != null ? brlC(taxasShopeeC) : '—') + '</span>', 'financial.view') }),
+        MetricCard({ label: 'Renda Final Shopee', value: maskSensitive('<span style="font-size:18px">' + (pagamentoPrevistoC != null ? brlC(pagamentoPrevistoC) : '—') + '</span>', 'financial.view') }),
+        MetricCard({ label: 'Custo do produto', value: maskSensitive('<span style="font-size:18px">' + (custoProdC != null ? brlC(-custoProdC) : (custoPendente ? '<span class="tag warn">pendente</span>' : '—')) + '</span>', 'product_cost.view') }),
+        MetricCard({ label: 'Lucro atual', value: maskSensitive('<span style="font-size:18px;color:' + (lucroAtualSimplesC != null && lucroAtualSimplesC < 0 && !cancelado ? 'var(--err)' : 'var(--ok)') + '">' + lucroHtmlCancelavel + '</span>', 'profit.view') }),
       ]) + '</div></div>';
 
     // Fase 7.2 (§4 do prompt): bloco Expedição usando SOMENTE dados já resolvidos no escopo desta
@@ -2584,11 +2600,11 @@
 
     // Blocos recolhíveis padronizados (§4 do prompt Fase 7.2): reagrupa os painéis já prontos acima
     // — nenhum HTML interno de painel nem cálculo é alterado, só a moldura/rótulo em volta deles.
-    var financeiroGroup = fichaGroup('Financeiro', bloco3Taxas + bloco4Envio + bloco5Ajustes + bloco6Creditos + resultadoBlock + precificacaoBlock + devReaberturaBlock);
+    var financeiroGroup = fichaGroupGuarded('Financeiro', bloco3Taxas + bloco4Envio + bloco5Ajustes + bloco6Creditos + resultadoBlock + precificacaoBlock + devReaberturaBlock, 'financial.view');
     var operacaoGroup = fichaGroup('Operação', dadosVendaBlock);
     var expedicaoGroup = fichaGroup('Expedição', expedicaoBlock);
-    var conciliacaoGroup = fichaGroup('Conciliação', bloco7Conciliacao + auditoriaFinPedidoBlock);
-    var fatorCustoGroup = fichaGroup('Fator de Custo', fatorCustoBlock);
+    var conciliacaoGroup = fichaGroupGuarded('Conciliação', bloco7Conciliacao + auditoriaFinPedidoBlock, 'financial.view');
+    var fatorCustoGroup = fichaGroupGuarded('Fator de Custo', fatorCustoBlock, 'product_cost.view');
     var auditoriaGroup = fichaGroup('Auditoria', auditoriaBlock);
 
     var dw = openDrawer({
