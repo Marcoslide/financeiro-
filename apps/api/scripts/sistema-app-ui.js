@@ -4628,7 +4628,7 @@
     var slice = txs.slice(0, 400);
     var special = (WFLOW_LABEL[fl] ? fl : '') || (walletF.sig ? 'sig' : '');
     var banner = special ? callout('', 'Filtro do Raio-X', (walletF.sig ? 'Mostrando o padrão recorrente: <b>' + esc((walletF.sig || '').slice(0, 60)) + '</b>.' : 'Mostrando: <b>' + esc(WFLOW_LABEL[fl]) + '</b>.') + ' <button class="link-btn" id="wclearsp">limpar filtro</button>') : '';
-    return PageHeader({ variant: 'eyebrow', eyebrow: 'CARTEIRA · MOVIMENTAÇÕES', title: 'Movimentações', description: 'Rastreie cada valor: de onde veio, para onde foi, qual pedido, de quem é a responsabilidade e se o saldo fecha. Clique em “Classificar” para corrigir a categoria e definir a responsabilidade — sem alterar o dado da Shopee.' }) +
+    return PageHeader({ variant: 'eyebrow', eyebrow: 'CARTEIRA · MOVIMENTAÇÕES', title: 'Movimentações', compact: true }) +
       banner +
       '<div class="chips">' + flows.map(function (c) { return '<span class="chip' + (walletF.flow === c[0] ? ' chip-on' : '') + '" data-wflow="' + c[0] + '">' + c[1] + '</span>'; }).join('') + '</div>' +
       '<div class="toolbar2" style="margin-top:8px"><input class="input sm" id="wq" style="width:280px" placeholder="Buscar pedido, descrição, valor, categoria ou responsável…" value="' + esc(walletF.search) + '"><select class="select sm" id="wcatsel">' + cats.map(function (c) { return '<option value="' + c[0] + '"' + (walletF.cat === c[0] ? ' selected' : '') + '>' + c[1] + '</option>'; }).join('') + '</select>' + (walletF.cat || walletF.flow || walletF.search || walletF.sig ? '<button class="link-btn" id="wclear">limpar tudo</button>' : '') + '</div>' +
@@ -7341,7 +7341,12 @@
     var actionsHtml = opts.actions && opts.actions.length ? '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' + opts.actions.join('') + '</div>' : '';
     var filtersHtml = opts.filters ? '<div style="margin-top:10px">' + opts.filters + '</div>' : '';
     if (variant === 'eyebrow') {
-      var rhead = '<div class="rhead"><div class="eyebrow">' + esc(opts.eyebrow || '') + '</div><h3 class="rtitle">' + esc(opts.title || '') + '</h3>' + (opts.description ? '<p class="rsub">' + esc(opts.description) + '</p>' : '') + '<div class="rule"></div></div>';
+      // UX urgente (teste operacional) — opts.compact: telas operacionais (CP/CR/Caixa/Carteira)
+      // pedem pra ver a tabela sem rolar a tela inteira primeiro. Sem descrição, sem barra decorativa,
+      // título menor — nunca usado no Dashboard (que continua "cheio", como já era).
+      var rhead = opts.compact
+        ? '<div class="rhead compact"><div class="eyebrow">' + esc(opts.eyebrow || '') + '</div><h3 class="rtitle">' + esc(opts.title || '') + '</h3></div>'
+        : '<div class="rhead"><div class="eyebrow">' + esc(opts.eyebrow || '') + '</div><h3 class="rtitle">' + esc(opts.title || '') + '</h3>' + (opts.description ? '<p class="rsub">' + esc(opts.description) + '</p>' : '') + '<div class="rule"></div></div>';
       return rhead + actionsHtml + filtersHtml;
     }
     if (variant === 'financial') {
@@ -9849,7 +9854,7 @@
     });
   }
   function caixaHistoricoView() {
-    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'CAIXA · HISTÓRICO', title: 'Fechamentos anteriores', description: 'Snapshot imutável de cada dia fechado — novo dado relacionado a um dia já fechado nunca reescreve o snapshot; vira Evento Posterior vinculado ao pedido, na data correspondente.' });
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'CAIXA · HISTÓRICO', title: 'Fechamentos anteriores', compact: true });
     var allDays = Object.keys(caixaClose).sort().reverse();
     if (!allDays.length) return head + emptyBox('Nenhum dia fechado ainda.');
     // PROMPT "REESTRUTURAÇÃO PROFISSIONAL DO CAIXA" §7: mesmo period global de todo o sistema
@@ -11563,7 +11568,7 @@
     cpRenderBody();
     app.querySelectorAll('[data-cptab]').forEach(function (t) { t.onclick = function () { cpSub = t.dataset.cptab; cpPage = 1; render(); }; });
   }
-  function cpHead() { return PageHeader({ variant: 'eyebrow', eyebrow: 'FINANCEIRO', title: 'Contas a Pagar', description: 'Lance, classifique e baixe as despesas da empresa por operação, categoria, conta contábil e conta financeira — alimenta o Caixa, a DRE de Despesas e os relatórios gerenciais.' }); }
+  function cpHead() { return PageHeader({ variant: 'eyebrow', eyebrow: 'FINANCEIRO', title: 'Contas a Pagar', compact: true }); }
   function cpRenderBody() {
     var body = document.getElementById('cpbody');
     if (cpSub === 'dre') { body.innerHTML = renderCpDre(); bindCpDre(); return; }
@@ -11653,7 +11658,11 @@
         '<td class="nowrap">' + dbr(h.emissao) + '</td><td class="nowrap">' + dbr(h.competencia) + '</td><td class="nowrap">' + dbr(h.vencimento) + '</td>' +
         '<td class="nowrap">' + brl(h.valor) + '</td><td class="nowrap">' + brl(cpValorPagoTotal(h)) + '</td><td class="nowrap">' + brl(saldo) + '</td>' +
         '<td><span class="badge ' + lbl[1] + '">' + lbl[0] + '</span></td>' +
-        '<td style="position:relative"><button class="btn-sm" data-cpmenu="' + h.id + '">⋯</button></td></tr>';
+        '<td class="col-actions-sticky" style="position:relative">' +
+        '<button class="btn-sm" data-cpver="' + h.id + '" title="Ver / editar">Ver</button>' +
+        (saldo > 0.004 ? ' <button class="btn-sm primary" data-cpbaixar="' + h.id + '" title="Baixa total do pagamento">Baixar</button>' : '') +
+        ' <button class="btn-sm" data-cpmenu="' + h.id + '" title="Mais ações">⋯</button>' +
+        '</td></tr>';
     }).join('');
     // ---- tabela: ocupa 100% da largura útil — sem coluna lateral (§8-10). Coluna "Pedido" (Fase 11
     // do prompt "Reestruturação do Caixa") — referência do pedido Shopee quando a conta nasceu do
@@ -11661,9 +11670,9 @@
     var table = '<div class="panel" style="margin-top:14px">' +
       (cpSel.size ? cpBulkBar(all) : '') +
       '<div class="table-wrap"><table class="report"><thead><tr><th><input type="checkbox" id="cp-chk-all" title="Selecionar todos os resultados filtrados"></th>' +
-      ['fornecedor:Fornecedor/Origem', ':Histórico', ':Categoria', ':Pedido', ':Conta contábil', ':Forma de pagamento', ':Conta financeira', 'emissao:Emissão', 'competencia:Competência', 'vencimento:Vencimento', 'valor:Valor', ':Valor pago', ':Saldo', 'situacao:Situação', ':'].map(function (c) {
-        var parts = c.split(':'); var key = parts[0], lbl = parts[1];
-        return '<th' + (key ? ' class="rowlink" data-cpsort="' + key + '"' : '') + '>' + esc(lbl) + (key && cpF.sort === key ? (cpF.dir === 'asc' ? ' ▲' : ' ▼') : '') + '</th>';
+      ['fornecedor:Fornecedor/Origem', ':Histórico', ':Categoria', ':Pedido', ':Conta contábil', ':Forma de pagamento', ':Conta financeira', 'emissao:Emissão', 'competencia:Competência', 'vencimento:Vencimento', 'valor:Valor', ':Valor pago', ':Saldo', 'situacao:Situação', ':Ações'].map(function (c, i, arr) {
+        var parts = c.split(':'); var key = parts[0], lbl = parts[1]; var isLast = i === arr.length - 1;
+        return '<th' + (key ? ' class="rowlink" data-cpsort="' + key + '"' : (isLast ? ' class="col-actions-sticky"' : '')) + '>' + esc(lbl) + (key && cpF.sort === key ? (cpF.dir === 'asc' ? ' ▲' : ' ▼') : '') + '</th>';
       }).join('') + '</tr></thead><tbody>' + (rows || '<tr><td colspan="15"><div class="empty" style="border:none"><p>Nenhuma conta encontrada com estes filtros.</p></div></td></tr>') + '</tbody></table></div>' +
       cpPagerHtml(all.length) + '</div>';
 
@@ -11710,6 +11719,8 @@
     var lim = document.getElementById('cp-limpar'); if (lim) lim.onclick = function () { cpF = { situacao: '', categoryId: '', paymentMethod: '', financialAccountId: '', costCenterId: '', accountingAccountId: '', supplierId: '', valorMin: null, valorMax: null, docNumber: '', search: '', dateBasis: 'vencimento', sort: 'vencimento', dir: 'asc' }; cpPage = 1; if (periodSel) periodSel.value = 'all'; render(); };
     app.querySelectorAll('[data-cpsort]').forEach(function (th) { th.onclick = function () { var k = th.dataset.cpsort; if (cpF.sort === k) cpF.dir = cpF.dir === 'asc' ? 'desc' : 'asc'; else { cpF.sort = k; cpF.dir = 'asc'; } cpRenderBody(); }; });
     app.querySelectorAll('[data-cpopen]').forEach(function (el) { el.onclick = function () { openCpEditor(el.dataset.cpopen); }; });
+    app.querySelectorAll('[data-cpver]').forEach(function (el) { el.onclick = function () { openCpEditor(el.dataset.cpver); }; });
+    app.querySelectorAll('[data-cpbaixar]').forEach(function (el) { el.onclick = function () { openCpBaixaModal(el.dataset.cpbaixar, 'total'); }; });
     var chkAll = document.getElementById('cp-chk-all'); if (chkAll) chkAll.onclick = function () { var all = cpFilteredList(); if (chkAll.checked) all.forEach(function (h) { cpSel.add(h.id); }); else cpSel.clear(); cpRenderBody(); };
     app.querySelectorAll('.cp-chk').forEach(function (c) { c.onclick = function () { if (c.checked) cpSel.add(c.dataset.id); else cpSel.delete(c.dataset.id); cpRenderBody(); }; });
     var prev = document.getElementById('cp-prev'); if (prev) prev.onclick = function () { cpPage--; cpRenderBody(); };
@@ -11813,18 +11824,18 @@
     document.querySelectorAll('.cp-dropdown').forEach(function (d) { d.remove(); });
     var h = contasPagar.find(function (x) { return x.id === id; }); if (!h) return;
     var rect = anchor.getBoundingClientRect();
-    var menuH = 230, menuW = 190; // aproximado (6 itens) — clampa dentro da viewport pra nunca abrir fora da tela (linha perto do rodapé)
+    // UX urgente (teste operacional): "Ver" e "Baixar" viraram botões visíveis na própria linha (fora
+    // do ⋯) — o menu guarda só ações secundárias/raras, então cai de 6 pra 4 itens.
+    var menuH = 170, menuW = 190;
     var top = Math.min(rect.bottom + 4, window.innerHeight - menuH - 8); if (top < 8) top = 8;
     var left = Math.min(rect.right - menuW, window.innerWidth - menuW - 8); if (left < 8) left = 8;
     var d = document.createElement('div'); d.className = 'cp-dropdown'; d.style.cssText = 'position:fixed;z-index:400;top:' + top + 'px;left:' + left + 'px;width:' + menuW + 'px;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:6px;';
-    var opts = [['Abrir / Editar', 'open'], ['Baixa total do pagamento', 'baixatotal'], ['Baixa parcial do pagamento', 'baixaparcial'], ['Cancelar', 'cancelar'], ['Clonar', 'clonar'], ['Excluir', 'excluir']];
+    var opts = [['Baixa parcial do pagamento', 'baixaparcial'], ['Cancelar', 'cancelar'], ['Clonar', 'clonar'], ['Excluir', 'excluir']];
     d.innerHTML = opts.map(function (o) { return '<div class="cp-mi" data-act="' + o[1] + '" style="padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px">' + o[0] + '</div>'; }).join('');
     document.body.appendChild(d);
     d.querySelectorAll('.cp-mi').forEach(function (mi) { mi.onmouseenter = function () { mi.style.background = 'var(--bg2,#f2f4f8)'; }; mi.onmouseleave = function () { mi.style.background = ''; }; });
     setTimeout(function () { document.addEventListener('click', closeIt); }, 0);
     function closeIt(e) { if (!d.contains(e.target)) { d.remove(); document.removeEventListener('click', closeIt); } }
-    d.querySelector('[data-act="open"]').onclick = function () { d.remove(); openCpEditor(id); };
-    d.querySelector('[data-act="baixatotal"]').onclick = function () { d.remove(); openCpBaixaModal(id, 'total'); };
     d.querySelector('[data-act="baixaparcial"]').onclick = function () { d.remove(); openCpBaixaModal(id, 'parcial'); };
     d.querySelector('[data-act="clonar"]').onclick = function () { d.remove(); cpCloneHeader(id).then(function (novo) { toast('Conta clonada', 'Nova conta criada em aberto.'); openCpEditor(novo.id); }); };
     d.querySelector('[data-act="cancelar"]').onclick = function () {
@@ -12931,7 +12942,7 @@
     return list;
   }
   function renderContasReceber() {
-    app.innerHTML = PageHeader({ variant: 'eyebrow', eyebrow: 'FINANCEIRO', title: 'Contas a Receber', description: 'Controle de dinheiro que a empresa tem para receber, o que já foi recebido, onde entrou e o saldo dos bancos — nasce do fechamento de Caixa (só transferências reais para banco, nunca por pedido) e de lançamentos manuais.' }) +
+    app.innerHTML = PageHeader({ variant: 'eyebrow', eyebrow: 'FINANCEIRO', title: 'Contas a Receber', compact: true }) +
       '<div class="subtabs">' + [['visaogeral', 'Visão Geral'], ['lista', 'Lista'], ['shopee', 'Pedidos (auditoria)'], ['projecao', 'Projeção de Recebimentos'], ['classificacoes', 'Classificações']].map(function (t) { return '<div class="subtab' + (crSub === t[0] ? ' active' : '') + '" data-crtab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>' +
       '<div id="crbody" style="margin-top:14px"></div>';
     crRenderBody();
@@ -13179,12 +13190,12 @@
         '<td class="nowrap">' + brl(h.valor) + '</td><td class="nowrap">' + brl(crRecebidoTotal(h)) + '</td><td class="nowrap">' + brl(saldo) + '</td>' +
         '<td><span class="badge ' + lbl[1] + '">' + lbl[0] + '</span></td>' +
         '<td>' + esc(crFinAccountLabel(h.financialAccountId)) + '</td>' +
-        '<td><button class="btn-sm" data-cropen="' + h.id + '">Abrir</button></td></tr>';
+        '<td class="col-actions-sticky"><button class="btn-sm" data-cropen="' + h.id + '">Abrir</button></td></tr>';
     }).join('');
     var table = '<div class="panel" style="margin-top:14px"><div class="table-wrap"><table class="report"><thead><tr>' +
-      ['vencimento:Vencimento', ':Descrição', ':Pagador', ':Origem', ':Categoria', ':Pedido / Referência', 'valor:Valor', ':Recebido', ':Saldo', ':Status', ':Conta', ':'].map(function (c) {
-        var parts = c.split(':'); var key = parts[0], lbl = parts[1];
-        return '<th' + (key ? ' class="rowlink" data-crsort="' + key + '"' : '') + '>' + esc(lbl) + (key && crF.sort === key ? (crF.dir === 'asc' ? ' ▲' : ' ▼') : '') + '</th>';
+      ['vencimento:Vencimento', ':Descrição', ':Pagador', ':Origem', ':Categoria', ':Pedido / Referência', 'valor:Valor', ':Recebido', ':Saldo', ':Status', ':Conta', ':Ações'].map(function (c, i, arr) {
+        var parts = c.split(':'); var key = parts[0], lbl = parts[1]; var isLast = i === arr.length - 1;
+        return '<th' + (key ? ' class="rowlink" data-crsort="' + key + '"' : (isLast ? ' class="col-actions-sticky"' : '')) + '>' + esc(lbl) + (key && crF.sort === key ? (crF.dir === 'asc' ? ' ▲' : ' ▼') : '') + '</th>';
       }).join('') + '</tr></thead><tbody>' + (rows || '<tr><td colspan="12"><div class="empty" style="border:none"><p>Nenhuma conta encontrada com estes filtros.</p></div></td></tr>') + '</tbody></table></div>' +
       crPagerHtml(all.length) + '</div>';
     return header + kpiHtml + filtros + table;

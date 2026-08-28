@@ -52,19 +52,25 @@
   .top-store{display:flex;align-items:center;gap:8px;font-size:13px;border:1px solid var(--line);padding:6px 10px;border-radius:8px;background:#fbfcfe}
   .top-store .dot{width:8px;height:8px;border-radius:50%;background:var(--ok)}
   .avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
-  .content{padding:24px 26px;max-width:1320px;width:100%}
-  .page-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:14px;gap:16px;flex-wrap:wrap}
+  /* UX urgente (teste operacional) — item 9: "não criar folha A4 no meio do ERP", usar a largura
+     total do monitor. 1320px sobrava ~350-570px de branco em 1440/1920 exatamente nas telas
+     operacionais (CP/CR) que mais precisam de colunas visíveis sem scroll horizontal. */
+  .content{padding:24px 26px;max-width:1880px;width:100%}
+  /* UX urgente (teste operacional): densidade maior em toda a área de conteúdo — telas operacionais
+     (CP/CR/Caixa/Carteira/Pedidos/Produtos/DRE) ganham mais linhas de tabela visíveis sem rolar, sem
+     mexer em nenhum cálculo/dado. Reduz só espaçamento (margens/paddings), nunca remove informação. */
+  .page-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:10px;gap:16px;flex-wrap:wrap}
   .page-head h2{margin:0;font-size:20px}.page-head p{margin:3px 0 0;color:var(--muted);font-size:13px}
   .info-banner{background:var(--info-bg);border:1px solid #cfe0fb;color:#1b4c99;border-radius:10px;padding:9px 14px;font-size:12.5px;margin-bottom:14px}
-  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;margin-bottom:16px}
-  .panel .ph{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}
-  .panel .ph h3{margin:0;font-size:14.5px}.pb{padding:16px}
-  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:16px}
-  .tab{padding:9px 14px;font-size:13px;font-weight:600;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;cursor:pointer}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;margin-bottom:12px}
+  .panel .ph{padding:11px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}
+  .panel .ph h3{margin:0;font-size:14.5px}.pb{padding:12px}
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:10px}
+  .tab{padding:8px 14px;font-size:13px;font-weight:600;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;cursor:pointer}
   .tab:hover{color:var(--ink)}.tab.active{color:var(--brand-2);border-bottom-color:var(--brand-2)}
-  .importbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:12px 16px;margin-bottom:16px}
+  .importbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:10px 16px;margin-bottom:12px}
   .importbar .ib-title{font-weight:700;font-size:13.5px}.importbar .ib-meta{color:var(--muted);font-size:12px}
-  .toolbar2{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+  .toolbar2{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
   .input,.select{padding:9px 12px;border:1px solid var(--line);border-radius:9px;background:#fff;font-size:13px;color:var(--ink)}
   .input.sm,.select.sm{padding:7px 10px;font-size:12.5px;border-radius:8px}
   .input:focus,.select:focus{outline:none;border-color:var(--brand-2)}
@@ -105,8 +111,16 @@
   .table-wrap::-webkit-scrollbar-thumb:hover{background:var(--brand-2)}
   .table-wrap{scrollbar-color:#b7c0d6 var(--bg);scrollbar-width:thin}
   table{border-collapse:collapse;width:100%;font-size:13px}
-  th{text-align:left;padding:10px 14px;color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;border-bottom:1px solid var(--line);white-space:nowrap;background:#fbfcfe}
-  td{padding:11px 14px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle}
+  th{text-align:left;padding:8px 12px;color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;border-bottom:1px solid var(--line);white-space:nowrap;background:#fbfcfe}
+  td{padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle}
+  /* item 7 do prompt de UX: coluna de ações sempre alcançável, mesmo com scroll horizontal — nunca
+     desaparece por trás do conteúdo largo da tabela. background explícito (nunca transparente) pra
+     não deixar o texto das colunas anteriores "vazando" por baixo ao rolar. */
+  .col-actions-sticky{position:sticky;right:0;background:#fff;box-shadow:-6px 0 8px -6px rgba(16,26,51,.18);white-space:nowrap}
+  th.col-actions-sticky{background:#fbfcfe}
+  table.report thead th.col-actions-sticky{background:#2b3444}
+  tr.rowlink:hover td.col-actions-sticky,tr:hover td.col-actions-sticky{background:#eef3ff}
+  table.report tbody tr:nth-child(even) td.col-actions-sticky{background:#fafbfd}
   .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
   .badge{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:11.5px;font-weight:600}
   .badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
@@ -156,8 +170,8 @@
   .dz{border:2px dashed var(--line);border-radius:12px;padding:26px;text-align:center;cursor:pointer;background:#fbfcfe}
   .dz.over{border-color:var(--brand-2);background:#f0f4ff}
   /* --- extras do sistema unificado --- */
-  .cards6{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:16px}
-  .fcard{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--panel);box-shadow:var(--shadow)}
+  .cards6{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-bottom:10px}
+  .fcard{border:1px solid var(--line);border-radius:12px;padding:10px 14px;background:var(--panel);box-shadow:var(--shadow)}
   .fcard .lbl{font-size:11.5px;color:var(--muted);font-weight:600}
   .fcard .val{font-size:19px;font-weight:750;margin-top:6px}
   .fcard.blue .val{color:var(--brand-2)}.fcard.green .val{color:var(--ok)}.fcard.red .val{color:var(--err)}.fcard.amber .val{color:var(--warn)}
@@ -193,11 +207,17 @@
   .pill.OUTRO{background:var(--neutral-bg);color:var(--neutral)}
   .chip.chip-on{background:var(--brand-2);color:#fff;border-color:var(--brand-2)}
   /* ===== Estilo "relatório" (dashboards de Devolução) ===== */
-  .rhead{margin:2px 0 16px}
+  .rhead{margin:2px 0 12px}
   .rhead .eyebrow{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#e0662a}
   .rhead h3.rtitle{margin:4px 0 2px;font-size:22px;font-weight:800;color:var(--ink);border:none;padding:0}
   .rhead .rsub{color:var(--muted);font-size:13.5px;margin:0;max-width:760px}
   .rhead .rule{height:3px;background:linear-gradient(90deg,#e0662a,#e0662a 120px,var(--line) 120px);border-radius:2px;margin-top:10px}
+  /* UX urgente (teste operacional) — telas OPERACIONAIS (CP/CR/Caixa/Carteira, nunca o Dashboard)
+     usam este modificador: sem descrição longa, sem barra decorativa, título menor — a tabela some
+     mais cedo. Dashboards continuam com .rhead "cheio" (mais visual, como já era). */
+  .rhead.compact{margin:2px 0 8px}
+  .rhead.compact .eyebrow{font-size:10px}
+  .rhead.compact h3.rtitle{font-size:18px;margin:2px 0 0}
   .kstrip{display:grid;grid-template-columns:repeat(auto-fit,minmax(225px,1fr));gap:0;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:var(--shadow);overflow:hidden;margin-bottom:16px}
   .kstrip .kc{padding:16px 18px;border-right:1px solid var(--line);min-width:0}
   .kstrip .kc:last-child{border-right:none}
