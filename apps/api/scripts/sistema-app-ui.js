@@ -12608,6 +12608,20 @@
   // bancária (Fase 7, Carteira→Banco) nasceria sem categoria.
   var CR_CAT_SHOPEE_CENTRO = 'Recebimentos Shopee';
   var CR_CAT_SHOPEE_TRANSFERENCIA = 'Transferência Shopee → Banco';
+  // Fase 10 Passo 0: nome do centro-bucket onde a migração automática (crMigrarClassificacaoLegadaDeCP)
+  // pousa categorias vindas de cpCategories sem equivalente nativo. Chamar isso de "Outras Receitas"
+  // faria o dado migrado passar por classificação CONFIRMADA — não é. "Receitas a Classificar" deixa
+  // claro que é um estado transitório aguardando revisão humana, nunca dado definitivo.
+  var CR_CENTRO_A_CLASSIFICAR = 'Receitas a Classificar';
+  // Verdadeiro só enquanto a categoria migrada NUNCA foi tocada por um humano — no instante em que
+  // alguém a edita e escolhe outro Centro (fluxo normal do editor de categoria), ela sai do bucket
+  // "Receitas a Classificar" e o aviso desaparece sozinho, sem precisar de um campo de status à parte.
+  function crCategoriaPendenteRevisao(catId) {
+    var cat = crCategories.find(function (c) { return c.id === catId; });
+    if (!cat || !cat.migradoDeCpCategoryId) return false;
+    var centro = crCostCenters.find(function (c) { return c.id === cat.costCenterId; });
+    return !!(centro && centro.name === CR_CENTRO_A_CLASSIFICAR);
+  }
   function crCategorySeedShopee() {
     var centro = crCostCenters.find(function (c) { return c.name === CR_CAT_SHOPEE_CENTRO; });
     var novosCentros = []; var centroId;
@@ -12634,7 +12648,7 @@
     var pendentes = contasReceber.filter(function (h) { return h.categoryId && !crCategories.some(function (c) { return c.id === h.categoryId; }); });
     if (!pendentes.length) return Promise.resolve();
     return crCategorySeedShopee().then(function () {
-      var centroMigrado = crCostCenters.find(function (c) { return c.name === 'Outras Receitas (migrado)'; });
+      var centroMigrado = crCostCenters.find(function (c) { return c.name === CR_CENTRO_A_CLASSIFICAR; });
       var centroMigradoId = centroMigrado ? centroMigrado.id : null;
       var novosCentros = [];
       var mapa = {}; var novasCategorias = []; var headersMudados = [];
@@ -12648,9 +12662,9 @@
           var nativa = crCategoryIdByName(CR_CAT_SHOPEE_TRANSFERENCIA);
           if (nativa) { mapa[cpCatId] = nativa; h.categoryId = nativa; headersMudados.push(h); return; }
         }
-        if (!centroMigradoId) { centroMigradoId = crUid('CRCC'); novosCentros.push({ id: centroMigradoId, name: 'Outras Receitas (migrado)', active: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); }
+        if (!centroMigradoId) { centroMigradoId = crUid('CRCC'); novosCentros.push({ id: centroMigradoId, name: CR_CENTRO_A_CLASSIFICAR, active: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); }
         var novaId = crUid('CRCAT'); var now = new Date().toISOString();
-        novasCategorias.push({ id: novaId, name: nomeCp === '—' ? 'Outros (migrado)' : nomeCp, costCenterId: centroMigradoId, active: true, createdAt: now, updatedAt: now, migradoDeCpCategoryId: cpCatId });
+        novasCategorias.push({ id: novaId, name: nomeCp === '—' ? 'A Classificar (migrado)' : nomeCp, costCenterId: centroMigradoId, active: true, createdAt: now, updatedAt: now, migradoDeCpCategoryId: cpCatId });
         mapa[cpCatId] = novaId; h.categoryId = novaId; headersMudados.push(h);
       });
       crCostCenters = crCostCenters.concat(novosCentros);
@@ -12673,7 +12687,11 @@
       return '<tr><td>' + esc(c.name) + '</td><td>' + n + '</td><td><span class="badge ' + (c.active ? 'b-ok' : 'b-neutral') + '">' + (c.active ? 'Ativo' : 'Inativo') + '</span></td><td><button class="btn-sm" data-crccedit="' + c.id + '">Editar</button> <button class="btn-sm" data-crccsug="' + c.id + '">🔍 Sugerir categorias</button></td></tr>';
     }).join('');
     var rowsCat = crCategories.slice().sort(function (a, b) { return crCostCenterLabel(a.costCenterId).localeCompare(crCostCenterLabel(b.costCenterId)) || a.name.localeCompare(b.name); }).map(function (c) {
-      return '<tr><td><b>' + esc(c.name) + '</b></td><td>' + esc(crCostCenterLabel(c.costCenterId)) + '</td><td>' + (countsCat[c.id] || 0) + '</td><td><span class="badge ' + (c.active ? 'b-ok' : 'b-neutral') + '">' + (c.active ? 'Ativa' : 'Inativa') + '</span></td><td><button class="btn-sm" data-crcatedit="' + c.id + '">Editar</button></td></tr>';
+      // Fase 10 Passo 0: categoria pousada pela migração automática de CP e nunca revisada por um
+      // humano nasce marcada — vira dado "confirmado" só quando alguém abre o editor e escolhe (ou
+      // reafirma) um Centro de verdade, não pelo simples fato de já ter um categoryId preenchido.
+      var pendente = crCategoriaPendenteRevisao(c.id);
+      return '<tr><td><b>' + esc(c.name) + '</b>' + (pendente ? ' <span class="tag" style="color:var(--warn,#b06a00)" title="Categoria criada automaticamente pela migração de Contas a Pagar — nunca confirmada por um humano">⚠ Classificação migrada — revisar</span>' : '') + '</td><td>' + esc(crCostCenterLabel(c.costCenterId)) + '</td><td>' + (countsCat[c.id] || 0) + '</td><td><span class="badge ' + (c.active ? 'b-ok' : 'b-neutral') + '">' + (c.active ? 'Ativa' : 'Inativa') + '</span></td><td><button class="btn-sm" data-crcatedit="' + c.id + '">Editar</button></td></tr>';
     }).join('');
     return '<div class="panel"><div class="ph"><h3>Centros de Recebimentos</h3><button class="btn-sm primary" id="cr-cc-new">+ Novo centro de recebimentos</button></div><div class="table-wrap">' + (rowsCc ? '<table><thead><tr><th>Nome</th><th>Categorias</th><th>Status</th><th></th></tr></thead><tbody>' + rowsCc + '</tbody></table>' : '<div class="empty"><p>Nenhum centro de recebimentos cadastrado.</p></div>') + '</div></div>' +
       '<div class="panel" style="margin-top:16px"><div class="ph"><h3>Categorias</h3><button class="btn-sm primary" id="cr-cat-new">+ Nova categoria</button></div><div class="table-wrap">' + (rowsCat ? '<table><thead><tr><th>Categoria</th><th>Centro de Recebimentos</th><th>Títulos vinculados</th><th>Status</th><th></th></tr></thead><tbody>' + rowsCat + '</tbody></table>' : '<div class="empty"><p>Nenhuma categoria cadastrada.</p></div>') + '</div></div>';
@@ -13112,7 +13130,7 @@
         // Fase 9 V11: categoria de CR sempre resolvida em crCategories — cpCategoryPathLabel() (CP)
         // nunca encontraria o ID e a coluna ficaria eternamente "—" pra todo título classificado
         // depois da V1/V5.
-        '<td>' + esc(crCategoryPathLabel(h.categoryId)) + (h.manualFields && h.manualFields.length ? ' <span class="tag" title="Categoria/Conta definidas manualmente — protegidas contra sobrescrita automática">🔒 manual</span>' : '') + '</td>' +
+        '<td>' + esc(crCategoryPathLabel(h.categoryId)) + (h.manualFields && h.manualFields.length ? ' <span class="tag" title="Categoria/Conta definidas manualmente — protegidas contra sobrescrita automática">🔒 manual</span>' : '') + (crCategoriaPendenteRevisao(h.categoryId) ? ' <span class="tag" style="color:var(--warn,#b06a00)" title="Categoria criada automaticamente pela migração de Contas a Pagar — nunca confirmada por um humano">⚠ migrada</span>' : '') + '</td>' +
         '<td>' + esc(h.orderId || h.referencia || '—') + '</td>' +
         '<td class="nowrap">' + brl(h.valor) + '</td><td class="nowrap">' + brl(crRecebidoTotal(h)) + '</td><td class="nowrap">' + brl(saldo) + '</td>' +
         '<td><span class="badge ' + lbl[1] + '">' + lbl[0] + '</span></td>' +
