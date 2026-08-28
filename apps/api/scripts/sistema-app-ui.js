@@ -839,6 +839,12 @@
   // ============================================================ RENDER (roteamento)
   function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', minharenda: 'Minha Renda', caixa: 'Caixa', contaspagar: 'Contas a Pagar', contasreceber: 'Contas a Receber', precificacao: 'Precificação', ia: 'Inteligência', fator: 'Fator de Custo' }[route] || ''; }
   function render() {
+    // item 14 — bloqueio de rota direta: mesmo se alguém forçar `route` (console, item de menu que
+    // ficou "solto"), a tela do módulo nunca chega a montar sem a permissão de ver aquele módulo.
+    if (authSession.user && !canAccessRoute(route)) {
+      app.innerHTML = renderErrBox('Você não tem permissão para acessar este módulo. Fale com um administrador se precisar de acesso.');
+      return;
+    }
     // Refatoração N5: zera os caches por-renderização a cada troca de tela/re-render — nunca deixa
     // um resultado de uma "foto" de dados anterior vazar para depois de uma importação/edição.
     ordersByIdCache = null; compByOrderIdCache.clear();
@@ -14131,7 +14137,7 @@
   }
 
   // ---------- boot ----------
-  document.querySelectorAll('#nav a').forEach(function (a) { a.onclick = function () { route = a.dataset.route; render(); }; });
+  document.querySelectorAll('#nav a').forEach(function (a) { a.onclick = function () { if (!canAccessRoute(a.dataset.route)) return; route = a.dataset.route; render(); }; });
   // PROMPT "OTIMIZAÇÃO COMPLETA DE UX/UI DESKTOP" §3: sidebar recolhível — só alterna uma classe no
   // shell (CSS cuida do resto); preferência fica em memória, igual a todo outro estado de UI do app
   // (nenhuma tela salva preferência em localStorage neste sistema).
@@ -14326,6 +14332,35 @@
   /** item 7/48 — usado pelo menu/rotas do front. Nunca a única barreira (rotas reais checam no servidor). */
   function hasPermission(key) { return authSession.user && authSession.user.role === 'OWNER' || authSession.permissions.indexOf(key) >= 0; }
 
+  /**
+   * item 13/14 — menu dinâmico por permissão + bloqueio de rota direta. Cada rota do #nav exige a
+   * permissão de "ver" o módulo equivalente do catálogo (item 10); "dashboard" e "ia" ficam sem
+   * gate porque não têm chave própria no catálogo (visão consolidada / módulo de apoio, sem dado
+   * exclusivo de nenhum perfil). MESMA RESSALVA do bloco acima: como os dados de pedidos/caixa/etc
+   * vivem só no IndexedDB do navegador (sem backend por trás deles), isto impede a NAVEGAÇÃO da UI
+   * — não é isolamento de dado real. Quem abre o DevTools ainda enxerga o IndexedDB inteiro,
+   * independente de qualquer rota estar "bloqueada" aqui. Documentado no relatório final (item 48).
+   */
+  var ROUTE_PERMISSION = {
+    produtos: 'products.view', pedidos: 'orders.view', posvenda: 'returns.view',
+    carteira: 'wallet.view', acelera: 'income.view', afiliados: 'affiliates.view',
+    minharenda: 'income.view', caixa: 'cash.view', contaspagar: 'ap.view',
+    contasreceber: 'ar.view', precificacao: 'pricing.view', fator: 'industrial_cost.view',
+  };
+  function canAccessRoute(r) { var perm = ROUTE_PERMISSION[r]; return !perm || hasPermission(perm); }
+  function firstAccessibleRoute() {
+    if (canAccessRoute('dashboard')) return 'dashboard';
+    var order = ['dashboard', 'produtos', 'pedidos', 'posvenda', 'carteira', 'acelera', 'afiliados', 'minharenda', 'caixa', 'contaspagar', 'contasreceber', 'precificacao', 'fator', 'ia'];
+    for (var i = 0; i < order.length; i++) if (canAccessRoute(order[i])) return order[i];
+    return 'dashboard';
+  }
+  /** oculta do #nav os itens cuja permissão de "ver" o usuário logado não tem (item 13). */
+  function applyMenuPermissions() {
+    document.querySelectorAll('#nav a[data-route]').forEach(function (a) {
+      a.style.display = canAccessRoute(a.dataset.route) ? '' : 'none';
+    });
+  }
+
   function userInitials(name) {
     var parts = (name || '').replace(/[^\p{L}\s]/gu, '').trim().split(/\s+/).filter(Boolean);
     if (!parts.length) return '··';
@@ -14438,7 +14473,9 @@
     return authLoadMe().then(function () {
       if (body.mustChangePassword) { renderMustChangePasswordForm(); return; }
       hideAuthOverlay();
-      if (!bootedOnce) { bootedOnce = true; bootApp(); }
+      applyMenuPermissions();
+      if (!canAccessRoute(route)) route = firstAccessibleRoute();
+      if (!bootedOnce) { bootedOnce = true; bootApp(); } else { render(); }
     });
   }
 
@@ -14495,6 +14532,8 @@
       if (!ok) { showAuthOverlay(); if (!bootedOnce) { bootedOnce = true; bootApp(); } return; }
       authLoadMe().then(function (me) {
         hideAuthOverlay();
+        applyMenuPermissions();
+        if (!canAccessRoute(route)) route = firstAccessibleRoute();
         if (!bootedOnce) { bootedOnce = true; bootApp(); }
       }).catch(function () { showAuthOverlay(); if (!bootedOnce) { bootedOnce = true; bootApp(); } });
     });

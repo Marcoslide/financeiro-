@@ -337,7 +337,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build fd0122b · 2026-08-28 03:10 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 5f8cb97 · 2026-08-28 03:15 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -421,9 +421,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     mod
   ));
 
-  // node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js
+  // ../../node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js
   var require_base64_js = __commonJS({
-    "node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js"(exports) {
+    "../../node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js"(exports) {
       "use strict";
       exports.byteLength = byteLength;
       exports.toByteArray = toByteArray;
@@ -522,9 +522,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js
+  // ../../node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js
   var require_ieee754 = __commonJS({
-    "node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js"(exports) {
+    "../../node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js"(exports) {
       exports.read = function(buffer, offset, isLE, mLen, nBytes) {
         var e, m;
         var eLen = nBytes * 8 - mLen - 1;
@@ -605,9 +605,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js
+  // ../../node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js
   var require_buffer = __commonJS({
-    "node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js"(exports) {
+    "../../node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js"(exports) {
       "use strict";
       var base64 = require_base64_js();
       var ieee754 = require_ieee754();
@@ -1976,9 +1976,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // packages/shared/dist/index.js
+  // ../../packages/shared/dist/index.js
   var require_dist = __commonJS({
-    "packages/shared/dist/index.js"(exports) {
+    "../../packages/shared/dist/index.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.ImportIssueSeverity = exports.IMPORT_ROW_STATUS_LABELS = exports.ImportRowStatus = exports.IMPORT_BATCH_STATUS_LABELS = exports.ImportBatchStatus = exports.FileFormat = exports.REPORT_TYPE_LABELS = exports.ReportType = exports.AuditAction = exports.TemporalStatus = exports.ReconciliationState = exports.IngestionSource = exports.EntityStatus = exports.ROLE_LABELS = exports.Role = void 0;
@@ -2154,19 +2154,19 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // apps/api/src/imports/parsing/browser/shim-xlsx.js
+  // src/imports/parsing/browser/shim-xlsx.js
   var require_shim_xlsx = __commonJS({
-    "apps/api/src/imports/parsing/browser/shim-xlsx.js"(exports, module) {
+    "src/imports/parsing/browser/shim-xlsx.js"(exports, module) {
       "use strict";
       var XLSX2 = typeof globalThis !== "undefined" && globalThis.XLSX || {};
       module.exports = XLSX2;
     }
   });
 
-  // apps/api/src/all/entry.ts
+  // src/all/entry.ts
   var import_buffer = __toESM(require_buffer());
 
-  // apps/api/src/imports/parsing/format.ts
+  // src/imports/parsing/format.ts
   var import_shared = __toESM(require_dist());
   function detectFileFormat(buffer) {
     if (buffer.length >= 4) {
@@ -2189,7 +2189,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return !(ext === "csv" || ext === "txt" || ext === "tsv" || ext === "");
   }
 
-  // apps/api/src/imports/parsing/workbook.ts
+  // src/imports/parsing/workbook.ts
   var XLSX = __toESM(require_shim_xlsx());
   var import_shared2 = __toESM(require_dist());
   function sniffDelimiter(sample) {
@@ -2330,7 +2330,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { sheets };
   }
 
-  // apps/api/src/imports/parsing/value-parsers.ts
+  // src/imports/parsing/value-parsers.ts
   var NULLISH = /* @__PURE__ */ new Set(["", "-", "--", "\u2014", "n/a", "na", "null"]);
   function stripCurrency(input) {
     let s = input.trim().replace(/\u00a0/g, " ").trim();
@@ -2449,7 +2449,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return label.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
   }
 
-  // apps/api/src/imports/parsing/row-accessor.ts
+  // src/imports/parsing/row-accessor.ts
   var RowAccessor = class {
     constructor(headers, cells) {
       this.headers = headers;
@@ -2498,7 +2498,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   };
 
-  // apps/api/src/imports/parsing/browser/shim-crypto.js
+  // src/imports/parsing/browser/shim-crypto.js
   function sha256(bytes) {
     const K = [
       1116352408,
@@ -2650,7 +2650,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // apps/api/src/imports/parsing/hashing.ts
+  // src/imports/parsing/hashing.ts
   function sha2562(value) {
     return createHash("sha256").update(value).digest("hex");
   }
@@ -2658,7 +2658,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return sha2562(buffer);
   }
 
-  // apps/api/src/products/parsing/product-sheet.ts
+  // src/products/parsing/product-sheet.ts
   var SCAN_LIMIT = 40;
   var REQUIRED_LABELS = ["ID do Produto", "Nome do Produto"].map(normalizeLabel);
   var STRONG_LABELS = ["SKU", "Variante Identificador", "Pre\xE7o", "Estoque do Vendedor"].map(normalizeLabel);
@@ -2832,10 +2832,10 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // apps/api/src/orders/parsing/orders-rows.ts
+  // src/orders/parsing/orders-rows.ts
   var import_shared6 = __toESM(require_dist());
 
-  // apps/api/src/imports/parsing/report-specs.ts
+  // src/imports/parsing/report-specs.ts
   var import_shared3 = __toESM(require_dist());
   function canonicalDecimal(s) {
     if (s == null) return "";
@@ -3303,7 +3303,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return REPORT_SPECS.find((s) => s.type === type);
   }
 
-  // apps/api/src/imports/parsing/detect.ts
+  // src/imports/parsing/detect.ts
   var import_shared4 = __toESM(require_dist());
   var SCAN_LIMIT2 = 40;
   var ORDER_FAMILY = [
@@ -3453,7 +3453,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { columns, headerNames, dataStartRow: headerRow + 1 };
   }
 
-  // apps/api/src/imports/parsing/analyze.ts
+  // src/imports/parsing/analyze.ts
   var import_shared5 = __toESM(require_dist());
   var PERSONAL_DATA_LABELS = [
     "Telefone",
@@ -3533,7 +3533,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // apps/api/src/orders/parsing/orders-rows.ts
+  // src/orders/parsing/orders-rows.ts
   function first(acc, labels) {
     for (const l of labels) {
       const v = acc.get(l);
@@ -3692,7 +3692,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return null;
   }
 
-  // apps/api/src/orders/status.ts
+  // src/orders/status.ts
   var NORMALIZED_LABELS = {
     NAO_PAGO: "N\xE3o pago",
     A_ENVIAR: "A enviar",
@@ -3723,7 +3723,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return "OUTRO";
   }
 
-  // apps/api/src/orders/finance.ts
+  // src/orders/finance.ts
   var round2 = (n) => Math.round(n * 100) / 100;
   function computeOrderFinance(input) {
     const fees = round2(
@@ -3756,7 +3756,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // apps/api/src/postsale/parsing/postsale-rows.ts
+  // src/postsale/parsing/postsale-rows.ts
   var import_shared7 = __toESM(require_dist());
   var REPORT_OF = {
     RETURN_REFUND: import_shared7.ReportType.RETURN_REFUND,
@@ -3886,7 +3886,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { ...base, rows, periodStart, periodEnd };
   }
 
-  // apps/api/src/postsale/exposure.ts
+  // src/postsale/exposure.ts
   var norm2 = (s) => (s != null ? s : "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   function classifyExposureNumbers(status, requested, compensation) {
     const s = norm2(status);
@@ -3908,7 +3908,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
   var EXPOSURE_METHODOLOGY = "Classifica\xE7\xE3o por status Shopee: CANCELADA/RECUSADA/DESIST\xCANCIA = sem perda; COMPENSA\xC7\xC3O ao vendedor = recuperado; CONCLU\xCDDA/APROVADA/REEMBOLSADA = preju\xEDzo confirmado (solicitado \u2212 compensa\xE7\xE3o); EM AN\xC1LISE/PENDENTE/DISPUTA = em risco. Valor solicitado nunca \xE9 tratado automaticamente como preju\xEDzo.";
 
-  // apps/api/src/all/entry.ts
+  // src/all/entry.ts
   globalThis.Buffer = import_buffer.Buffer;
   var toBuf = (ab) => import_buffer.Buffer.from(new Uint8Array(ab));
   globalThis.SISTEMA = {
@@ -4784,6 +4784,12 @@ buffer/index.js:
   // ============================================================ RENDER (roteamento)
   function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', minharenda: 'Minha Renda', caixa: 'Caixa', contaspagar: 'Contas a Pagar', contasreceber: 'Contas a Receber', precificacao: 'Precificação', ia: 'Inteligência', fator: 'Fator de Custo' }[route] || ''; }
   function render() {
+    // item 14 — bloqueio de rota direta: mesmo se alguém forçar `route` (console, item de menu que
+    // ficou "solto"), a tela do módulo nunca chega a montar sem a permissão de ver aquele módulo.
+    if (authSession.user && !canAccessRoute(route)) {
+      app.innerHTML = renderErrBox('Você não tem permissão para acessar este módulo. Fale com um administrador se precisar de acesso.');
+      return;
+    }
     // Refatoração N5: zera os caches por-renderização a cada troca de tela/re-render — nunca deixa
     // um resultado de uma "foto" de dados anterior vazar para depois de uma importação/edição.
     ordersByIdCache = null; compByOrderIdCache.clear();
@@ -18076,7 +18082,7 @@ buffer/index.js:
   }
 
   // ---------- boot ----------
-  document.querySelectorAll('#nav a').forEach(function (a) { a.onclick = function () { route = a.dataset.route; render(); }; });
+  document.querySelectorAll('#nav a').forEach(function (a) { a.onclick = function () { if (!canAccessRoute(a.dataset.route)) return; route = a.dataset.route; render(); }; });
   // PROMPT "OTIMIZAÇÃO COMPLETA DE UX/UI DESKTOP" §3: sidebar recolhível — só alterna uma classe no
   // shell (CSS cuida do resto); preferência fica em memória, igual a todo outro estado de UI do app
   // (nenhuma tela salva preferência em localStorage neste sistema).
@@ -18271,6 +18277,35 @@ buffer/index.js:
   /** item 7/48 — usado pelo menu/rotas do front. Nunca a única barreira (rotas reais checam no servidor). */
   function hasPermission(key) { return authSession.user && authSession.user.role === 'OWNER' || authSession.permissions.indexOf(key) >= 0; }
 
+  /**
+   * item 13/14 — menu dinâmico por permissão + bloqueio de rota direta. Cada rota do #nav exige a
+   * permissão de "ver" o módulo equivalente do catálogo (item 10); "dashboard" e "ia" ficam sem
+   * gate porque não têm chave própria no catálogo (visão consolidada / módulo de apoio, sem dado
+   * exclusivo de nenhum perfil). MESMA RESSALVA do bloco acima: como os dados de pedidos/caixa/etc
+   * vivem só no IndexedDB do navegador (sem backend por trás deles), isto impede a NAVEGAÇÃO da UI
+   * — não é isolamento de dado real. Quem abre o DevTools ainda enxerga o IndexedDB inteiro,
+   * independente de qualquer rota estar "bloqueada" aqui. Documentado no relatório final (item 48).
+   */
+  var ROUTE_PERMISSION = {
+    produtos: 'products.view', pedidos: 'orders.view', posvenda: 'returns.view',
+    carteira: 'wallet.view', acelera: 'income.view', afiliados: 'affiliates.view',
+    minharenda: 'income.view', caixa: 'cash.view', contaspagar: 'ap.view',
+    contasreceber: 'ar.view', precificacao: 'pricing.view', fator: 'industrial_cost.view',
+  };
+  function canAccessRoute(r) { var perm = ROUTE_PERMISSION[r]; return !perm || hasPermission(perm); }
+  function firstAccessibleRoute() {
+    if (canAccessRoute('dashboard')) return 'dashboard';
+    var order = ['dashboard', 'produtos', 'pedidos', 'posvenda', 'carteira', 'acelera', 'afiliados', 'minharenda', 'caixa', 'contaspagar', 'contasreceber', 'precificacao', 'fator', 'ia'];
+    for (var i = 0; i < order.length; i++) if (canAccessRoute(order[i])) return order[i];
+    return 'dashboard';
+  }
+  /** oculta do #nav os itens cuja permissão de "ver" o usuário logado não tem (item 13). */
+  function applyMenuPermissions() {
+    document.querySelectorAll('#nav a[data-route]').forEach(function (a) {
+      a.style.display = canAccessRoute(a.dataset.route) ? '' : 'none';
+    });
+  }
+
   function userInitials(name) {
     var parts = (name || '').replace(/[^\p{L}\s]/gu, '').trim().split(/\s+/).filter(Boolean);
     if (!parts.length) return '··';
@@ -18383,7 +18418,9 @@ buffer/index.js:
     return authLoadMe().then(function () {
       if (body.mustChangePassword) { renderMustChangePasswordForm(); return; }
       hideAuthOverlay();
-      if (!bootedOnce) { bootedOnce = true; bootApp(); }
+      applyMenuPermissions();
+      if (!canAccessRoute(route)) route = firstAccessibleRoute();
+      if (!bootedOnce) { bootedOnce = true; bootApp(); } else { render(); }
     });
   }
 
@@ -18440,6 +18477,8 @@ buffer/index.js:
       if (!ok) { showAuthOverlay(); if (!bootedOnce) { bootedOnce = true; bootApp(); } return; }
       authLoadMe().then(function (me) {
         hideAuthOverlay();
+        applyMenuPermissions();
+        if (!canAccessRoute(route)) route = firstAccessibleRoute();
         if (!bootedOnce) { bootedOnce = true; bootApp(); }
       }).catch(function () { showAuthOverlay(); if (!bootedOnce) { bootedOnce = true; bootApp(); } });
     });
