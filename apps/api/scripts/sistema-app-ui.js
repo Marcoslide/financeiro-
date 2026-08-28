@@ -3985,7 +3985,12 @@
     Object.keys(patch).forEach(function (k) { var old = c[k]; if ((old == null ? '' : String(old)) !== (patch[k] == null ? '' : String(patch[k]))) { changes.push({ field: k, old: old == null ? '' : String(old), nw: patch[k] == null ? '' : String(patch[k]) }); c[k] = patch[k]; } });
     if (changes.length || obs) { c.history = c.history || []; c.history.unshift({ at: new Date().toISOString(), user: userName || 'Operador', changes: changes, obs: obs || '' }); }
     if (obs != null) c.note = obs;
-    walletCls[id] = c; return putMany('walletcls', [c]);
+    walletCls[id] = c;
+    return putMany('walletcls', [c]).then(function (r) {
+      // item 22 — só registra quando algo de fato mudou (evita ruído de silent no-ops).
+      if (changes.length) auditLocal('WALLET_CLASSIFY_LOCAL', 'carteira', 'WalletTransactionClassification', id, null, { changes: changes });
+      return r;
+    });
   }
   // Categoria efetiva (manual sobrepõe automática); responsabilidade (manual → devolução vinculada → não definida).
   function wEffCat(t) { var c = wgetCls(t.id); return (c && c.catManual) ? c.catManual : t.category; }
@@ -8997,7 +9002,10 @@
     fatorPedidoSnapshots = fatorPedidoSnapshots.filter(function (s) { return !fatorIds[s.orderId]; }).concat(fatorSnapsNovos);
     // Fase 8: a integração financeira (AR/AP/transferências) roda SEMPRE que o dia é fechado (normal
     // ou com ressalva) — idempotente, nunca duplica ao rodar de novo pro mesmo dia.
-    return caixaAplicarIntegracaoFinanceira(dateKey).then(function () { return putMany('caixafechamentos', [rec]); }).then(function () { return putMany('fatorpedidosnapshots', fatorSnapsNovos); });
+    return caixaAplicarIntegracaoFinanceira(dateKey).then(function () { return putMany('caixafechamentos', [rec]); }).then(function () { return putMany('fatorpedidosnapshots', fatorSnapsNovos); }).then(function (r) {
+      auditLocal('CASH_CLOSE_LOCAL', 'caixa', 'CashClosure', dateKey, null, { status: status, justificativa: justificativa || null, vendasN: vendas.n, vendasValor: vendas.valor });
+      return r;
+    });
   }
   // PROMPT "REESTRUTURAÇÃO PROFISSIONAL DO CAIXA" §1: "Reabrir caixa" — volta o status para ABERTO
   // (permitindo reclassificar/fechar de novo mais tarde), mas NUNCA apaga o snapshot nem os títulos
@@ -9009,7 +9017,10 @@
     var at = new Date().toISOString();
     rec.status = 'ABERTO';
     rec.history = (rec.history || []).concat([{ at: at, user: 'Operador', status: 'ABERTO', justificativa: 'Reaberto manualmente' }]);
-    return putMany('caixafechamentos', [rec]);
+    return putMany('caixafechamentos', [rec]).then(function (r) {
+      auditLocal('CASH_REOPEN_LOCAL', 'caixa', 'CashClosure', dateKey, { status: 'FECHADO' }, { status: 'ABERTO' });
+      return r;
+    });
   }
   // ==================== DASHBOARD GERENCIAL DO CAIXA (por período) ====================
   // Parte 7/8 do prompt "Correção do custo + taxas...": o Dashboard deixa de responder só por
@@ -11337,6 +11348,9 @@
     }).then(function () {
       return putMany('cpheader', [full]);
     }).then(function () {
+      // item 22 — registro paralelo no servidor da ação local (criar/editar CP); nunca bloqueia a
+      // mutação, que já está salva no IndexedDB acima independente do resultado desta chamada.
+      auditLocal(isNew ? 'CP_CREATE' : 'CP_EDIT', 'contas-a-pagar', 'AccountsPayable', id, existing ? { valor: existing.valor, categoryId: existing.categoryId } : null, { valor: full.valor, categoryId: full.categoryId, descricao: full.descricao });
       if (andBaixa) return cpRegistrarBaixa(id, { valorPago: cpSaldo(full), date: cpToday(), financialAccountId: full.financialAccountId, paymentMethod: full.paymentMethod, juros: 0, multa: 0, desconto: 0, observacao: 'Baixa automática — "Salvar e Dar Baixa".' }).then(function () { return full; });
       return full;
     });
@@ -11348,7 +11362,10 @@
     cpPayments = [full].concat(cpPayments);
     cpPushHistory(h, 'BAIXA', 'Pagamento de ' + brl(full.valorPago) + (full.financialAccountId ? ' pela conta ' + cpFinAccountLabel(full.financialAccountId) : '') + (full.juros || full.multa || full.desconto ? ' (juros ' + brl(full.juros) + ', multa ' + brl(full.multa) + ', desconto ' + brl(full.desconto) + ')' : '') + '.');
     h.updatedAt = now;
-    return Promise.all([putMany('cppayments', [full]), putMany('cpheader', [h])]).then(function () { return full; });
+    return Promise.all([putMany('cppayments', [full]), putMany('cpheader', [h])]).then(function () {
+      auditLocal('CP_PAY', 'contas-a-pagar', 'AccountsPayablePayment', id, null, { valorPago: full.valorPago, accountsPayableId: headerId, financialAccountId: full.financialAccountId });
+      return full;
+    });
   }
   // Upsert canônico por sourceEventKey (Fase 5 — geração automática de Contas a Pagar no Fechar
   // Caixa). Mesma REGRA DE OURO da Contas a Receber: chamar de novo pro MESMO pedido/dia só
@@ -11383,7 +11400,10 @@
     var h = contasPagar.find(function (x) { return x.id === p.accountsPayableId; });
     p.estornado = true; p.estornadoAt = new Date().toISOString();
     if (h) { cpPushHistory(h, 'ESTORNO', 'Baixa de ' + brl(p.valorPago) + ' em ' + dbr(p.date) + ' estornada.'); h.updatedAt = p.estornadoAt; }
-    return Promise.all([putMany('cppayments', [p])].concat(h ? [putMany('cpheader', [h])] : []));
+    return Promise.all([putMany('cppayments', [p])].concat(h ? [putMany('cpheader', [h])] : [])).then(function (r) {
+      auditLocal('CP_PAY_REVERSE', 'contas-a-pagar', 'AccountsPayablePayment', paymentId, { estornado: false }, { estornado: true, valorPago: p.valorPago });
+      return r;
+    });
   }
   // §45: cancelar nunca apaga; se já houver pagamento, exige estorno antes (nunca cancela em silêncio
   // um título com dinheiro já movimentado).
@@ -11393,7 +11413,10 @@
     if (pagos.length) return Promise.reject(new Error('Esta conta possui ' + pagos.length + ' baixa(s) registrada(s). Estorne as baixas antes de cancelar.'));
     h.canceledAt = new Date().toISOString(); h.canceledReason = reason || null; h.updatedAt = h.canceledAt;
     cpPushHistory(h, 'CANCELAMENTO', reason || 'Conta cancelada.');
-    return putMany('cpheader', [h]);
+    return putMany('cpheader', [h]).then(function (r) {
+      auditLocal('CP_CANCEL', 'contas-a-pagar', 'AccountsPayable', id, { canceledAt: null }, { canceledAt: h.canceledAt, reason: reason || null });
+      return r;
+    });
   }
   // §46: exclusão só para títulos sem baixa registrada — nunca some com movimentação bancária.
   function cpDeleteHeader(id) {
@@ -12897,7 +12920,10 @@
     });
     crPushHistory(full, isNew ? 'CRIACAO' : 'EDICAO', isNew ? 'Conta a receber criada.' : 'Conta a receber editada.');
     contasReceber = [full].concat(contasReceber.filter(function (h) { return h.id !== id; }));
-    return putMany('crheader', [full]).then(function () { return full; });
+    return putMany('crheader', [full]).then(function () {
+      auditLocal(isNew ? 'CR_CREATE' : 'CR_EDIT', 'contas-a-receber', 'AccountsReceivable', id, existing ? { valor: existing.valor, categoryId: existing.categoryId } : null, { valor: full.valor, categoryId: full.categoryId, descricao: full.descricao });
+      return full;
+    });
   }
   // ---- Upsert canônico por sourceEventKey (Fase 5/6/8 — geração automática no Fechar Caixa). REGRA
   // DE OURO: um recebível de pedido existe UMA vez — chama de novo em cada fechamento só ATUALIZA o
@@ -12932,14 +12958,20 @@
     // "sem conta financeira" depois de já recebido.
     if (full.financialAccountId && !h.financialAccountId) h.financialAccountId = full.financialAccountId;
     h.updatedAt = now;
-    return Promise.all([putMany('crreceipts', [full]), putMany('crheader', [h])]).then(function () { return full; });
+    return Promise.all([putMany('crreceipts', [full]), putMany('crheader', [h])]).then(function () {
+      auditLocal('CR_RECEIVE', 'contas-a-receber', 'AccountsReceivableReceipt', id, null, { valorRecebido: full.valorRecebido, accountsReceivableId: headerId, financialAccountId: full.financialAccountId });
+      return full;
+    });
   }
   function crEstornarBaixa(receiptId) {
     var p = crReceipts.find(function (x) { return x.id === receiptId; }); if (!p) return Promise.reject(new Error('Recebimento não encontrado.'));
     var h = contasReceber.find(function (x) { return x.id === p.accountsReceivableId; });
     p.estornado = true; p.estornadoAt = new Date().toISOString();
     if (h) { crPushHistory(h, 'ESTORNO', 'Recebimento de ' + brl(p.valorRecebido) + ' em ' + dbr(p.date) + ' estornado.'); h.updatedAt = p.estornadoAt; }
-    return Promise.all([putMany('crreceipts', [p])].concat(h ? [putMany('crheader', [h])] : []));
+    return Promise.all([putMany('crreceipts', [p])].concat(h ? [putMany('crheader', [h])] : [])).then(function (r) {
+      auditLocal('CR_RECEIVE_REVERSE', 'contas-a-receber', 'AccountsReceivableReceipt', receiptId, { estornado: false }, { estornado: true, valorRecebido: p.valorRecebido });
+      return r;
+    });
   }
   function crCancelHeader(id, reason) {
     var h = contasReceber.find(function (x) { return x.id === id; }); if (!h) return Promise.reject(new Error('Conta a receber não encontrada.'));

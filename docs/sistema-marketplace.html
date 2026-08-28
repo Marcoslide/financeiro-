@@ -337,7 +337,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 72917b8 · 2026-08-28 03:27 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 654004a · 2026-08-28 03:42 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -421,9 +421,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     mod
   ));
 
-  // node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js
+  // ../../node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js
   var require_base64_js = __commonJS({
-    "node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js"(exports) {
+    "../../node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js"(exports) {
       "use strict";
       exports.byteLength = byteLength;
       exports.toByteArray = toByteArray;
@@ -522,9 +522,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js
+  // ../../node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js
   var require_ieee754 = __commonJS({
-    "node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js"(exports) {
+    "../../node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js"(exports) {
       exports.read = function(buffer, offset, isLE, mLen, nBytes) {
         var e, m;
         var eLen = nBytes * 8 - mLen - 1;
@@ -605,9 +605,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js
+  // ../../node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js
   var require_buffer = __commonJS({
-    "node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js"(exports) {
+    "../../node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js"(exports) {
       "use strict";
       var base64 = require_base64_js();
       var ieee754 = require_ieee754();
@@ -1976,9 +1976,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // packages/shared/dist/index.js
+  // ../../packages/shared/dist/index.js
   var require_dist = __commonJS({
-    "packages/shared/dist/index.js"(exports) {
+    "../../packages/shared/dist/index.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.ImportIssueSeverity = exports.IMPORT_ROW_STATUS_LABELS = exports.ImportRowStatus = exports.IMPORT_BATCH_STATUS_LABELS = exports.ImportBatchStatus = exports.FileFormat = exports.REPORT_TYPE_LABELS = exports.ReportType = exports.AuditAction = exports.TemporalStatus = exports.ReconciliationState = exports.IngestionSource = exports.EntityStatus = exports.ROLE_LABELS = exports.Role = void 0;
@@ -2154,19 +2154,19 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // apps/api/src/imports/parsing/browser/shim-xlsx.js
+  // src/imports/parsing/browser/shim-xlsx.js
   var require_shim_xlsx = __commonJS({
-    "apps/api/src/imports/parsing/browser/shim-xlsx.js"(exports, module) {
+    "src/imports/parsing/browser/shim-xlsx.js"(exports, module) {
       "use strict";
       var XLSX2 = typeof globalThis !== "undefined" && globalThis.XLSX || {};
       module.exports = XLSX2;
     }
   });
 
-  // apps/api/src/all/entry.ts
+  // src/all/entry.ts
   var import_buffer = __toESM(require_buffer());
 
-  // apps/api/src/imports/parsing/format.ts
+  // src/imports/parsing/format.ts
   var import_shared = __toESM(require_dist());
   function detectFileFormat(buffer) {
     if (buffer.length >= 4) {
@@ -2189,7 +2189,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return !(ext === "csv" || ext === "txt" || ext === "tsv" || ext === "");
   }
 
-  // apps/api/src/imports/parsing/workbook.ts
+  // src/imports/parsing/workbook.ts
   var XLSX = __toESM(require_shim_xlsx());
   var import_shared2 = __toESM(require_dist());
   function sniffDelimiter(sample) {
@@ -2330,7 +2330,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { sheets };
   }
 
-  // apps/api/src/imports/parsing/value-parsers.ts
+  // src/imports/parsing/value-parsers.ts
   var NULLISH = /* @__PURE__ */ new Set(["", "-", "--", "\u2014", "n/a", "na", "null"]);
   function stripCurrency(input) {
     let s = input.trim().replace(/\u00a0/g, " ").trim();
@@ -2449,7 +2449,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return label.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
   }
 
-  // apps/api/src/imports/parsing/row-accessor.ts
+  // src/imports/parsing/row-accessor.ts
   var RowAccessor = class {
     constructor(headers, cells) {
       this.headers = headers;
@@ -2498,7 +2498,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   };
 
-  // apps/api/src/imports/parsing/browser/shim-crypto.js
+  // src/imports/parsing/browser/shim-crypto.js
   function sha256(bytes) {
     const K = [
       1116352408,
@@ -2650,7 +2650,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // apps/api/src/imports/parsing/hashing.ts
+  // src/imports/parsing/hashing.ts
   function sha2562(value) {
     return createHash("sha256").update(value).digest("hex");
   }
@@ -2658,7 +2658,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return sha2562(buffer);
   }
 
-  // apps/api/src/products/parsing/product-sheet.ts
+  // src/products/parsing/product-sheet.ts
   var SCAN_LIMIT = 40;
   var REQUIRED_LABELS = ["ID do Produto", "Nome do Produto"].map(normalizeLabel);
   var STRONG_LABELS = ["SKU", "Variante Identificador", "Pre\xE7o", "Estoque do Vendedor"].map(normalizeLabel);
@@ -2832,10 +2832,10 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // apps/api/src/orders/parsing/orders-rows.ts
+  // src/orders/parsing/orders-rows.ts
   var import_shared6 = __toESM(require_dist());
 
-  // apps/api/src/imports/parsing/report-specs.ts
+  // src/imports/parsing/report-specs.ts
   var import_shared3 = __toESM(require_dist());
   function canonicalDecimal(s) {
     if (s == null) return "";
@@ -3303,7 +3303,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return REPORT_SPECS.find((s) => s.type === type);
   }
 
-  // apps/api/src/imports/parsing/detect.ts
+  // src/imports/parsing/detect.ts
   var import_shared4 = __toESM(require_dist());
   var SCAN_LIMIT2 = 40;
   var ORDER_FAMILY = [
@@ -3453,7 +3453,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { columns, headerNames, dataStartRow: headerRow + 1 };
   }
 
-  // apps/api/src/imports/parsing/analyze.ts
+  // src/imports/parsing/analyze.ts
   var import_shared5 = __toESM(require_dist());
   var PERSONAL_DATA_LABELS = [
     "Telefone",
@@ -3533,7 +3533,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // apps/api/src/orders/parsing/orders-rows.ts
+  // src/orders/parsing/orders-rows.ts
   function first(acc, labels) {
     for (const l of labels) {
       const v = acc.get(l);
@@ -3692,7 +3692,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return null;
   }
 
-  // apps/api/src/orders/status.ts
+  // src/orders/status.ts
   var NORMALIZED_LABELS = {
     NAO_PAGO: "N\xE3o pago",
     A_ENVIAR: "A enviar",
@@ -3723,7 +3723,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return "OUTRO";
   }
 
-  // apps/api/src/orders/finance.ts
+  // src/orders/finance.ts
   var round2 = (n) => Math.round(n * 100) / 100;
   function computeOrderFinance(input) {
     const fees = round2(
@@ -3756,7 +3756,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // apps/api/src/postsale/parsing/postsale-rows.ts
+  // src/postsale/parsing/postsale-rows.ts
   var import_shared7 = __toESM(require_dist());
   var REPORT_OF = {
     RETURN_REFUND: import_shared7.ReportType.RETURN_REFUND,
@@ -3886,7 +3886,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { ...base, rows, periodStart, periodEnd };
   }
 
-  // apps/api/src/postsale/exposure.ts
+  // src/postsale/exposure.ts
   var norm2 = (s) => (s != null ? s : "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   function classifyExposureNumbers(status, requested, compensation) {
     const s = norm2(status);
@@ -3908,7 +3908,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
   var EXPOSURE_METHODOLOGY = "Classifica\xE7\xE3o por status Shopee: CANCELADA/RECUSADA/DESIST\xCANCIA = sem perda; COMPENSA\xC7\xC3O ao vendedor = recuperado; CONCLU\xCDDA/APROVADA/REEMBOLSADA = preju\xEDzo confirmado (solicitado \u2212 compensa\xE7\xE3o); EM AN\xC1LISE/PENDENTE/DISPUTA = em risco. Valor solicitado nunca \xE9 tratado automaticamente como preju\xEDzo.";
 
-  // apps/api/src/all/entry.ts
+  // src/all/entry.ts
   globalThis.Buffer = import_buffer.Buffer;
   var toBuf = (ab) => import_buffer.Buffer.from(new Uint8Array(ab));
   globalThis.SISTEMA = {
@@ -7930,7 +7930,12 @@ buffer/index.js:
     Object.keys(patch).forEach(function (k) { var old = c[k]; if ((old == null ? '' : String(old)) !== (patch[k] == null ? '' : String(patch[k]))) { changes.push({ field: k, old: old == null ? '' : String(old), nw: patch[k] == null ? '' : String(patch[k]) }); c[k] = patch[k]; } });
     if (changes.length || obs) { c.history = c.history || []; c.history.unshift({ at: new Date().toISOString(), user: userName || 'Operador', changes: changes, obs: obs || '' }); }
     if (obs != null) c.note = obs;
-    walletCls[id] = c; return putMany('walletcls', [c]);
+    walletCls[id] = c;
+    return putMany('walletcls', [c]).then(function (r) {
+      // item 22 — só registra quando algo de fato mudou (evita ruído de silent no-ops).
+      if (changes.length) auditLocal('WALLET_CLASSIFY_LOCAL', 'carteira', 'WalletTransactionClassification', id, null, { changes: changes });
+      return r;
+    });
   }
   // Categoria efetiva (manual sobrepõe automática); responsabilidade (manual → devolução vinculada → não definida).
   function wEffCat(t) { var c = wgetCls(t.id); return (c && c.catManual) ? c.catManual : t.category; }
@@ -12942,7 +12947,10 @@ buffer/index.js:
     fatorPedidoSnapshots = fatorPedidoSnapshots.filter(function (s) { return !fatorIds[s.orderId]; }).concat(fatorSnapsNovos);
     // Fase 8: a integração financeira (AR/AP/transferências) roda SEMPRE que o dia é fechado (normal
     // ou com ressalva) — idempotente, nunca duplica ao rodar de novo pro mesmo dia.
-    return caixaAplicarIntegracaoFinanceira(dateKey).then(function () { return putMany('caixafechamentos', [rec]); }).then(function () { return putMany('fatorpedidosnapshots', fatorSnapsNovos); });
+    return caixaAplicarIntegracaoFinanceira(dateKey).then(function () { return putMany('caixafechamentos', [rec]); }).then(function () { return putMany('fatorpedidosnapshots', fatorSnapsNovos); }).then(function (r) {
+      auditLocal('CASH_CLOSE_LOCAL', 'caixa', 'CashClosure', dateKey, null, { status: status, justificativa: justificativa || null, vendasN: vendas.n, vendasValor: vendas.valor });
+      return r;
+    });
   }
   // PROMPT "REESTRUTURAÇÃO PROFISSIONAL DO CAIXA" §1: "Reabrir caixa" — volta o status para ABERTO
   // (permitindo reclassificar/fechar de novo mais tarde), mas NUNCA apaga o snapshot nem os títulos
@@ -12954,7 +12962,10 @@ buffer/index.js:
     var at = new Date().toISOString();
     rec.status = 'ABERTO';
     rec.history = (rec.history || []).concat([{ at: at, user: 'Operador', status: 'ABERTO', justificativa: 'Reaberto manualmente' }]);
-    return putMany('caixafechamentos', [rec]);
+    return putMany('caixafechamentos', [rec]).then(function (r) {
+      auditLocal('CASH_REOPEN_LOCAL', 'caixa', 'CashClosure', dateKey, { status: 'FECHADO' }, { status: 'ABERTO' });
+      return r;
+    });
   }
   // ==================== DASHBOARD GERENCIAL DO CAIXA (por período) ====================
   // Parte 7/8 do prompt "Correção do custo + taxas...": o Dashboard deixa de responder só por
@@ -15282,6 +15293,9 @@ buffer/index.js:
     }).then(function () {
       return putMany('cpheader', [full]);
     }).then(function () {
+      // item 22 — registro paralelo no servidor da ação local (criar/editar CP); nunca bloqueia a
+      // mutação, que já está salva no IndexedDB acima independente do resultado desta chamada.
+      auditLocal(isNew ? 'CP_CREATE' : 'CP_EDIT', 'contas-a-pagar', 'AccountsPayable', id, existing ? { valor: existing.valor, categoryId: existing.categoryId } : null, { valor: full.valor, categoryId: full.categoryId, descricao: full.descricao });
       if (andBaixa) return cpRegistrarBaixa(id, { valorPago: cpSaldo(full), date: cpToday(), financialAccountId: full.financialAccountId, paymentMethod: full.paymentMethod, juros: 0, multa: 0, desconto: 0, observacao: 'Baixa automática — "Salvar e Dar Baixa".' }).then(function () { return full; });
       return full;
     });
@@ -15293,7 +15307,10 @@ buffer/index.js:
     cpPayments = [full].concat(cpPayments);
     cpPushHistory(h, 'BAIXA', 'Pagamento de ' + brl(full.valorPago) + (full.financialAccountId ? ' pela conta ' + cpFinAccountLabel(full.financialAccountId) : '') + (full.juros || full.multa || full.desconto ? ' (juros ' + brl(full.juros) + ', multa ' + brl(full.multa) + ', desconto ' + brl(full.desconto) + ')' : '') + '.');
     h.updatedAt = now;
-    return Promise.all([putMany('cppayments', [full]), putMany('cpheader', [h])]).then(function () { return full; });
+    return Promise.all([putMany('cppayments', [full]), putMany('cpheader', [h])]).then(function () {
+      auditLocal('CP_PAY', 'contas-a-pagar', 'AccountsPayablePayment', id, null, { valorPago: full.valorPago, accountsPayableId: headerId, financialAccountId: full.financialAccountId });
+      return full;
+    });
   }
   // Upsert canônico por sourceEventKey (Fase 5 — geração automática de Contas a Pagar no Fechar
   // Caixa). Mesma REGRA DE OURO da Contas a Receber: chamar de novo pro MESMO pedido/dia só
@@ -15328,7 +15345,10 @@ buffer/index.js:
     var h = contasPagar.find(function (x) { return x.id === p.accountsPayableId; });
     p.estornado = true; p.estornadoAt = new Date().toISOString();
     if (h) { cpPushHistory(h, 'ESTORNO', 'Baixa de ' + brl(p.valorPago) + ' em ' + dbr(p.date) + ' estornada.'); h.updatedAt = p.estornadoAt; }
-    return Promise.all([putMany('cppayments', [p])].concat(h ? [putMany('cpheader', [h])] : []));
+    return Promise.all([putMany('cppayments', [p])].concat(h ? [putMany('cpheader', [h])] : [])).then(function (r) {
+      auditLocal('CP_PAY_REVERSE', 'contas-a-pagar', 'AccountsPayablePayment', paymentId, { estornado: false }, { estornado: true, valorPago: p.valorPago });
+      return r;
+    });
   }
   // §45: cancelar nunca apaga; se já houver pagamento, exige estorno antes (nunca cancela em silêncio
   // um título com dinheiro já movimentado).
@@ -15338,7 +15358,10 @@ buffer/index.js:
     if (pagos.length) return Promise.reject(new Error('Esta conta possui ' + pagos.length + ' baixa(s) registrada(s). Estorne as baixas antes de cancelar.'));
     h.canceledAt = new Date().toISOString(); h.canceledReason = reason || null; h.updatedAt = h.canceledAt;
     cpPushHistory(h, 'CANCELAMENTO', reason || 'Conta cancelada.');
-    return putMany('cpheader', [h]);
+    return putMany('cpheader', [h]).then(function (r) {
+      auditLocal('CP_CANCEL', 'contas-a-pagar', 'AccountsPayable', id, { canceledAt: null }, { canceledAt: h.canceledAt, reason: reason || null });
+      return r;
+    });
   }
   // §46: exclusão só para títulos sem baixa registrada — nunca some com movimentação bancária.
   function cpDeleteHeader(id) {
@@ -16842,7 +16865,10 @@ buffer/index.js:
     });
     crPushHistory(full, isNew ? 'CRIACAO' : 'EDICAO', isNew ? 'Conta a receber criada.' : 'Conta a receber editada.');
     contasReceber = [full].concat(contasReceber.filter(function (h) { return h.id !== id; }));
-    return putMany('crheader', [full]).then(function () { return full; });
+    return putMany('crheader', [full]).then(function () {
+      auditLocal(isNew ? 'CR_CREATE' : 'CR_EDIT', 'contas-a-receber', 'AccountsReceivable', id, existing ? { valor: existing.valor, categoryId: existing.categoryId } : null, { valor: full.valor, categoryId: full.categoryId, descricao: full.descricao });
+      return full;
+    });
   }
   // ---- Upsert canônico por sourceEventKey (Fase 5/6/8 — geração automática no Fechar Caixa). REGRA
   // DE OURO: um recebível de pedido existe UMA vez — chama de novo em cada fechamento só ATUALIZA o
@@ -16877,14 +16903,20 @@ buffer/index.js:
     // "sem conta financeira" depois de já recebido.
     if (full.financialAccountId && !h.financialAccountId) h.financialAccountId = full.financialAccountId;
     h.updatedAt = now;
-    return Promise.all([putMany('crreceipts', [full]), putMany('crheader', [h])]).then(function () { return full; });
+    return Promise.all([putMany('crreceipts', [full]), putMany('crheader', [h])]).then(function () {
+      auditLocal('CR_RECEIVE', 'contas-a-receber', 'AccountsReceivableReceipt', id, null, { valorRecebido: full.valorRecebido, accountsReceivableId: headerId, financialAccountId: full.financialAccountId });
+      return full;
+    });
   }
   function crEstornarBaixa(receiptId) {
     var p = crReceipts.find(function (x) { return x.id === receiptId; }); if (!p) return Promise.reject(new Error('Recebimento não encontrado.'));
     var h = contasReceber.find(function (x) { return x.id === p.accountsReceivableId; });
     p.estornado = true; p.estornadoAt = new Date().toISOString();
     if (h) { crPushHistory(h, 'ESTORNO', 'Recebimento de ' + brl(p.valorRecebido) + ' em ' + dbr(p.date) + ' estornado.'); h.updatedAt = p.estornadoAt; }
-    return Promise.all([putMany('crreceipts', [p])].concat(h ? [putMany('crheader', [h])] : []));
+    return Promise.all([putMany('crreceipts', [p])].concat(h ? [putMany('crheader', [h])] : [])).then(function (r) {
+      auditLocal('CR_RECEIVE_REVERSE', 'contas-a-receber', 'AccountsReceivableReceipt', receiptId, { estornado: false }, { estornado: true, valorRecebido: p.valorRecebido });
+      return r;
+    });
   }
   function crCancelHeader(id, reason) {
     var h = contasReceber.find(function (x) { return x.id === id; }); if (!h) return Promise.reject(new Error('Conta a receber não encontrada.'));
