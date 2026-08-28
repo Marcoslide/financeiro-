@@ -317,7 +317,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build c68223b · 2026-08-27 23:52 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 5b7114c · 2026-08-27 23:59 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -16405,7 +16405,15 @@ buffer/index.js:
   var crProjF = { search: '', produto: '', sku: '', prazo: '' };
   var crProjPage = 1, crProjPageSize = 30;
   var crPage = 1, crPageSize = 30;
-  var crF = { situacao: '', financialAccountId: '', search: '', dateBasis: 'vencimento', sort: 'vencimento', dir: 'asc' };
+  var crF = { situacao: '', financialAccountId: '', categoryId: '', costCenterId: '', search: '', dateBasis: 'vencimento', sort: 'vencimento', dir: 'asc' };
+  // Fase 9 V11: "Recebimento" como base de data não é um campo do cabeçalho — é a data do último
+  // recebimento efetivo (crReceipts), então recebe tratamento à parte de dateBasis (que só lê h[basis]
+  // diretamente).
+  function crUltimoRecebimento(h) {
+    var recibos = crReceiptsForHeader(h.id).filter(function (p) { return !p.estornado; });
+    if (!recibos.length) return null;
+    return recibos.reduce(function (max, p) { return (p.date || '') > max ? (p.date || '') : max; }, '');
+  }
   // PROMPT "Reestruturar Contas a Receber + Controle Bancário" §4: PREVISTO é o estado de um título
   // gerado por transferência Carteira→Banco reconhecida automaticamente (Pix), mas sem baixa/conta
   // confirmada ainda — dinheiro que já saiu da Shopee, só falta o operador confirmar em qual banco
@@ -16741,10 +16749,12 @@ buffer/index.js:
     var op = opActiveOrNull(); if (op) list = list.filter(function (h) { return !h.operationId || h.operationId === op; });
     var basis = crF.dateBasis;
     var range = periodRange(); var from = range.from ? range.from.toISOString().slice(0, 10) : null; var to = range.to ? range.to.toISOString().slice(0, 10) : null;
-    list = list.filter(function (h) { var d = h[basis]; if (!d) return periodSel.value === 'all'; if (from && d < from) return false; if (to && d > to) return false; return true; });
+    list = list.filter(function (h) { var d = basis === 'recebimento' ? crUltimoRecebimento(h) : h[basis]; if (!d) return periodSel.value === 'all'; if (from && d < from) return false; if (to && d > to) return false; return true; });
     if (crF.situacao) list = list.filter(function (h) { return crStatusDerivado(h) === crF.situacao; });
     if (crF.financialAccountId === '__none') list = list.filter(function (h) { return !h.financialAccountId; });
     else if (crF.financialAccountId) list = list.filter(function (h) { return h.financialAccountId === crF.financialAccountId; });
+    if (crF.categoryId) list = list.filter(function (h) { return h.categoryId === crF.categoryId; });
+    if (crF.costCenterId) list = list.filter(function (h) { var c = crCategories.find(function (x) { return x.id === h.categoryId; }); return c && c.costCenterId === crF.costCenterId; });
     if (crF.search) { var q = cpNorm(crF.search); list = list.filter(function (h) { return cpNorm(h.descricao || '').indexOf(q) >= 0 || cpNorm(h.pagador || '').indexOf(q) >= 0 || cpNorm(h.referencia || '').indexOf(q) >= 0 || cpNorm(h.orderId || '').indexOf(q) >= 0; }); }
     list.sort(function (a, b) { var k = crF.sort; var av = a[k] || '', bv = b[k] || ''; var c = av < bv ? -1 : av > bv ? 1 : 0; return crF.dir === 'asc' ? c : -c; });
     return list;
@@ -16972,13 +16982,15 @@ buffer/index.js:
     var header = '<div class="page-head" style="align-items:center"><div>' +
       '<p style="margin:0;color:var(--muted);font-size:13px">' + nn(all.length) + ' conta(s) · saldo ' + brl(all.reduce(function (s, h) { return s + crSaldo(h); }, 0)) + '</p></div>' +
       '<div style="display:flex;gap:8px"><button class="btn-sm primary" id="cr-new">+ Nova conta a receber</button></div></div>';
-    var basisOpts = [['competencia', 'Competência'], ['vencimento', 'Vencimento']];
+    var basisOpts = [['competencia', 'Competência'], ['vencimento', 'Vencimento'], ['recebimento', 'Recebimento']];
     var filtros = '<div class="panel"><div class="pb">' + devPeriodBarAsCp() +
       '<div class="toolbar2" style="margin-top:0">' +
       '<input class="input" id="cr-search" style="flex:2;min-width:240px" placeholder="Buscar — descrição, pagador, pedido, referência…" value="' + esc(crF.search) + '">' +
       '<select class="select sm" id="cr-situacao">' + CR_SITUACOES.map(function (o) { return '<option value="' + o[0] + '"' + (crF.situacao === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>' +
       '<select class="select sm" id="cr-basis">' + basisOpts.map(function (o) { return '<option value="' + o[0] + '"' + (crF.dateBasis === o[0] ? ' selected' : '') + '>Data: ' + o[1] + '</option>'; }).join('') + '</select>' +
       '<select class="select sm" id="cr-conta">' + crFinAccountOptions(crF.financialAccountId) + '</select>' +
+      '<select class="select sm" id="cr-fcat">' + crCategoryOptions(crF.categoryId, false) + '</select>' +
+      '<select class="select sm" id="cr-fcc">' + '<option value="">Todo centro de recebimentos</option>' + crCostCenters.map(function (c) { return '<option value="' + c.id + '"' + (crF.costCenterId === c.id ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('') + '</select>' +
       '<div style="flex:1"></div><button class="btn-sm" id="cr-limpar">Limpar filtros</button>' +
       '</div></div></div>';
     var rows = pageList.map(function (h) {
@@ -16988,7 +17000,10 @@ buffer/index.js:
         '<td class="rowlink cell-text" data-cropen="' + h.id + '"><b>' + esc((h.descricao || '').slice(0, 60)) + '</b></td>' +
         '<td>' + esc(h.pagador || '—') + '</td>' +
         '<td>' + esc(CR_ORIGIN_LABEL[h.origin] || h.origin || '—') + '</td>' +
-        '<td>' + esc(cpCategoryPathLabel(h.categoryId)) + (h.manualFields && h.manualFields.length ? ' <span class="tag" title="Categoria/Conta definidas manualmente — protegidas contra sobrescrita automática">🔒 manual</span>' : '') + '</td>' +
+        // Fase 9 V11: categoria de CR sempre resolvida em crCategories — cpCategoryPathLabel() (CP)
+        // nunca encontraria o ID e a coluna ficaria eternamente "—" pra todo título classificado
+        // depois da V1/V5.
+        '<td>' + esc(crCategoryPathLabel(h.categoryId)) + (h.manualFields && h.manualFields.length ? ' <span class="tag" title="Categoria/Conta definidas manualmente — protegidas contra sobrescrita automática">🔒 manual</span>' : '') + '</td>' +
         '<td>' + esc(h.orderId || h.referencia || '—') + '</td>' +
         '<td class="nowrap">' + brl(h.valor) + '</td><td class="nowrap">' + brl(crRecebidoTotal(h)) + '</td><td class="nowrap">' + brl(saldo) + '</td>' +
         '<td><span class="badge ' + lbl[1] + '">' + lbl[0] + '</span></td>' +
@@ -17014,7 +17029,9 @@ buffer/index.js:
     var instantSel = { 'cr-situacao': 'situacao', 'cr-basis': 'dateBasis' };
     Object.keys(instantSel).forEach(function (elId) { var el = document.getElementById(elId); if (el) el.onchange = function () { crF[instantSel[elId]] = el.value; crPage = 1; crRenderBody(); }; });
     var contaSel = document.getElementById('cr-conta'); if (contaSel) contaSel.onchange = function () { crF.financialAccountId = contaSel.value === '__none' ? '__none' : contaSel.value; crPage = 1; crRenderBody(); };
-    var lim = document.getElementById('cr-limpar'); if (lim) lim.onclick = function () { crF = { situacao: '', financialAccountId: '', search: '', dateBasis: 'vencimento', sort: 'vencimento', dir: 'asc' }; crPage = 1; if (periodSel) periodSel.value = 'all'; render(); };
+    var fcatSel = document.getElementById('cr-fcat'); if (fcatSel) fcatSel.onchange = function () { crF.categoryId = fcatSel.value || ''; crPage = 1; crRenderBody(); };
+    var fccSel = document.getElementById('cr-fcc'); if (fccSel) fccSel.onchange = function () { crF.costCenterId = fccSel.value || ''; crPage = 1; crRenderBody(); };
+    var lim = document.getElementById('cr-limpar'); if (lim) lim.onclick = function () { crF = { situacao: '', financialAccountId: '', categoryId: '', costCenterId: '', search: '', dateBasis: 'vencimento', sort: 'vencimento', dir: 'asc' }; crPage = 1; if (periodSel) periodSel.value = 'all'; render(); };
     app.querySelectorAll('[data-crsort]').forEach(function (th) { th.onclick = function () { var k = th.dataset.crsort; if (crF.sort === k) crF.dir = crF.dir === 'asc' ? 'desc' : 'asc'; else { crF.sort = k; crF.dir = 'asc'; } crRenderBody(); }; });
     app.querySelectorAll('[data-cropen]').forEach(function (el) { el.onclick = function () { openCrEditor(el.dataset.cropen); }; });
     var prev = document.getElementById('cr-prev'); if (prev) prev.onclick = function () { crPage--; crRenderBody(); };
