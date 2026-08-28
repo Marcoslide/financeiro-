@@ -14168,6 +14168,10 @@
   document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; pricingOpConfig = []; pricingFamilyRules = []; pontoEquilibrioCfg = {}; metaLucroCfg = {}; financialAccounts = []; financialEvents = []; contasReceber = []; crReceipts = []; financialTransfers = []; fatorFuncionarios = []; fatorCustosFixos = []; fatorCustosVariaveis = []; fatorPedidoSnapshots = []; fatorConfig = {}; skuFamilyOverrides = {}; fatorConfigs = []; fatorSetores = []; fatorImpostos = []; fatorProcessos = []; fatorRoteiros = {}; fatorRoteiroSkuOverrides = {}; fatorSub = 'geral'; skuFamilyOverrideHistory = []; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
   var opSelBtn = document.getElementById('op-selector'); if (opSelBtn) opSelBtn.onclick = function () { openOperationSelector(); };
 
+  // Fase 10.2: todo o boot local (abrir IndexedDB, carregar os dados, primeiro render()) virou
+  // bootApp() — só é chamado depois que authInit() confirma uma sessão válida no servidor (ou logo
+  // após um login/bootstrap bem-sucedido). O carregamento em si nunca mudou uma linha.
+  function bootApp() {
   // Abre o banco; se falhar (corrompido/bloqueado/privado), ativa o modo em memória e SEGUE —
   // o sistema sempre carrega e Produtos sempre abre (só não salva). Nunca dead-end / tela branca.
   openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
@@ -14255,4 +14259,245 @@
       render();
     });
   }).catch(function (e) { app.innerHTML = '<div class="form-err" style="max-width:640px;margin:24px auto"><b>Não foi possível abrir o banco de dados local.</b><br>' + esc(e.message || e) + '<div style="margin-top:12px"><button class="btn-sm primary" onclick="location.reload()">Recarregar</button></div></div>'; });
+  }
+
+  // ============================================================================
+  // Fase 10.2 — LOGIN / SESSÃO / USUÁRIOS / PERFIS
+  // ============================================================================
+  // Arquitetura (ver relatório entregue com a auditoria da Fase 10.2): o
+  // "Sistema Marketplace — Líder" é servido pelo MESMO servidor NestJS que
+  // valida a sessão (apps/api, agora servindo /sistema-marketplace.html
+  // estático na mesma origem) — login/senha são conferidos no SERVIDOR
+  // (argon2), nunca no navegador. O overlay abaixo (#auth-overlay, fora de
+  // #app) é a única coisa que o usuário vê/toca antes de uma sessão válida
+  // existir — ocultar menu não é segurança (por isso as rotas administrativas
+  // reais — /api/users, /api/roles, /api/audit-logs — também checam
+  // permissão no servidor, não só aqui). O que ESTE arquivo não pode fazer:
+  // impedir que alguém com acesso ao navegador leia o IndexedDB local — os
+  // dados operacionais continuam 100% client-side, então a autorização por
+  // permissão AQUI (menu, telas, campos da Ficha 360) é uma fronteira de
+  // experiência/disciplina operacional, não uma garantia de isolamento de
+  // dado como as rotas da API têm. Documentado explicitamente no relatório.
+  var authSession = { accessToken: null, user: null, permissions: [] };
+  var AUTH_OVERLAY = document.getElementById('auth-overlay');
+
+  function authFetch(path, opts) {
+    opts = opts || {};
+    var headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+    if (authSession.accessToken) headers['Authorization'] = 'Bearer ' + authSession.accessToken;
+    return fetch('/api' + path, Object.assign({ credentials: 'include' }, opts, { headers: headers }))
+      .then(function (res) {
+        if (res.status === 401 && !opts.__retried) {
+          // access token expirou (15min) — tenta renovar em silêncio pelo cookie httpOnly antes de
+          // desistir; se o refresh também falhar, é sessão mesmo encerrada (usuário desativado,
+          // logout em outra aba, cookie expirado) — cai pro login.
+          return authRefreshSilent().then(function (ok) {
+            if (!ok) { showAuthOverlay(); return Promise.reject(new Error('Sessão expirada.')); }
+            return authFetch(path, Object.assign({}, opts, { __retried: true }));
+          });
+        }
+        return res;
+      });
+  }
+  function authFetchJson(path, opts) {
+    return authFetch(path, opts).then(function (res) {
+      if (!res.ok) return res.json().catch(function () { return {}; }).then(function (b) { throw new Error(b.message || ('Erro ' + res.status)); });
+      if (res.status === 204) return null;
+      return res.json();
+    });
+  }
+  /** item 22 — registra uma ação local no audit log do servidor. Best-effort/fire-and-forget
+   * (item 23): uma falha de rede aqui NUNCA bloqueia nem desfaz a ação local que já aconteceu. */
+  function auditLocal(action, module, entityType, entityId, before, after, metadata) {
+    authFetch('/audit-logs', { method: 'POST', body: JSON.stringify({ action: action, module: module, entityType: entityType, entityId: entityId, before: before, after: after, metadata: metadata }) }).catch(function () { });
+  }
+
+  function authRefreshSilent() {
+    return fetch('/api/auth/refresh', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      .then(function (res) { if (!res.ok) return false; return res.json().then(function (d) { authSession.accessToken = d.accessToken; return true; }); })
+      .catch(function () { return false; });
+  }
+  function authLoadMe() {
+    return authFetchJson('/auth/me').then(function (me) {
+      authSession.user = me; authSession.permissions = me.permissions || [];
+      return me;
+    });
+  }
+  /** item 7/48 — usado pelo menu/rotas do front. Nunca a única barreira (rotas reais checam no servidor). */
+  function hasPermission(key) { return authSession.user && authSession.user.role === 'OWNER' || authSession.permissions.indexOf(key) >= 0; }
+
+  function userInitials(name) {
+    var parts = (name || '').replace(/[^\p{L}\s]/gu, '').trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return '··';
+    return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+  }
+  var ROLE_LABEL_PT = { OWNER: 'Proprietário', ADMIN: 'Administrador', FINANCIAL: 'Financeiro', VIEWER: 'Consulta' };
+  function roleLabel(user) {
+    if (user.appRole && user.appRole.name) return user.appRole.name;
+    return ROLE_LABEL_PT[user.role] || user.role;
+  }
+
+  function showAuthOverlay() {
+    AUTH_OVERLAY.style.display = 'flex';
+    fetch('/api/auth/bootstrap/status').then(function (r) { return r.json(); }).then(function (s) {
+      if (s.needsBootstrap) renderBootstrapForm(); else renderLoginForm();
+    }).catch(function () { renderLoginForm(); });
+  }
+  function hideAuthOverlay() {
+    AUTH_OVERLAY.style.display = 'none';
+    renderUserMenuTrigger();
+  }
+
+  var AUTH_CARD_STYLE = 'width:380px;max-width:92vw;background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 30px 80px rgba(16,26,51,.18);padding:32px';
+
+  function renderLoginForm(errorMsg) {
+    AUTH_OVERLAY.innerHTML =
+      '<div style="' + AUTH_CARD_STYLE + '">' +
+      '<div style="display:flex;align-items:center;gap:10px;margin-bottom:22px"><div class="logo-badge">LM</div><div><div style="font-weight:800;font-size:16px">Marketplace</div><div style="color:var(--muted);font-size:12px">Sistema unificado</div></div></div>' +
+      '<h2 style="margin:0 0 4px;font-size:19px">Entrar</h2>' +
+      '<p style="margin:0 0 20px;color:var(--muted);font-size:13px">Acesse com seu e-mail e senha.</p>' +
+      (errorMsg ? '<div class="form-err" style="margin-bottom:14px">' + esc(errorMsg) + '</div>' : '') +
+      '<label class="fld">E-mail</label><input class="input" id="auth-email" type="email" autocomplete="username" style="width:100%;margin-bottom:12px">' +
+      '<label class="fld">Senha</label>' +
+      '<div style="position:relative"><input class="input" id="auth-password" type="password" autocomplete="current-password" style="width:100%">' +
+      '<button type="button" id="auth-toggle-pw" class="link-btn" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:11.5px">mostrar</button></div>' +
+      '<button class="btn-sm primary" id="auth-submit" style="width:100%;margin-top:18px;padding:10px">Entrar</button>' +
+      '</div>';
+    var pwInput = document.getElementById('auth-password');
+    document.getElementById('auth-toggle-pw').onclick = function () {
+      var showing = pwInput.type === 'text'; pwInput.type = showing ? 'password' : 'text';
+      document.getElementById('auth-toggle-pw').textContent = showing ? 'mostrar' : 'ocultar';
+    };
+    function submit() {
+      var email = document.getElementById('auth-email').value.trim();
+      var password = pwInput.value;
+      if (!email || !password) return renderLoginForm('Informe e-mail e senha.');
+      var btn = document.getElementById('auth-submit'); btn.disabled = true; btn.textContent = 'Entrando…';
+      fetch('/api/auth/login', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email, password: password }) })
+        .then(function (res) { return res.json().then(function (body) { if (!res.ok) throw new Error(body.message || 'Não foi possível entrar.'); return body; }); })
+        .then(onAuthSuccess)
+        .catch(function (e) { renderLoginForm(e.message); });
+    }
+    document.getElementById('auth-submit').onclick = submit;
+    AUTH_OVERLAY.querySelectorAll('input').forEach(function (inp) { inp.onkeydown = function (e) { if (e.key === 'Enter') submit(); }; });
+  }
+
+  /** item 2/26 — só aparece quando o servidor confirma que NENHUM usuário existe ainda. */
+  function renderBootstrapForm(errorMsg) {
+    AUTH_OVERLAY.innerHTML =
+      '<div style="' + AUTH_CARD_STYLE + '">' +
+      '<div style="display:flex;align-items:center;gap:10px;margin-bottom:22px"><div class="logo-badge">LM</div><div><div style="font-weight:800;font-size:16px">Marketplace</div><div style="color:var(--muted);font-size:12px">Sistema unificado</div></div></div>' +
+      '<h2 style="margin:0 0 4px;font-size:19px">Criar conta do Proprietário</h2>' +
+      '<p style="margin:0 0 20px;color:var(--muted);font-size:13px">Primeiro acesso — nenhum usuário existe ainda. Esta conta tem acesso total e só pode ser criada uma vez.</p>' +
+      (errorMsg ? '<div class="form-err" style="margin-bottom:14px">' + esc(errorMsg) + '</div>' : '') +
+      '<label class="fld">Nome da empresa</label><input class="input" id="bs-org" style="width:100%;margin-bottom:12px">' +
+      '<label class="fld">Seu nome</label><input class="input" id="bs-name" style="width:100%;margin-bottom:12px">' +
+      '<label class="fld">E-mail</label><input class="input" id="bs-email" type="email" autocomplete="username" style="width:100%;margin-bottom:12px">' +
+      '<label class="fld">Senha (mínimo 8 caracteres)</label><input class="input" id="bs-password" type="password" autocomplete="new-password" style="width:100%">' +
+      '<button class="btn-sm primary" id="bs-submit" style="width:100%;margin-top:18px;padding:10px">Criar conta e entrar</button>' +
+      '<button class="link-btn" id="bs-golog" style="width:100%;margin-top:10px;text-align:center">Já tenho uma conta</button>' +
+      '</div>';
+    document.getElementById('bs-golog').onclick = function () { renderLoginForm(); };
+    document.getElementById('bs-submit').onclick = function () {
+      var body = { organizationName: document.getElementById('bs-org').value.trim(), name: document.getElementById('bs-name').value.trim(), email: document.getElementById('bs-email').value.trim(), password: document.getElementById('bs-password').value };
+      if (!body.organizationName || !body.name || !body.email || !body.password) return renderBootstrapForm('Preencha todos os campos.');
+      var btn = document.getElementById('bs-submit'); btn.disabled = true; btn.textContent = 'Criando…';
+      fetch('/api/auth/bootstrap', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        .then(function (res) { return res.json().then(function (b) { if (!res.ok) throw new Error(Array.isArray(b.message) ? b.message.join(' ') : b.message); return b; }); })
+        .then(onAuthSuccess)
+        .catch(function (e) { renderBootstrapForm(e.message); });
+    };
+  }
+
+  /** item 26 — troca obrigatória de senha (primeiro acesso ou redefinição por um admin). Bloqueia
+   * a entrada no sistema até ser concluída — o overlay continua visível. */
+  function renderMustChangePasswordForm(errorMsg) {
+    AUTH_OVERLAY.innerHTML =
+      '<div style="' + AUTH_CARD_STYLE + '">' +
+      '<h2 style="margin:0 0 4px;font-size:19px">Defina sua nova senha</h2>' +
+      '<p style="margin:0 0 20px;color:var(--muted);font-size:13px">Por segurança, você precisa trocar a senha antes de continuar.</p>' +
+      (errorMsg ? '<div class="form-err" style="margin-bottom:14px">' + esc(errorMsg) + '</div>' : '') +
+      '<label class="fld">Senha atual</label><input class="input" id="mcp-current" type="password" style="width:100%;margin-bottom:12px">' +
+      '<label class="fld">Nova senha (mínimo 8 caracteres)</label><input class="input" id="mcp-new" type="password" style="width:100%;margin-bottom:12px">' +
+      '<label class="fld">Confirmar nova senha</label><input class="input" id="mcp-confirm" type="password" style="width:100%">' +
+      '<button class="btn-sm primary" id="mcp-submit" style="width:100%;margin-top:18px;padding:10px">Salvar e entrar</button>' +
+      '</div>';
+    document.getElementById('mcp-submit').onclick = function () {
+      var current = document.getElementById('mcp-current').value, novo = document.getElementById('mcp-new').value, confirm2 = document.getElementById('mcp-confirm').value;
+      if (!current || !novo) return renderMustChangePasswordForm('Preencha os dois campos de senha.');
+      if (novo !== confirm2) return renderMustChangePasswordForm('A confirmação não bate com a nova senha.');
+      authFetch('/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword: current, newPassword: novo }) })
+        .then(function (res) { if (!res.ok) return res.json().then(function (b) { throw new Error(b.message || 'Não foi possível trocar a senha.'); }); return authLoadMe(); })
+        .then(function () { hideAuthOverlay(); toast('Senha alterada', ''); })
+        .catch(function (e) { renderMustChangePasswordForm(e.message); });
+    };
+  }
+
+  function onAuthSuccess(body) {
+    authSession.accessToken = body.accessToken;
+    return authLoadMe().then(function () {
+      if (body.mustChangePassword) { renderMustChangePasswordForm(); return; }
+      hideAuthOverlay();
+      if (!bootedOnce) { bootedOnce = true; bootApp(); }
+    });
+  }
+
+  /** item 46 — avatar/nome/perfil compactos no topbar, com Minha conta/Alterar senha/Sair. */
+  function renderUserMenuTrigger() {
+    var trigger = document.getElementById('user-menu-trigger');
+    var av = document.getElementById('user-avatar');
+    if (!trigger || !av || !authSession.user) return;
+    av.textContent = userInitials(authSession.user.name);
+    av.title = authSession.user.name + ' · ' + roleLabel(authSession.user);
+    trigger.onclick = function (e) { e.stopPropagation(); openUserMenu(trigger); };
+  }
+  function openUserMenu(anchor) {
+    document.querySelectorAll('.cp-dropdown').forEach(function (d) { d.remove(); }); // reaproveita o mesmo padrão visual do menu "⋯" (openCpRowMenu)
+    var u = authSession.user; if (!u) return;
+    var rect = anchor.getBoundingClientRect();
+    var d = document.createElement('div'); d.className = 'cp-dropdown'; d.style.cssText = 'position:fixed;z-index:400;top:' + (rect.bottom + 6) + 'px;right:' + (window.innerWidth - rect.right) + 'px;width:220px;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:6px;';
+    d.innerHTML =
+      '<div style="padding:8px 10px;border-bottom:1px solid var(--line);margin-bottom:4px"><b style="font-size:13px">' + esc(u.name) + '</b><div class="footnote" style="margin:2px 0 0">' + esc(roleLabel(u)) + '</div></div>' +
+      '<div class="cp-mi" data-act="changepw" style="padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px">Alterar minha senha</div>' +
+      (hasPermission('users.view') ? '<div class="cp-mi" data-act="admin" style="padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px">Usuários e Acessos</div>' : '') +
+      '<div class="cp-mi" data-act="logout" style="padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px;color:var(--err)">Sair</div>';
+    document.body.appendChild(d);
+    d.querySelectorAll('.cp-mi').forEach(function (mi) { mi.onmouseenter = function () { mi.style.background = 'var(--bg2,#f2f4f8)'; }; mi.onmouseleave = function () { mi.style.background = ''; }; });
+    setTimeout(function () { document.addEventListener('click', closeIt); }, 0);
+    function closeIt(e) { if (!d.contains(e.target)) { d.remove(); document.removeEventListener('click', closeIt); } }
+    d.querySelector('[data-act="changepw"]').onclick = function () { d.remove(); AUTH_OVERLAY.style.display = 'flex'; renderVoluntaryChangePasswordForm(); };
+    var adminItem = d.querySelector('[data-act="admin"]'); if (adminItem) adminItem.onclick = function () { d.remove(); route = 'admin-usuarios'; render(); };
+    d.querySelector('[data-act="logout"]').onclick = function () { d.remove(); doLogout(); };
+  }
+  /** Igual ao renderMustChangePasswordForm, mas com um "Cancelar" — troca voluntária (item 25), não a
+   * obrigatória do primeiro acesso, então o usuário pode desistir e continuar usando o sistema. */
+  function renderVoluntaryChangePasswordForm(errorMsg) {
+    renderMustChangePasswordForm(errorMsg);
+    var btn = document.getElementById('mcp-submit');
+    var cancel = document.createElement('button');
+    cancel.className = 'link-btn'; cancel.style.cssText = 'width:100%;margin-top:10px;text-align:center'; cancel.textContent = 'Cancelar';
+    cancel.onclick = function () { hideAuthOverlay(); };
+    btn.parentNode.appendChild(cancel);
+  }
+
+  function doLogout() {
+    authFetch('/auth/logout', { method: 'POST', body: JSON.stringify({}) }).catch(function () { }).then(function () {
+      authSession = { accessToken: null, user: null, permissions: [] };
+      location.reload(); // reboot limpo — evita qualquer estado de tela anterior vazar pro próximo login
+    });
+  }
+
+  var bootedOnce = false;
+  function authInit() {
+    AUTH_OVERLAY.style.display = 'flex';
+    AUTH_OVERLAY.innerHTML = '<div style="color:var(--muted);font-size:13px">Carregando…</div>';
+    authRefreshSilent().then(function (ok) {
+      if (!ok) { showAuthOverlay(); if (!bootedOnce) { bootedOnce = true; bootApp(); } return; }
+      authLoadMe().then(function (me) {
+        hideAuthOverlay();
+        if (!bootedOnce) { bootedOnce = true; bootApp(); }
+      }).catch(function () { showAuthOverlay(); if (!bootedOnce) { bootedOnce = true; bootApp(); } });
+    });
+  }
+  authInit();
 })();

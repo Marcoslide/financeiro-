@@ -357,11 +357,18 @@
       </select>
       <div class="datein" id="dateinputs"><input class="input sm" type="date" id="dfrom"><span style="color:var(--muted);font-size:12px">até</span><input class="input sm" type="date" id="dto"><button class="btn-sm primary" id="dapply">Aplicar</button></div>
       <div class="top-store" id="op-selector" style="cursor:pointer;user-select:none"><span class="dot"></span> <b id="op-selector-label">Carregando…</b> <span style="font-size:10px;margin-left:2px">▼</span></div>
-      <div class="avatar">LM</div>
+      <div id="user-menu-trigger" style="position:relative;cursor:pointer;user-select:none">
+        <div class="avatar" id="user-avatar">··</div>
+      </div>
     </div>
     <div class="content" id="app"></div>
   </div>
 </div>
+<!-- Fase 10.2 (login/usuários/perfis) — overlay de sessão: cobre a tela inteira até uma sessão
+     válida ser confirmada pelo servidor. Fica FORA de #app de propósito (o app continua carregando
+     seus dados locais em paralelo, sem travar nada) — item 6: "sem login, não abrir o sistema" é
+     aplicado aqui, na única superfície que o usuário de fato enxerga/toca. -->
+<div id="auth-overlay" style="position:fixed;inset:0;z-index:99999;background:var(--bg);display:flex;align-items:center;justify-content:center"></div>
 <div id="caixa-print-doc"></div>
 <!--XLSX--><!--BUNDLE--><!--UI-->
 </body>
