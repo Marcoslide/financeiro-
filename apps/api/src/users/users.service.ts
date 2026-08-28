@@ -119,7 +119,10 @@ export class UsersService {
         if (dupe) throw new ConflictException('Já existe um usuário cadastrado com este e-mail.');
       }
     }
+    // item 20 — "troca de perfil" cobre tanto o Role legado quanto o perfil
+    // granular (appRoleId), que é o que de fato controla as permissões na UI.
     const roleChanged = dto.role !== undefined && dto.role !== before.role;
+    const appRoleChanged = dto.appRoleId !== undefined && dto.appRoleId !== before.appRoleId;
     const updated = await this.prisma.user.update({
       where: { id },
       data: {
@@ -142,9 +145,10 @@ export class UsersService {
       before: { name: before.name, email: before.email, role: before.role, appRoleId: before.appRoleId },
       after: { name: updated.name, email: updated.email, role: updated.role, appRoleId: updated.appRoleId },
     });
-    // item 20 — troca de perfil (role) é auditada também com uma ação própria,
-    // separada do USER_UPDATE genérico, para facilitar auditoria de acesso.
-    if (roleChanged) {
+    // item 20 — troca de perfil (role legado e/ou perfil granular) é auditada
+    // também com uma ação própria, separada do USER_UPDATE genérico, para
+    // facilitar auditoria de acesso.
+    if (roleChanged || appRoleChanged) {
       await this.audit.record({
         organizationId,
         userId: actorId,
@@ -152,8 +156,8 @@ export class UsersService {
         module: 'admin',
         entityType: 'User',
         entityId: id,
-        before: { role: before.role },
-        after: { role: updated.role },
+        before: { role: before.role, appRoleId: before.appRoleId },
+        after: { role: updated.role, appRoleId: updated.appRoleId },
       });
     }
     return updated;
