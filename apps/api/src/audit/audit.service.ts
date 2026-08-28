@@ -4,9 +4,16 @@ import { PrismaService } from '../prisma/prisma.service';
 export interface AuditEntry {
   organizationId: string;
   userId?: string | null;
+  /// Fase 10.2 item 21 — snapshot do nome no momento da ação (sobrevive a
+  /// renomeação/exclusão posterior do usuário).
+  userNameSnapshot?: string | null;
   action: string;
+  /// Módulo de origem (ex.: "contas-a-pagar", "caixa") — só usado pela tela
+  /// de Auditoria pra filtrar; nunca lido pelos motores financeiros.
+  module?: string | null;
   entityType: string;
   entityId?: string | null;
+  marketplaceAccountId?: string | null;
   before?: unknown;
   after?: unknown;
   metadata?: Record<string, unknown>;
@@ -22,9 +29,12 @@ export class AuditService {
       data: {
         organizationId: entry.organizationId,
         userId: entry.userId ?? null,
+        userNameSnapshot: entry.userNameSnapshot ?? null,
         action: entry.action,
+        module: entry.module ?? null,
         entityType: entry.entityType,
         entityId: entry.entityId ?? null,
+        marketplaceAccountId: entry.marketplaceAccountId ?? null,
         beforePayload: (entry.before ?? undefined) as any,
         afterPayload: (entry.after ?? undefined) as any,
         metadata: (entry.metadata ?? undefined) as any,

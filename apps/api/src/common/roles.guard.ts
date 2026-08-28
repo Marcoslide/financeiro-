@@ -17,7 +17,9 @@ export class RolesGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest();
     const user = request.user as AuthUser | undefined;
-    if (!user || !required.includes(user.role)) {
+    // Fase 10.2 item 2: OWNER é sempre super-conjunto de qualquer @Roles() —
+    // nunca fica de fora de uma rota liberada para ADMIN/FINANCIAL/VIEWER.
+    if (!user || (user.role !== Role.OWNER && !required.includes(user.role))) {
       throw new ForbiddenException('Você não tem permissão para esta ação.');
     }
     return true;

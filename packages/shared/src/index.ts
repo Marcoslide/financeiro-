@@ -3,14 +3,23 @@
  * Mantém a fonte única de verdade para papéis e estados usados nos dois lados.
  */
 
-/** Papéis de usuário (Bloco 1). */
+/**
+ * Papéis de usuário (Bloco 1 + Fase 10.2). OWNER foi somado por cima do
+ * enum legado: é sempre um super-conjunto de ADMIN (ver RolesGuard) e nunca
+ * pode ser removido/rebaixado por um usuário comum (item 28 da Fase 10.2).
+ * A autorização fina por módulo×ação vive em AppRole/Permission
+ * (packages/database/permissions.ts) — este enum é só o "balde" grosso que
+ * o RolesGuard/@Roles() legados ainda consultam.
+ */
 export enum Role {
+  OWNER = 'OWNER',
   ADMIN = 'ADMIN',
   FINANCIAL = 'FINANCIAL',
   VIEWER = 'VIEWER',
 }
 
 export const ROLE_LABELS: Record<Role, string> = {
+  [Role.OWNER]: 'Proprietário',
   [Role.ADMIN]: 'Administrador',
   [Role.FINANCIAL]: 'Financeiro',
   [Role.VIEWER]: 'Consulta',
@@ -87,6 +96,36 @@ export enum AuditAction {
   OCCURRENCE_UPDATE = 'OCCURRENCE_UPDATE',
   OCCURRENCE_FINANCIAL = 'OCCURRENCE_FINANCIAL',
   OCCURRENCE_DISPUTE = 'OCCURRENCE_DISPUTE',
+  // Fase 10.2 — login/usuários/perfis/permissões
+  ACCESS_DENIED = 'ACCESS_DENIED',
+  BOOTSTRAP_OWNER = 'BOOTSTRAP_OWNER',
+  ROLE_CREATE = 'ROLE_CREATE',
+  ROLE_UPDATE = 'ROLE_UPDATE',
+  ROLE_DEACTIVATE = 'ROLE_DEACTIVATE',
+  PERMISSION_OVERRIDE_UPDATE = 'PERMISSION_OVERRIDE_UPDATE',
+  PASSWORD_CHANGE = 'PASSWORD_CHANGE',
+  PASSWORD_RESET = 'PASSWORD_RESET',
+  // Fase 10.2 — ações locais do "Sistema Marketplace — Líder" (item 22),
+  // gravadas via POST /audit/log a partir do app 100% client-side; a
+  // mutação em si continua só no IndexedDB do navegador — isto é só o
+  // registro paralelo e imutável de que ela aconteceu (ver item 23).
+  CP_CREATE = 'CP_CREATE',
+  CP_EDIT = 'CP_EDIT',
+  CP_CANCEL = 'CP_CANCEL',
+  CP_PAY = 'CP_PAY',
+  CP_PAY_REVERSE = 'CP_PAY_REVERSE',
+  CR_CREATE = 'CR_CREATE',
+  CR_EDIT = 'CR_EDIT',
+  CR_RECEIVE = 'CR_RECEIVE',
+  CR_RECEIVE_REVERSE = 'CR_RECEIVE_REVERSE',
+  CASH_CLASSIFY = 'CASH_CLASSIFY',
+  WALLET_CLASSIFY_LOCAL = 'WALLET_CLASSIFY_LOCAL',
+  CASH_CLOSE_LOCAL = 'CASH_CLOSE_LOCAL',
+  CASH_REOPEN_LOCAL = 'CASH_REOPEN_LOCAL',
+  PRODUCT_COST_UPDATE = 'PRODUCT_COST_UPDATE',
+  COMPETENCIA_UPDATE = 'COMPETENCIA_UPDATE',
+  IMPORT_EXECUTE_LOCAL = 'IMPORT_EXECUTE_LOCAL',
+  ADMIN_DELETE_LOCAL = 'ADMIN_DELETE_LOCAL',
 }
 
 // ============================================================================
@@ -263,4 +302,9 @@ export interface AuthUser {
   email: string;
   role: Role;
   organizationId: string;
+  /// Fase 10.2 — claim assinada pelo servidor (dentro do JWT de acesso),
+  /// populada pelo JwtAuthGuard. Usada pelo PermissionGuard para autorizar
+  /// rotas por permissão, não só por Role. Ausente em contextos onde o JWT
+  /// antigo (sem essa claim) ainda circula — tratar como [] nesse caso.
+  permissions?: string[];
 }

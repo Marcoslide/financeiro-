@@ -15,7 +15,14 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// Papel legado (Bloco 1) — mantido para não quebrar o RolesGuard/@Roles() já em
+/// produção no apps/web. OWNER foi somado por cima dele (Fase 10.2): é sempre
+/// tratado como super-conjunto de ADMIN pelo RolesGuard, nunca removido/rebaixado
+/// por um usuário comum (ver users.service.ts). A autorização fina de verdade
+/// (por módulo/ação) vive em AppRole/Permission abaixo — este enum só decide o
+/// "balde" grosso que o código legado ainda consulta.
 enum Role {
+  OWNER
   ADMIN
   FINANCIAL
   VIEWER
@@ -92,21 +99,22 @@ model Organization {
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
-  marketplaceAccounts MarketplaceAccount[]
-  users               User[]
-  auditLogs           AuditLog[]
-  importBatches       ImportBatch[]
-  products            Product[]
-  productVariations   ProductVariation[]
-  productFamilies     ProductFamily[]
-  productImportBatches ProductImportBatch[]
-  marketplaceOrders   MarketplaceOrder[]
-  postSaleOccurrences PostSaleOccurrence[]
+  marketplaceAccounts   MarketplaceAccount[]
+  users                 User[]
+  appRoles              AppRole[]
+  auditLogs             AuditLog[]
+  importBatches         ImportBatch[]
+  products              Product[]
+  productVariations     ProductVariation[]
+  productFamilies       ProductFamily[]
+  productImportBatches  ProductImportBatch[]
+  marketplaceOrders     MarketplaceOrder[]
+  postSaleOccurrences   PostSaleOccurrence[]
   postSaleImportBatches PostSaleImportBatch[]
-  aiSetting           AiSetting?
-  aiAnalyses          AiAnalysis[]
-  actionPlans         ActionPlan[]
-  salesImportBatches  SalesImportBatch[]
+  aiSetting             AiSetting?
+  aiAnalyses            AiAnalysis[]
+  actionPlans           ActionPlan[]
+  salesImportBatches    SalesImportBatch[]
 
   @@map("organizations")
 }
@@ -125,21 +133,21 @@ model MarketplaceAccount {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
-  organization Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  connections  MarketplaceConnection[]
-  memberships  Membership[]
-  importBatches ImportBatch[]
-  dedupKeys     ImportDedupKey[]
-  products             Product[]
-  productVariations    ProductVariation[]
-  productFamilies      ProductFamily[]
-  productImportBatches ProductImportBatch[]
-  marketplaceOrders    MarketplaceOrder[]
-  postSaleOccurrences  PostSaleOccurrence[]
+  organization          Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connections           MarketplaceConnection[]
+  memberships           Membership[]
+  importBatches         ImportBatch[]
+  dedupKeys             ImportDedupKey[]
+  products              Product[]
+  productVariations     ProductVariation[]
+  productFamilies       ProductFamily[]
+  productImportBatches  ProductImportBatch[]
+  marketplaceOrders     MarketplaceOrder[]
+  postSaleOccurrences   PostSaleOccurrence[]
   postSaleImportBatches PostSaleImportBatch[]
-  aiAnalyses           AiAnalysis[]
-  actionPlans          ActionPlan[]
-  salesImportBatches   SalesImportBatch[]
+  aiAnalyses            AiAnalysis[]
+  actionPlans           ActionPlan[]
+  salesImportBatches    SalesImportBatch[]
 
   @@unique([organizationId, marketplace, displayName])
   @@index([organizationId])
@@ -169,21 +177,39 @@ model MarketplaceConnection {
 
 /// Usuário do sistema. Senha com Argon2. Vinculado a uma organização.
 model User {
-  id             String       @id @default(cuid())
-  organizationId String
-  name           String
-  email          String       @unique
-  passwordHash   String
-  role           Role         @default(VIEWER)
-  status         EntityStatus @default(ACTIVE)
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  id                 String       @id @default(cuid())
+  organizationId     String
+  name               String
+  email              String       @unique
+  passwordHash       String
+  role               Role         @default(VIEWER)
+  /// Perfil granular (Fase 10.2) — se nulo, o usuário só tem o que o Role legado
+  /// concede (compatibilidade com registros criados antes desta fase).
+  appRoleId          String?
+  status             EntityStatus @default(ACTIVE)
+  /// Item 26: força troca de senha no login seguinte (primeiro acesso ou
+  /// redefinição feita por um administrador).
+  mustChangePassword Boolean      @default(false)
+  lastLoginAt        DateTime?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  createdBy          String?
+  updatedBy          String?
+  /// Item 15 (multiempresa/multioperação) — restrição por NOME de
+  /// empresa/operação, comparada no cliente contra as empresas que o
+  /// "Sistema Marketplace — Líder" tem cadastradas no IndexedDB de quem
+  /// logou. Lista vazia = sem restrição (vê todas). Documentado como
+  /// fronteira client-side, não isolamento de dado real (item 48): o
+  /// Postgres não conhece as empresas do IndexedDB do usuário.
+  allowedCompanyNames String[] @default([])
 
-  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  memberships   Membership[]
-  refreshTokens RefreshToken[]
-  auditLogs     AuditLog[]
-  importBatches ImportBatch[]
+  organization             Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  appRole                  AppRole?                   @relation(fields: [appRoleId], references: [id], onDelete: SetNull)
+  memberships              Membership[]
+  refreshTokens            RefreshToken[]
+  auditLogs                AuditLog[]
+  permissionOverrides      UserPermissionOverride[]
+  importBatches            ImportBatch[]
   productFamilies          ProductFamily[]
   productFamilyCostEntries ProductFamilyCostHistory[]
   productImportBatches     ProductImportBatch[]
@@ -191,6 +217,7 @@ model User {
   salesImportBatches       SalesImportBatch[]
 
   @@index([organizationId])
+  @@index([appRoleId])
   @@map("users")
 }
 
@@ -224,18 +251,29 @@ model RefreshToken {
   @@map("refresh_tokens")
 }
 
-/// Trilha de auditoria (quem, o quê, antes/depois).
+/// Trilha de auditoria (quem, o quê, antes/depois). Camada paralela de
+/// rastreabilidade (item 23 da Fase 10.2): nunca é lida pelos motores
+/// financeiros, só gravada por eles/pela sessão — uma falha aqui não pode
+/// alterar nenhum cálculo.
 model AuditLog {
-  id             String   @id @default(cuid())
-  organizationId String
-  userId         String?
-  action         String
-  entityType     String
-  entityId       String?
-  beforePayload  Json?
-  afterPayload   Json?
-  metadata       Json?
-  createdAt      DateTime @default(now())
+  id                   String   @id @default(cuid())
+  organizationId       String
+  userId               String?
+  /// Snapshot do nome no momento da ação — sobrevive a uma renomeação/exclusão
+  /// posterior do usuário (item 21).
+  userNameSnapshot     String?
+  action               String
+  /// Módulo de origem (ex.: "contas-a-pagar", "caixa") — item 22 lista as
+  /// ações mínimas obrigatórias; module ajuda a filtrar a tela de Auditoria.
+  module               String?
+  entityType           String
+  entityId             String?
+  /// "operação" (loja/marketplace) da ação, quando aplicável — item 21.
+  marketplaceAccountId String?
+  beforePayload        Json?
+  afterPayload         Json?
+  metadata             Json?
+  createdAt            DateTime @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -246,6 +284,84 @@ model AuditLog {
 }
 
 // ============================================================================
+// Fase 10.2 — RBAC granular (login/usuários/perfis/permissões do "Sistema
+// Marketplace — Líder"). Aditivo: Role (enum acima) continua existindo e
+// sendo o que apps/web/RolesGuard usam hoje; AppRole/Permission é a matriz
+// fina por módulo×ação pedida na Fase 10.2, consultada pelo novo endpoint
+// de permissões efetivas (auth/permissions.service.ts).
+// ============================================================================
+
+/// Perfil configurável por organização — os 7 templates (item 8) nascem com
+/// isSystem=true (não podem ser apagados, só desativados) mais quantos perfis
+/// personalizados o proprietário quiser criar (item 20).
+model AppRole {
+  id             String       @id @default(cuid())
+  organizationId String
+  /// Chave estável usada pelo seed dos templates (ex.: "OWNER", "OPERATION");
+  /// nula em perfis 100% customizados.
+  key            String?
+  name           String
+  isSystem       Boolean      @default(false)
+  status         EntityStatus @default(ACTIVE)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  permissions  AppRolePermission[]
+  users        User[]
+
+  @@unique([organizationId, key])
+  @@index([organizationId])
+  @@map("app_roles")
+}
+
+/// Catálogo global de permissões por módulo×ação (item 10/11) — mesma lista
+/// para toda organização, nunca duplicada por tenant.
+model Permission {
+  id     String @id @default(cuid())
+  /// ex.: "ap.pay", "financial.view" — ver PERMISSION_CATALOG em
+  /// apps/api/src/auth/permission-catalog.ts (fonte única de verdade).
+  key    String @unique
+  module String
+  label  String
+
+  roles     AppRolePermission[]
+  overrides UserPermissionOverride[]
+
+  @@index([module])
+  @@map("permissions")
+}
+
+model AppRolePermission {
+  id           String @id @default(cuid())
+  appRoleId    String
+  permissionId String
+
+  appRole    AppRole    @relation(fields: [appRoleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([appRoleId, permissionId])
+  @@index([permissionId])
+  @@map("app_role_permissions")
+}
+
+/// Item 9: perfil + exceções por usuário. allow=true concede mesmo sem o
+/// perfil ter a permissão; allow=false revoga mesmo que o perfil tenha.
+model UserPermissionOverride {
+  id           String  @id @default(cuid())
+  userId       String
+  permissionId String
+  allow        Boolean
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, permissionId])
+  @@index([permissionId])
+  @@map("user_permission_overrides")
+}
+
+// ============================================================================
 // Bloco 2 — Importação
 // ============================================================================
 
@@ -253,10 +369,10 @@ model AuditLog {
 /// Guarda TODOS os metadados exigidos no resultado da importação e a análise (prévia,
 /// alertas, colunas). Isolado por organização + loja. Ver docs/bloco-2-plano.md.
 model ImportBatch {
-  id                   String            @id @default(cuid())
+  id                   String          @id @default(cuid())
   organizationId       String
   marketplaceAccountId String
-  ingestionSource      IngestionSource   @default(MANUAL_UPLOAD)
+  ingestionSource      IngestionSource @default(MANUAL_UPLOAD)
 
   // Detecção do relatório
   reportType               ReportType @default(UNKNOWN) // efetivo (após eventual override manual)
@@ -287,16 +403,16 @@ model ImportBatch {
   periodEnd   DateTime?
 
   // Resultado
-  status        ImportBatchStatus @default(AWAITING_CONFIRMATION)
-  totalRows     Int               @default(0) // linhas de dados consideradas
-  validRows     Int               @default(0) // parseadas sem erro
-  importedRows  Int               @default(0) // novas
-  updatedRows   Int               @default(0) // mesma chave natural, campo mutável mudou
-  duplicatedRows Int              @default(0) // hash canônico já visto
-  warningRows   Int               @default(0) // importadas mas com alerta
-  failedRows    Int               @default(0) // erro de parsing/validação
-  processingMs  Int?
-  errorMessage  String?
+  status         ImportBatchStatus @default(AWAITING_CONFIRMATION)
+  totalRows      Int               @default(0) // linhas de dados consideradas
+  validRows      Int               @default(0) // parseadas sem erro
+  importedRows   Int               @default(0) // novas
+  updatedRows    Int               @default(0) // mesma chave natural, campo mutável mudou
+  duplicatedRows Int               @default(0) // hash canônico já visto
+  warningRows    Int               @default(0) // importadas mas com alerta
+  failedRows     Int               @default(0) // erro de parsing/validação
+  processingMs   Int?
+  errorMessage   String?
 
   // Análise (prévia, alertas, colunas) — Json para a tela mostrar antes de confirmar
   analysis Json?
@@ -508,7 +624,7 @@ model ProductVariation {
 
   // --- Dados INTERNOS (nunca sobrescritos por reimportação) ---
   /// Preço de fechamento/com desconto — decisão nossa. null = "não informado".
-  closingPrice  Decimal?      @db.Decimal(14, 4)
+  closingPrice  Decimal? @db.Decimal(14, 4)
   familyId      String?
   internalNotes String?
 
@@ -519,10 +635,10 @@ model ProductVariation {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  marketplaceAccount MarketplaceAccount @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
-  product            Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
-  family             ProductFamily?     @relation(fields: [familyId], references: [id], onDelete: SetNull)
+  organization       Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplaceAccount MarketplaceAccount       @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+  product            Product                  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  family             ProductFamily?           @relation(fields: [familyId], references: [id], onDelete: SetNull)
   occurrenceItems    PostSaleOccurrenceItem[]
   orderItems         MarketplaceOrderItem[]
 
@@ -558,15 +674,15 @@ model ProductImportBatch {
   status ImportBatchStatus @default(PROCESSING)
 
   // Resultado da sincronização (prompt §17).
-  totalRows        Int @default(0)
-  productsSeen     Int @default(0)
-  variationsSeen   Int @default(0)
-  newProducts      Int @default(0)
-  newVariations    Int @default(0)
-  updatedRecords   Int @default(0)
-  unchangedRecords Int @default(0)
-  ignoredRows      Int @default(0)
-  errorRows        Int @default(0)
+  totalRows        Int     @default(0)
+  productsSeen     Int     @default(0)
+  variationsSeen   Int     @default(0)
+  newProducts      Int     @default(0)
+  newVariations    Int     @default(0)
+  updatedRecords   Int     @default(0)
+  unchangedRecords Int     @default(0)
+  ignoredRows      Int     @default(0)
+  errorRows        Int     @default(0)
   processingMs     Int?
   errorMessage     String?
 
@@ -611,15 +727,15 @@ enum OccurrenceType {
 /// Pedido (a venda). Hub que conectará venda, financeiro, Ads, logística etc.
 /// Identificado por (loja, ID do pedido). Um pedido pode ter várias ocorrências.
 model MarketplaceOrder {
-  id                   String   @id @default(cuid())
+  id                   String @id @default(cuid())
   organizationId       String
   marketplaceAccountId String
   externalOrderId      String // "ID do pedido"
 
   // --- Status (§13: preserva original + normalizado) ---
-  orderStatus       String? // status_original_marketplace (texto cru da Shopee)
-  normalizedStatus  String? // NAO_PAGO | A_ENVIAR | ENVIADO | CONCLUIDO | CANCELADO
-  cancelReason      String?
+  orderStatus        String? // status_original_marketplace (texto cru da Shopee)
+  normalizedStatus   String? // NAO_PAGO | A_ENVIAR | ENVIADO | CONCLUIDO | CANCELADO
+  cancelReason       String?
   returnRefundStatus String?
 
   // --- Logística ---
@@ -637,17 +753,17 @@ model MarketplaceOrder {
   cancelledAt    DateTime?
 
   // --- Financeiro do PEDIDO (persistido UMA vez — §17) ---
-  itemsSubtotal      Decimal? @db.Decimal(14, 2) // soma dos subtotais de itens
-  totalAmount        Decimal? @db.Decimal(14, 2) // "Valor Total"
-  grandTotal         Decimal? @db.Decimal(14, 2) // "Total global"
-  buyerPaidShipping  Decimal? @db.Decimal(14, 2)
-  reverseShippingFee Decimal? @db.Decimal(14, 2)
-  transactionFee     Decimal? @db.Decimal(14, 2)
-  commissionGross    Decimal? @db.Decimal(14, 2)
-  commissionNet      Decimal? @db.Decimal(14, 2)
-  serviceFeeGross    Decimal? @db.Decimal(14, 2)
-  serviceFeeNet      Decimal? @db.Decimal(14, 2)
-  estimatedShipping  Decimal? @db.Decimal(14, 2)
+  itemsSubtotal       Decimal? @db.Decimal(14, 2) // soma dos subtotais de itens
+  totalAmount         Decimal? @db.Decimal(14, 2) // "Valor Total"
+  grandTotal          Decimal? @db.Decimal(14, 2) // "Total global"
+  buyerPaidShipping   Decimal? @db.Decimal(14, 2)
+  reverseShippingFee  Decimal? @db.Decimal(14, 2)
+  transactionFee      Decimal? @db.Decimal(14, 2)
+  commissionGross     Decimal? @db.Decimal(14, 2)
+  commissionNet       Decimal? @db.Decimal(14, 2)
+  serviceFeeGross     Decimal? @db.Decimal(14, 2)
+  serviceFeeNet       Decimal? @db.Decimal(14, 2)
+  estimatedShipping   Decimal? @db.Decimal(14, 2)
   sellerDiscountTotal Decimal? @db.Decimal(14, 2)
 
   // --- Resultado estimado (determinístico; recalculado na importação) ---
@@ -657,8 +773,8 @@ model MarketplaceOrder {
   estimatedMarginPct   Decimal? @db.Decimal(9, 4)
   costPending          Boolean  @default(false) // algum item sem custo/sem vínculo
 
-  unitsTotal   Int? // "Número de produtos pedidos" / soma de quantidades
-  itemCount    Int  @default(0)
+  unitsTotal Int? // "Número de produtos pedidos" / soma de quantidades
+  itemCount  Int  @default(0)
 
   // --- Cliente / entrega (PII — nunca enviado à LLM) ---
   buyerUsername String?
@@ -678,13 +794,13 @@ model MarketplaceOrder {
 
   firstImportBatchId String?
   lastImportBatchId  String?
-  firstSeenAt DateTime @default(now())
-  lastSeenAt  DateTime @default(now())
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  firstSeenAt        DateTime @default(now())
+  lastSeenAt         DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
-  organization       Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  marketplaceAccount MarketplaceAccount   @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+  organization       Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplaceAccount MarketplaceAccount     @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
   occurrences        PostSaleOccurrence[]
   items              MarketplaceOrderItem[]
   statusHistory      OrderStatusHistory[]
@@ -707,9 +823,9 @@ model MarketplaceOrderItem {
   itemKey        String
   lineIndex      Int    @default(0)
 
-  productName  String?
-  sku          String?
-  mainSkuRef   String?
+  productName   String?
+  sku           String?
+  mainSkuRef    String?
   variationName String?
 
   originalPrice   Decimal? @db.Decimal(14, 2)
@@ -725,16 +841,16 @@ model MarketplaceOrderItem {
   skuLinked          Boolean @default(false)
 
   // --- Snapshot de custo (§23) — congelado no momento da venda ---
-  costUnit        Decimal? @db.Decimal(14, 4)
-  costTotal       Decimal? @db.Decimal(14, 2)
+  costUnit        Decimal?  @db.Decimal(14, 4)
+  costTotal       Decimal?  @db.Decimal(14, 2)
   costSource      String? // FAMILY | NONE
   costFamilyId    String?
   costReferenceAt DateTime?
-  costMissing     Boolean  @default(false) // vinculado mas sem custo cadastrado
+  costMissing     Boolean   @default(false) // vinculado mas sem custo cadastrado
 
   // --- Rateio determinístico (§29) ---
-  allocatedFees   Decimal? @db.Decimal(14, 2)
-  estimatedResult Decimal? @db.Decimal(14, 2)
+  allocatedFees      Decimal? @db.Decimal(14, 2)
+  estimatedResult    Decimal? @db.Decimal(14, 2)
   estimatedMarginPct Decimal? @db.Decimal(9, 4)
 
   /// Linha bruta completa do item (auditoria §18/§37).
@@ -771,13 +887,13 @@ model OrderStatusHistory {
 
 /// Lote de importação de PEDIDOS (§20) — contadores de upsert e metadados.
 model SalesImportBatch {
-  id                   String   @id @default(cuid())
+  id                   String @id @default(cuid())
   organizationId       String
   marketplaceAccountId String
 
   originalFilename String
   fileHash         String
-  parserVersion    String  @default("v1")
+  parserVersion    String @default("v1")
 
   rowsProcessed   Int @default(0)
   ordersSeen      Int @default(0)
@@ -817,68 +933,68 @@ model PostSaleOccurrence {
   type                 OccurrenceType
 
   /// Chave natural por tipo (returnId p/ devolução; orderId p/ cancel/falha).
-  naturalKey        String
-  externalReturnId  String? // "ID da Devolução"
-  externalOrderId   String // redundante p/ consulta rápida
+  naturalKey       String
+  externalReturnId String? // "ID da Devolução"
+  externalOrderId  String // redundante p/ consulta rápida
 
   // --- DADO SHOPEE (importado, auditável — nunca sobrescrito silenciosamente) ---
-  status            String?  // status original da Shopee
-  reason            String?  // motivo original Shopee
-  reasonRevised     String?  // motivo revisado Shopee
-  resolution        String? // "Solução para Retorno e Reembolso"
-  returnType        String?
-  disputeReason     String?
-  sellerNote        String?
+  status        String? // status original da Shopee
+  reason        String? // motivo original Shopee
+  reasonRevised String? // motivo revisado Shopee
+  resolution    String? // "Solução para Retorno e Reembolso"
+  returnType    String?
+  disputeReason String?
+  sellerNote    String?
 
   // Financeiro AO NÍVEL DA OCORRÊNCIA (uma vez por ocorrência).
-  requestedRefundAmount   Decimal? @db.Decimal(14, 2)
+  requestedRefundAmount    Decimal? @db.Decimal(14, 2)
   sellerCompensationAmount Decimal? @db.Decimal(14, 2)
-  buyerPaidAmount         Decimal? @db.Decimal(14, 2)
+  buyerPaidAmount          Decimal? @db.Decimal(14, 2)
 
-  occurredAt        DateTime? // data do evento (criação do pedido/finalização)
-  trackingNumber    String?
-  trackingStatus    String?
+  occurredAt     DateTime? // data do evento (criação do pedido/finalização)
+  trackingNumber String?
+  trackingStatus String?
 
   // --- CONTROLE INTERNO (operacional — informado pela equipe, §8/§9/§15/§21) ---
-  internalStatus     String  @default("NOVA") // NOVA|ANALISE|AGUARDANDO_EVIDENCIA|AGUARDANDO_RETORNO|EM_TRANSITO|RECEBIDO|EM_DISPUTA|AGUARDANDO_RESULTADO|RESOLVIDA|ENCERRADA|EXIGE_ACAO
-  priority           String  @default("MEDIA") // BAIXA|MEDIA|ALTA|URGENTE
-  ownerName          String? // responsável operacional
-  internalCause      String? // causa interna (≠ motivo Shopee)
-  causeFamily        String? // família da causa (ex.: "Avaria / Embalagem")
-  responsibility     String  @default("NAO_IDENTIFICADA") // OPERACAO|SHOPEE|LOGISTICA|COMPRADOR|COMPARTILHADA|NAO_IDENTIFICADA
-  merchandiseStatus  String  @default("DESCONHECIDO") // DESCONHECIDO|CLIENTE_POSSUI|RETORNO_DISPENSADO|AGUARDANDO_POSTAGEM|EM_TRANSITO|RECEBIDO|EXTRAVIADO|PERDIDO
+  internalStatus       String   @default("NOVA") // NOVA|ANALISE|AGUARDANDO_EVIDENCIA|AGUARDANDO_RETORNO|EM_TRANSITO|RECEBIDO|EM_DISPUTA|AGUARDANDO_RESULTADO|RESOLVIDA|ENCERRADA|EXIGE_ACAO
+  priority             String   @default("MEDIA") // BAIXA|MEDIA|ALTA|URGENTE
+  ownerName            String? // responsável operacional
+  internalCause        String? // causa interna (≠ motivo Shopee)
+  causeFamily          String? // família da causa (ex.: "Avaria / Embalagem")
+  responsibility       String   @default("NAO_IDENTIFICADA") // OPERACAO|SHOPEE|LOGISTICA|COMPRADOR|COMPARTILHADA|NAO_IDENTIFICADA
+  merchandiseStatus    String   @default("DESCONHECIDO") // DESCONHECIDO|CLIENTE_POSSUI|RETORNO_DISPENSADO|AGUARDANDO_POSTAGEM|EM_TRANSITO|RECEBIDO|EXTRAVIADO|PERDIDO
   merchandiseCondition String? // REAPROVEITAVEL|REQUER_RETRABALHO|AVARIADO|PERDA_TOTAL
-  recoverableValue   Decimal? @db.Decimal(14, 2) // valor recuperável estimado do produto
-  operatorNotes      String?
-  checklist          Json?    // [{text, done}]
+  recoverableValue     Decimal? @db.Decimal(14, 2) // valor recuperável estimado do produto
+  operatorNotes        String?
+  checklist            Json? // [{text, done}]
 
   // --- DISPUTA operacional (§11/§12) ---
-  hasDispute            Boolean  @default(false)
-  disputeStatus         String   @default("NAO_INICIADA") // NAO_INICIADA|POSSIVEL|EM_PREPARACAO|RESPONDIDA|AGUARDANDO_SHOPEE|GANHA|PARCIAL|PERDIDA|PRAZO_PERDIDO|CANCELADA
-  disputeDeadline       DateTime?
-  disputeRespondedAt    DateTime?
-  disputeContestedAmount Decimal? @db.Decimal(14, 2)
-  disputeRecoveredAmount Decimal? @db.Decimal(14, 2)
-  disputeNote           String?
+  hasDispute             Boolean   @default(false)
+  disputeStatus          String    @default("NAO_INICIADA") // NAO_INICIADA|POSSIVEL|EM_PREPARACAO|RESPONDIDA|AGUARDANDO_SHOPEE|GANHA|PARCIAL|PERDIDA|PRAZO_PERDIDO|CANCELADA
+  disputeDeadline        DateTime?
+  disputeRespondedAt     DateTime?
+  disputeContestedAmount Decimal?  @db.Decimal(14, 2)
+  disputeRecoveredAmount Decimal?  @db.Decimal(14, 2)
+  disputeNote            String?
 
   // --- CÁLCULO desnormalizado (motor determinístico §16/§19 — recalculado) ---
-  refundedTotal      Decimal? @db.Decimal(14, 2)
+  refundedTotal       Decimal? @db.Decimal(14, 2)
   additionalCostTotal Decimal? @db.Decimal(14, 2) // frete reverso + retrabalho + outros custos
-  recoveredTotal     Decimal? @db.Decimal(14, 2)  // compensação + recuperação disputa + valor recuperável
-  knownNetImpact     Decimal? @db.Decimal(14, 2)  // impacto líquido conhecido
-  cmvAvailable       Boolean  @default(false)
+  recoveredTotal      Decimal? @db.Decimal(14, 2) // compensação + recuperação disputa + valor recuperável
+  knownNetImpact      Decimal? @db.Decimal(14, 2) // impacto líquido conhecido
+  cmvAvailable        Boolean  @default(false)
 
-  sourceReportType  String // ORDERS/RETURN_REFUND/ORDER_CANCELLATION/FAILED_DELIVERY
+  sourceReportType   String // ORDERS/RETURN_REFUND/ORDER_CANCELLATION/FAILED_DELIVERY
   firstImportBatchId String?
   lastImportBatchId  String?
-  firstSeenAt       DateTime @default(now())
-  lastSeenAt        DateTime @default(now())
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  firstSeenAt        DateTime @default(now())
+  lastSeenAt         DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
-  organization       Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  marketplaceAccount MarketplaceAccount        @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
-  order              MarketplaceOrder          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  organization       Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplaceAccount MarketplaceAccount         @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+  order              MarketplaceOrder           @relation(fields: [orderId], references: [id], onDelete: Cascade)
   items              PostSaleOccurrenceItem[]
   statusHistory      OccurrenceStatusHistory[]
   financialEvents    OccurrenceFinancialEvent[]
@@ -896,22 +1012,22 @@ model PostSaleOccurrence {
 /// Evento financeiro de uma ocorrência (§13/§17). Idempotente por dedupeKey — uma
 /// compensação importada e reimportada não entra duas vezes. Direção COST/RECOVERY.
 model OccurrenceFinancialEvent {
-  id             String   @id @default(cuid())
-  organizationId String
-  occurrenceId   String
-  type           String   // REEMBOLSO_SOLICITADO|REEMBOLSO_PAGO|FRETE_REVERSO|FRETE_ADICIONAL|COMPENSACAO_SHOPEE|RECUPERACAO_DISPUTA|PRODUTO_RECUPERADO|PRODUTO_PERDIDO|CUSTO_RETRABALHO|AJUSTE_MANUAL|OUTRO
-  direction      String   // COST | RECOVERY | NEUTRAL
-  amount         Decimal  @db.Decimal(14, 2)
-  occurredAt     DateTime @default(now())
-  source         String   @default("MANUAL") // MANUAL | IMPORT
-  externalRef    String?  // referência de origem (para idempotência de importados)
-  importBatchId  String?
+  id              String   @id @default(cuid())
+  organizationId  String
+  occurrenceId    String
+  type            String // REEMBOLSO_SOLICITADO|REEMBOLSO_PAGO|FRETE_REVERSO|FRETE_ADICIONAL|COMPENSACAO_SHOPEE|RECUPERACAO_DISPUTA|PRODUTO_RECUPERADO|PRODUTO_PERDIDO|CUSTO_RETRABALHO|AJUSTE_MANUAL|OUTRO
+  direction       String // COST | RECOVERY | NEUTRAL
+  amount          Decimal  @db.Decimal(14, 2)
+  occurredAt      DateTime @default(now())
+  source          String   @default("MANUAL") // MANUAL | IMPORT
+  externalRef     String? // referência de origem (para idempotência de importados)
+  importBatchId   String?
   createdByUserId String?
-  createdByName  String?
-  note           String?
+  createdByName   String?
+  note            String?
   /// Chave de deduplicação estável (idempotência §17).
-  dedupeKey      String
-  createdAt      DateTime @default(now())
+  dedupeKey       String
+  createdAt       DateTime @default(now())
 
   occurrence PostSaleOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
 
@@ -923,16 +1039,16 @@ model OccurrenceFinancialEvent {
 
 /// Timeline operacional/auditoria (§10/§29): toda mudança manual ou comentário.
 model OccurrenceActivity {
-  id            String   @id @default(cuid())
-  occurrenceId  String
-  kind          String   // CHANGE | COMMENT | FINANCIAL | DISPUTE | STATUS
-  field         String?
-  oldValue      String?
-  newValue      String?
-  message       String?
-  userId        String?
-  userName      String?
-  createdAt     DateTime @default(now())
+  id           String   @id @default(cuid())
+  occurrenceId String
+  kind         String // CHANGE | COMMENT | FINANCIAL | DISPUTE | STATUS
+  field        String?
+  oldValue     String?
+  newValue     String?
+  message      String?
+  userId       String?
+  userName     String?
+  createdAt    DateTime @default(now())
 
   occurrence PostSaleOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
 
@@ -943,7 +1059,7 @@ model OccurrenceActivity {
 /// Item (SKU/variação/produto afetado) de uma ocorrência. Quantidades e preço
 /// unitário AQUI; conectado ao catálogo por SKU (variação) quando houver match.
 model PostSaleOccurrenceItem {
-  id             String  @id @default(cuid())
+  id             String @id @default(cuid())
   occurrenceId   String
   organizationId String
 
@@ -983,15 +1099,15 @@ model PostSaleOccurrenceItem {
 /// Configuração de IA por organização. A credencial é criptografada e NUNCA vai
 /// para o frontend/bundle. Provider desacoplado (§45–§47).
 model AiSetting {
-  id                  String   @id @default(cuid())
-  organizationId      String   @unique
-  provider            String   @default("anthropic") // anthropic | openai
-  model               String   @default("claude-sonnet-4-5")
-  encryptedApiKey     String?
-  enabled             Boolean  @default(false)
-  updatedByUserId     String?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  id              String   @id @default(cuid())
+  organizationId  String   @unique
+  provider        String   @default("anthropic") // anthropic | openai
+  model           String   @default("claude-sonnet-4-5")
+  encryptedApiKey String?
+  enabled         Boolean  @default(false)
+  updatedByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -1031,31 +1147,31 @@ model AiAnalysis {
 /// Plano de ação (§63–§73). Nasce de achados/hipóteses/IA, mas sempre confirmado
 /// pelo usuário. Guarda baseline/meta e a data de implantação (marco de medição).
 model ActionPlan {
-  id                   String   @id @default(cuid())
+  id                   String    @id @default(cuid())
   organizationId       String
   marketplaceAccountId String
   title                String
   description          String?
-  origin               String?  // user | finding | ai | cause | sku | ...
-  status               String   @default("SUGGESTED") // §65
-  priority             String   @default("MEDIUM")
+  origin               String? // user | finding | ai | cause | sku | ...
+  status               String    @default("SUGGESTED") // §65
+  priority             String    @default("MEDIUM")
   ownerName            String?
   dueDate              DateTime?
   implementedAt        DateTime?
   reviewAt             DateTime?
   indicator            String?
-  baselineValue        Decimal? @db.Decimal(14, 4)
-  targetValue          Decimal? @db.Decimal(14, 4)
-  financialImpact      Decimal? @db.Decimal(14, 2)
+  baselineValue        Decimal?  @db.Decimal(14, 4)
+  targetValue          Decimal?  @db.Decimal(14, 4)
+  financialImpact      Decimal?  @db.Decimal(14, 2)
   notes                String?
   relatedSkus          Json?
   relatedFindings      Json?
   createdByUserId      String?
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
-  organization       Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  marketplaceAccount MarketplaceAccount       @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+  organization       Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplaceAccount MarketplaceAccount        @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
   checklist          ActionPlanChecklistItem[]
 
   @@index([organizationId, status])
@@ -1063,11 +1179,11 @@ model ActionPlan {
 }
 
 model ActionPlanChecklistItem {
-  id        String  @id @default(cuid())
+  id        String   @id @default(cuid())
   planId    String
   text      String
-  done      Boolean @default(false)
-  order     Int     @default(0)
+  done      Boolean  @default(false)
+  order     Int      @default(0)
   createdAt DateTime @default(now())
 
   plan ActionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
@@ -1105,29 +1221,29 @@ model PostSaleImportBatch {
   fileSizeBytes     Int
   fileHash          String
   storageKey        String
-  parserVersion     String @default("v1")
+  parserVersion     String     @default("v1")
 
-  sheetName         String?
-  headerRowIndex    Int?
-  physicalRowCount  Int @default(0)
-  dataRowCount      Int @default(0)
-  periodStart       DateTime?
-  periodEnd         DateTime?
+  sheetName        String?
+  headerRowIndex   Int?
+  physicalRowCount Int       @default(0)
+  dataRowCount     Int       @default(0)
+  periodStart      DateTime?
+  periodEnd        DateTime?
 
   status ImportBatchStatus @default(PROCESSING)
 
-  totalRows        Int @default(0)
-  occurrencesSeen  Int @default(0)
-  itemsSeen        Int @default(0)
-  newOccurrences   Int @default(0)
-  updatedOccurrences Int @default(0)
-  unchangedOccurrences Int @default(0)
-  ordersTouched    Int @default(0)
-  unlinkedItems    Int @default(0)
-  errorRows        Int @default(0)
-  processingMs     Int?
-  errorMessage     String?
-  errors           Json?
+  totalRows            Int     @default(0)
+  occurrencesSeen      Int     @default(0)
+  itemsSeen            Int     @default(0)
+  newOccurrences       Int     @default(0)
+  updatedOccurrences   Int     @default(0)
+  unchangedOccurrences Int     @default(0)
+  ordersTouched        Int     @default(0)
+  unlinkedItems        Int     @default(0)
+  errorRows            Int     @default(0)
+  processingMs         Int?
+  errorMessage         String?
+  errors               Json?
 
   createdByUserId String?
   startedAt       DateTime?

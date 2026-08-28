@@ -6,6 +6,7 @@
  */
 import { PrismaClient, Role, EntityStatus, IngestionSource, ConnectionStatus } from '@prisma/client';
 import * as argon2 from 'argon2';
+import { seedPermissionsAndRoles } from '../index';
 
 const prisma = new PrismaClient();
 
@@ -57,22 +58,29 @@ async function main() {
     },
   });
 
+  // Fase 10.2: catálogo de permissões + os 7 perfis-template desta organização.
+  await seedPermissionsAndRoles(prisma, org.id);
+  const appRoles = await prisma.appRole.findMany({ where: { organizationId: org.id } });
+  const appRoleIdByKey = new Map(appRoles.map((r) => [r.key, r.id]));
+
   const passwordHash = await argon2.hash(DEMO_PASSWORD);
-  const users: Array<{ email: string; name: string; role: Role }> = [
-    { email: 'admin@demo.local', name: 'Admin (demo)', role: Role.ADMIN },
-    { email: 'financeiro@demo.local', name: 'Financeiro (demo)', role: Role.FINANCIAL },
-    { email: 'viewer@demo.local', name: 'Consulta (demo)', role: Role.VIEWER },
+  const users: Array<{ email: string; name: string; role: Role; appRoleKey: string }> = [
+    { email: 'owner@demo.local', name: 'Proprietário (demo)', role: Role.OWNER, appRoleKey: 'OWNER' },
+    { email: 'admin@demo.local', name: 'Admin (demo)', role: Role.ADMIN, appRoleKey: 'ADMIN' },
+    { email: 'financeiro@demo.local', name: 'Financeiro (demo)', role: Role.FINANCIAL, appRoleKey: 'FINANCIAL' },
+    { email: 'viewer@demo.local', name: 'Consulta (demo)', role: Role.VIEWER, appRoleKey: 'VIEWER' },
   ];
 
   for (const u of users) {
     const user = await prisma.user.upsert({
       where: { email: u.email },
-      update: { role: u.role, name: u.name },
+      update: { role: u.role, name: u.name, appRoleId: appRoleIdByKey.get(u.appRoleKey) },
       create: {
         organizationId: org.id,
         email: u.email,
         name: u.name,
         role: u.role,
+        appRoleId: appRoleIdByKey.get(u.appRoleKey),
         passwordHash,
         status: EntityStatus.ACTIVE,
       },
