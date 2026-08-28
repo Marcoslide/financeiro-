@@ -56,7 +56,10 @@ function gitShortSha() {
 }
 const buildSha = process.env.VERCEL_GIT_COMMIT_SHA ? process.env.VERCEL_GIT_COMMIT_SHA.slice(0, 7) : gitShortSha();
 const buildAt = new Date().toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
-const buildInfo = 'build ' + (buildSha || '(sem git)') + ' · ' + buildAt;
+// Fase 10.1 "Congelamento e Preparação para Teste Real": rótulo textual do congelamento, visível na
+// tela (não só o hash) — set TEST_LABEL='' para voltar ao rodapé padrão depois da validação.
+const TEST_LABEL = 'TESTE OPERACIONAL — 28/08/2026';
+const buildInfo = (TEST_LABEL ? TEST_LABEL + ' · ' : '') + 'build ' + (buildSha || '(sem git)') + ' · ' + buildAt;
 
 const html = shell
   .replace('<!--XLSX-->', () => '<script>' + xlsx + '\n</script>')
