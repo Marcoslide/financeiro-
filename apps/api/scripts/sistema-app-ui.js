@@ -6247,7 +6247,7 @@
     // linhas lidas por CADA aba física (nunca só uma agregada escondendo quantas abas existem por
     // grupo) e quais abas candidatas não puderam ser processadas — pra provar (não só dizer) que TODAS
     // as abas foram processadas antes de mostrar "Importação concluída".
-    out.diag = { abas: wb.SheetNames.slice(), linhasPorAba: {}, linhasPorAbaFisica: {}, abasSemCabecalho: [], identificadoresInvalidos: [] };
+    out.diag = { abas: wb.SheetNames.slice(), linhasPorAba: {}, linhasPorAbaFisica: {}, abasSemCabecalho: [], identificadoresInvalidos: [], adjSemOrderIdNaoReconhecido: [] };
     function registrarAbas(grupoLabel, abaSheets) {
       out.diag[grupoLabel] = abaSheets.map(function (s) { return s.sheetName; });
       out.diag.linhasPorAba[grupoLabel] = abaSheets.reduce(function (sum, s) { return sum + s.rows.length; }, 0);
@@ -6320,12 +6320,32 @@
     // linhas inflavam o "Total" exibido (confirmado com dados reais: R$5.532,18 real vs R$24.781,70
     // exibido — diferença de R$19.249,52). Uma linha de subtotal da própria planilha nunca é um evento
     // financeiro individual — exige orderId real para entrar em mrAdj.
+    //
+    // Rodada 3 — reforço pedido explicitamente: excluir só por "orderId vazio" seria simplista demais
+    // (uma linha sem orderId poderia, em tese, ser um ajuste financeiro global legítimo, não vinculado
+    // a nenhum pedido — o formato NUNCA mostrou isso nos 2 arquivos reais auditados: as 12 linhas sem
+    // orderId encontradas são comprovadamente estruturais — 4 banners "valor total"/"valor total do
+    // ajuste" + 8 linhas de detalhamento por categoria logo abaixo deles, cuja soma bate EXATO, ao
+    // centavo, com o banner do mesmo arquivo — mas não custa nada manter uma rede de segurança pro
+    // futuro). Por isso: toda linha sem orderId que TAMBÉM não bate com o rótulo "valor total" (ou seja,
+    // não é um banner reconhecível) é contada em `out.diag.adjSemOrderIdNaoReconhecido` — se esse
+    // contador for > 0 num arquivo futuro, o Diagnóstico da Planilha (mrDiagnosticoIntegridade) avisa
+    // explicitamente, em vez de a linha simplesmente desaparecer sem nenhum rastro.
     var adSheets = mrAoaAll(wb, 'Adjustment');
     registrarAbas('abasAdjustment', adSheets);
     var adjSeq = 0;
     adSheets.forEach(function (s) {
       var ad = s.rows;
-      ad.forEach(function (r) { var v = null; for (var c = 0; c < r.length; c++) { if (/-?\d+[.,]\d/.test(String(r[c]))) v = r[c]; } var oid3 = ''; r.forEach(function (c) { if (/^\d{6,}[A-Z0-9]+$/.test(String(c).trim())) oid3 = String(c).trim(); }); var dt3 = null; for (var d3 = 0; d3 < r.length; d3++) { if (/^\d{4}-\d{2}-\d{2}$/.test(String(r[d3]).trim())) { dt3 = String(r[d3]).trim(); break; } } if (v != null && oid3) { out.adj.push({ seq: adjSeq++, orderId: oid3, data: dt3, desc: r.filter(function (x) { return String(x).trim() && !/^-?\d+[.,]\d+$/.test(String(x).trim()); }).join(' ').slice(0, 80), valor: mrCents(v) }); } });
+      ad.forEach(function (r) {
+        var v = null; for (var c = 0; c < r.length; c++) { if (/-?\d+[.,]\d/.test(String(r[c]))) v = r[c]; }
+        var oid3 = ''; r.forEach(function (c) { if (/^\d{6,}[A-Z0-9]+$/.test(String(c).trim())) oid3 = String(c).trim(); });
+        var dt3 = null; for (var d3 = 0; d3 < r.length; d3++) { if (/^\d{4}-\d{2}-\d{2}$/.test(String(r[d3]).trim())) { dt3 = String(r[d3]).trim(); break; } }
+        if (v != null && oid3) {
+          out.adj.push({ seq: adjSeq++, orderId: oid3, data: dt3, desc: r.filter(function (x) { return String(x).trim() && !/^-?\d+[.,]\d+$/.test(String(x).trim()); }).join(' ').slice(0, 80), valor: mrCents(v) });
+        } else if (v != null && !oid3 && normStatus(r[0]).indexOf('valor total') < 0) {
+          out.diag.adjSemOrderIdNaoReconhecido.push({ arquivo: s.sheetName, linha: r.slice(0, 5) });
+        }
+      });
     });
     // Service Fee Details — mesma correção: processa todas as abas correspondentes. Achado P4 da
     // auditoria: um ID de pedido pode chegar em notação científica do Excel (ex.: "2.60316E+13") —
@@ -7426,6 +7446,13 @@
     }
     var diagImpBlock = diagImp ? '<div class="panel"><div class="ph"><h3>Diagnóstico de Importação — Income</h3></div><div class="pb">' +
       (diagImp.importacaoCompleta === false ? callout('warn', '🔴 IMPORTAÇÃO INCOMPLETA', (diagImp.abasSemCabecalho || []).length + ' aba(s) candidata(s) não tinham o cabeçalho esperado e NÃO foram processadas: ' + (diagImp.abasSemCabecalho || []).join(', ') + '. Confira o formato dessas abas antes de considerar os números confiáveis.') : callout('green', '✓ Importação completa', 'Todas as abas candidatas do arquivo foram processadas.')) +
+      // Rodada 3 da auditoria — rede de segurança: linha do Adjustment sem orderId E sem rótulo
+      // "valor total" reconhecido não é simplesmente descartada por "falta de pedido" — é sinalizada
+      // aqui. Nos 2 arquivos reais auditados isso nunca ocorreu (as 12 linhas sem orderId encontradas
+      // são comprovadamente banners/subtotais por categoria, soma batendo ao centavo com o total da
+      // aba) — mas se algum dia a Shopee introduzir um ajuste financeiro global sem pedido vinculado,
+      // este aviso aparece em vez de o valor simplesmente sumir sem rastro.
+      ((diagImp.adjSemOrderIdNaoReconhecido || []).length ? callout('warn', '⚠️ Linha(s) da aba Adjustment não classificada(s)', (diagImp.adjSemOrderIdNaoReconhecido || []).length + ' linha(s) na aba Adjustment têm valor monetário mas não têm número de pedido nem rótulo de total reconhecido — não entraram no cálculo. Pode ser um tipo de ajuste financeiro novo (ex.: ajuste global sem pedido vinculado). Revisar manualmente: ' + (diagImp.adjSemOrderIdNaoReconhecido || []).map(function (x) { return x.arquivo + ': ' + JSON.stringify(x.linha); }).join(' | ')) : '') +
       kv('Arquivo', mrSummary.fileName || '—') +
       kv('Abas encontradas no arquivo', nn(diagImp.abas.length) + ' (' + diagImp.abas.join(', ') + ')') +
       diagGrupoAbasHtml('Renda', diagImp.abasRenda) +
@@ -11711,7 +11738,14 @@
     var head = '<table class="report"><thead><tr><th>#</th><th>Processo</th><th>Tempo (min)</th><th></th></tr></thead><tbody>';
     var body = rows.map(function (r, i) { return '<tr><td>' + (i + 1) + '</td><td><select class="select sm" data-' + prefix + '-proc="' + i + '">' + procs.map(function (p) { return '<option value="' + esc(p.id) + '"' + (p.id === r.processoId ? ' selected' : '') + '>' + esc(p.nome) + ' (' + esc(fatorSetorNome(p.setorId)) + ')</option>'; }).join('') + '</select></td><td><input class="input sm" style="width:90px" data-' + prefix + '-tempo="' + i + '" value="' + (r.tempoMin != null ? r.tempoMin : '') + '"></td><td><button class="btn-sm" data-' + prefix + '-del="' + i + '">Remover</button></td></tr>'; }).join('');
     var totalMin = rows.reduce(function (s, r) { return s + (Number(r.tempoMin) || 0); }, 0);
-    return '<div class="table-wrap">' + head + body + '</tbody></table></div><div class="footnote" style="margin:8px 0"><b>Total automático: ' + nn(totalMin) + ' min</b></div><button class="btn-sm" data-' + prefix + '-add="1">+ Adicionar processo</button>';
+    // PRIORIDADE 2 (auditoria UI do Fator de Custo) — achado confirmado por teste real de operador:
+    // o "Total automático" só era recalculado num re-render completo (Adicionar/Remover/Salvar) — editar
+    // o tempo de uma linha JÁ existente não disparava nenhum listener, então o número ficava visualmente
+    // desatualizado até o próximo clique (o valor realmente SALVO sempre esteve correto — readRows() lê
+    // o DOM no momento do clique em Salvar — mas o operador via um total que não refletia o que estava
+    // prestes a salvar). id no footnote + wireTotalLive() (bindFatorRoteiroView) mantêm os dois em
+    // sincronia a cada tecla, sem re-renderizar a tabela inteira (evita perder o foco do campo).
+    return '<div class="table-wrap">' + head + body + '</tbody></table></div><div class="footnote" id="' + prefix + '-total" style="margin:8px 0"><b>Total automático: ' + nn(totalMin) + ' min</b></div><button class="btn-sm" data-' + prefix + '-add="1">+ Adicionar processo</button>';
   }
   function fatorRoteiroView(opId) {
     var fams = fatorFamilias();
@@ -11742,9 +11776,26 @@
     function readRows(prefix) {
       var rows = []; document.querySelectorAll('[data-' + prefix + '-proc]').forEach(function (sel) { var i = sel.dataset[prefix + 'Proc']; var tempo = document.querySelector('[data-' + prefix + '-tempo="' + i + '"]'); rows.push({ processoId: sel.value, tempoMin: cpParseNum(tempo ? tempo.value : 0) || 0 }); }); return rows;
     }
+    // PRIORIDADE 2 (auditoria UI do Fator de Custo) — achado confirmado por teste real de operador:
+    // editar o tempo de uma linha JÁ existente do roteiro nunca recalculava o "Total automático" na tela
+    // (só um clique em Adicionar/Remover/Salvar, que força um render() completo, atualizava o número —
+    // o valor efetivamente SALVO sempre esteve correto, já que readRows() lê o DOM no momento do clique
+    // em Salvar; o problema era só o texto exibido ficar temporariamente desatualizado). Atualiza só o
+    // texto do total a cada tecla, sem re-renderizar a tabela inteira (evita perder o foco do campo).
+    function wireTotalLive(prefix) {
+      var totalEl = document.getElementById(prefix + '-total');
+      if (!totalEl) return;
+      document.querySelectorAll('[data-' + prefix + '-tempo]').forEach(function (inp) {
+        inp.oninput = function () {
+          var soma = readRows(prefix).reduce(function (s, r) { return s + (Number(r.tempoMin) || 0); }, 0);
+          totalEl.innerHTML = '<b>Total automático: ' + nn(soma) + ' min</b>';
+        };
+      });
+    }
     var frAdd = document.querySelector('[data-fr-add]'); if (frAdd) frAdd.onclick = function () { var rows = readRows('fr'); var procs = fatorProcessosAtivos(opId); rows.push({ processoId: procs[0] ? procs[0].id : '', tempoMin: 0 }); fatorRoteiroDraft = { familyId: fatorRoteiroFamiliaSel, rows: rows }; render(); };
     document.querySelectorAll('[data-fr-del]').forEach(function (b) { b.onclick = function () { var rows = readRows('fr'); rows.splice(Number(b.dataset.frDel), 1); fatorRoteiroDraft = { familyId: fatorRoteiroFamiliaSel, rows: rows }; render(); }; });
     var frSave = document.getElementById('fr-save'); if (frSave) frSave.onclick = function () { var rows = readRows('fr'); fatorRoteiroFamiliaSave(opId, fatorRoteiroFamiliaSel, rows).then(function () { fatorRoteiroDraft = null; render(); toast('Roteiro salvo', ''); }); };
+    wireTotalLive('fr');
 
     var skuInput = document.getElementById('fr-sku'); if (skuInput) skuInput.oninput = function () { fatorRoteiroSkuSel = this.value; };
     var skuLoad = document.getElementById('fr-sku-load'); if (skuLoad) skuLoad.onclick = function () {
@@ -11756,6 +11807,7 @@
     document.querySelectorAll('[data-frk-del]').forEach(function (b) { b.onclick = function () { var rows = readRows('frk'); rows.splice(Number(b.dataset.frkDel), 1); fatorRoteiroSkuDraft = { sku: fatorRoteiroSkuSel, rows: rows }; render(); }; });
     var frkSave = document.getElementById('frk-save'); if (frkSave) frkSave.onclick = function () { var rows = readRows('frk'); fatorRoteiroSkuSave(fatorRoteiroSkuSel, rows).then(function () { fatorRoteiroSkuDraft = null; render(); toast('Exceção salva', ''); }); };
     var frkRemove = document.getElementById('frk-remove'); if (frkRemove) frkRemove.onclick = function () { fatorRoteiroSkuRemove(fatorRoteiroSkuSel).then(function () { fatorRoteiroSkuDraft = null; render(); toast('Exceção removida', ''); }); };
+    wireTotalLive('frk');
   }
 
   // ---------- 9. Capacidade Produtiva ----------
