@@ -15485,6 +15485,12 @@
     composicao: function (orderId) { return pedidoComposicaoFinanceira(orderId); },
     auditoria: function (orderId) { return auditarComposicaoFinanceiraPedido(orderId); },
     resolverCustoSku: function (sku, itemHint) { return resolveSkuCost ? resolveSkuCost(sku, itemHint) : null; },
+    // Fator de Custo Industrial — mesmas funções canônicas que a tela usa, só-leitura, pra permitir
+    // auditoria em massa/independente sem precisar clicar na UI (mesmo princípio do restante do hook).
+    fatorCustoPedido: function (orderId) { return fatorCustoIndustrialPedido ? fatorCustoIndustrialPedido(orderId) : null; },
+    fatorCustoMinutoHomemSetor: function (setorId, opId) { return fatorCustoMinutoHomemSetorC(setorId, opId); },
+    fatorCustoFixoMinutoSetor: function (setorId, opId) { return fatorCustoFixoMinutoSetorC(setorId, opId); },
+    fatorConfigVigente: function (opId, refDateIso) { return fatorConfigVigente(opId, refDateIso); },
   });
 
   var bootedOnce = false;
