@@ -2488,15 +2488,50 @@
       var custoUnit = r.found ? r.cost : null;
       var custoTotal = custoUnit != null ? r2(custoUnit * it.qty) : null;
       var unitPrice = it.agreedPrice != null ? it.agreedPrice : (it.subtotal != null && it.qty ? r2(it.subtotal / it.qty) : null);
-      return { produto: it.productName, sku: it.sku, skuEncontrado: r.canonicalSku || null, variacao: it.variationName, familia: r.familyName || null, qty: it.qty, unitPrice: unitPrice, total: it.subtotal, custoUnit: custoUnit, custoTotal: custoTotal, linked: r.found, matchedBy: r.matchedBy, motivo: r.motivo, overridden: !!r.overridden };
+      return { produto: it.productName, sku: it.sku, skuEncontrado: r.canonicalSku || null, variacao: it.variationName, familia: r.familyName || null, qty: it.qty, unitPrice: unitPrice, total: it.subtotal, custoUnit: custoUnit, custoTotal: custoTotal, linked: r.found, matchedBy: r.matchedBy, motivo: r.motivo, regra: r.regra, overridden: !!r.overridden };
     }) : [];
+    // Correção "Identidade canônica — Fase 2, itens 12-15 (observabilidade)": vocabulário
+    // determinístico do MÉTODO DE RESOLUÇÃO exibido na Ficha — sempre derivado do `regra`/`motivo`
+    // que resolveSkuCostByKeyRaw() já retorna (nunca um motor novo, só tradução pra leitura humana).
+    // Nunca rotula como "ID nativo" quando não existe — hoje nenhum arquivo real usado pela operação
+    // (Order.all/cancelled/return_refund/toship) traz Product ID/Item ID/Model ID/Shop ID (achado
+    // F001 da auditoria pré-go-live); a linha "ID nativo Shopee: não disponível nesta fonte" abaixo
+    // é sempre mostrada, nunca um valor fictício.
+    var RESOLUCAO_METODO_LABEL = { STRONG_VARIATION_ID: 'ID nativo Shopee', ACTIVE_EXACT_SKU: 'SKU único na operação', ACTIVE_REFERENCE_SKU: 'SKU único na operação (via referência)', HISTORICAL_INACTIVE_MATCH: 'SKU único na operação (anúncio inativo)', MULTIPLE_LISTINGS_SAME_FAMILY: 'SKU único na operação (múltiplos anúncios, mesma família)', SKU_PRODUCT_NAME_MATCH: 'SKU + produto + variação', MANUAL_IDENTITY: 'Mapeamento manual', MANUAL_OVERRIDE: 'Mapeamento manual (classificação por SKU)' };
+    function resolucaoMetodo(r) {
+      if (r.regra && RESOLUCAO_METODO_LABEL[r.regra]) return RESOLUCAO_METODO_LABEL[r.regra];
+      if (r.motivo === 'SKU_CONFLITANTE' || r.motivo === 'SKU_CONFLITANTE_HISTORICAL') return 'Ambíguo';
+      if (r.motivo === 'SKU_NAO_LOCALIZADO') return 'Sem correspondência';
+      return r.regra ? RESOLUCAO_METODO_LABEL[r.regra] || r.regra : '—';
+    }
+    // Status determinístico (§9/§14 do prompt): nunca esconde ambiguidade atrás de um "custo
+    // pendente" genérico — distingue explicitamente ambíguo (exige decisão humana) de
+    // sem-correspondência/sem-custo (dado ausente, não decisão pendente).
+    function resolucaoStatus(r) {
+      if (r.overridden) return '🟡 Mapeamento manual';
+      if (r.motivo === 'SKU_CONFLITANTE' || r.motivo === 'SKU_CONFLITANTE_HISTORICAL') return '⚠ Ambíguo';
+      if (r.linked) return r.regra === 'MANUAL_IDENTITY' ? '🟡 Mapeamento manual' : '✅ Resolvido';
+      if (r.motivo === 'SKU_NAO_LOCALIZADO') return '⚪ Sem correspondência';
+      return '⚪ ' + (SKU_MOTIVO_LABEL[r.motivo] || 'Não resolvido');
+    }
     // §10 do prompt de correção de custo: "Forma do cruzamento" (SKU exato × SKU de referência) fica
     // discreta em tooltip no próprio SKU — só para auditoria, nunca um card extra. §14: cada falha usa
     // o motivo real (nunca um genérico "custo pendente" escondendo se é SKU inexistente, sem família,
     // família sem custo ou conflito de SKU).
+    // Bloco "Identidade do Produto" (§12-15 da correção de identidade canônica): operação/empresa/
+    // marketplace do PRÓPRIO pedido (nunca a operação ativa no seletor — um pedido sempre pertence
+    // à operação que o importou, mesmo em modo "Todas as Operações"), e a nota honesta de que
+    // nenhuma fonte real usada por esta operação carrega ID nativo Shopee (F001).
+    var pedOp = ord && ord.operationId ? operations.find(function (o) { return o.id === ord.operationId; }) : null;
+    var pedCompany = pedOp ? opCompany(pedOp) : null;
+    var identidadeOperacaoHtml = kv('Empresa', pedCompany ? (pedCompany.nomeFantasia || pedCompany.razaoSocial) : (ord && ord.operationId ? '—' : 'Não identificada (pedido legado, sem operação atribuída)')) +
+      kv('Marketplace', pedOp ? (pedOp.marketplace || '—') : '—') +
+      kv('Loja', pedOp ? (pedOp.storeName || pedOp.nome || '—') : '—') +
+      kv('ID nativo Shopee', 'Não disponível nesta fonte (Order.all/cancelled/return_refund/toship não trazem Product ID/Item ID/Model ID)');
     var dadosVendaBlock = '<div class="panel"><div class="ph"><h3>2. Produto e Venda</h3></div><div class="pb">' +
       kv('Pedido', orderId) + kv('Status Shopee', ord ? (S.pedidos.labels[ord.normalizedStatus] || ord.orderStatus) : '—') + kv('Data de criação', ord ? dbr(ord.createdAt) : '—') + kv('Data de pagamento', ord && ord.paidAt ? dbr(ord.paidAt) : '—') + kv('BR / Rastreamento', ord ? ord.tracking : '—') + (ord && ord.isFbs ? kv('Full/FBS', 'Sim') : '') +
-      (itemRows.length ? '<div class="table-wrap" style="margin-top:8px"><table class="report"><thead><tr><th>Produto</th><th>SKU do Pedido</th><th>SKU em Produtos</th><th>Variação</th><th>Família</th><th>Qtd</th><th>Valor unit.</th><th>Valor total</th><th>Custo unit.</th><th>Custo total</th></tr></thead><tbody>' +
+      '<details style="margin-top:8px"><summary style="cursor:pointer;font-weight:600;font-size:12px">Identidade do Produto (empresa/loja/método de resolução)</summary><div style="margin-top:6px">' + identidadeOperacaoHtml + '</div></details>' +
+      (itemRows.length ? '<div class="table-wrap" style="margin-top:8px"><table class="report"><thead><tr><th>Produto</th><th>SKU do Pedido</th><th>SKU em Produtos</th><th>Variação</th><th>Família</th><th>Qtd</th><th>Valor unit.</th><th>Valor total</th><th>Custo unit.</th><th>Custo total</th><th>Método de resolução</th><th>Status</th></tr></thead><tbody>' +
         itemRows.map(function (r) {
           var cruzTitle = r.matchedBy ? 'Cruzamento: ' + esc(SKU_MATCHEDBY_LABEL[r.matchedBy] || r.matchedBy) : (r.motivo ? esc(SKU_MOTIVO_LABEL[r.motivo] || r.motivo) : '');
           var SKU_MOTIVO_CURTO = { SKU_NAO_LOCALIZADO: 'não localizado', SEM_FAMILIA: 'sem família', FAMILIA_NAO_ENCONTRADA: 'família inexistente', FAMILIA_SEM_CUSTO: 'sem custo', SKU_CONFLITANTE: 'conflito', SKU_CONFLITANTE_HISTORICAL: 'conflito' };
@@ -2505,8 +2540,8 @@
           // PROMPT "Família de Produto — classificação manual sempre vence": o botão de Diagnóstico
           // precisa continuar acessível mesmo depois que o override resolve o custo (r.linked=true) —
           // senão o usuário perde o único caminho de volta até "Remover classificação manual".
-          var diagCell = (r.linked && !r.overridden) ? '' : ' <button class="btn-sm" data-skucostdiag="' + esc(orderId) + '" style="margin-left:4px;padding:1px 6px;font-size:10px">' + (r.overridden ? '🔒 Manual' : 'Diagnóstico') + '</button>';
-          return '<tr><td class="cell-text">' + esc(r.produto || '—') + '</td><td class="mono">' + esc(r.sku || '—') + '</td><td class="mono">' + skuEncontradoCell + diagCell + '</td><td>' + esc(r.variacao || '—') + '</td><td>' + esc(r.familia || '—') + '</td><td>' + nn(r.qty) + '</td><td class="nowrap">' + (r.unitPrice != null ? brl(r.unitPrice) : '—') + '</td><td class="nowrap">' + (r.total != null ? brl(r.total) : '—') + '</td><td class="nowrap">' + custoCell + '</td><td class="nowrap">' + (r.custoTotal != null ? brl(r.custoTotal) : '—') + '</td></tr>';
+          var diagCell = (r.linked && !r.overridden) ? '' : ' <button class="btn-sm" data-skucostdiag="' + esc(orderId) + '" style="margin-left:4px;padding:1px 6px;font-size:10px">' + (r.overridden ? '🔒 Manual' : (r.motivo === 'SKU_CONFLITANTE' || r.motivo === 'SKU_CONFLITANTE_HISTORICAL' ? 'Resolver produto' : 'Diagnóstico')) + '</button>';
+          return '<tr><td class="cell-text">' + esc(r.produto || '—') + '</td><td class="mono">' + esc(r.sku || '—') + '</td><td class="mono">' + skuEncontradoCell + diagCell + '</td><td>' + esc(r.variacao || '—') + '</td><td>' + esc(r.familia || '—') + '</td><td>' + nn(r.qty) + '</td><td class="nowrap">' + (r.unitPrice != null ? brl(r.unitPrice) : '—') + '</td><td class="nowrap">' + (r.total != null ? brl(r.total) : '—') + '</td><td class="nowrap">' + custoCell + '</td><td class="nowrap">' + (r.custoTotal != null ? brl(r.custoTotal) : '—') + '</td><td class="footnote" style="margin:0">' + esc(resolucaoMetodo(r)) + '</td><td class="nowrap">' + esc(resolucaoStatus(r)) + '</td></tr>';
         }).join('') +
         '</tbody></table></div>' : '') +
       (itemRows.some(function (r) { return !r.linked; }) ? '<div class="footnote" style="margin-top:6px">⚠ Custo parcialmente pendente — pelo menos um item deste pedido não tem custo cadastrado. Motivo exato em cada linha (passe o mouse ou clique em "Diagnóstico").</div>' : '') +
