@@ -40,7 +40,31 @@ const bundle = built.outputFiles[0].text;
 
 const shell = fs.readFileSync(path.join(__dirname, 'sistema-app-shell.html'), 'utf8');
 const xlsx = fs.readFileSync(findXlsx(), 'utf8');
-const ui = fs.readFileSync(path.join(__dirname, 'sistema-app-ui.js'), 'utf8');
+let ui = fs.readFileSync(path.join(__dirname, 'sistema-app-ui.js'), 'utf8');
+
+// Prioridade 1 (Rodada 2 da auditoria): window.__qaAudit é um hook só-leitura útil pra auditoria em
+// massa, mas não pode existir no build de produção (docs/sistema-marketplace.html, o mesmo arquivo
+// publicado pela Vercel). Este projeto não tem build separado por DEV/QA/staging/produção — é um
+// único HTML estático montado por este script — então o corte precisa acontecer AQUI, em build-time,
+// por variável de ambiente: sem QA_AUDIT_ENABLED=1 explícito, o bloco entre os marcadores é removido
+// do texto ANTES de entrar no bundle, então window.__qaAudit fica genuinamente `undefined` (não há
+// nenhum código do hook no HTML final pra inspecionar/reativar). Todo build normal (o que gera o
+// docs/sistema-marketplace.html commitado) roda sem essa variável.
+const QA_AUDIT_ENABLED = process.env.QA_AUDIT_ENABLED === '1';
+{
+  const startMarker = '/* __QA_AUDIT_HOOK_START__ */';
+  const endMarker = '/* __QA_AUDIT_HOOK_END__ */';
+  const start = ui.indexOf(startMarker);
+  const end = ui.indexOf(endMarker);
+  if (start === -1 || end === -1 || end < start) {
+    throw new Error('Marcadores __QA_AUDIT_HOOK_START__/END__ não encontrados em sistema-app-ui.js — build abortado pra não publicar o hook por engano.');
+  }
+  if (QA_AUDIT_ENABLED) {
+    console.log('[build-sistema-app] QA_AUDIT_ENABLED=1 — window.__qaAudit INCLUÍDO neste build. NÃO commitar esta saída em docs/sistema-marketplace.html.');
+  } else {
+    ui = ui.slice(0, start) + ui.slice(end + endMarker.length);
+  }
+}
 
 // Identificador de build (prompt "Etapa 2 — inserir identificador de build"): mostra no rodapé do
 // menu qual commit e em que instante o docs/sistema-marketplace.html atual foi gerado, para o

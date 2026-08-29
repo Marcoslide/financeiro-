@@ -337,7 +337,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 34d9ed4 · 2026-08-29 16:03 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build e970d84 · 2026-08-29 16:12 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -19437,19 +19437,16 @@ buffer/index.js:
   // estado — só chama as mesmas funções que a Ficha do Pedido já chama pra renderizar, permitindo
   // comparar UI×Engine e rodar auditoria em massa (milhares de pedidos) sem abrir a Ficha um por um
   // via clique, que é o gargalo real de qualquer varredura grande.
-  window.__qaAudit = Object.freeze({
-    orderIds: function () { return orders.map(function (o) { return o.id; }); },
-    ordersCount: function () { return orders.length; },
-    composicao: function (orderId) { return pedidoComposicaoFinanceira(orderId); },
-    auditoria: function (orderId) { return auditarComposicaoFinanceiraPedido(orderId); },
-    resolverCustoSku: function (sku, itemHint) { return resolveSkuCost ? resolveSkuCost(sku, itemHint) : null; },
-    // Fator de Custo Industrial — mesmas funções canônicas que a tela usa, só-leitura, pra permitir
-    // auditoria em massa/independente sem precisar clicar na UI (mesmo princípio do restante do hook).
-    fatorCustoPedido: function (orderId) { return fatorCustoIndustrialPedido ? fatorCustoIndustrialPedido(orderId) : null; },
-    fatorCustoMinutoHomemSetor: function (setorId, opId) { return fatorCustoMinutoHomemSetorC(setorId, opId); },
-    fatorCustoFixoMinutoSetor: function (setorId, opId) { return fatorCustoFixoMinutoSetorC(setorId, opId); },
-    fatorConfigVigente: function (opId, refDateIso) { return fatorConfigVigente(opId, refDateIso); },
-  });
+  //
+  // Prioridade 1 (Rodada 2 da auditoria): este bloco inteiro (entre os marcadores abaixo) é REMOVIDO
+  // por texto pelo build (apps/api/scripts/build-sistema-app-html.cjs) a menos que a variável de
+  // ambiente QA_AUDIT_ENABLED=1 esteja setada NO MOMENTO DO BUILD. O arquivo publicado em docs/ é
+  // sempre gerado SEM essa variável (build normal), então window.__qaAudit é `undefined` em produção
+  // — não existe "if" em runtime pra contornar (nem checar location.hostname etc.): o código do hook
+  // simplesmente não está no bundle. Pra auditoria/QA, gera-se um build separado com
+  // QA_AUDIT_ENABLED=1 node apps/api/scripts/build-sistema-app-html.cjs, cuja saída NUNCA deve ser
+  // commitada em docs/sistema-marketplace.html (usar caminho de saída alternativo/scratch).
+  
 
   var bootedOnce = false;
   function authInit() {

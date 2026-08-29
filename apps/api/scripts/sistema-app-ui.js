@@ -15490,6 +15490,16 @@
   // estado — só chama as mesmas funções que a Ficha do Pedido já chama pra renderizar, permitindo
   // comparar UI×Engine e rodar auditoria em massa (milhares de pedidos) sem abrir a Ficha um por um
   // via clique, que é o gargalo real de qualquer varredura grande.
+  //
+  // Prioridade 1 (Rodada 2 da auditoria): este bloco inteiro (entre os marcadores abaixo) é REMOVIDO
+  // por texto pelo build (apps/api/scripts/build-sistema-app-html.cjs) a menos que a variável de
+  // ambiente QA_AUDIT_ENABLED=1 esteja setada NO MOMENTO DO BUILD. O arquivo publicado em docs/ é
+  // sempre gerado SEM essa variável (build normal), então window.__qaAudit é `undefined` em produção
+  // — não existe "if" em runtime pra contornar (nem checar location.hostname etc.): o código do hook
+  // simplesmente não está no bundle. Pra auditoria/QA, gera-se um build separado com
+  // QA_AUDIT_ENABLED=1 node apps/api/scripts/build-sistema-app-html.cjs, cuja saída NUNCA deve ser
+  // commitada em docs/sistema-marketplace.html (usar caminho de saída alternativo/scratch).
+  /* __QA_AUDIT_HOOK_START__ */
   window.__qaAudit = Object.freeze({
     orderIds: function () { return orders.map(function (o) { return o.id; }); },
     ordersCount: function () { return orders.length; },
@@ -15503,6 +15513,7 @@
     fatorCustoFixoMinutoSetor: function (setorId, opId) { return fatorCustoFixoMinutoSetorC(setorId, opId); },
     fatorConfigVigente: function (opId, refDateIso) { return fatorConfigVigente(opId, refDateIso); },
   });
+  /* __QA_AUDIT_HOOK_END__ */
 
   var bootedOnce = false;
   function authInit() {
