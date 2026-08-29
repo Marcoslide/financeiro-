@@ -573,7 +573,7 @@
       // histórico, porque aponta pra uma variação real; o override cego (classificação manual de SKU
       // sem NENHUM vínculo em Produtos) continua seguro como último recurso, aplicado só aqui — NUNCA
       // quando existem candidatas reais (ver os tiers abaixo).
-      var overrideNone = skuFamilyOverrides[key];
+      var overrideNone = skuFamilyOverrideGet(key);
       var fallbackNone = manualIdentityFallback(null);
       if (fallbackNone) return fallbackNone;
       if (overrideNone) {
@@ -659,20 +659,34 @@
     var key = normalizeSkuKey(skuRaw);
     return skuFamilyOverrideHistory.filter(function (h) { return h.skuKey === key; }).sort(function (a, b) { return b.alteradoEm.localeCompare(a.alteradoEm); });
   }
+  // CRÍTICO (achado da Prioridade 15 — auditoria de stores/keyPath): `skuFamilyOverrides` nunca
+  // gravava `operationId` e o mapa em memória nunca era filtrado por operação (nem escrita nem
+  // leitura) — pior que o bug já corrigido em mrRenda/mrShip/mrAdj (9bdf751) porque nem precisa de
+  // reimportação: um operador classificando manualmente um SKU em QUALQUER operação sobrescrevia (e
+  // vazava) a classificação desse mesmo texto de SKU em TODAS as outras operações. Corrigido com uma
+  // chave composta `opId+'|'+skuKey`; registros antigos (sem operationId, migrados no boot sob a
+  // chave simples `skuKey`) continuam visíveis em qualquer operação — mesma regra de compatibilidade
+  // retroativa já usada no resto do sistema (nunca perde dado legado).
+  function skuOverrideStoreKey(key) { var op = opActiveOrNull(); return op ? (op + '|' + key) : key; }
+  function skuFamilyOverrideGet(key) { return skuFamilyOverrides[skuOverrideStoreKey(key)] || skuFamilyOverrides[key] || null; }
   function skuFamilyOverrideSave(skuRaw, familyId) {
     var key = normalizeSkuKey(skuRaw);
     if (!key || !familyId) return Promise.resolve();
-    var anterior = skuFamilyOverrides[key] ? skuFamilyOverrides[key].familyId : null;
-    var rec = { id: key, skuKey: key, skuOriginal: skuRaw, familyId: familyId, setAt: new Date().toISOString() };
-    skuFamilyOverrides[key] = rec;
+    var existing = skuFamilyOverrideGet(key);
+    var anterior = existing ? existing.familyId : null;
+    var storeKey = skuOverrideStoreKey(key);
+    var rec = { id: storeKey, skuKey: key, skuOriginal: skuRaw, familyId: familyId, operationId: opActiveOrNull(), setAt: new Date().toISOString() };
+    skuFamilyOverrides[storeKey] = rec;
     return putMany('skufamilyoverrides', [rec]).then(function () { rebuildSkuCost(); return skuFamilyOverrideHistoryLog(key, skuRaw, anterior, familyId, 'Classificação manual'); }).then(function () { return rec; });
   }
   function skuFamilyOverrideRemove(skuRaw) {
     var key = normalizeSkuKey(skuRaw);
     if (!key) return Promise.resolve();
-    var anterior = skuFamilyOverrides[key] ? skuFamilyOverrides[key].familyId : null;
-    delete skuFamilyOverrides[key];
-    return delOne('skufamilyoverrides', key).then(function () { rebuildSkuCost(); return skuFamilyOverrideHistoryLog(key, skuRaw, anterior, null, 'Remoção da classificação manual'); });
+    var existing = skuFamilyOverrideGet(key);
+    var anterior = existing ? existing.familyId : null;
+    var storeKey = skuOverrideStoreKey(key);
+    delete skuFamilyOverrides[storeKey];
+    return delOne('skufamilyoverrides', storeKey).then(function () { rebuildSkuCost(); return skuFamilyOverrideHistoryLog(key, skuRaw, anterior, null, 'Remoção da classificação manual'); });
   }
   // Correção de segurança pós-Auditoria Pré-Go-Live: CRUD da identidade canônica por item (SKU + nome
   // do produto + nome da variação -> UMA variação real específica). Ao contrário de
@@ -1253,7 +1267,12 @@
     var orderId = res.order.id;
     var now = new Date().toISOString(); var ex = shipBip[orderId];
     if (ex) { ex.history = ex.history || []; ex.history.unshift({ at: now, note: note || '' }); ex.lastScanAt = now; if (note) ex.note = note; }
-    else { ex = shipBip[orderId] = { id: orderId, orderId: orderId, bipedAt: now, lastScanAt: now, bipedBy: 'Operador', note: note || '', scannedVia: res.via, scannedValue: rawInput, history: [] }; }
+    // Achado real da Prioridade 13 (auditoria): shipBip nunca gravava operationId e o boot nunca
+    // filtrava esse objeto por operação (byOp() só cobria orders/wallet/mrRenda/etc — ver comentário
+    // §AS/§AT/§AU) — bipes de uma operação vazavam para a tela de Expedição de outra operação vazia.
+    // `res.order` já vem do array `orders` já escopado pela operação ativa, então o `orderId`
+    // resolvido aqui já pertence à operação certa — só falta persistir o rótulo.
+    else { ex = shipBip[orderId] = { id: orderId, orderId: orderId, operationId: opActiveOrNull(), bipedAt: now, lastScanAt: now, bipedBy: 'Operador', note: note || '', scannedVia: res.via, scannedValue: rawInput, history: [] }; }
     return putMany('shipbip', [ex]).then(function () { return ex; });
   }
   // Full/FBS não é despachado por bipe interno — a Shopee expede pelo próprio centro de
@@ -1348,7 +1367,10 @@
     var aEnviarAll = orders.filter(function (o) { return o.normalizedStatus === 'A_ENVIAR'; });
     var esperados = aEnviarAll.map(function (o) { return { orderId: o.id, modalidade: o.shippingOption || '(sem modalidade)', prazoEnvio: o.shipByDate, statusNoMomento: o.normalizedStatus, isFbs: !!o.isFbs }; });
     var now = new Date().toISOString();
-    var sess = { id: 'exps' + Date.now() + Math.round(performance.now()), dataOperacional: dataOperacional || now.slice(0, 10), horaInicio: now, operador: operador || 'Operador', esperados: esperados, resolvidas: [] };
+    // operationId: mesmo achado da Prioridade 13 acima (shipBip) — expSessions também nunca era
+    // filtrado por operação no boot; a chave (`exps`+timestamp) já é sempre única, então aqui o risco
+    // era só de VAZAMENTO de leitura (sessões de outra operação aparecendo juntas), não de colisão.
+    var sess = { id: 'exps' + Date.now() + Math.round(performance.now()), operationId: opActiveOrNull(), dataOperacional: dataOperacional || now.slice(0, 10), horaInicio: now, operador: operador || 'Operador', esperados: esperados, resolvidas: [] };
     expSessions.unshift(sess);
     return putMany('expsessions', [sess]).then(function () { return sess; });
   }
@@ -2930,7 +2952,7 @@
         // só remover (o usuário pode mudar de ideia sem precisar de dois passos).
         (it.skuPedido ? ('<div style="margin-top:8px;padding-top:8px;border-top:1px dashed #22304a">' +
           (it.resolveResult && it.resolveResult.overridden ? (function () {
-            var ov = skuFamilyOverrides[normalizeSkuKey(it.skuPedido)];
+            var ov = skuFamilyOverrideGet(normalizeSkuKey(it.skuPedido));
             var hist = skuFamilyOverrideHistoryFor(it.skuPedido);
             var histHtml = hist.length ? '<details style="margin-top:6px"><summary style="cursor:pointer;font-size:11px">Ver histórico de classificação (' + hist.length + ')</summary>' + hist.map(function (h) { return '<div class="footnote" style="margin:4px 0 0 0">' + dbr(h.alteradoEm) + ' ' + new Date(h.alteradoEm).toLocaleTimeString('pt-BR') + ' — ' + esc(h.familiaAnteriorNome || '(nenhuma)') + ' → ' + esc(h.familiaNovaNome || '(removida)') + ' · ' + esc(h.origem) + '</div>'; }).join('') + '</details>' : '';
             return '<div class="footnote" style="margin-bottom:6px">🔒 <b>Classificação Manual</b> — família atual: <b>' + esc(it.familyName || '—') + '</b>' + (ov && ov.setAt ? ' · alterado em ' + dbr(ov.setAt) + ' ' + new Date(ov.setAt).toLocaleTimeString('pt-BR') : '') + ' · origem: Classificação manual — vale para todos os pedidos com este SKU.</div>' +
@@ -11233,15 +11255,26 @@
     fatorRoteiros[familyId] = rec;
     return putMany('fatorroteiros', [rec]).then(function () { return rec; });
   }
+  // CRÍTICO (achado da Prioridade 15, mesmo padrão de skuFamilyOverrides): esta exceção de roteiro
+  // por SKU nunca gravava operationId e o mapa nunca era filtrado por operação — 2 operações com
+  // exceção cadastrada para o MESMO texto de SKU se sobrescreviam/vazavam entre si sem precisar de
+  // reimportação nenhuma. Mesma correção: chave composta `opId+'|'+skuKey`, com compatibilidade
+  // retroativa para registros legados (chave simples `skuKey`, sempre visíveis).
+  function fatorRoteiroSkuStoreKey(key) { var op = opActiveOrNull(); return op ? (op + '|' + key) : key; }
+  function fatorRoteiroSkuGet(key) { return fatorRoteiroSkuOverrides[fatorRoteiroSkuStoreKey(key)] || fatorRoteiroSkuOverrides[key] || null; }
   function fatorRoteiroSkuSave(skuRaw, processosArr) {
     var key = normalizeSkuKey(skuRaw); if (!key) return Promise.resolve();
-    var rec = fatorRoteiroSkuOverrides[key] || { id: key, skuKey: key, skuOriginal: skuRaw };
+    var storeKey = fatorRoteiroSkuStoreKey(key);
+    var rec = fatorRoteiroSkuGet(key) || { id: storeKey, skuKey: key, skuOriginal: skuRaw, operationId: opActiveOrNull() };
+    var oldId = rec.id; var migrating = oldId && oldId !== storeKey;
+    if (migrating) delete fatorRoteiroSkuOverrides[oldId]; // migra a exceção legada pra chave escopada, sem duplicar
+    rec.id = storeKey; rec.operationId = opActiveOrNull();
     rec.processos = (processosArr || []).map(function (p, i) { return { processoId: p.processoId, tempoMin: cpParseNum(p.tempoMin) || 0, ordem: i + 1 }; });
     rec.updatedAt = new Date().toISOString();
-    fatorRoteiroSkuOverrides[key] = rec;
-    return putMany('fatorroteirosku', [rec]).then(function () { return rec; });
+    fatorRoteiroSkuOverrides[storeKey] = rec;
+    return (migrating ? delOne('fatorroteirosku', oldId) : Promise.resolve()).then(function () { return putMany('fatorroteirosku', [rec]); }).then(function () { return rec; });
   }
-  function fatorRoteiroSkuRemove(skuRaw) { var key = normalizeSkuKey(skuRaw); if (!key) return Promise.resolve(); delete fatorRoteiroSkuOverrides[key]; return delOne('fatorroteirosku', key); }
+  function fatorRoteiroSkuRemove(skuRaw) { var key = normalizeSkuKey(skuRaw); if (!key) return Promise.resolve(); var storeKey = fatorRoteiroSkuStoreKey(key); delete fatorRoteiroSkuOverrides[storeKey]; return delOne('fatorroteirosku', storeKey); }
   function fatorRoteiroProcessosResolvidos(roteiro) {
     return (roteiro && roteiro.processos || []).map(function (p) { var proc = fatorProcessos.find(function (x) { return x.id === p.processoId; }); return proc ? { processo: proc, tempoMin: p.tempoMin != null ? p.tempoMin : proc.tempoPadraoMin } : null; }).filter(Boolean);
   }
@@ -11251,7 +11284,7 @@
   function fatorRoteiroItem(it) {
     var r = it.sku ? resolveSkuCost(it.sku, it) : { found: false, motivo: 'SKU_NAO_LOCALIZADO' };
     var skuKey = it.sku ? normalizeSkuKey(it.sku) : null;
-    var override = skuKey ? fatorRoteiroSkuOverrides[skuKey] : null;
+    var override = skuKey ? fatorRoteiroSkuGet(skuKey) : null;
     var roteiro = override || (r.familyId ? fatorRoteiros[r.familyId] : null);
     var procs = fatorRoteiroProcessosResolvidos(roteiro);
     if (!procs.length) return { encontrado: false, motivo: !r.familyId ? (r.motivo || 'SEM_FAMILIA') : 'FAMILIA_SEM_ROTEIRO', familyId: r.familyId || null, familyName: r.familyName || null, processos: [] };
@@ -11790,7 +11823,9 @@
     if (fatorRoteiroSkuDraft) {
       skuBox += fatorRoteiroRowsTableHtml(fatorRoteiroSkuDraft.rows, 'frk', opId) + '<div style="margin-top:10px"><button class="btn-sm primary" id="frk-save">Salvar exceção</button> <button class="btn-sm" id="frk-remove">Remover exceção deste SKU</button></div>';
     }
-    var existentes = Object.values(fatorRoteiroSkuOverrides);
+    // Listagem escopada: registros legados (sem operationId) continuam visíveis em qualquer operação
+    // (compatibilidade retroativa), mas uma exceção já escopada de OUTRA operação nunca aparece aqui.
+    var existentes = Object.values(fatorRoteiroSkuOverrides).filter(function (e) { return !e.operationId || e.operationId === opId; });
     if (existentes.length) skuBox += '<div class="footnote" style="margin-top:12px">Exceções cadastradas: ' + existentes.map(function (e) { return esc(e.skuOriginal); }).join(', ') + '</div>';
     skuBox += '</div></div>';
     return famBox + skuBox;
@@ -11825,7 +11860,7 @@
     var skuInput = document.getElementById('fr-sku'); if (skuInput) skuInput.oninput = function () { fatorRoteiroSkuSel = this.value; };
     var skuLoad = document.getElementById('fr-sku-load'); if (skuLoad) skuLoad.onclick = function () {
       var sku = document.getElementById('fr-sku').value.trim(); if (!sku) { toast('Digite um SKU', '', true); return; }
-      var key = normalizeSkuKey(sku); var existing = fatorRoteiroSkuOverrides[key];
+      var key = normalizeSkuKey(sku); var existing = fatorRoteiroSkuGet(key);
       fatorRoteiroSkuSel = sku; fatorRoteiroSkuDraft = { sku: sku, rows: existing ? existing.processos.map(function (p) { return { processoId: p.processoId, tempoMin: p.tempoMin }; }) : [] }; render();
     };
     var frkAdd = document.querySelector('[data-frk-add]'); if (frkAdd) frkAdd.onclick = function () { var rows = readRows('frk'); var procs = fatorProcessosAtivos(opId); rows.push({ processoId: procs[0] ? procs[0].id : '', tempoMin: 0 }); fatorRoteiroSkuDraft = { sku: fatorRoteiroSkuSel, rows: rows }; render(); };
@@ -12896,7 +12931,11 @@
       // → pertence a → Centro), nunca uma segunda decisão do operador.
       draft.costCenterId = cpCentroIdFromCategoria(draft.categoryId);
       var pForma = fieldVal('cp-forma-pgto'); if (pForma != null) draft.paymentMethod = pForma || null;
-      var pConta = fieldVal('cp-conta-fin'); if (pConta != null) draft.financialAccountId = pConta || null;
+      // FIX (mesma classe do achado real da Prioridade 8 em Contas a Receber): "__none" é só o
+      // sentinela do FILTRO da listagem (cpF.financialAccountId==='__none', linha ~12564) — nunca pode
+      // virar valor persistido do registro, senão "Conta financeira obrigatória" (checada logo abaixo
+      // em doSave()) deixa de bloquear de verdade quando o operador escolhe "Sem conta financeira".
+      var pConta = fieldVal('cp-conta-fin'); if (pConta != null) draft.financialAccountId = (pConta && pConta !== '__none') ? pConta : null;
       var pDoc = fieldVal('cp-docnum'); if (pDoc != null) draft.documentNumber = pDoc;
       var pCta = fieldVal('cp-cta-pgto'); if (pCta != null) draft.accountingAccountId = pCta || null;
       var jr = fieldVal('cp-juros'); if (jr != null) draft.jurosPercent = cpParseNum(jr) || 0;
@@ -14152,7 +14191,14 @@
         // PROMPT "Correção da Base Financeira" §1/§7: categoria financeira obrigatória em todo
         // lançamento — mesma exigência já aplicada ao editor de Contas a Pagar (openCpEditor).
         if (!categoryId) { panel.querySelector('#cr-err').innerHTML = '<div class="form-err">Selecione a categoria financeira.</div>'; return; }
-        var financialAccountId = panel.querySelector('#cr-conta-fin').value || null;
+        // FIX (achado real da Prioridade 8 — auditoria): "__none" é só o sentinela do FILTRO da
+        // listagem (crFinAccountLabel/`crF.financialAccountId==='__none'`, linha ~13808) — nunca pode
+        // ser persistido como valor de um registro. Antes deste fix, escolher "Sem conta financeira"
+        // no <select> gravava a STRING "__none" em vez de `null`, quebrando o filtro "Sem conta
+        // financeira" (contava 0 em vez do real) e tornando o título invisível a qualquer saldo
+        // bancário — reproduzido ao vivo em 50/200 títulos.
+        var financialAccountIdRaw = panel.querySelector('#cr-conta-fin').value;
+        var financialAccountId = (financialAccountIdRaw && financialAccountIdRaw !== '__none') ? financialAccountIdRaw : null;
         // BUG CRÍTICO (auditoria noturna, "Contas a Receber sem Conta financeira"): um CR criado
         // manualmente do zero nunca exigia Conta prevista (mesma rigidez que Contas a Pagar já tinha).
         // Só exige para título NOVO e manual — títulos automáticos (ex.: Pix identificado na Carteira,
@@ -14199,7 +14245,11 @@
         if (valorRecebido == null || valorRecebido <= 0) { errEl.innerHTML = '<div class="form-err">Informe um valor válido.</div>'; return false; }
         var dataBaixa = panel.querySelector('#crb-data').value;
         if (!dataBaixa) { errEl.innerHTML = '<div class="form-err">Informe a data do recebimento.</div>'; return false; }
-        var financialAccountId = panel.querySelector('#crb-conta').value;
+        // FIX (achado real da Prioridade 8): "__none" é o sentinela de FILTRO (nunca um valor válido
+        // de conta financeira) — normalizado aqui pra nunca ser persistido no recibo, mesmo achado do
+        // editor de cabeçalho acima (30/151 recibos reais afetados, R$14.700,32).
+        var financialAccountIdRaw = panel.querySelector('#crb-conta').value;
+        var financialAccountId = (financialAccountIdRaw && financialAccountIdRaw !== '__none') ? financialAccountIdRaw : null;
         // BUG CRÍTICO (auditoria noturna, "Contas a Receber sem Conta financeira"): sem Conta financeira
         // + Forma de recebimento obrigatórias na baixa, o recebimento era confirmado sem nunca impactar o
         // saldo bancário — o fluxo correto é CR → Baixa → Conta financeira → Saldo do banco.
@@ -15044,10 +15094,17 @@
     crCategories = r[54] || []; crCostCenters = r[55] || [];
     fatorFuncionarios = r[42] || []; fatorCustosFixos = r[43] || []; fatorCustosVariaveis = r[44] || []; fatorPedidoSnapshots = r[45] || [];
     var fatorCfgRow = settings.filter(function (x) { return x.id === 'fatorConfig'; })[0]; if (fatorCfgRow && fatorCfgRow.data) fatorConfig = fatorCfgRow.data;
-    skuFamilyOverrides = {}; (r[46] || []).forEach(function (ov) { skuFamilyOverrides[ov.skuKey] = ov; });
+    // Achado crítico da Prioridade 15: registros gravados ANTES do fix (sem operationId) continuam
+    // indexados pela chave simples `skuKey` (compatibilidade retroativa — nunca some); registros
+    // gravados DEPOIS do fix já vêm com `id`/chave composta `operationId+'|'+skuKey` (ver
+    // skuOverrideStoreKey), então basta reindexar por `ov.id` (que já é a chave correta em ambos os
+    // casos, pois registros legados sempre foram salvos com `id === skuKey`).
+    skuFamilyOverrides = {}; (r[46] || []).forEach(function (ov) { skuFamilyOverrides[ov.id] = ov; });
     fatorConfigs = r[47] || []; fatorSetores = r[48] || []; fatorImpostos = r[49] || []; fatorProcessos = r[50] || [];
     fatorRoteiros = {}; (r[51] || []).forEach(function (rt) { fatorRoteiros[rt.familyId] = rt; });
-    fatorRoteiroSkuOverrides = {}; (r[52] || []).forEach(function (rt) { fatorRoteiroSkuOverrides[rt.skuKey] = rt; });
+    // Mesma correção retroativa de skuFamilyOverrides acima — `rt.id` já é a chave certa nos dois casos
+    // (legado: `id===skuKey`; pós-fix: `id===operationId+'|'+skuKey`).
+    fatorRoteiroSkuOverrides = {}; (r[52] || []).forEach(function (rt) { fatorRoteiroSkuOverrides[rt.id] = rt; });
     skuFamilyOverrideHistory = r[53] || [];
     productIdentityMappingsAll = {}; (r[56] || []).forEach(function (m) { productIdentityMappingsAll[m.id] = m; });
     productIdentityMappings = productIdentityMappingsAll; // filtrado por operação mais abaixo, quando activeOperationId for conhecido
