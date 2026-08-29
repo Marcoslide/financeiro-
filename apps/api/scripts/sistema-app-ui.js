@@ -6095,15 +6095,41 @@
     return { nat: meta.nat, suporta: meta.suporta, impacta: impacta };
   }
   var FIN_NATUREZA_LABEL = { DEBITO_VENDEDOR: 'Débito do vendedor', CREDITO_VENDEDOR: 'Crédito do vendedor', DESCONTO_COMERCIAL_VENDEDOR: 'Desconto comercial do vendedor', RECEITA: 'Receita', SUBSIDIO_SHOPEE: 'Subsídio/crédito Shopee', PAGO_COMPRADOR: 'Pago pelo comprador', INFORMATIVO: 'Informativo', REEMBOLSO_DEVOLUCAO: 'Reembolso/devolução', AJUSTE_NEUTRO: 'Ajuste neutro/reconciliação', NAO_CLASSIFICADO: 'Não classificado' };
-  function mrAoa(wb, name) { var sn = wb.SheetNames.filter(function (x) { return normStatus(x) === normStatus(name) || normStatus(x).indexOf(normStatus(name)) >= 0; })[0]; return sn ? XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: false, defval: '' }) : null; }
+  // CORREÇÃO DE CAUSA RAIZ (Auditoria Pré-Go-Live, achado P0 "Income truncado em 10.000 linhas"): o
+  // antigo mrAoa() pegava só a PRIMEIRA aba cujo nome batesse (ex.: só "Renda" entre "Renda"/"Renda-2"/
+  // "Renda-3"/"Renda-4"/"Renda-5") e descartava as demais em silêncio — no arquivo auditado isso
+  // custou 37.446 de 47.446 linhas (79%) sem nenhum aviso. Não era um limite de 10.000 linhas no
+  // código (não existe nenhum slice/constante desse tipo neste importador) — 10.000 era só o tamanho
+  // físico da primeira aba. mrAoaAll() devolve TODAS as abas cujo nome corresponde, na ordem em que
+  // aparecem no arquivo. Cada chamador processa cada aba com sua PRÓPRIA detecção de cabeçalho — nunca
+  // concatena o AOA bruto de várias abas, o que colocaria a linha de cabeçalho de uma aba no meio dos
+  // dados da anterior e a contaminaria como se fosse um pedido real.
+  function mrAoaAll(wb, name) {
+    var sns = wb.SheetNames.filter(function (x) { return normStatus(x) === normStatus(name) || normStatus(x).indexOf(normStatus(name)) >= 0; });
+    return sns.map(function (sn) { return { sheetName: sn, rows: XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: false, defval: '' }) }; });
+  }
+  // Summary é um bloco de totais únicos declarados pela Shopee (não uma tabela particionável em
+  // várias abas) — mantém o comportamento de sempre (primeira aba correspondente).
+  function mrAoa(wb, name) { var all = mrAoaAll(wb, name); return all.length ? all[0].rows : null; }
+  // Detecta ID que chegou em notação científica do Excel (ex.: "2.60316E+13") — achado real da
+  // auditoria (Service Fee Details). Nunca tenta "adivinhar" o ID original; o chamador deve descartar
+  // o registro do cruzamento normal e registrá-lo em diag.identificadoresInvalidos para auditoria.
+  function mrIdInvalido(raw) { return /^-?\d+(\.\d+)?e[+-]?\d+$/i.test(String(raw || '').trim()); }
   function mrParseIncome(ab, filename) {
     var wb = XLSX.read(new Uint8Array(ab), { type: 'array' }); if (!mrIsIncome(wb)) return { notRecognized: true };
     var out = { notRecognized: false, renda: [], ship: [], adj: [], svc: [], summary: {}, period: {} };
-    // PROMPT "Auditoria obrigatória do importador Income": diagnóstico de importação — abas
-    // realmente encontradas no arquivo (nunca assumidas) + linhas lidas por aba, pra provar (não só
-    // dizer) que todas as abas/colunas foram processadas antes de mostrar "Importação concluída".
-    out.diag = { abas: wb.SheetNames.slice(), linhasPorAba: {} };
-    // Summary (totais declarados pela Shopee)
+    // PROMPT "Auditoria obrigatória do importador Income" + correção pós-auditoria (achado P0 "Income
+    // truncado"): diagnóstico de importação — abas realmente encontradas no arquivo (nunca assumidas),
+    // linhas lidas por CADA aba física (nunca só uma agregada escondendo quantas abas existem por
+    // grupo) e quais abas candidatas não puderam ser processadas — pra provar (não só dizer) que TODAS
+    // as abas foram processadas antes de mostrar "Importação concluída".
+    out.diag = { abas: wb.SheetNames.slice(), linhasPorAba: {}, linhasPorAbaFisica: {}, abasSemCabecalho: [], identificadoresInvalidos: [] };
+    function registrarAbas(grupoLabel, abaSheets) {
+      out.diag[grupoLabel] = abaSheets.map(function (s) { return s.sheetName; });
+      out.diag.linhasPorAba[grupoLabel] = abaSheets.reduce(function (sum, s) { return sum + s.rows.length; }, 0);
+      abaSheets.forEach(function (s) { out.diag.linhasPorAbaFisica[s.sheetName] = s.rows.length; });
+    }
+    // Summary (totais declarados pela Shopee) — bloco de totais únicos, não uma tabela particionável.
     var sm = mrAoa(wb, 'Summary'); out.diag.linhasPorAba['Summary'] = sm ? sm.length : 0; if (sm) { sm.forEach(function (r) { var lab = normStatus(r[0]); var val = null; for (var c = 1; c < r.length; c++) { if (String(r[c]).trim() !== '') { val = r[c]; } } if (lab.indexOf('receita total') >= 0) out.summary.receita = mrCents(r[1]); if (lab.indexOf('quantidade total liberada') >= 0) out.summary.liberado = mrCents(val); if (lab.indexOf('despesas totais') >= 0) out.summary.despesas = mrCents(val); if (lab === 'de') out.period.from = String(r[1]).trim(); if (lab === 'para') out.period.to = String(r[1]).trim(); }); }
     // Renda — §35-38 do prompt "correção crítica Minha Renda": mapeamento por índice de coluna já
     // validado contra o cabeçalho real (não alterado — os campos abaixo já liam certo). Adicionamos
@@ -6111,48 +6137,82 @@
     // AMP, taxas de devolução, recarga automática, promoção de frete, compensação, reembolso ao
     // comprador, itens da devolução) — nunca descartados, mesmo os que ainda não alimentam nenhuma
     // tela (ficam disponíveis para auditoria em "Campos ainda não classificados", §46).
-    var rd = mrAoa(wb, 'Renda');
-    out.diag.linhasPorAba['Renda'] = rd ? rd.length : 0;
-    if (rd) {
+    //
+    // CORREÇÃO DE CAUSA RAIZ (achado P0 "Income truncado em 10.000 linhas"): a Shopee particiona a
+    // Renda em várias abas (Renda, Renda-2, Renda-3...) quando o volume é grande — processa TODAS,
+    // nunca só a primeira. Cada aba tem seu PRÓPRIO cabeçalho, detectado independentemente.
+    var rdSheets = mrAoaAll(wb, 'Renda');
+    registrarAbas('abasRenda', rdSheets);
+    rdSheets.forEach(function (s) {
+      var rd = s.rows;
       var hi = rd.findIndex(function (r) { return normStatus(r[2]) === 'id do pedido'; });
-      if (hi >= 0) {
-        var headerRow = rd[hi] || []; var headerLen = headerRow.length;
-        out.diag.colunasRenda = headerLen;
-        out.diag.ultimaColunaRenda = XLSX.utils.encode_col(headerLen - 1);
-        out.diag.headerRow = headerRow;
-        for (var i = hi + 1; i < rd.length; i++) {
-          var r = rd[i]; var oid = String(r[2] || '').trim(); if (!oid) continue;
-          var ver = /sku/i.test(String(r[1])) ? 'Sku' : 'Order';
-          var outros = {};
-          for (var ci = 11; ci < headerLen; ci++) {
-            if (MR_NAMED_COLS[ci] || MR_TEXT_COLS[ci]) continue;
-            var raw = r[ci]; if (raw == null || String(raw).trim() === '') continue;
-            var val = mrCents(raw); if (!val) continue;
-            var colLabel = String(headerRow[ci] || ('coluna ' + ci)).trim();
-            outros[colLabel] = (outros[colLabel] || 0) + val;
-          }
-          out.renda.push({
-            ver: ver, orderId: oid, refundId: String(r[3] || '').trim(), sku: String(r[4] || '').trim(), produto: String(r[5] || '').trim(), dataCriacao: String(r[6] || '').trim(), dataConclusao: String(r[7] || '').trim(), canal: String(r[8] || '').trim(), tipoPedido: String(r[9] || '').trim(),
-            liberado: mrCents(r[11]), preco: mrCents(r[12]), reembolso: mrCents(r[13]), pix: mrCents(r[14]), cupom: mrCents(r[15]), fretePagoComprador: mrCents(r[16]), freteParceiro: mrCents(r[17]), descontoFrete: mrCents(r[18]), envioReverso: mrCents(r[19]), comissao: mrCents(r[27]), servico: mrCents(r[28]), transacao: mrCents(r[29]), afiliado: mrCents(r[30]), comissaoBruta: mrCents(r[43]), servicoBruta: mrCents(r[44]),
-            // novos — §36-37: ação comercial (incentivo + ajuste) integrada à Taxa de Serviço; demais
-            // campos ficam disponíveis para auditoria/consulta, sem entrar no total canônico de taxas.
-            taxaDevolucaoVendedor: mrCents(r[20]), incentivoAcaoComercial: mrCents(r[21]), voucherSeller: mrCents(r[22]), voucherCompartilhado: mrCents(r[23]), incentivoCupom: mrCents(r[24]), coinCashbackSeller: mrCents(r[25]), coinCashbackCompartilhado: mrCents(r[26]), taxaDevolucaoFacil: mrCents(r[31]), amp: mrCents(r[32]), deducaoAmp: mrCents(r[33]), taxaRecargaAutomatica: mrCents(r[34]), quantiaPagaComprador: mrCents(r[36]), promocaoDescontoFrete: mrCents(r[39]), ajusteAcaoComercial: mrCents(r[46]), compensacaoPerdida: mrCents(r[47]), reembolsoComprador: mrCents(r[48]), moedasResgatadasDevolucao: mrCents(r[49]), cupomDevolucao: mrCents(r[50]), promoBancoDevolucao: mrCents(r[51]), promoShopeeDevolucao: mrCents(r[52]), pixAjusteAdicional: mrCents(r[53]),
-            outros: outros,
-          });
+      if (hi < 0) { out.diag.abasSemCabecalho.push(s.sheetName); return; }
+      var headerRow = rd[hi] || []; var headerLen = headerRow.length;
+      if (out.diag.colunasRenda == null) { out.diag.colunasRenda = headerLen; out.diag.ultimaColunaRenda = XLSX.utils.encode_col(headerLen - 1); out.diag.headerRow = headerRow; }
+      for (var i = hi + 1; i < rd.length; i++) {
+        var r = rd[i]; var oid = String(r[2] || '').trim(); if (!oid) continue;
+        var ver = /sku/i.test(String(r[1])) ? 'Sku' : 'Order';
+        var outros = {};
+        for (var ci = 11; ci < headerLen; ci++) {
+          if (MR_NAMED_COLS[ci] || MR_TEXT_COLS[ci]) continue;
+          var raw = r[ci]; if (raw == null || String(raw).trim() === '') continue;
+          var val = mrCents(raw); if (!val) continue;
+          var colLabel = String(headerRow[ci] || ('coluna ' + ci)).trim();
+          outros[colLabel] = (outros[colLabel] || 0) + val;
         }
+        out.renda.push({
+          ver: ver, orderId: oid, refundId: String(r[3] || '').trim(), sku: String(r[4] || '').trim(), produto: String(r[5] || '').trim(), dataCriacao: String(r[6] || '').trim(), dataConclusao: String(r[7] || '').trim(), canal: String(r[8] || '').trim(), tipoPedido: String(r[9] || '').trim(),
+          liberado: mrCents(r[11]), preco: mrCents(r[12]), reembolso: mrCents(r[13]), pix: mrCents(r[14]), cupom: mrCents(r[15]), fretePagoComprador: mrCents(r[16]), freteParceiro: mrCents(r[17]), descontoFrete: mrCents(r[18]), envioReverso: mrCents(r[19]), comissao: mrCents(r[27]), servico: mrCents(r[28]), transacao: mrCents(r[29]), afiliado: mrCents(r[30]), comissaoBruta: mrCents(r[43]), servicoBruta: mrCents(r[44]),
+          // novos — §36-37: ação comercial (incentivo + ajuste) integrada à Taxa de Serviço; demais
+          // campos ficam disponíveis para auditoria/consulta, sem entrar no total canônico de taxas.
+          taxaDevolucaoVendedor: mrCents(r[20]), incentivoAcaoComercial: mrCents(r[21]), voucherSeller: mrCents(r[22]), voucherCompartilhado: mrCents(r[23]), incentivoCupom: mrCents(r[24]), coinCashbackSeller: mrCents(r[25]), coinCashbackCompartilhado: mrCents(r[26]), taxaDevolucaoFacil: mrCents(r[31]), amp: mrCents(r[32]), deducaoAmp: mrCents(r[33]), taxaRecargaAutomatica: mrCents(r[34]), quantiaPagaComprador: mrCents(r[36]), promocaoDescontoFrete: mrCents(r[39]), ajusteAcaoComercial: mrCents(r[46]), compensacaoPerdida: mrCents(r[47]), reembolsoComprador: mrCents(r[48]), moedasResgatadasDevolucao: mrCents(r[49]), cupomDevolucao: mrCents(r[50]), promoBancoDevolucao: mrCents(r[51]), promoShopeeDevolucao: mrCents(r[52]), pixAjusteAdicional: mrCents(r[53]),
+          outros: outros,
+        });
       }
-    }
-    // Shipping Fee Discrepancy
-    var sh = mrAoa(wb, 'Shipping Fee Discrepancy'); out.diag.linhasPorAba['Shipping Fee Discrepancy'] = sh ? sh.length : 0; if (sh) { var shi = sh.findIndex(function (r) { return normStatus(r[0]) === 'id do pedido'; }); if (shi >= 0) { for (var j = shi + 1; j < sh.length; j++) { var s2 = sh[j]; var oid2 = String(s2[0] || '').trim(); if (!oid2) continue; out.ship.push({ orderId: oid2, esperado: mrCents(s2[1]), real: mrCents(s2[2]), motivo: String(s2[3] || '').trim() }); } } }
-    // Adjustment
+    });
+    // Shipping Fee Discrepancy — mesma correção: processa todas as abas correspondentes.
+    var shSheets = mrAoaAll(wb, 'Shipping Fee Discrepancy');
+    registrarAbas('abasShipping', shSheets);
+    shSheets.forEach(function (s) {
+      var sh = s.rows;
+      var shi = sh.findIndex(function (r) { return normStatus(r[0]) === 'id do pedido'; });
+      if (shi < 0) { out.diag.abasSemCabecalho.push(s.sheetName); return; }
+      for (var j = shi + 1; j < sh.length; j++) { var s2 = sh[j]; var oid2 = String(s2[0] || '').trim(); if (!oid2) continue; out.ship.push({ orderId: oid2, esperado: mrCents(s2[1]), real: mrCents(s2[2]), motivo: String(s2[3] || '').trim() }); }
+    });
+    // Adjustment — mesma correção: processa todas as abas correspondentes.
     // Refatoração M3 (Fase 3 item 3 da auditoria — "Outros Ajustes" não respeitava o período): a
     // planilha TEM uma data real e confiável por lançamento — "Data de conclusão do ajuste" (1ª coluna
     // no formato AAAA-MM-DD que aparece na linha) — só nunca tinha sido capturada pelo parser. Pega o
     // primeiro valor no formato ISO de data da linha (a 2ª data eventual, "conclusão do pagamento", vem
     // depois e não é usada aqui — data3/dt3 é sempre a primeira, que é a de conclusão do AJUSTE).
-    var ad = mrAoa(wb, 'Adjustment'); out.diag.linhasPorAba['Adjustment'] = ad ? ad.length : 0; if (ad) { var ahi = ad.findIndex(function (r) { return normStatus(r[0]).indexOf('id do pedido') >= 0 || normStatus(r[0]).indexOf('data') >= 0 && r.length > 3; }); ad.forEach(function (r, idx) { var v = null; for (var c = 0; c < r.length; c++) { if (/-?\d+[.,]\d/.test(String(r[c]))) v = r[c]; } var oid3 = ''; r.forEach(function (c) { if (/^\d{6,}[A-Z0-9]+$/.test(String(c).trim())) oid3 = String(c).trim(); }); var dt3 = null; for (var d3 = 0; d3 < r.length; d3++) { if (/^\d{4}-\d{2}-\d{2}$/.test(String(r[d3]).trim())) { dt3 = String(r[d3]).trim(); break; } } if (v != null && (oid3 || normStatus(r[0]).indexOf('valor total') >= 0)) { out.adj.push({ seq: idx, orderId: oid3, data: dt3, desc: r.filter(function (x) { return String(x).trim() && !/^-?\d+[.,]\d+$/.test(String(x).trim()); }).join(' ').slice(0, 80), valor: mrCents(v) }); } }); }
-    // Service Fee Details
-    var sv = mrAoa(wb, 'Service Fee Details'); out.diag.linhasPorAba['Service Fee Details'] = sv ? sv.length : 0; if (sv) { var vhi = sv.findIndex(function (r) { return normStatus(r[1]) === 'id do pedido'; }); if (vhi >= 0) { for (var k = vhi + 1; k < sv.length; k++) { var v2 = sv[k]; var oid4 = String(v2[1] || '').trim(); if (!oid4) continue; out.svc.push({ seq: k, orderId: oid4, afiliadosVendedor: mrCents(v2[2]), transacao: mrCents(v2[3]), porItem: mrCents(v2[4]) }); } } }
+    var adSheets = mrAoaAll(wb, 'Adjustment');
+    registrarAbas('abasAdjustment', adSheets);
+    var adjSeq = 0;
+    adSheets.forEach(function (s) {
+      var ad = s.rows;
+      ad.forEach(function (r) { var v = null; for (var c = 0; c < r.length; c++) { if (/-?\d+[.,]\d/.test(String(r[c]))) v = r[c]; } var oid3 = ''; r.forEach(function (c) { if (/^\d{6,}[A-Z0-9]+$/.test(String(c).trim())) oid3 = String(c).trim(); }); var dt3 = null; for (var d3 = 0; d3 < r.length; d3++) { if (/^\d{4}-\d{2}-\d{2}$/.test(String(r[d3]).trim())) { dt3 = String(r[d3]).trim(); break; } } if (v != null && (oid3 || normStatus(r[0]).indexOf('valor total') >= 0)) { out.adj.push({ seq: adjSeq++, orderId: oid3, data: dt3, desc: r.filter(function (x) { return String(x).trim() && !/^-?\d+[.,]\d+$/.test(String(x).trim()); }).join(' ').slice(0, 80), valor: mrCents(v) }); } });
+    });
+    // Service Fee Details — mesma correção: processa todas as abas correspondentes. Achado P4 da
+    // auditoria: um ID de pedido pode chegar em notação científica do Excel (ex.: "2.60316E+13") —
+    // nunca associar automaticamente a nenhum pedido; registra em diag.identificadoresInvalidos.
+    var svSheets = mrAoaAll(wb, 'Service Fee Details');
+    registrarAbas('abasServiceFee', svSheets);
+    var svSeq = 0;
+    svSheets.forEach(function (s) {
+      var sv = s.rows;
+      var vhi = sv.findIndex(function (r) { return normStatus(r[1]) === 'id do pedido'; });
+      if (vhi < 0) { out.diag.abasSemCabecalho.push(s.sheetName); return; }
+      for (var k = vhi + 1; k < sv.length; k++) {
+        var v2 = sv[k]; var oid4 = String(v2[1] || '').trim(); if (!oid4) continue;
+        if (mrIdInvalido(oid4)) { out.diag.identificadoresInvalidos.push({ aba: s.sheetName, linha: k, valor: oid4, motivo: 'ID em notação científica — não associado a nenhum pedido' }); continue; }
+        out.svc.push({ seq: svSeq++, orderId: oid4, afiliadosVendedor: mrCents(v2[2]), transacao: mrCents(v2[3]), porItem: mrCents(v2[4]) });
+      }
+    });
+    // §1.3 do prompt "correções pós-auditoria": nunca decidir "sucesso" aqui — só expõe os fatos
+    // (quantas abas candidatas existiam, quantas não tinham cabeçalho reconhecido) para a UI mostrar
+    // "IMPORTAÇÃO INCOMPLETA" sempre que alguma aba candidata não pôde ser processada.
+    out.diag.totalAbasCandidatas = (out.diag.abasRenda || []).length + (out.diag.abasShipping || []).length + (out.diag.abasAdjustment || []).length + (out.diag.abasServiceFee || []).length;
+    out.diag.importacaoCompleta = out.diag.abasSemCabecalho.length === 0;
     // Campos financeiros críticos citados no prompt de auditoria — prova, campo a campo, que o
     // parser encontrou cada um (nunca "sucesso" genérico escondendo uma coluna que faltou).
     var CAMPOS_CRITICOS = ['Taxa de comissão líquida', 'Taxa de serviço líquida', 'Taxa de comissão Afiliados do Vendedor', 'Taxa de Devolução Fácil Shopee', 'Taxa da Recarga Automática (Pedido)', 'Taxa de envio reverso', 'Taxa de devolução do vendedor', 'Voucher subsidiado pelo Seller', 'Voucher compartilhado subsidiado pelo Seller', 'Coin Cashback subsidiado pelo Seller', 'Coin Cashback compartilhado subsidiado pelo Seller', 'Taxa de comissão bruta', 'Taxa de serviço bruta', 'Ajuste por participação em ação comercial', 'Valor Reembolsado ao Comprador'];
@@ -7189,16 +7249,33 @@
     // linhas por aba, colunas da Renda e campos financeiros críticos, um a um. Nunca "sucesso"
     // genérico escondendo uma aba/coluna que faltou.
     var diagImp = mrSummary && mrSummary.diag ? mrSummary.diag : null;
+    // Correção pós-auditoria (achado P0 "Income truncado"): mostra a quebra POR ABA FÍSICA de cada
+    // grupo (Renda/Shipping/Adjustment/Service Fee), nunca só um total agregado que esconde quantas
+    // abas existem — e um selo explícito de IMPORTAÇÃO COMPLETA/INCOMPLETA no topo, nunca "sucesso"
+    // genérico quando alguma aba candidata não tinha cabeçalho reconhecido.
+    function diagGrupoAbasHtml(label, abaList) {
+      if (!abaList || !abaList.length) return '';
+      return kv(label + ' — abas processadas', nn(abaList.length) + ' (' + abaList.join(', ') + ')') +
+        abaList.map(function (aba) { return kv('　↳ ' + aba + ' — linhas', nn(diagImp.linhasPorAbaFisica ? (diagImp.linhasPorAbaFisica[aba] || 0) : 0)); }).join('');
+    }
     var diagImpBlock = diagImp ? '<div class="panel"><div class="ph"><h3>Diagnóstico de Importação — Income</h3></div><div class="pb">' +
+      (diagImp.importacaoCompleta === false ? callout('warn', '🔴 IMPORTAÇÃO INCOMPLETA', (diagImp.abasSemCabecalho || []).length + ' aba(s) candidata(s) não tinham o cabeçalho esperado e NÃO foram processadas: ' + (diagImp.abasSemCabecalho || []).join(', ') + '. Confira o formato dessas abas antes de considerar os números confiáveis.') : callout('green', '✓ Importação completa', 'Todas as abas candidatas do arquivo foram processadas.')) +
       kv('Arquivo', mrSummary.fileName || '—') +
-      kv('Abas encontradas', nn(diagImp.abas.length) + ' (' + diagImp.abas.join(', ') + ')') +
-      Object.keys(diagImp.linhasPorAba).map(function (aba) { return kv(aba + ' — linhas lidas', nn(diagImp.linhasPorAba[aba])); }).join('') +
+      kv('Abas encontradas no arquivo', nn(diagImp.abas.length) + ' (' + diagImp.abas.join(', ') + ')') +
+      diagGrupoAbasHtml('Renda', diagImp.abasRenda) +
+      diagGrupoAbasHtml('Shipping Fee Discrepancy', diagImp.abasShipping) +
+      diagGrupoAbasHtml('Adjustment', diagImp.abasAdjustment) +
+      diagGrupoAbasHtml('Service Fee Details', diagImp.abasServiceFee) +
+      kv('Total de linhas de Renda (todas as abas somadas)', nn(diagImp.linhasPorAba['Renda'] || 0)) +
       kv('Colunas da aba Renda', diagImp.colunasRenda != null ? nn(diagImp.colunasRenda) : '—') +
       kv('Última coluna da Renda', diagImp.ultimaColunaRenda || '—') +
       '<div class="table-wrap" style="margin-top:8px"><table class="report"><thead><tr><th>Campo financeiro crítico</th><th>Encontrado?</th><th>Coluna</th></tr></thead><tbody>' +
       (diagImp.camposCriticos || []).map(function (c) { return '<tr><td class="cell-text">' + esc(c.nome) + '</td><td>' + (c.encontrado ? '<span class="tag ok">✓ encontrado</span>' : '<span class="tag warn">🔴 não encontrado</span>') + '</td><td class="mono">' + esc(c.coluna || '—') + '</td></tr>'; }).join('') +
       '</tbody></table></div>' +
       (diagImp.camposCriticos && diagImp.camposCriticos.every(function (c) { return c.encontrado; }) ? callout('green', '✓ Todos os campos financeiros críticos foram encontrados', 'A importação processou Renda, Service Fee Details, Adjustment e Shipping Fee Discrepancy.') : callout('warn', '🔴 Pelo menos um campo crítico não foi encontrado', 'Confira o cabeçalho real da planilha — a importação não deve ser considerada completa.')) +
+      ((diagImp.identificadoresInvalidos || []).length ? '<div class="table-wrap" style="margin-top:8px"><table class="report"><thead><tr><th>Aba</th><th>Linha</th><th>Valor recebido</th><th>Motivo</th></tr></thead><tbody>' +
+        diagImp.identificadoresInvalidos.map(function (x) { return '<tr><td class="cell-text">' + esc(x.aba) + '</td><td>' + nn(x.linha) + '</td><td class="mono">' + esc(x.valor) + '</td><td class="cell-text">' + esc(x.motivo) + '</td></tr>'; }).join('') +
+        '</tbody></table></div>' + callout('warn', '🔴 ' + diagImp.identificadoresInvalidos.length + ' identificador(es) inválido(s) (notação científica)', 'Nunca associados a nenhum pedido — não entram em nenhum cálculo, só ficam disponíveis para auditoria acima.') : '') +
       '</div></div>' : '';
     var incomeAudit = mrSummary ? '<div class="panel"><div class="ph"><h3>Auditoria da planilha Income</h3></div><div class="pb">' +
       kv('Arquivo carregado', mrSummary.fileName || '—') + kv('Importado em', mrSummary.importedAt ? new Date(mrSummary.importedAt).toLocaleString('pt-BR') : '—') + kv('Linhas lidas (Order + Sku)', nn(mrRenda.length)) + kv('Pedidos únicos (linhas Order)', nn(Object.keys(pedidosUnicosIncome).length)) + kv('Período encontrado', datas.length ? (dbr(datas[0]) + ' a ' + dbr(datas[datas.length - 1])) : '—') + kv('Campos financeiros reconhecidos', nn(MR_FIELD_MAP.length) + ' mapeados por nome') +
