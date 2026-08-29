@@ -8914,27 +8914,46 @@
       acChanged.push(rec);
     });
     if (acChanged.length) stampsToSave.push(putMany('acelera', acChanged));
-    // Correção "Identidade canônica — Fase 2, item 1/2 da revisão pós-scoping": Produtos/Variações/
-    // Famílias/productIdentityMappings NUNCA tinham entrado nesta migração (só existia isolamento
-    // para orders/occ/wallet/etc. desde a Fase 12) — dado legado desses 4 ficava sem operationId
-    // para sempre. Corrigido para seguir EXATAMENTE o mesmo padrão acima: só roda uma vez (mesmo
-    // guard `if (operations.length) return` do topo da função), carimba a MESMA operação padrão
-    // recém-criada (nunca "a operação atualmente selecionada" — não existe seleção ainda neste
-    // ponto do boot) e persiste. Nunca assume qual operação "deveria" ser dona do dado antigo além
-    // da suposição documentada: se a instalação não tinha nenhuma operação cadastrada, só podia
-    // estar operando com 1 empresa/loja até aqui — a mesma suposição já aplicada a orders/wallet.
-    ['products', 'variations', 'families'].forEach(function (key) {
-      var arr = raw[key] || []; var changed = [];
-      arr.forEach(function (rec) { if (!rec.operationId) { rec.operationId = operation.id; changed.push(rec); } });
-      if (changed.length) stampsToSave.push(putMany(STORE_BY_ARRKEY[key], changed));
-    });
-    var pim = raw.productIdentityMappingsAll || {}; var pimChanged = [];
-    Object.keys(pim).forEach(function (k) { var rec = pim[k]; if (!rec.operationId) { rec.operationId = operation.id; pimChanged.push(rec); } });
-    if (pimChanged.length) stampsToSave.push(putMany('productidentitymappings', pimChanged));
     stampsToSave.push(putMany('companies', [company]), putMany('operations', [operation]), putMany('settings', [{ id: 'activeOperationId', data: operation.id }]));
     return Promise.all(stampsToSave);
   }
   var STORE_BY_ARRKEY = { orders: 'orders', occ: 'occ', wallet: 'wallet', affConv: 'affconv', affRpa: 'affrpa', affVb: 'affvb', mrRenda: 'mrrenda', mrShip: 'mrship', mrAdj: 'mradj', mrSvc: 'mrsvc', products: 'products', variations: 'variations', families: 'pfamilies' };
+  // Correção "Identidade canônica — Fase 2, revisão pós-scoping": Produtos/Variações/Famílias/
+  // productIdentityMappings tinham sido acoplados ao guard `if (operations.length) return` de
+  // opRunMigrationIfNeeded() — mas esse guard só é verdadeiro no PRIMEIRO boot depois que
+  // multi-operação foi introduzido. Uma instalação real já pode ter `operations.length > 0` há
+  // muitas versões (orders/wallet/etc. já migrados) e MESMO ASSIM ter catálogo legado sem
+  // operationId (o catálogo só passou a ser escopado agora). Um guard baseado em operations.length
+  // consideraria essa migração "já feita" e deixaria os órfãos para sempre.
+  //
+  // Por isso esta migração NUNCA usa operations.length como evidência de "já rodei". Ela roda em
+  // TODO boot (barato: é só um filtro em memória sobre dado já carregado) e decide sozinha, a cada
+  // vez, escaneando por registros sem operationId — a idempotência vem do próprio resultado: uma
+  // vez migrados, não sobra órfão pra achar, e a próxima passada não muda nada. Nunca sobrescreve
+  // um registro que já tem operationId (só toca órfãos — dado novo corretamente escopado nunca é
+  // tocado). E nunca adivinha a operação de um órfão quando existe mais de uma operação candidata:
+  // com exatamente 1 operação (qualquer que seja sua origem/idade), a atribuição é seguramente
+  // determinística (só pode ser aquela); com 2+ operações, não há evidência histórica no dado atual
+  // para decidir qual delas é dona do registro — marca como LEGACY_UNASSIGNED em vez de arriscar
+  // contaminar a empresa errada (o registro fica invisível em qualquer operação específica, mas
+  // continua acessível em "Todas as Operações", nunca perdido).
+  var LEGACY_UNASSIGNED = 'LEGACY_UNASSIGNED';
+  function catalogMigrationIfNeeded(raw) {
+    if (!operations.length) return Promise.resolve(); // ainda não passou pelo bootstrap acima nesta chamada; roda de novo no próximo boot já com operations povoado
+    var ativas = operations.filter(function (o) { return o.ativa !== false; });
+    var alvo = ativas.length === 1 ? ativas[0].id : (ativas.length >= 2 ? LEGACY_UNASSIGNED : null);
+    if (!alvo) return Promise.resolve(); // 0 operações ativas (todas desativadas) — nenhum destino seguro, não migra
+    var stampsToSave = [];
+    ['products', 'variations', 'families'].forEach(function (key) {
+      var arr = raw[key] || []; var changed = [];
+      arr.forEach(function (rec) { if (!rec.operationId) { rec.operationId = alvo; changed.push(rec); } });
+      if (changed.length) stampsToSave.push(putMany(STORE_BY_ARRKEY[key], changed));
+    });
+    var pim = raw.productIdentityMappingsAll || {}; var pimChanged = [];
+    Object.keys(pim).forEach(function (k) { var rec = pim[k]; if (!rec.operationId) { rec.operationId = alvo; pimChanged.push(rec); } });
+    if (pimChanged.length) stampsToSave.push(putMany('productidentitymappings', pimChanged));
+    return Promise.all(stampsToSave);
+  }
   // ---- Seletor de operação no topo (§AR/§AS/§AT) ----
   function opUpdateSelectorLabel() {
     var el = document.getElementById('op-selector-label'); if (!el) return;
@@ -14639,7 +14658,13 @@
     // nenhuma operação cadastrada). Dado legado (sem operationId) nunca é perdido — ganha a operação
     // padrão "Líder Molduras · Shopee" e continua acessível normalmente a partir dela.
     var prodDataForMigration = Produtos.getData();
-    return opRunMigrationIfNeeded({ orders: orders, occ: occ, wallet: wallet, acelera: acelera, affConv: affConv, affRpa: affRpa, affVb: affVb, mrRenda: mrRenda, mrShip: mrShip, mrAdj: mrAdj, mrSvc: mrSvc, products: prodDataForMigration.products, variations: prodDataForMigration.variations, families: prodDataForMigration.families, productIdentityMappingsAll: productIdentityMappingsAll }).then(function () {
+    return opRunMigrationIfNeeded({ orders: orders, occ: occ, wallet: wallet, acelera: acelera, affConv: affConv, affRpa: affRpa, affVb: affVb, mrRenda: mrRenda, mrShip: mrShip, mrAdj: mrAdj, mrSvc: mrSvc }).then(function () {
+      // catalogMigrationIfNeeded roda DEPOIS de opRunMigrationIfNeeded (nunca antes) — se o boot
+      // acima acabou de criar a operação padrão, `operations` já reflete isso aqui; se a instalação
+      // já tinha operações há muitas versões (caso real mais provável em produção), essa migração
+      // roda do mesmo jeito, porque nunca depende de operations.length como sinal de "já rodou".
+      return catalogMigrationIfNeeded({ products: prodDataForMigration.products, variations: prodDataForMigration.variations, families: prodDataForMigration.families, productIdentityMappingsAll: productIdentityMappingsAll });
+    }).then(function () {
       activeOperationId = (activeSetting && activeSetting.data) || (operations[0] ? operations[0].id : null) || OP_ALL;
       // §AS/§AT/§AU — filtro em memória pela operação ativa: cada motor de negócio já aprovado
       // continua lendo os MESMOS arrays globais, sem nenhuma alteração — a isolação acontece aqui,
