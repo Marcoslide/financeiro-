@@ -1643,7 +1643,10 @@
   function bindPedidosList() {
     app.querySelectorAll('[data-ptab]').forEach(function (t) { t.onclick = function () { pedTab = t.dataset.ptab; render(); }; });
     var rt = document.querySelector('[data-pedretorno]'); if (rt) rt.onclick = function () { pedIncluirRetornoAssociado = !pedIncluirRetornoAssociado; render(); };
-    var q = document.getElementById('ped-q'); if (q) { var deb; q.oninput = function () { clearTimeout(deb); deb = setTimeout(function () { pedSearch = q.value; renderPedidos(); var el = document.getElementById('ped-q'); if (el) { el.focus(); el.value = pedSearch; el.setSelectionRange(pedSearch.length, pedSearch.length); } }, 200); }; }
+    // FIX (achado real da Prioridade 6 — auditoria de busca): espaços nas pontas do termo digitado
+    // zeravam um resultado que bateria perfeitamente sem eles (a comparação normalizada nunca
+    // aparava o texto bruto de origem) — trim() aqui, na captura, cobre toda a busca de uma vez.
+    var q = document.getElementById('ped-q'); if (q) { var deb; q.oninput = function () { clearTimeout(deb); deb = setTimeout(function () { pedSearch = q.value.trim(); renderPedidos(); var el = document.getElementById('ped-q'); if (el) { el.focus(); el.value = pedSearch; el.setSelectionRange(pedSearch.length, pedSearch.length); } }, 200); }; }
     var clr = document.getElementById('ped-clear'); if (clr) clr.onclick = function () { pedSearch = ''; pedTab = 'ALL'; render(); };
     app.querySelectorAll('[data-open]').forEach(function (b) { b.onclick = function () { openPedidoFicha360(b.dataset.open); }; });
   }
@@ -3880,7 +3883,9 @@
     });
   }
   function bindDevOcc() {
-    var q = document.getElementById('devq'); if (q) { var t; q.oninput = function () { clearTimeout(t); t = setTimeout(function () { var v = q.value; devF.search = v; devPage = 1; render(); var el = document.getElementById('devq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
+    // FIX (mesmo achado real da Prioridade 6, replicado aqui): trim() na captura do termo — espaços
+    // nas pontas não podem zerar um resultado que bateria perfeitamente sem eles.
+    var q = document.getElementById('devq'); if (q) { var t; q.oninput = function () { clearTimeout(t); t = setTimeout(function () { var v = q.value.trim(); devF.search = v; devPage = 1; render(); var el = document.getElementById('devq'); if (el) { el.focus(); el.value = v; el.setSelectionRange(v.length, v.length); } }, 220); }; }
     app.querySelectorAll('[data-octype]').forEach(function (c) { c.onclick = function () { devF.type = c.dataset.octype; devF.status = ''; devF.resolucao = ''; devPage = 1; render(); }; });
     var dst = document.getElementById('devstatus'); if (dst) dst.onchange = function () { devF.status = dst.value; devPage = 1; render(); };
     var dre = document.getElementById('devresol'); if (dre) dre.onchange = function () { devF.resolucao = dre.value; devPage = 1; render(); };
