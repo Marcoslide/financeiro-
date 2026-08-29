@@ -337,7 +337,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 517fe10 · 2026-08-29 09:56 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build cd697b5 · 2026-08-29 13:00 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -12826,10 +12826,27 @@ buffer/index.js:
       acChanged.push(rec);
     });
     if (acChanged.length) stampsToSave.push(putMany('acelera', acChanged));
+    // Correção "Identidade canônica — Fase 2, item 1/2 da revisão pós-scoping": Produtos/Variações/
+    // Famílias/productIdentityMappings NUNCA tinham entrado nesta migração (só existia isolamento
+    // para orders/occ/wallet/etc. desde a Fase 12) — dado legado desses 4 ficava sem operationId
+    // para sempre. Corrigido para seguir EXATAMENTE o mesmo padrão acima: só roda uma vez (mesmo
+    // guard `if (operations.length) return` do topo da função), carimba a MESMA operação padrão
+    // recém-criada (nunca "a operação atualmente selecionada" — não existe seleção ainda neste
+    // ponto do boot) e persiste. Nunca assume qual operação "deveria" ser dona do dado antigo além
+    // da suposição documentada: se a instalação não tinha nenhuma operação cadastrada, só podia
+    // estar operando com 1 empresa/loja até aqui — a mesma suposição já aplicada a orders/wallet.
+    ['products', 'variations', 'families'].forEach(function (key) {
+      var arr = raw[key] || []; var changed = [];
+      arr.forEach(function (rec) { if (!rec.operationId) { rec.operationId = operation.id; changed.push(rec); } });
+      if (changed.length) stampsToSave.push(putMany(STORE_BY_ARRKEY[key], changed));
+    });
+    var pim = raw.productIdentityMappingsAll || {}; var pimChanged = [];
+    Object.keys(pim).forEach(function (k) { var rec = pim[k]; if (!rec.operationId) { rec.operationId = operation.id; pimChanged.push(rec); } });
+    if (pimChanged.length) stampsToSave.push(putMany('productidentitymappings', pimChanged));
     stampsToSave.push(putMany('companies', [company]), putMany('operations', [operation]), putMany('settings', [{ id: 'activeOperationId', data: operation.id }]));
     return Promise.all(stampsToSave);
   }
-  var STORE_BY_ARRKEY = { orders: 'orders', occ: 'occ', wallet: 'wallet', affConv: 'affconv', affRpa: 'affrpa', affVb: 'affvb', mrRenda: 'mrrenda', mrShip: 'mrship', mrAdj: 'mradj', mrSvc: 'mrsvc' };
+  var STORE_BY_ARRKEY = { orders: 'orders', occ: 'occ', wallet: 'wallet', affConv: 'affconv', affRpa: 'affrpa', affVb: 'affvb', mrRenda: 'mrrenda', mrShip: 'mrship', mrAdj: 'mradj', mrSvc: 'mrsvc', products: 'products', variations: 'variations', families: 'pfamilies' };
   // ---- Seletor de operação no topo (§AR/§AS/§AT) ----
   function opUpdateSelectorLabel() {
     var el = document.getElementById('op-selector-label'); if (!el) return;
@@ -18533,7 +18550,8 @@ buffer/index.js:
     // §BK/§BL do complemento — MIGRAÇÃO MULTI-OPERAÇÃO: idempotente (só roda se ainda não existe
     // nenhuma operação cadastrada). Dado legado (sem operationId) nunca é perdido — ganha a operação
     // padrão "Líder Molduras · Shopee" e continua acessível normalmente a partir dela.
-    return opRunMigrationIfNeeded({ orders: orders, occ: occ, wallet: wallet, acelera: acelera, affConv: affConv, affRpa: affRpa, affVb: affVb, mrRenda: mrRenda, mrShip: mrShip, mrAdj: mrAdj, mrSvc: mrSvc }).then(function () {
+    var prodDataForMigration = Produtos.getData();
+    return opRunMigrationIfNeeded({ orders: orders, occ: occ, wallet: wallet, acelera: acelera, affConv: affConv, affRpa: affRpa, affVb: affVb, mrRenda: mrRenda, mrShip: mrShip, mrAdj: mrAdj, mrSvc: mrSvc, products: prodDataForMigration.products, variations: prodDataForMigration.variations, families: prodDataForMigration.families, productIdentityMappingsAll: productIdentityMappingsAll }).then(function () {
       activeOperationId = (activeSetting && activeSetting.data) || (operations[0] ? operations[0].id : null) || OP_ALL;
       // §AS/§AT/§AU — filtro em memória pela operação ativa: cada motor de negócio já aprovado
       // continua lendo os MESMOS arrays globais, sem nenhuma alteração — a isolação acontece aqui,
