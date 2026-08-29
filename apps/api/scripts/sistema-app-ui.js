@@ -6309,12 +6309,23 @@
     // no formato AAAA-MM-DD que aparece na linha) — só nunca tinha sido capturada pelo parser. Pega o
     // primeiro valor no formato ISO de data da linha (a 2ª data eventual, "conclusão do pagamento", vem
     // depois e não é usada aqui — data3/dt3 é sempre a primeira, que é a de conclusão do AJUSTE).
+    //
+    // CORREÇÃO — Prioridade 0 (Rodada 2 da auditoria, reconciliação 73×75): a condição de fallback
+    // `normStatus(r[0]).indexOf('valor total') >= 0` incluía no array de eventos as próprias linhas de
+    // SUBTOTAL da aba (cada arquivo Adjustment real da Shopee traz 2: uma nota no topo "Valor total do
+    // ajuste" e um rodapé "Valor total", ambas repetindo o MESMO total do arquivo, sem orderId nem
+    // data). orderId="" nunca casa com nenhum pedido real (comp.adjRows as ignora sempre), então essas
+    // linhas nunca contaminam a Ficha/Caixa/DRE de nenhum pedido — mas mrEngine().adjTot e o callout
+    // "Ajustes (histórico completo)" somam mrAdj.reduce(valor) SEM filtrar por orderId, então essas 4
+    // linhas inflavam o "Total" exibido (confirmado com dados reais: R$5.532,18 real vs R$24.781,70
+    // exibido — diferença de R$19.249,52). Uma linha de subtotal da própria planilha nunca é um evento
+    // financeiro individual — exige orderId real para entrar em mrAdj.
     var adSheets = mrAoaAll(wb, 'Adjustment');
     registrarAbas('abasAdjustment', adSheets);
     var adjSeq = 0;
     adSheets.forEach(function (s) {
       var ad = s.rows;
-      ad.forEach(function (r) { var v = null; for (var c = 0; c < r.length; c++) { if (/-?\d+[.,]\d/.test(String(r[c]))) v = r[c]; } var oid3 = ''; r.forEach(function (c) { if (/^\d{6,}[A-Z0-9]+$/.test(String(c).trim())) oid3 = String(c).trim(); }); var dt3 = null; for (var d3 = 0; d3 < r.length; d3++) { if (/^\d{4}-\d{2}-\d{2}$/.test(String(r[d3]).trim())) { dt3 = String(r[d3]).trim(); break; } } if (v != null && (oid3 || normStatus(r[0]).indexOf('valor total') >= 0)) { out.adj.push({ seq: adjSeq++, orderId: oid3, data: dt3, desc: r.filter(function (x) { return String(x).trim() && !/^-?\d+[.,]\d+$/.test(String(x).trim()); }).join(' ').slice(0, 80), valor: mrCents(v) }); } });
+      ad.forEach(function (r) { var v = null; for (var c = 0; c < r.length; c++) { if (/-?\d+[.,]\d/.test(String(r[c]))) v = r[c]; } var oid3 = ''; r.forEach(function (c) { if (/^\d{6,}[A-Z0-9]+$/.test(String(c).trim())) oid3 = String(c).trim(); }); var dt3 = null; for (var d3 = 0; d3 < r.length; d3++) { if (/^\d{4}-\d{2}-\d{2}$/.test(String(r[d3]).trim())) { dt3 = String(r[d3]).trim(); break; } } if (v != null && oid3) { out.adj.push({ seq: adjSeq++, orderId: oid3, data: dt3, desc: r.filter(function (x) { return String(x).trim() && !/^-?\d+[.,]\d+$/.test(String(x).trim()); }).join(' ').slice(0, 80), valor: mrCents(v) }); } });
     });
     // Service Fee Details — mesma correção: processa todas as abas correspondentes. Achado P4 da
     // auditoria: um ID de pedido pode chegar em notação científica do Excel (ex.: "2.60316E+13") —
