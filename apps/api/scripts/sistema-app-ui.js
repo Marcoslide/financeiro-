@@ -10863,7 +10863,16 @@
     var funcs = fatorFuncionariosAtivos(opId);
     if (!funcs.length) pend.push('Funcionários produtivos');
     else if (!funcs.some(function (f) { return fatorCustoMinutoHomemSetorC(f.setorId, opId) > 0; })) pend.push('Funcionários com custo-hora válido (produtividade/salário cadastrados)');
-    var temRoteiro = Object.keys(fatorRoteiros).some(function (fid) { return (fatorRoteiros[fid] || []).length > 0; });
+    // PRIORIDADE 2 (auditoria UI do Fator de Custo) — bug real confirmado por teste de operador: cada
+    // registro de fatorRoteiros[familyId] é um OBJETO ({id,familyId,operationId,processos:[...],
+    // updatedAt}), nunca um array — checar `.length` nele sempre dava `undefined > 0` (falso), então
+    // ESTE gate nunca reconhecia nenhum roteiro cadastrado, em NENHUMA operação, mesmo com famílias e
+    // roteiros completos — bloqueava a tela "Rentabilidade Real" (Caixa) permanentemente com "Roteiro
+    // de Produção por Família" pendente. Corrigido para checar `.processos.length` (a lista real de
+    // etapas) e para escopar por família da OPERAÇÃO ATIVA (fatorFamilias() já filtra por operação —
+    // antes, o roteiro de uma família de OUTRA operação também contava aqui, o que teoricamente também
+    // já mascarava o problema oposto: nunca reproduzido, mas corrigido junto por ser a mesma linha).
+    var temRoteiro = fatorFamilias().some(function (f) { var rt = fatorRoteiros[f.id]; return !!(rt && rt.processos && rt.processos.length > 0); });
     if (!temRoteiro) pend.push('Roteiro de Produção por Família (pelo menos uma família)');
     if (!fatorCustosFixosAtivos(opId).length) pend.push('Custos Fixos');
     if (!fatorCustosVariaveisAtivos(opId).length) pend.push('Custos Variáveis');
