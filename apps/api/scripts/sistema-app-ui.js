@@ -10077,9 +10077,29 @@
     // caixaFluxoDia() (mesmo motor já usado na tela do dia), nunca recalcula nada novo aqui.
     var fluxoSnap = caixaFluxoDia(dateKey);
     var storeKey = caixaCloseStoreKey(dateKey);
-    var rec = caixaCloseGet(dateKey) || { id: storeKey, dateKey: dateKey, history: [], eventosPosteriores: [] };
+    var rec = caixaCloseGet(dateKey) || { id: storeKey, dateKey: dateKey, history: [], eventosPosteriores: [], snapshotHistory: [] };
     rec.id = storeKey; rec.dateKey = dateKey; rec.operationId = opActiveOrNull();
     var at = new Date().toISOString();
+    // AUDITABILIDADE FINANCEIRA (achado da certificação pré-go-live) — um "Fechar" que SUBSTITUI um
+    // snapshot já existente só pode acontecer depois de uma reabertura consciente (caixaReabrirDia),
+    // já que o botão "Fechar" só aparece com o dia ABERTO. Antes de sobrescrever rec.snapshot,
+    // preserva a versão INTEIRA anterior (nunca um resumo) em rec.snapshotHistory, com quem/quando/
+    // motivo/versão — nunca perde o "antes" de um refechamento. O PRIMEIRO fechamento do dia (rec.
+    // snapshot ainda não existe) nunca gera entrada aqui — só existe "antes" a partir do 2º fechamento.
+    if (rec.snapshot) {
+      // motivo: prioriza a justificativa deste próprio fechamento (ex.: "Fechar com Ressalva"); se
+      // vazia, cai pro motivo informado na reabertura mais recente (rec.history) que levou a este
+      // refechamento — nunca fica sem nenhum motivo quando um dos dois foi de fato preenchido.
+      var ultimaReabertura = (rec.history || []).filter(function (h) { return h.status === 'ABERTO'; }).slice(-1)[0];
+      var motivoReabertura = ultimaReabertura ? ultimaReabertura.justificativa : null;
+      rec.snapshotHistory = (rec.snapshotHistory || []).concat([{
+        version: (rec.snapshotHistory || []).length + 1,
+        snapshot: rec.snapshot,
+        status: rec.status, closedAt: rec.closedAt, closedBy: rec.closedBy,
+        supersededAt: at, supersededBy: userName || 'Operador',
+        motivo: justificativa || motivoReabertura || 'Refechamento sem motivo informado',
+      }]);
+    }
     rec.status = status; rec.closedBy = userName || 'Operador'; rec.closedAt = at;
     rec.snapshot = { vendasN: vendas.n, vendasValor: vendas.valor, lucroC: vendas.nLucroConhecido ? vendas.lucroC : null, expEsperados: exp.esperados, expExpedidos: exp.expedidos, acN: ac.resgatesN || 0, pendTotal: pend.total, pendCartTotal: pendCart.total, recebidoLiquido: ac.resgatesN ? ac.valorLiquido / 100 : 0, transferido: fluxoSnap.transferido };
     rec.justificativa = justificativa || null;
@@ -10124,11 +10144,11 @@
   // de Contas a Pagar/Receber já gerados por caixaAplicarIntegracaoFinanceira (que continua
   // idempotente por sourceEventKey — um novo "Fechar dia" só atualiza os mesmos registros, nunca
   // duplica). O histórico completo de aberturas/fechamentos fica em rec.history, nunca sobrescrito.
-  function caixaReabrirDia(dateKey) {
+  function caixaReabrirDia(dateKey, motivo) {
     var rec = caixaCloseGet(dateKey); if (!rec) return Promise.resolve();
     var at = new Date().toISOString();
     rec.status = 'ABERTO';
-    rec.history = (rec.history || []).concat([{ at: at, user: 'Operador', status: 'ABERTO', justificativa: 'Reaberto manualmente' }]);
+    rec.history = (rec.history || []).concat([{ at: at, user: 'Operador', status: 'ABERTO', justificativa: motivo || 'Reaberto manualmente (sem motivo informado)' }]);
     return putMany('caixafechamentos', [rec]).then(function (r) {
       auditLocal('CASH_REOPEN_LOCAL', 'caixa', 'CashClosure', dateKey, { status: 'FECHADO' }, { status: 'ABERTO' });
       return r;
@@ -10844,6 +10864,20 @@
       (eventosPosterioresLista.length ? ('<details class="cx-collapse" open><summary>Ver eventos posteriores</summary><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>Registrado em</th><th>Tipo</th><th>Pedido</th><th>Descrição</th><th>Valor</th><th>Status</th></tr></thead><tbody>' + evpRows + '</tbody></table></div></div></details>') : '<div class="footnote">Nenhum evento posterior registrado para este fechamento até agora.</div>') +
       '</div>') : '';
 
+    // ---- AUDITABILIDADE FINANCEIRA (achado da certificação pré-go-live) — Histórico de Versões:
+    // toda vez que um refechamento (reabertura consciente + "Fechar" de novo) SUBSTITUI o resultado
+    // congelado, a versão anterior INTEIRA fica visível aqui — nunca só uma nota pequena no log de
+    // status. Só aparece quando existe pelo menos 1 versão superada (rec.snapshotHistory). ----
+    var snapshotHistoryLista = (st.rec && st.rec.snapshotHistory) || [];
+    var svhRows = snapshotHistoryLista.map(function (v) {
+      return '<tr><td class="nowrap">v' + nn(v.version) + '</td><td class="nowrap">' + (v.closedAt ? new Date(v.closedAt).toLocaleString('pt-BR') : '—') + '</td><td>' + esc(v.closedBy || '—') + '</td><td class="nowrap">' + (v.snapshot && v.snapshot.lucroC != null ? brlC(v.snapshot.lucroC) : 'não disponível') + '</td><td class="nowrap">' + (v.supersededAt ? new Date(v.supersededAt).toLocaleString('pt-BR') : '—') + '</td><td>' + esc(v.supersededBy || '—') + '</td><td class="cell-text">' + esc(v.motivo || '—') + '</td></tr>';
+    }).join('');
+    var snapshotHistoryBlock = snapshotHistoryLista.length ? ('<div class="cx-section"><h4>Histórico de Versões' + h4sub(nn(snapshotHistoryLista.length) + ' versão(ões) anterior(es)') + '</h4>' +
+      '<div class="footnote" style="margin:-4px 0 8px">Este dia já foi reaberto e refechado ' + nn(snapshotHistoryLista.length) + ' vez(es). Cada refechamento SUBSTITUI o resultado congelado (rec.snapshot) — a(s) versão(ões) anterior(es) fica(m) preservada(s) aqui, nunca apagada(s), com quem/quando/motivo.</div>' +
+      '<details class="cx-collapse" open><summary>Ver versões anteriores</summary><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>Versão</th><th>Fechado em</th><th>Por</th><th>Resultado daquela versão</th><th>Substituído em</th><th>Por</th><th>Motivo</th></tr></thead><tbody>' + svhRows + '</tbody></table></div></div></details>' +
+      '<div class="footnote" style="margin-top:6px">Versão atual (não listada acima): ' + (resultadoOriginalC != null ? brlC(resultadoOriginalC) : 'não disponível') + ', fechada em ' + (st.rec && st.rec.closedAt ? new Date(st.rec.closedAt).toLocaleString('pt-BR') : '—') + ' por ' + esc((st.rec && st.rec.closedBy) || '—') + '.</div>' +
+      '</div>') : '';
+
     // ---- CONFERÊNCIAS (Pedidos/Expedição/Pendências/Auditoria) — colapsáveis, não dominam a tela ----
     var pedRowsC = vendas.pedidos.map(function (o) { var c = pedidoComposicaoFinanceira(o.id); return '<tr class="rowlink" data-goped360="' + esc(o.id) + '"><td class="mono">' + esc(o.id) + '</td><td>' + esc(S.pedidos.labels[o.normalizedStatus] || o.orderStatus) + '</td><td class="nowrap">' + brl(c.receitaC != null ? c.receitaC / 100 : (o.totalAmount || 0)) + '</td><td class="nowrap">' + (c.resultadoC != null ? brlC(c.resultadoC) : '—') + '</td></tr>'; }).join('');
     var pedidosDetails = '<details class="cx-collapse"><summary>Pedidos do dia · ' + nn(vendas.n) + ' pedido(s)</summary><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Status</th><th>Valor</th><th>Lucro</th></tr></thead><tbody>' + (pedRowsC || '<tr><td colspan="4" class="empty">Nenhum pedido pago neste dia.</td></tr>') + '</tbody></table></div></div></details>';
@@ -10929,14 +10963,16 @@
 
     var transfManualBtn = '<div style="margin:6px 0 0"><button class="btn-sm" id="bt-abrir-manual">+ Adicionar transferência não encontrada</button></div>';
 
-    return header + resumoTopo + fluxoDinheiro + creditosSection + debitosSection + conciliacaoFinanceira + dreResumo + eventosPosterioresBlock + lancamentosFinanceiros + conferencias + integracaoResumo + transfManualBtn + footer;
+    return header + resumoTopo + fluxoDinheiro + creditosSection + debitosSection + conciliacaoFinanceira + dreResumo + eventosPosterioresBlock + snapshotHistoryBlock + lancamentosFinanceiros + conferencias + integracaoResumo + transfManualBtn + footer;
   }
   function bindCaixaFechamentoBody(dateKey) {
     var dateSel = document.getElementById('cx-date-sel'); if (dateSel) dateSel.onchange = function () { caixaAbrirDia(dateSel.value); };
     var gr = document.querySelector('[data-gorentabilidade]'); if (gr) gr.onclick = function () { caixaSub = 'rentabilidade'; caixaFechamentoDate = dateKey; render(); };
     var reabrirBtn = document.getElementById('caixa-reabrir'); if (reabrirBtn) reabrirBtn.onclick = function () {
-      if (!confirm('Reabrir o fechamento de ' + dbr(dateKey) + '? O dia volta para "Em conferência" — nada já lançado em Contas a Pagar/Receber é apagado, e o histórico de aberturas/fechamentos fica registrado.')) return;
-      caixaReabrirDia(dateKey).then(function () { toast('Caixa reaberto', dbr(dateKey)); render(); });
+      if (!confirm('Reabrir o fechamento de ' + dbr(dateKey) + '? O dia volta para "Em conferência" — nada já lançado em Contas a Pagar/Receber é apagado. O resultado atual fica preservado no histórico de versões se este dia for fechado de novo, e o histórico de aberturas/fechamentos fica registrado.')) return;
+      var motivo = prompt('Motivo da reabertura (fica registrado no histórico de versões deste dia):', '');
+      if (motivo === null) return; // cancelou o prompt
+      caixaReabrirDia(dateKey, motivo).then(function () { toast('Caixa reaberto', dbr(dateKey)); render(); });
     };
     var verAudBtn = document.getElementById('caixa-ver-auditoria'); if (verAudBtn) verAudBtn.onclick = function () {
       var d = document.getElementById('cx-ver-auditoria-details');
