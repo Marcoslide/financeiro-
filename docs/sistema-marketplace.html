@@ -337,7 +337,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 53942b5 · 2026-08-29 03:15 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 517fe10 · 2026-08-29 09:56 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -4003,6 +4003,10 @@ buffer/index.js:
   // Shopee grava no pedido. Guarda apenas variationId (a família é sempre lida ao vivo de
   // skuVarById/skuFamById — nunca fica desatualizada se a família do anúncio mudar depois).
   var productIdentityMappings = {};
+  // Master não-filtrado (todas as operações) — productIdentityMappings acima é a VIEW filtrada pela
+  // operação ativa, recalculada em bootApp() junto com Produtos.scopeToOperation(). Nunca usar esta
+  // variável para resolução de custo (resolveSkuCostByKeyRaw só lê productIdentityMappings, a view).
+  var productIdentityMappingsAll = {};
   var lastImportStamp = null; // "Atualizado com dados até…" (§31)
   var wallet = [];            // extrato da carteira (linhas SHOPEE; reconstruídas são calculadas)
   var walletCls = {};         // classificação INTERNA por id (separada do dado Shopee; preservada na reimportação) —
@@ -4629,13 +4633,15 @@ buffer/index.js:
     var skuKey = normalizeSkuKey(skuRaw);
     if (!skuKey || !variationId) return Promise.resolve();
     var idKey = productIdentityMappingKey(skuKey, productName, variationName);
-    var rec = { id: idKey, skuKey: skuKey, skuOriginal: skuRaw, productName: productName || null, variationName: variationName || null, variationId: variationId, resolvedAt: new Date().toISOString(), method: 'MANUAL_IDENTITY', status: 'ACTIVE' };
-    productIdentityMappings[idKey] = rec;
+    // operationId: mesmo escopo já aplicado ao catálogo de Produtos (Fase 2 da correção de identidade
+    // canônica) — null em "Todas as Operações" (nunca bloqueia o vínculo, só não isola).
+    var rec = { id: idKey, skuKey: skuKey, skuOriginal: skuRaw, productName: productName || null, variationName: variationName || null, variationId: variationId, operationId: opActiveOrNull(), resolvedAt: new Date().toISOString(), method: 'MANUAL_IDENTITY', status: 'ACTIVE' };
+    productIdentityMappings[idKey] = rec; productIdentityMappingsAll[idKey] = rec;
     return putMany('productidentitymappings', [rec]).then(function () { rebuildSkuCost(); return rec; });
   }
   function productIdentityMappingRemove(idKey) {
     if (!idKey || !productIdentityMappings[idKey]) return Promise.resolve();
-    delete productIdentityMappings[idKey];
+    delete productIdentityMappings[idKey]; delete productIdentityMappingsAll[idKey];
     return delOne('productidentitymappings', idKey).then(function () { rebuildSkuCost(); });
   }
   // <select> com todas as famílias cadastradas (qualquer uma pode ser escolhida para qualquer SKU —
@@ -11731,7 +11737,16 @@ buffer/index.js:
       return saveVars(vs).then(function () { return vs; });
     }
 
+    // Correção "Identidade canônica — Fase 2" (fechamento de escopo): catálogo de Produtos/Variações/
+    // Famílias era GLOBAL (sem operationId), compartilhado por todas as empresas/lojas/marketplaces —
+    // risco real quando duas operações têm o mesmo texto de SKU apontando pra produtos diferentes.
+    // Segue o MESMO padrão já validado (§AS/§AT/§AU) usado por orders/mrRenda/wallet/etc.: cada
+    // importação exige uma operação ativa específica (nunca "Todas as Operações" — mesmo gate
+    // OP_BLOCK_MSG de todo import*() do sistema) e cada registro novo carrega o operationId de quem
+    // importou. Dado legado sem operationId nunca é perdido — continua visível em qualquer operação
+    // (mesma regra de compatibilidade retroativa dos outros stores).
     function syncRows(rows, filename) {
+      var opId = opActiveOrNull(); if (!opId) return Promise.reject(new Error(OP_BLOCK_MSG));
       var now = new Date().toISOString();
       var errors = rows.filter(function (r) { return r.error; }).length;
       var valid = rows.filter(function (r) { return !r.error && r.shopeeProductId; });
@@ -11743,8 +11758,8 @@ buffer/index.js:
       valid.forEach(function (r) { seen[r.shopeeProductId] = 1; lastRowByKey[r.shopeeProductId + '::' + r.variationKey] = r; });
       res.productsSeen = Object.keys(seen).length;
       var cp = [], cv = [];
-      Object.keys(seen).forEach(function (pid) { var name = nameById[pid] || pid, ex = prodById[pid]; if (!ex) { var p = { id: pid, shopeeProductId: pid, name: name, principalSku: null, status: 'ACTIVE', firstSeenAt: now, lastSeenAt: now }; prodById[pid] = p; S2.products.push(p); cp.push(p); res.newProducts++; } else { ex.lastSeenAt = now; if (ex.name !== name) { ex.name = name; res.updated++; } cp.push(ex); } });
-      Object.keys(lastRowByKey).forEach(function (key) { var r = lastRowByKey[key]; res.variationsSeen++; var id = r.shopeeProductId + '::' + r.variationKey, ex = varById[id], price = r.shopeeFullPrice == null ? null : Number(r.shopeeFullPrice); var prod = prodById[r.shopeeProductId]; if (prod && !prod.principalSku && r.referenceSku) prod.principalSku = r.referenceSku; if (!ex) { var v = { id: id, productId: r.shopeeProductId, shopeeVariationId: r.shopeeVariationId || '', variationKey: r.variationKey, variationName: r.variationName, sku: r.sku, referenceSku: r.referenceSku, gtin: r.gtin, shopeeFullPrice: price, sellerStock: r.sellerStock, failReason: r.failReason, familyId: null, closingPrice: null, firstSeenAt: now, lastSeenAt: now }; varById[id] = v; S2.variations.push(v); cv.push(v); res.newVariations++; } else { var chg = ex.variationName !== r.variationName || ex.sku !== r.sku || ex.referenceSku !== r.referenceSku || ex.gtin !== r.gtin || ex.sellerStock !== r.sellerStock || (ex.shopeeFullPrice == null ? null : Number(ex.shopeeFullPrice)) !== price; ex.lastSeenAt = now; if (chg) { ex.variationName = r.variationName; ex.sku = r.sku; ex.referenceSku = r.referenceSku; ex.gtin = r.gtin; ex.shopeeFullPrice = price; ex.sellerStock = r.sellerStock; ex.shopeeVariationId = r.shopeeVariationId || ''; res.updated++; } else res.unchanged++; cv.push(ex); } });
+      Object.keys(seen).forEach(function (pid) { var name = nameById[pid] || pid, ex = prodById[pid]; if (!ex) { var p = { id: pid, shopeeProductId: pid, name: name, principalSku: null, status: 'ACTIVE', operationId: opId, firstSeenAt: now, lastSeenAt: now }; prodById[pid] = p; S2.products.push(p); cp.push(p); res.newProducts++; } else { ex.lastSeenAt = now; if (ex.name !== name) { ex.name = name; res.updated++; } cp.push(ex); } });
+      Object.keys(lastRowByKey).forEach(function (key) { var r = lastRowByKey[key]; res.variationsSeen++; var id = r.shopeeProductId + '::' + r.variationKey, ex = varById[id], price = r.shopeeFullPrice == null ? null : Number(r.shopeeFullPrice); var prod = prodById[r.shopeeProductId]; if (prod && !prod.principalSku && r.referenceSku) prod.principalSku = r.referenceSku; if (!ex) { var v = { id: id, productId: r.shopeeProductId, shopeeVariationId: r.shopeeVariationId || '', variationKey: r.variationKey, variationName: r.variationName, sku: r.sku, referenceSku: r.referenceSku, gtin: r.gtin, shopeeFullPrice: price, sellerStock: r.sellerStock, failReason: r.failReason, familyId: null, closingPrice: null, operationId: opId, firstSeenAt: now, lastSeenAt: now }; varById[id] = v; S2.variations.push(v); cv.push(v); res.newVariations++; } else { var chg = ex.variationName !== r.variationName || ex.sku !== r.sku || ex.referenceSku !== r.referenceSku || ex.gtin !== r.gtin || ex.sellerStock !== r.sellerStock || (ex.shopeeFullPrice == null ? null : Number(ex.shopeeFullPrice)) !== price; ex.lastSeenAt = now; if (chg) { ex.variationName = r.variationName; ex.sku = r.sku; ex.referenceSku = r.referenceSku; ex.gtin = r.gtin; ex.shopeeFullPrice = price; ex.sellerStock = r.sellerStock; ex.shopeeVariationId = r.shopeeVariationId || ''; res.updated++; } else res.unchanged++; cv.push(ex); } });
       reindex();
       return Promise.all([dbPut('products', cp), dbPut('variations', cv)]).then(function () { var b = { id: uuid(), createdAt: now, filename: filename || 'planilha.xlsx', total: res.total, productsSeen: res.productsSeen, variationsSeen: res.variationsSeen, newProducts: res.newProducts, newVariations: res.newVariations, updated: res.updated, unchanged: res.unchanged, errors: res.errors }; S2.imports.unshift(b); return dbPut('pimports', [b]).then(function () { onChange(); return res; }); });
     }
@@ -12014,7 +12029,7 @@ buffer/index.js:
     // PROMPT "Fator de Custo": tempoProducaoMin é campo puramente aditivo (não afeta currentCostAmount
     // nem nenhum consumidor existente de família) — usado só pelo motor fatorTempoProducaoPedido() para
     // ratear hora homem/custos fixos/variáveis por família, nunca distribuído igual entre produtos.
-    function createFamily(dto) { var cost = parseNum(dto.cost), tempo = parseNum(dto.tempoProducaoMin), now = new Date().toISOString(), f = { id: uuid(), name: dto.name, normalizedName: normalize(dto.name), internalCode: dto.internalCode || null, notes: dto.notes || null, status: dto.status || 'ACTIVE', currentCostAmount: cost, currentCostEffectiveFrom: cost != null ? now : null, costUpdatedAt: cost != null ? now : null, costHistory: cost != null ? [{ costAmount: cost, effectiveFrom: now, createdAt: now }] : [], tempoProducaoMin: tempo }; S2.families.push(f); return afterFamChange([f]).then(function () { return f; }); }
+    function createFamily(dto) { var cost = parseNum(dto.cost), tempo = parseNum(dto.tempoProducaoMin), now = new Date().toISOString(), f = { id: uuid(), name: dto.name, normalizedName: normalize(dto.name), internalCode: dto.internalCode || null, notes: dto.notes || null, status: dto.status || 'ACTIVE', currentCostAmount: cost, currentCostEffectiveFrom: cost != null ? now : null, costUpdatedAt: cost != null ? now : null, costHistory: cost != null ? [{ costAmount: cost, effectiveFrom: now, createdAt: now }] : [], tempoProducaoMin: tempo, operationId: opActiveOrNull() }; S2.families.push(f); return afterFamChange([f]).then(function () { return f; }); }
     function updateFamily(f, dto) { var now = new Date().toISOString(); if (dto.name != null) { f.name = dto.name; f.normalizedName = normalize(dto.name); } if (dto.internalCode !== undefined) f.internalCode = dto.internalCode || null; if (dto.notes !== undefined) f.notes = dto.notes || null; if (dto.status) f.status = dto.status; if (dto.tempoProducaoMin !== undefined) f.tempoProducaoMin = parseNum(dto.tempoProducaoMin); var cost = parseNum(dto.cost); if (cost != null && cost !== f.currentCostAmount) { f.currentCostAmount = cost; f.currentCostEffectiveFrom = now; f.costUpdatedAt = now; f.costHistory = (f.costHistory || []).concat([{ costAmount: cost, effectiveFrom: now, createdAt: now }]); } return afterFamChange([f]); }
     function renderFamilias() {
       appEl.innerHTML = head('A família é a unidade interna de custo. Vários SKUs apontam para uma família; o custo mora aqui, com histórico.', ['<button class="btn-sm primary" id="nf">+ Nova família</button>']) + tabsHtml('familias') + '<div class="panel"><div class="pb"><div class="toolbar2"><input class="input sm" id="fq" style="width:260px" placeholder="Buscar família"><select class="select sm" id="fst"><option value="">Todas</option><option value="ACTIVE">Ativas</option><option value="INACTIVE">Inativas</option><option value="NOCOST">Sem custo</option></select></div></div><div class="pb" style="padding:0" id="fl"></div></div>';
@@ -12165,6 +12180,26 @@ buffer/index.js:
       getData: function () { return { products: S2.products, variations: S2.variations, families: S2.families }; },
       load: function () { return Promise.all([dbGetAll('products'), dbGetAll('variations'), dbGetAll('pfamilies'), dbGetAll('pimports')]).then(function (r) { S2.products = r[0]; S2.variations = r[1]; S2.families = r[2]; S2.imports = r[3].sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); }); reindex(); }); },
       reset: function () { S2.products = []; S2.variations = []; S2.families = []; S2.imports = []; S2.selected.clear(); S2.expanded.clear(); reindex(); },
+      // Correção "Identidade canônica — Fase 2" (fechamento de escopo, §2 da auditoria pré-go-live):
+      // filtra o catálogo já carregado em memória para a operação ativa, EXATAMENTE o mesmo padrão
+      // byOp() já validado em bootApp() para orders/mrRenda/wallet/etc. — dado legado sem operationId
+      // nunca é perdido (continua visível em qualquer operação), só dado NOVO (importado após esta
+      // correção) fica isolado por empresa/loja/marketplace. Chamado uma única vez no boot, depois de
+      // activeOperationId ser determinado — nunca em "Todas as Operações" (visão consolidada, mesma
+      // regra das outras entidades: agrega a leitura, nunca mistura o dado gravado). Como
+      // resolveSkuCostByKeyRaw() e todo o resto do sistema só enxergam o catálogo através de
+      // Produtos.getData() (skuAliasIndex/skuVarById/skuFamById são reconstruídos a partir daqui em
+      // rebuildSkuCost()), filtrar S2 aqui já isola a resolução de custo inteira — nenhuma mudança de
+      // assinatura foi necessária em resolveSkuCostByKeyRaw/resolveSkuCost (correção mínima, não
+      // duplica motor).
+      scopeToOperation: function (opId) {
+        if (!opId) return; // "Todas as Operações" — nunca filtra, é visão consolidada
+        var keepP = {}, keepIds = {};
+        S2.products = S2.products.filter(function (p) { var keep = !p.operationId || p.operationId === opId; if (keep) keepP[p.id] = 1; return keep; });
+        S2.variations = S2.variations.filter(function (v) { return (!v.operationId || v.operationId === opId) && keepP[v.productId]; });
+        S2.families = S2.families.filter(function (f) { return !f.operationId || f.operationId === opId; });
+        reindex();
+      },
     };
   }
 
@@ -18439,7 +18474,7 @@ buffer/index.js:
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; pricingOpConfig = []; pricingFamilyRules = []; pontoEquilibrioCfg = {}; metaLucroCfg = {}; financialAccounts = []; financialEvents = []; contasReceber = []; crReceipts = []; financialTransfers = []; fatorFuncionarios = []; fatorCustosFixos = []; fatorCustosVariaveis = []; fatorPedidoSnapshots = []; fatorConfig = {}; skuFamilyOverrides = {}; fatorConfigs = []; fatorSetores = []; fatorImpostos = []; fatorProcessos = []; fatorRoteiros = {}; fatorRoteiroSkuOverrides = {}; fatorSub = 'geral'; skuFamilyOverrideHistory = []; productIdentityMappings = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; pricingOpConfig = []; pricingFamilyRules = []; pontoEquilibrioCfg = {}; metaLucroCfg = {}; financialAccounts = []; financialEvents = []; contasReceber = []; crReceipts = []; financialTransfers = []; fatorFuncionarios = []; fatorCustosFixos = []; fatorCustosVariaveis = []; fatorPedidoSnapshots = []; fatorConfig = {}; skuFamilyOverrides = {}; fatorConfigs = []; fatorSetores = []; fatorImpostos = []; fatorProcessos = []; fatorRoteiros = {}; fatorRoteiroSkuOverrides = {}; fatorSub = 'geral'; skuFamilyOverrideHistory = []; productIdentityMappings = {}; productIdentityMappingsAll = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
   var opSelBtn = document.getElementById('op-selector'); if (opSelBtn) opSelBtn.onclick = function () { openOperationSelector(); };
 
   // Fase 10.2: todo o boot local (abrir IndexedDB, carregar os dados, primeiro render()) virou
@@ -18486,7 +18521,8 @@ buffer/index.js:
     fatorRoteiros = {}; (r[51] || []).forEach(function (rt) { fatorRoteiros[rt.familyId] = rt; });
     fatorRoteiroSkuOverrides = {}; (r[52] || []).forEach(function (rt) { fatorRoteiroSkuOverrides[rt.skuKey] = rt; });
     skuFamilyOverrideHistory = r[53] || [];
-    productIdentityMappings = {}; (r[56] || []).forEach(function (m) { productIdentityMappings[m.id] = m; });
+    productIdentityMappingsAll = {}; (r[56] || []).forEach(function (m) { productIdentityMappingsAll[m.id] = m; });
+    productIdentityMappings = productIdentityMappingsAll; // filtrado por operação mais abaixo, quando activeOperationId for conhecido
     fatorMigrarTempoProducaoLegado();
     cpMigrarCategoriasSemCentro().catch(function () { });
     crMigrarClassificacaoLegadaDeCP().catch(function () { });
@@ -18512,6 +18548,8 @@ buffer/index.js:
         pricingOpConfig = byOp(pricingOpConfig);
         financialAccounts = byOp(financialAccounts); financialEvents = byOp(financialEvents);
         contasReceber = byOp(contasReceber); financialTransfers = byOp(financialTransfers);
+        productIdentityMappings = {}; Object.keys(productIdentityMappingsAll).forEach(function (k) { var m = productIdentityMappingsAll[k]; if (!m.operationId || m.operationId === activeOperationId) productIdentityMappings[k] = m; });
+        Produtos.scopeToOperation(activeOperationId);
       }
       if (lastImportStamp == null && batches.length) { var last = batches.map(function (b) { return b.createdAt; }).sort().pop(); lastImportStamp = last || null; }
       if (occ.length) putMany('occ', occ);
