@@ -10978,11 +10978,19 @@
   function bindCaixaFechamentoBody(dateKey) {
     var dateSel = document.getElementById('cx-date-sel'); if (dateSel) dateSel.onchange = function () { caixaAbrirDia(dateSel.value); };
     var gr = document.querySelector('[data-gorentabilidade]'); if (gr) gr.onclick = function () { caixaSub = 'rentabilidade'; caixaFechamentoDate = dateKey; render(); };
+    // Achado real de auditoria (bateria de versionamento, Grupo 7 — duplo clique): sem guarda de
+    // reentrância, 2 cliques síncronos em "Reabrir caixa" disparavam 2 execuções completas de
+    // caixaReabrirDia(), gerando 2 entradas 'ABERTO' duplicadas em rec.history por uma única ação do
+    // operador — mesma classe do bug já corrigido em "Fechar"/"Fechar com Ressalva" (flag cxClosing,
+    // abaixo), nunca tinha sido aplicada aqui.
+    var cxReabrindo = false;
     var reabrirBtn = document.getElementById('caixa-reabrir'); if (reabrirBtn) reabrirBtn.onclick = function () {
+      if (cxReabrindo || reabrirBtn.disabled) return;
       if (!confirm('Reabrir o fechamento de ' + dbr(dateKey) + '? O dia volta para "Em conferência" — nada já lançado em Contas a Pagar/Receber é apagado. O resultado atual fica preservado no histórico de versões se este dia for fechado de novo, e o histórico de aberturas/fechamentos fica registrado.')) return;
       var motivo = prompt('Motivo da reabertura (fica registrado no histórico de versões deste dia):', '');
       if (motivo === null) return; // cancelou o prompt
-      caixaReabrirDia(dateKey, motivo).then(function () { toast('Caixa reaberto', dbr(dateKey)); render(); });
+      cxReabrindo = true; reabrirBtn.disabled = true;
+      caixaReabrirDia(dateKey, motivo).then(function () { toast('Caixa reaberto', dbr(dateKey)); render(); }, function (e) { cxReabrindo = false; reabrirBtn.disabled = false; toast('Não foi possível reabrir', e.message || String(e), true); });
     };
     var verAudBtn = document.getElementById('caixa-ver-auditoria'); if (verAudBtn) verAudBtn.onclick = function () {
       var d = document.getElementById('cx-ver-auditoria-details');
