@@ -337,7 +337,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 34808e5 · 2026-08-29 14:28 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 5b05c18 · 2026-08-29 15:17 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -5960,12 +5960,29 @@ buffer/index.js:
   // "esperado" usa os MESMOS grupos que "sistema" deriva, servindo de guarda de regressão: se um
   // futuro ajuste desalinhar o alias de algum campo canônico do resto da composição, aparece aqui
   // como 🔴 na hora, pedido a pedido, sem esperar uma auditoria manual de 100 pedidos.
+  //
+  // Achado real de auditoria (amostra de 300 pedidos, 23 com Income+Adjustment): "Renda Final
+  // calculada" nasce de receitaC = Order.all (Preço Acordado × Qtd) e "Renda Final reconstruída"
+  // nascia, antes deste fix, só de mrRow.liberado (Quantia Total Lançada, Income) — duas fontes que já
+  // divergem ANTES de qualquer taxa/ajuste, porque "Valor do pedido — Order.all" (Preço Acordado) e
+  // "Valor financeiro — Income" (mrRow.preco, Preço do produto) são grandezas diferentes por natureza
+  // (ver comentário original em ~1861: "NUNCA vem do Income"). Comparar Renda Final calculada × Renda
+  // Final reconstruída SEM neutralizar essa diferença de preço-base produzia falso 🔴 em todo pedido
+  // onde ela existisse — mesmo com a composição financeira 100% correta: provado numericamente que os
+  // 23/23 pedidos 🔴 da amostra tinham resíduo ZERO após subtrair exatamente essa diferença de preço-
+  // base (script de prova em auditoria externa, TODAS_23_EXPLICADAS_PELA_DIFERENCA_DE_PRECO_BASE=true).
+  // Fix (só na REGRA de auditoria — pedidoComposicaoFinanceira() e seus campos canônicos permanecem
+  // intocados): soma-se de volta a diferença de preço-base (receitaC − mrRow.preco) ao valor
+  // reconstruído antes de comparar, trazendo as duas grandezas para a MESMA base (Renda Final sobre o
+  // preço Order.all) — só sobra 🔴 quando existe divergência financeira real (Adjustment omitido, taxa
+  // duplicada, erro de centavo), nunca a diferença de preço-base isolada, que passa a aparecer só como
+  // nota informativa (ℹ diferencaOrigem), nunca somada ao statusGeral.
   function auditarComposicaoFinanceiraPedido(orderId) {
     var comp = pedidoComposicaoFinanceira(orderId);
     var vendaEsperadoC = comp.ord ? Math.round(orderFinance(comp.ord).revenue * 100) : null;
     var ajustesEsperadoC = comp.somaGrupo(comp.gDescontos) + comp.somaGrupo(comp.gCreditos);
     var taxasEsperadoC = comp.somaGrupo(comp.gTaxas);
-    // Renda Final: quando o Income já cruzou este pedido, o esperado é o próprio "Quantia Total
+    // Renda Final: quando o Income já cruzou este pedido, o esperado parte do próprio "Quantia Total
     // Lançada" (mrRow.liberado) — o número que a própria Shopee confirmou — SOMADO a qualquer
     // Adjustment posterior real deste pedido (comp.adjRows): a liberação original é sempre anterior
     // a esses eventos (§45-48), então comparar sistema (que já inclui o Adjustment) direto contra o
@@ -5974,7 +5991,11 @@ buffer/index.js:
     // compensação). Sem Income, não há um "esperado" confirmável — usa o próprio valor provisório do
     // sistema (Order.all) só para não deixar a linha vazia, marcado como parcial.
     var adjTotalC = comp.adjRows.reduce(function (s, a) { return s + (a.valor || 0); }, 0);
-    var rendaFinalEsperadoC = comp.mrRow ? comp.mrRow.liberado + adjTotalC : comp.rendaFinalShopeeC;
+    // Diferença de preço-base — "Valor do pedido — Order.all" (receitaC) × "Valor financeiro — Income"
+    // (mrRow.preco): grandezas distintas por definição, nunca é por si só divergência financeira — vira
+    // nota informativa (diferencaOrigem) e, aqui, é somada de volta ao esperado para equalizar a base.
+    var precoBaseDiffC = comp.mrRow ? (comp.receitaC - comp.mrRow.preco) : null;
+    var rendaFinalEsperadoC = comp.mrRow ? (comp.mrRow.liberado + adjTotalC + precoBaseDiffC) : comp.rendaFinalShopeeC;
     function linha(esperadoC, sistemaC, semReferenciaConfiavel) {
       var diferencaC = (esperadoC != null && sistemaC != null) ? sistemaC - esperadoC : null;
       var status = diferencaC == null ? '🟡 sem dado suficiente' : semReferenciaConfiavel ? '🟡 diferença explicada (sem Income — provisório)' : Math.abs(diferencaC) <= 2 ? '🟢 OK' : '🔴 divergência financeira';
@@ -5984,10 +6005,16 @@ buffer/index.js:
     var ajustes = linha(ajustesEsperadoC, comp.ajustesPedidoC);
     var taxas = linha(taxasEsperadoC, comp.taxasShopeeC);
     var rendaFinal = linha(rendaFinalEsperadoC, comp.rendaFinalShopeeC, !comp.mrRow);
+    // Nota informativa (NUNCA contribui para statusGeral, nunca é "🔴 Divergência financeira"): só
+    // existe quando há Income cruzado E a diferença de preço-base é real (> 1 centavo).
+    var diferencaOrigem = (precoBaseDiffC != null && Math.abs(precoBaseDiffC) > 1) ? {
+      valorOrderAllC: comp.receitaC, valorIncomeC: comp.mrRow.preco, diferencaC: precoBaseDiffC,
+      nota: 'ℹ Diferença de origem entre Valor do pedido — Order.all (' + brlC(comp.receitaC) + ') e Valor financeiro — Income (' + brlC(comp.mrRow.preco) + '): ' + brlC(precoBaseDiffC) + '. Já neutralizada na comparação de Renda Final acima — não é divergência financeira.'
+    } : null;
     var linhas = [vendaBruta, ajustes, taxas, rendaFinal];
     var statusGeral = linhas.some(function (l) { return l.status.indexOf('🔴') === 0; }) ? '🔴 divergência financeira'
       : linhas.some(function (l) { return l.status.indexOf('🟡') === 0; }) ? '🟡 diferença explicada' : '🟢 OK';
-    return { orderId: orderId, temIncome: comp.temIncome, vendaBruta: vendaBruta, ajustes: ajustes, taxas: taxas, rendaFinal: rendaFinal, statusGeral: statusGeral };
+    return { orderId: orderId, temIncome: comp.temIncome, vendaBruta: vendaBruta, ajustes: ajustes, taxas: taxas, rendaFinal: rendaFinal, diferencaOrigem: diferencaOrigem, statusGeral: statusGeral };
   }
   // resolveSellerCharges(orderId) — PROMPT DEFINITIVO "FICHA DO PEDIDO — TAXAS SHOPEE + CUSTOS DA
   // LOJA + CABEÇALHO + RESULTADO": lista ÚNICA, FIXA e EXAUSTIVA de tudo que a Shopee efetivamente
@@ -6441,9 +6468,14 @@ buffer/index.js:
     // Taxas/Renda Final: esperado (recomposto dos grupos + Quantia Total Lançada do Income) × sistema
     // (os mesmos campos que Ficha/Caixa/Minha Renda/Dashboard exibem) — guarda de regressão visível.
     var auditComp = auditarComposicaoFinanceiraPedido(orderId);
-    var auditCompRow = function (label, l) { return '<div class="fin-line"><span>' + esc(label) + '</span><span>esperado ' + (l.esperadoC != null ? brlC(l.esperadoC) : '—') + ' · sistema ' + (l.sistemaC != null ? brlC(l.sistemaC) : '—') + ' · dif. ' + (l.diferencaC != null ? brlC(l.diferencaC) : '—') + ' <span class="tag">' + l.status + '</span></span></div>'; };
+    var auditCompRow = function (label, l, esperadoLabel, sistemaLabel) { return '<div class="fin-line"><span>' + esc(label) + '</span><span>' + esc(esperadoLabel || 'esperado') + ' ' + (l.esperadoC != null ? brlC(l.esperadoC) : '—') + ' · ' + esc(sistemaLabel || 'sistema') + ' ' + (l.sistemaC != null ? brlC(l.sistemaC) : '—') + ' · dif. ' + (l.diferencaC != null ? brlC(l.diferencaC) : '—') + ' <span class="tag">' + l.status + '</span></span></div>'; };
+    // "Renda Final reconstruída" (Income/Adjustment, já equalizada na base Order.all) × "Renda Final
+    // calculada" (sistema) — nomenclatura precisa (PROMPT auditoria 300 pedidos, achado nº1): nunca
+    // "esperado"/"sistema" genéricos aqui, pra não sugerir que Order.all e Income deveriam ser iguais.
+    var diferencaOrigemBlock = auditComp.diferencaOrigem ? '<div class="footnote" style="margin-top:6px">' + esc(auditComp.diferencaOrigem.nota) + '</div>' : '';
     var auditCompBlock = '<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Auditoria da composição financeira (esperado × sistema) — ' + auditComp.statusGeral + '</summary><div style="margin-top:6px">' +
-      auditCompRow('Venda Bruta', auditComp.vendaBruta) + auditCompRow('Ajustes do pedido', auditComp.ajustes) + auditCompRow('Taxas Shopee', auditComp.taxas) + auditCompRow('Renda Final Shopee', auditComp.rendaFinal) +
+      auditCompRow('Venda Bruta', auditComp.vendaBruta) + auditCompRow('Ajustes do pedido', auditComp.ajustes) + auditCompRow('Taxas Shopee', auditComp.taxas) + auditCompRow('Renda Final Shopee', auditComp.rendaFinal, 'Renda Final reconstruída', 'Renda Final calculada') +
+      diferencaOrigemBlock +
       '</div></details>';
     var auditoriaBlock = '<div class="panel"><div class="ph"><h3>Auditoria Técnica</h3></div><div class="pb">' +
       (auditoriaFonte.length || shipRow ? '<details><summary style="cursor:pointer;font-weight:600">Ver campos brutos, origem e valores não contabilizados</summary><div style="margin-top:6px">' +
