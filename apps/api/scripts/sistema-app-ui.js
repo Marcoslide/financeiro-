@@ -10603,13 +10603,28 @@
         pendenciaResolver('FIN:' + orderId, acao, motivo, motivo, 'ABERTA').then(function () { toast('Pendência financeira resolvida', orderId); render(); });
       };
     });
-    var cl = document.getElementById('caixa-close'); if (cl && !cl.disabled) cl.onclick = function () { caixaCloseDay(dateKey, 'FECHADO', 'Operador', null).then(function () { toast('Caixa fechado', dbr(dateKey)); render(); }); };
-    var cr = document.getElementById('caixa-closeress'); if (cr) cr.onclick = function () {
+    // Achado real de auditoria (Prioridade 18, teste de duplo clique): sem guarda de reentrância, 2
+    // cliques síncronos no mesmo botão disparavam 2 execuções completas de caixaCloseDay() (2 entradas
+    // duplicadas no histórico do fechamento para uma única ação do operador) — mesma classe do bug já
+    // corrigido em Contas a Pagar (#cp-save/#cp-savebaixa). Fix: flag cxClosing + desabilitar os 2
+    // botões assim que o primeiro clique inicia o fechamento.
+    var cxClosing = false;
+    var cl = document.getElementById('caixa-close');
+    var cr = document.getElementById('caixa-closeress');
+    if (cl && !cl.disabled) cl.onclick = function () {
+      if (cxClosing) return; cxClosing = true; cl.disabled = true; if (cr) cr.disabled = true;
+      caixaCloseDay(dateKey, 'FECHADO', 'Operador', null).then(function () { toast('Caixa fechado', dbr(dateKey)); render(); })
+        .catch(function (e) { cxClosing = false; cl.disabled = false; if (cr) cr.disabled = false; toast('Não foi possível fechar', e.message || String(e), true); });
+    };
+    if (cr) cr.onclick = function () {
+      if (cxClosing) return;
       var pendAtual = caixaDayPendencias(dateKey); var pendCartAtual = caixaDayPendenciasCarteira(dateKey);
       var msg = []; if (pendAtual.total) msg.push(nn(pendAtual.total) + ' pendência(s) do fluxo'); if (pendCartAtual.total) msg.push(nn(pendCartAtual.total) + ' pendência(s) da carteira');
       var justificativa = prompt((msg.length ? msg.join(' e ') + ' ainda em aberto. ' : '') + 'Descreva o motivo para fechar mesmo assim:');
       if (justificativa == null || !justificativa.trim()) return;
-      caixaCloseDay(dateKey, 'FECHADO_COM_RESSALVA', 'Operador', justificativa.trim()).then(function () { toast('Caixa fechado com ressalva', dbr(dateKey)); render(); });
+      cxClosing = true; cr.disabled = true; if (cl) cl.disabled = true;
+      caixaCloseDay(dateKey, 'FECHADO_COM_RESSALVA', 'Operador', justificativa.trim()).then(function () { toast('Caixa fechado com ressalva', dbr(dateKey)); render(); })
+        .catch(function (e) { cxClosing = false; cr.disabled = false; if (cl) cl.disabled = false; toast('Não foi possível fechar', e.message || String(e), true); });
     };
     var xl = document.getElementById('caixa-xlsx'); if (xl) xl.onclick = function () { caixaExportarXlsx(dateKey); toast('Planilha gerada', 'Fechamento_Caixa_' + dateKey + '.xlsx'); };
     var pr = document.getElementById('caixa-print'); if (pr) pr.onclick = function () { caixaImprimirFechamento(dateKey); };
