@@ -337,7 +337,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 317a5aa · 2026-08-29 13:34 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build fa8ab03 · 2026-08-29 13:58 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -4644,6 +4644,21 @@ buffer/index.js:
     delete productIdentityMappings[idKey]; delete productIdentityMappingsAll[idKey];
     return delOne('productidentitymappings', idKey).then(function () { rebuildSkuCost(); });
   }
+  // Espelha Produtos.legacyReassign() (§5-7 do painel de cobertura) pro mapeamento manual: só
+  // atribui um registro LEGACY_UNASSIGNED a uma operação real quando o operador escolhe
+  // explicitamente registro + destino, preserva histórico dentro do próprio registro.
+  function productIdentityMappingLegacyReassign(idKey, targetOpId, motivo) {
+    var rec = productIdentityMappingsAll[idKey];
+    if (!rec || rec.operationId !== LEGACY_UNASSIGNED) return Promise.reject(new Error('Mapeamento não está em LEGACY_UNASSIGNED — recarregue a página e tente novamente.'));
+    var now = new Date().toISOString();
+    rec.reassignHistory = (rec.reassignHistory || []).concat([{ de: LEGACY_UNASSIGNED, para: targetOpId, em: now, metodo: 'MANUAL', motivo: motivo || null }]);
+    rec.operationId = targetOpId;
+    return putMany('productidentitymappings', [rec]).then(function () {
+      if (activeOperationId && activeOperationId !== OP_ALL && targetOpId === activeOperationId) productIdentityMappings[idKey] = rec;
+      rebuildSkuCost();
+      return rec;
+    });
+  }
   // <select> com todas as famílias cadastradas (qualquer uma pode ser escolhida para qualquer SKU —
   // nunca filtra por "famílias já vinculadas a este produto"). Reaproveitado por pedidosSkuDiag() e
   // openSkuCostDiag() — nunca duas listas de família divergentes na mesma tela de diagnóstico.
@@ -4664,6 +4679,39 @@ buffer/index.js:
   // ficarem disponíveis independente da ordem de montagem dos blocos dentro da função.
   var INCOME_STATUS_TXT = { FOUND: '🟢 localizado', NOT_IN_INCOME: '🟡 aguardando lançamento', WRONG_OPERATION: '🔴 encontrado em outra operação — auditar isolamento', DUPLICATE_ORDER_ROWS: '🔴 mais de uma linha para este pedido — auditar planilha', INVALID_ORDER_ID: '🔴 ID do pedido inválido' };
   var SKU_MATCHEDBY_LABEL = { SKU: 'SKU', REFERENCE_SKU: 'SKU de referência' };
+  // Correção "Identidade canônica — Fase 2, Central de Integridade do Catálogo": vocabulário
+  // honesto do MÉTODO DE RESOLUÇÃO, compartilhado entre a Ficha do Pedido e o Painel de Cobertura
+  // (Produtos → Auditoria) — declarado no escopo do módulo (não dentro de nenhuma função de render)
+  // pra nunca duplicar a tradução regra→rótulo em dois lugares. Sempre derivado do que
+  // resolveSkuCostByKeyRaw() já retorna (regra/motivo) — nunca um motor de resolução novo. Nunca
+  // rotula como "ID nativo" quando a fonte real não traz esse dado (achado F001).
+  var RESOLUCAO_METODO_LABEL = { STRONG_VARIATION_ID: 'ID nativo Shopee', ACTIVE_EXACT_SKU: 'SKU único na operação', ACTIVE_REFERENCE_SKU: 'SKU único na operação (via referência)', HISTORICAL_INACTIVE_MATCH: 'SKU único na operação (anúncio inativo)', MULTIPLE_LISTINGS_SAME_FAMILY: 'SKU único na operação (múltiplos anúncios, mesma família)', SKU_PRODUCT_NAME_MATCH: 'SKU + produto + variação', MANUAL_IDENTITY: 'Mapeamento manual', MANUAL_OVERRIDE: 'Mapeamento manual (classificação por SKU)' };
+  function resolucaoMetodo(r) {
+    if (r.regra && RESOLUCAO_METODO_LABEL[r.regra]) return RESOLUCAO_METODO_LABEL[r.regra];
+    if (r.motivo === 'SKU_CONFLITANTE' || r.motivo === 'SKU_CONFLITANTE_HISTORICAL') return 'Ambíguo';
+    if (r.motivo === 'SKU_NAO_LOCALIZADO') return 'Sem correspondência';
+    return r.regra ? RESOLUCAO_METODO_LABEL[r.regra] || r.regra : '—';
+  }
+  function resolucaoStatus(r) {
+    if (r.overridden) return '🟡 Mapeamento manual';
+    if (r.motivo === 'SKU_CONFLITANTE' || r.motivo === 'SKU_CONFLITANTE_HISTORICAL') return '⚠ Ambíguo';
+    // resolveSkuCost()/resolveSkuCostByKeyRaw() sinalizam sucesso em r.found — nunca existiu campo
+    // r.linked no retorno delas (esse nome só existe no mapa DERIVADO skuCost{}, uma estrutura
+    // diferente); usar r.linked aqui fazia todo item resolvido com sucesso cair no fallback
+    // "Não resolvido" por engano.
+    if (r.found) return r.regra === 'MANUAL_IDENTITY' ? '🟡 Mapeamento manual' : '✅ Resolvido';
+    if (r.motivo === 'SKU_NAO_LOCALIZADO') return '⚪ Sem correspondência';
+    return '⚪ ' + (SKU_MOTIVO_LABEL[r.motivo] || 'Não resolvido');
+  }
+  // Bucket de 5 categorias mutuamente exclusivas para os KPIs "Identidades resolvidas..." do Painel
+  // de Cobertura — sempre derivado do mesmo r.regra/r.motivo/r.found, nunca um cálculo próprio.
+  function resolucaoBucket(r) {
+    if (r.motivo === 'SKU_CONFLITANTE' || r.motivo === 'SKU_CONFLITANTE_HISTORICAL') return 'AMBIGUO';
+    if (r.regra === 'MANUAL_IDENTITY' || r.regra === 'MANUAL_OVERRIDE' || r.overridden) return 'MANUAL';
+    if (r.regra === 'SKU_PRODUCT_NAME_MATCH') return 'COMBINACAO';
+    if (r.found) return 'AUTOMATICA';
+    return 'SEM_CORRESPONDENCIA';
+  }
   // Rótulos EXATOS de taxaRow que carregam filhos reais do Service Fee Details (§20-21 do prompt
   // "Taxa de Serviço até a raiz") — nunca um regex genérico "^Taxa de serviço", que também bate com
   // "Taxa de serviço (aproximado — sem Income cruzado)" (ESTIMATED, nunca tem filhos reais) e faz o
@@ -6437,30 +6485,8 @@ buffer/index.js:
       var unitPrice = it.agreedPrice != null ? it.agreedPrice : (it.subtotal != null && it.qty ? r2(it.subtotal / it.qty) : null);
       return { produto: it.productName, sku: it.sku, skuEncontrado: r.canonicalSku || null, variacao: it.variationName, familia: r.familyName || null, qty: it.qty, unitPrice: unitPrice, total: it.subtotal, custoUnit: custoUnit, custoTotal: custoTotal, linked: r.found, matchedBy: r.matchedBy, motivo: r.motivo, regra: r.regra, overridden: !!r.overridden };
     }) : [];
-    // Correção "Identidade canônica — Fase 2, itens 12-15 (observabilidade)": vocabulário
-    // determinístico do MÉTODO DE RESOLUÇÃO exibido na Ficha — sempre derivado do `regra`/`motivo`
-    // que resolveSkuCostByKeyRaw() já retorna (nunca um motor novo, só tradução pra leitura humana).
-    // Nunca rotula como "ID nativo" quando não existe — hoje nenhum arquivo real usado pela operação
-    // (Order.all/cancelled/return_refund/toship) traz Product ID/Item ID/Model ID/Shop ID (achado
-    // F001 da auditoria pré-go-live); a linha "ID nativo Shopee: não disponível nesta fonte" abaixo
-    // é sempre mostrada, nunca um valor fictício.
-    var RESOLUCAO_METODO_LABEL = { STRONG_VARIATION_ID: 'ID nativo Shopee', ACTIVE_EXACT_SKU: 'SKU único na operação', ACTIVE_REFERENCE_SKU: 'SKU único na operação (via referência)', HISTORICAL_INACTIVE_MATCH: 'SKU único na operação (anúncio inativo)', MULTIPLE_LISTINGS_SAME_FAMILY: 'SKU único na operação (múltiplos anúncios, mesma família)', SKU_PRODUCT_NAME_MATCH: 'SKU + produto + variação', MANUAL_IDENTITY: 'Mapeamento manual', MANUAL_OVERRIDE: 'Mapeamento manual (classificação por SKU)' };
-    function resolucaoMetodo(r) {
-      if (r.regra && RESOLUCAO_METODO_LABEL[r.regra]) return RESOLUCAO_METODO_LABEL[r.regra];
-      if (r.motivo === 'SKU_CONFLITANTE' || r.motivo === 'SKU_CONFLITANTE_HISTORICAL') return 'Ambíguo';
-      if (r.motivo === 'SKU_NAO_LOCALIZADO') return 'Sem correspondência';
-      return r.regra ? RESOLUCAO_METODO_LABEL[r.regra] || r.regra : '—';
-    }
-    // Status determinístico (§9/§14 do prompt): nunca esconde ambiguidade atrás de um "custo
-    // pendente" genérico — distingue explicitamente ambíguo (exige decisão humana) de
-    // sem-correspondência/sem-custo (dado ausente, não decisão pendente).
-    function resolucaoStatus(r) {
-      if (r.overridden) return '🟡 Mapeamento manual';
-      if (r.motivo === 'SKU_CONFLITANTE' || r.motivo === 'SKU_CONFLITANTE_HISTORICAL') return '⚠ Ambíguo';
-      if (r.linked) return r.regra === 'MANUAL_IDENTITY' ? '🟡 Mapeamento manual' : '✅ Resolvido';
-      if (r.motivo === 'SKU_NAO_LOCALIZADO') return '⚪ Sem correspondência';
-      return '⚪ ' + (SKU_MOTIVO_LABEL[r.motivo] || 'Não resolvido');
-    }
+    // resolucaoMetodo()/resolucaoStatus() — vocabulário global (declarado perto de SKU_MOTIVO_LABEL),
+    // reaproveitado aqui e no Painel de Cobertura (Produtos → Auditoria) sem duplicar a tradução.
     // §10 do prompt de correção de custo: "Forma do cruzamento" (SKU exato × SKU de referência) fica
     // discreta em tooltip no próprio SKU — só para auditoria, nunca um card extra. §14: cada falha usa
     // o motivo real (nunca um genérico "custo pendente" escondendo se é SKU inexistente, sem família,
@@ -12166,12 +12192,180 @@ buffer/index.js:
           conflicts.map(skuConflictGroupHtml).join(''));
       return '<div class="panel" style="margin-bottom:14px"><div class="ph"><h3>Identidades de produto ainda ambíguas (SKU compartilhado entre anúncios)</h3><span class="footnote" style="margin:0">' + nn(conflicts.length) + ' identidade(s) pendente(s)</span></div><div class="pb">' + body + '</div></div>';
     }
+    // ============================================================ CENTRAL DE INTEGRIDADE DO
+    // CATÁLOGO (Produtos → Auditoria) — painel de cobertura pedido na revisão pós-scoping. Todo KPI
+    // é numericamente auditável (drill-down abre exatamente a mesma contagem exibida) e sempre
+    // deriva do que resolveSkuCost()/skuAliasIndex já calculam — nunca um motor de custo novo.
+    function legacyUnassignedNow() {
+      if (S2.legacyUnassigned) return S2.legacyUnassigned;
+      return {
+        products: S2.products.filter(function (p) { return p.operationId === LEGACY_UNASSIGNED; }),
+        variations: S2.variations.filter(function (v) { return v.operationId === LEGACY_UNASSIGNED; }),
+        families: S2.families.filter(function (f) { return f.operationId === LEGACY_UNASSIGNED; }),
+      };
+    }
+    function legacyMappingsNow() {
+      return Object.keys(productIdentityMappingsAll).map(function (k) { return productIdentityMappingsAll[k]; }).filter(function (m) { return m.operationId === LEGACY_UNASSIGNED; });
+    }
+    // §9 do prompt "SKU compartilhado — definição correta": SKU repetido em OUTRA operação nunca é
+    // conflito — só conta como compartilhado quando 2+ productId DIFERENTES reivindicam o mesmo SKU
+    // DENTRO da mesma operação (S2.variations já está escopado pela operação ativa aqui).
+    function catalogSkuMap() {
+      var map = {};
+      S2.variations.forEach(function (v) {
+        if (!v.sku) return;
+        var key = normalizeSkuKey(v.sku); if (!key) return;
+        (map[key] = map[key] || {})[v.productId] = 1;
+      });
+      return map;
+    }
+    function catalogAuditStats() {
+      var skuMap = catalogSkuMap();
+      var skuKeys = Object.keys(skuMap);
+      var skusCompartilhados = skuKeys.filter(function (k) { return Object.keys(skuMap[k]).length >= 2; }).length;
+      var produtosSemFamilia = S2.products.filter(function (p) {
+        var vs = S2.varByProduct[p.id] || [];
+        return !vs.length || vs.every(function (v) { return !v.familyId; });
+      }).length;
+      var comCusto = 0, semCusto = 0, identBuckets = { AUTOMATICA: 0, COMBINACAO: 0, MANUAL: 0, AMBIGUO: 0, SEM_CORRESPONDENCIA: 0 }, seenIdentity = {};
+      orders.forEach(function (o) {
+        var items = o.items || []; if (!items.length) return;
+        var todosOk = true;
+        items.forEach(function (it) {
+          if (!it.sku) { todosOk = false; return; }
+          var r = resolveSkuCost(it.sku, it);
+          if (!r.found) todosOk = false;
+          var idKey = normalizeSkuKey(it.sku) + '|' + normalizeIdentityText(it.productName) + '|' + normalizeIdentityText(it.variationName);
+          if (!seenIdentity[idKey]) { seenIdentity[idKey] = 1; identBuckets[resolucaoBucket(r)]++; }
+        });
+        if (todosOk) comCusto++; else semCusto++;
+      });
+      var totalPed = comCusto + semCusto;
+      var lu = legacyUnassignedNow(); var luMap = legacyMappingsNow();
+      return {
+        produtos: S2.products.length, variacoes: S2.variations.length,
+        skusUnicos: skuKeys.length, skusCompartilhados: skusCompartilhados,
+        produtosSemFamilia: produtosSemFamilia,
+        pedidosComCusto: comCusto, pedidosSemCusto: semCusto,
+        coberturaCustoPct: totalPed ? (comCusto / totalPed * 100) : null,
+        identAutomatica: identBuckets.AUTOMATICA, identCombinacao: identBuckets.COMBINACAO,
+        identManual: identBuckets.MANUAL, identAmbiguo: identBuckets.AMBIGUO, identSemCorrespondencia: identBuckets.SEM_CORRESPONDENCIA,
+        legadoTotal: lu.products.length + lu.variations.length + lu.families.length + luMap.length,
+        legado: lu, legadoMappings: luMap,
+      };
+    }
+    // Drill-down: cada KPI abre a MESMA contagem exibida (§10 do prompt) — nunca uma lista
+    // aproximada. `kind` decide a lista+colunas; reaproveita orders/S2 já calculados acima.
+    function catalogDrillRows(kind) {
+      if (kind === 'semFamilia') {
+        return { title: 'Produtos sem família', headers: ['Produto', 'Variações', 'SKU(s)'], rows: S2.products.filter(function (p) { var vs = S2.varByProduct[p.id] || []; return !vs.length || vs.every(function (v) { return !v.familyId; }); }).map(function (p) { var vs = S2.varByProduct[p.id] || []; return [p.name, String(vs.length), vs.map(function (v) { return v.sku || '—'; }).join(', ')]; }) };
+      }
+      if (kind === 'skuCompartilhado') {
+        var map = catalogSkuMap();
+        var rows = [];
+        Object.keys(map).forEach(function (key) { var pids = Object.keys(map[key]); if (pids.length < 2) return; var nomes = pids.map(function (pid) { var p = S2.products.find(function (x) { return x.id === pid; }); return p ? p.name : pid; }); rows.push([key, String(pids.length), nomes.join(' / ')]); });
+        return { title: 'SKUs compartilhados internamente (mesma operação)', headers: ['SKU', 'Nº de produtos', 'Produtos'], rows: rows };
+      }
+      var pedRows = []; var seenIdentity = {};
+      var pedidoKinds = { comCusto: 1, semCusto: 1, identAutomatica: 1, identCombinacao: 1, identManual: 1, identAmbiguo: 1, identSemCorrespondencia: 1 };
+      if (pedidoKinds[kind]) {
+        orders.forEach(function (o) {
+          var items = o.items || []; if (!items.length) return;
+          var todosOk = items.every(function (it) { return it.sku && resolveSkuCost(it.sku, it).found; });
+          if (kind === 'comCusto' && todosOk) pedRows.push([o.id, S.pedidos.labels[o.normalizedStatus] || o.orderStatus, dbr(o.createdAt), items.map(function (i) { return i.sku || '—'; }).join(', ')]);
+          if (kind === 'semCusto' && !todosOk) pedRows.push([o.id, S.pedidos.labels[o.normalizedStatus] || o.orderStatus, dbr(o.createdAt), items.filter(function (i) { return !i.sku || !resolveSkuCost(i.sku, i).found; }).map(function (i) { return (i.sku || '(sem SKU)') + ' — ' + esc(SKU_MOTIVO_LABEL[(i.sku ? resolveSkuCost(i.sku, i).motivo : 'SKU_NAO_LOCALIZADO')] || '—'); }).join('; ')]);
+          items.forEach(function (it) {
+            if (!it.sku) return;
+            var idKey = normalizeSkuKey(it.sku) + '|' + normalizeIdentityText(it.productName) + '|' + normalizeIdentityText(it.variationName);
+            if (seenIdentity[idKey]) return;
+            var r = resolveSkuCost(it.sku, it); var bucket = resolucaoBucket(r);
+            var bucketToKind = { AUTOMATICA: 'identAutomatica', COMBINACAO: 'identCombinacao', MANUAL: 'identManual', AMBIGUO: 'identAmbiguo', SEM_CORRESPONDENCIA: 'identSemCorrespondencia' };
+            if (bucketToKind[bucket] === kind) { seenIdentity[idKey] = 1; pedRows.push([it.sku, it.productName || '—', it.variationName || '—', resolucaoMetodo(r)]); }
+          });
+        });
+        var titles = { comCusto: 'Pedidos com custo', semCusto: 'Pedidos sem custo', identAutomatica: 'Identidades resolvidas automaticamente', identCombinacao: 'Identidades resolvidas por SKU + produto + variação', identManual: 'Identidades resolvidas manualmente', identAmbiguo: 'Ambiguidades abertas', identSemCorrespondencia: 'SKUs sem correspondência' };
+        var headersPed = (kind === 'comCusto' || kind === 'semCusto') ? ['Pedido', 'Status', 'Data', kind === 'comCusto' ? 'SKUs' : 'Item(ns) sem custo e motivo'] : ['SKU', 'Produto', 'Variação', 'Método'];
+        return { title: titles[kind], headers: headersPed, rows: pedRows };
+      }
+      if (kind === 'legado') {
+        var lu = legacyUnassignedNow(); var luM = legacyMappingsNow();
+        var rows2 = [];
+        lu.products.forEach(function (p) { rows2.push(['Produto', p.name, '—', '—', '—', dbr(p.firstSeenAt), 'products', p.id]); });
+        lu.variations.forEach(function (v) { var p = S2.products.find(function (x) { return x.id === v.productId; }); rows2.push(['Variação', v.variationName || '(única)', v.sku || '—', p ? p.name : v.productId, '—', dbr(v.firstSeenAt), 'variations', v.id]); });
+        lu.families.forEach(function (f) { rows2.push(['Família', f.name, '—', '—', f.name, '—', 'families', f.id]); });
+        luM.forEach(function (m) { rows2.push(['Mapeamento manual', m.productName || '(sem nome)', m.skuOriginal || '—', m.productName || '—', '—', dbr(m.resolvedAt), 'mapping', m.id]); });
+        return { title: 'Legado sem operação (LEGACY_UNASSIGNED)', headers: ['Tipo', 'Nome', 'SKU', 'Produto', 'Família', 'Data', 'origem-tipo', 'origem-id'], rows: rows2, isLegacy: true };
+      }
+      return { title: '', headers: [], rows: [] };
+    }
+    function catalogDrillTableHtml(d) {
+      if (!d.rows.length) return '<span class="tag ok">🟢 Nenhum registro — 0 (confere com o KPI).</span>';
+      var visibleHeaders = d.isLegacy ? d.headers.slice(0, 6) : d.headers;
+      // §6 do prompt "AÇÃO EM LOTE SEGURA": botão só existe na tabela de legado, e só faz algo depois
+      // que o operador marca explicitamente os checkboxes desta lista — nunca um "atribuir todos".
+      return '<div class="footnote" style="margin-bottom:8px">Total: <b>' + nn(d.rows.length) + '</b> — precisa bater exatamente com o número mostrado no KPI.</div>' +
+        (d.isLegacy ? '<button class="btn-sm" id="legAtribuirSelecionados" style="margin-bottom:8px">Atribuir selecionados à operação</button>' : '') +
+        '<div class="table-wrap"><table><thead><tr>' + (d.isLegacy ? '<th style="width:24px"><input type="checkbox" id="legAll"></th>' : '') + visibleHeaders.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') + (d.isLegacy ? '<th>Ação</th>' : '') + '</tr></thead><tbody>' +
+        d.rows.map(function (row, i) {
+          var cells = visibleHeaders.map(function (h, ci) { return '<td class="cell-text">' + esc(row[ci]) + '</td>'; }).join('');
+          if (!d.isLegacy) return '<tr>' + cells + '</tr>';
+          var origemTipo = row[6], origemId = row[7];
+          return '<tr><td><input type="checkbox" class="legSel" data-legtipo="' + esc(origemTipo) + '" data-legid="' + esc(origemId) + '"></td>' + cells + '<td><button class="btn-sm" data-legatribuir="1" data-legtipo="' + esc(origemTipo) + '" data-legid="' + esc(origemId) + '">Atribuir à operação</button></td></tr>';
+        }).join('') + '</tbody></table></div>';
+    }
+    // Modal simples de escolha de operação destino — reaproveitado pela ação individual e em lote.
+    function openOperationPickerModal(onPick) {
+      var opts = operations.filter(function (o) { return o.ativa !== false; }).map(function (o) { return '<option value="' + esc(o.id) + '">' + esc(opLabel(o)) + '</option>'; }).join('');
+      openModal({
+        title: 'Atribuir à operação', width: 440,
+        bodyHtml: '<label class="fld">Empresa / Operação destino</label><select class="select" id="legOpSel" style="width:100%">' + opts + '</select><label class="fld" style="margin-top:8px">Motivo (opcional, fica no histórico)</label><input class="input" id="legMotivo" style="width:100%" placeholder="Ex.: confirmado com o operador que este SKU sempre foi da Loja A">',
+        confirmLabel: 'Atribuir',
+        onConfirm: function (panel) {
+          var opId = panel.querySelector('#legOpSel').value; var motivo = panel.querySelector('#legMotivo').value.trim();
+          if (!opId) { toast('Escolha uma operação', '', true); return false; }
+          return onPick(opId, motivo);
+        },
+      });
+    }
+    function catalogDrillOpen(kind) {
+      var d = catalogDrillRows(kind);
+      var handle = openDrawer({
+        title: d.title, width: 900,
+        renderBody: function () { return catalogDrillTableHtml(d); },
+        onMount: function (panel) {
+          var allBox = panel.querySelector('#legAll');
+          if (allBox) allBox.onchange = function () { panel.querySelectorAll('.legSel').forEach(function (c) { c.checked = allBox.checked; }); };
+          panel.querySelectorAll('[data-legatribuir]').forEach(function (b) {
+            b.onclick = function () {
+              var tipo = b.dataset.legtipo, id = b.dataset.legid;
+              openOperationPickerModal(function (opId, motivo) {
+                var p = tipo === 'mapping' ? productIdentityMappingLegacyReassign(id, opId, motivo) : Produtos.legacyReassign(tipo === 'products' ? 'product' : tipo === 'variations' ? 'variation' : 'family', id, opId, motivo);
+                return p.then(function () { toast('Atribuído', 'Registro sai de LEGACY_UNASSIGNED e passa a valer só para a operação escolhida.'); render(); catalogDrillOpen(kind); handle.close(); }).catch(function (e) { toast('Falha ao atribuir', e.message, true); });
+              });
+            };
+          });
+          var selBtn = panel.querySelector('#legAtribuirSelecionados');
+          if (selBtn) selBtn.onclick = function () {
+            var sel = Array.from(panel.querySelectorAll('.legSel:checked'));
+            if (!sel.length) { toast('Selecione ao menos 1 registro', '', true); return; }
+            openOperationPickerModal(function (opId, motivo) {
+              return Promise.all(sel.map(function (c) { var tipo = c.dataset.legtipo, id = c.dataset.legid; return (tipo === 'mapping' ? productIdentityMappingLegacyReassign(id, opId, motivo) : Produtos.legacyReassign(tipo === 'products' ? 'product' : tipo === 'variations' ? 'variation' : 'family', id, opId, motivo)); }))
+                .then(function () { toast('Atribuídos', nn(sel.length) + ' registro(s) atribuído(s).'); render(); catalogDrillOpen(kind); handle.close(); }).catch(function (e) { toast('Falha ao atribuir em lote', e.message, true); });
+            });
+          };
+        },
+      });
+    }
+    function integrityKpiHtml(label, value, kind, cls) {
+      return '<div class="metric-card' + (cls ? ' ' + cls : '') + '" data-catdrill="' + esc(kind) + '" style="cursor:pointer"><div class="mc-label">' + esc(label) + '</div><div class="mc-value">' + esc(value) + '</div></div>';
+    }
     function renderAuditoria() {
       var conflicts = auditSkuConflicts();
       var audit = auditOrphans();
       var nUnamb = audit.unambiguous.reduce(function (s, g) { return s + g.orphans.length; }, 0);
       var nAmb = audit.ambiguous.reduce(function (s, g) { return s + g.orphans.length; }, 0);
       var total = nUnamb + nAmb;
+      var stats = catalogAuditStats();
       function rowsFor(list, ambiguous) {
         var rows = [];
         list.forEach(function (g) {
@@ -12182,7 +12376,27 @@ buffer/index.js:
         });
         return rows.join('');
       }
-      appEl.innerHTML = head('SKUs duplicados entre anúncios e variações sem família — mostra exatamente por que o custo não chega ao Pedido.') + tabsHtml('auditoria') +
+      var integridadeOk = stats.legadoTotal === 0;
+      var kpiGrid = '<div class="panel"><div class="ph"><h3>Central de Integridade do Catálogo — operação atual</h3></div><div class="pb">' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px">' +
+        integrityKpiHtml('Produtos', nn(stats.produtos), 'produtos') +
+        integrityKpiHtml('Variações', nn(stats.variacoes), 'variacoes') +
+        integrityKpiHtml('SKUs únicos', nn(stats.skusUnicos), 'skusUnicos') +
+        integrityKpiHtml('SKUs compartilhados (mesma operação)', nn(stats.skusCompartilhados), 'skuCompartilhado', stats.skusCompartilhados ? 'amber' : '') +
+        integrityKpiHtml('Produtos sem família', nn(stats.produtosSemFamilia), 'semFamilia', stats.produtosSemFamilia ? 'amber' : '') +
+        integrityKpiHtml('Pedidos com custo', nn(stats.pedidosComCusto), 'comCusto') +
+        integrityKpiHtml('Pedidos sem custo', nn(stats.pedidosSemCusto), 'semCusto', stats.pedidosSemCusto ? 'amber' : '') +
+        integrityKpiHtml('Cobertura de custo', stats.coberturaCustoPct != null ? stats.coberturaCustoPct.toFixed(2) + '%' : '—', 'comCusto') +
+        integrityKpiHtml('Resolvidas automaticamente', nn(stats.identAutomatica), 'identAutomatica') +
+        integrityKpiHtml('Resolvidas por combinação', nn(stats.identCombinacao), 'identCombinacao') +
+        integrityKpiHtml('Resolvidas manualmente', nn(stats.identManual), 'identManual') +
+        integrityKpiHtml('Ambiguidades abertas', nn(stats.identAmbiguo), 'identAmbiguo', stats.identAmbiguo ? 'amber' : '') +
+        integrityKpiHtml('Sem correspondência', nn(stats.identSemCorrespondencia), 'identSemCorrespondencia', stats.identSemCorrespondencia ? 'amber' : '') +
+        '</div></div></div>' +
+        '<div class="panel"><div class="ph"><h3>Integridade de operação</h3></div><div class="pb">' +
+        '<div class="fin-line"><span>Legados não atribuídos (Produtos+Variações+Famílias+Mapeamentos, todas as operações)</span><b>' + nn(stats.legadoTotal) + '</b></div>' +
+        '<div style="margin-top:8px">' + (integridadeOk ? '<span class="tag ok">✅ íntegro — nenhum registro aguardando classificação</span>' : '<span class="tag warn" style="cursor:pointer" data-catdrill="legado">⚠ existem ' + nn(stats.legadoTotal) + ' registro(s) legado(s) aguardando classificação — clique para revisar e atribuir</span>') + '</div>' +
+        '</div></div>' +
         skuConflictsPanelHtml(conflicts) +
         '<div class="panel"><div class="ph"><h3>Variações sem família em produtos com custo cadastrado</h3><span class="footnote" style="margin:0">' + nn(total) + ' variação(ões) órfã(s)</span></div><div class="pb">' +
         (total === 0 ? '<span class="tag ok">🟢 Nenhuma variação órfã encontrada — todo produto com família cadastrada tem todas as suas variações vinculadas.</span>' :
@@ -12192,7 +12406,9 @@ buffer/index.js:
           rowsFor(audit.unambiguous, false) + rowsFor(audit.ambiguous, true) +
           '</tbody></table></div>')) +
         '</div></div>';
+      appEl.innerHTML = head('SKUs duplicados entre anúncios e variações sem família — mostra exatamente por que o custo não chega ao Pedido.') + tabsHtml('auditoria') + kpiGrid;
       wireTabs();
+      appEl.querySelectorAll('[data-catdrill]').forEach(function (el) { el.onclick = function () { catalogDrillOpen(el.dataset.catdrill); }; });
       appEl.querySelectorAll('[data-identvincular]').forEach(function (b) {
         b.onclick = function () {
           var sku = b.dataset.identsku, produto = b.dataset.identproduto || null, variacao = b.dataset.identvariacao || null, variationId = b.dataset.identvarid;
@@ -12228,12 +12444,57 @@ buffer/index.js:
       // assinatura foi necessária em resolveSkuCostByKeyRaw/resolveSkuCost (correção mínima, não
       // duplica motor).
       scopeToOperation: function (opId) {
+        // §2 do painel de cobertura (revisão pós-scoping): antes de filtrar, guarda à parte os
+        // registros LEGACY_UNASSIGNED (2+ operações existiam e não havia evidência de qual dona) —
+        // eles NUNCA entram no catálogo de nenhuma operação específica (mesma regra de sempre), mas
+        // não podem desaparecer da memória: ficam em S2.legacyUnassigned, consultável só pela
+        // Central de Integridade (nunca pelo motor de custo/resolução).
+        S2.legacyUnassigned = {
+          products: S2.products.filter(function (p) { return p.operationId === LEGACY_UNASSIGNED; }),
+          variations: S2.variations.filter(function (v) { return v.operationId === LEGACY_UNASSIGNED; }),
+          families: S2.families.filter(function (f) { return f.operationId === LEGACY_UNASSIGNED; }),
+        };
         if (!opId) return; // "Todas as Operações" — nunca filtra, é visão consolidada
         var keepP = {}, keepIds = {};
         S2.products = S2.products.filter(function (p) { var keep = !p.operationId || p.operationId === opId; if (keep) keepP[p.id] = 1; return keep; });
         S2.variations = S2.variations.filter(function (v) { return (!v.operationId || v.operationId === opId) && keepP[v.productId]; });
         S2.families = S2.families.filter(function (f) { return !f.operationId || f.operationId === opId; });
         reindex();
+      },
+      // Robusto também em "Todas as Operações" (scopeToOperation nunca roda nesse modo, então
+      // S2.legacyUnassigned pode não ter sido computado ainda) — recalcula na hora se necessário.
+      getLegacyUnassigned: function () {
+        if (S2.legacyUnassigned) return S2.legacyUnassigned;
+        return {
+          products: S2.products.filter(function (p) { return p.operationId === LEGACY_UNASSIGNED; }),
+          variations: S2.variations.filter(function (v) { return v.operationId === LEGACY_UNASSIGNED; }),
+          families: S2.families.filter(function (f) { return f.operationId === LEGACY_UNASSIGNED; }),
+        };
+      },
+      // §5-7 do painel de cobertura: atribuição manual e explícita de um registro LEGACY_UNASSIGNED
+      // a uma operação real, nunca em lote automático por padrão (só quando o operador seleciona
+      // explicitamente registro + operação destino). Preserva histórico dentro do próprio registro
+      // (sem precisar de uma store nova) e nunca mexe em registro que já tem outra operação.
+      legacyReassign: function (type, id, targetOpId, motivo) {
+        var storeName = { product: 'products', variation: 'variations', family: 'pfamilies' }[type];
+        var arrKey = type === 'product' ? 'products' : type === 'variation' ? 'variations' : 'families';
+        var legacyArr = (S2.legacyUnassigned || {})[arrKey] || [];
+        var rec = legacyArr.find(function (x) { return x.id === id; });
+        if (!rec || rec.operationId !== LEGACY_UNASSIGNED) return Promise.reject(new Error('Registro não está em LEGACY_UNASSIGNED — recarregue a página e tente novamente.'));
+        var now = new Date().toISOString();
+        rec.reassignHistory = (rec.reassignHistory || []).concat([{ de: LEGACY_UNASSIGNED, para: targetOpId, em: now, metodo: 'MANUAL', motivo: motivo || null }]);
+        rec.operationId = targetOpId;
+        return dbPut(storeName, [rec]).then(function () {
+          S2.legacyUnassigned[arrKey] = legacyArr.filter(function (x) { return x.id !== id; });
+          // Sem isso, um registro atribuído à operação ATUALMENTE ativa só aparecia no catálogo após
+          // recarregar a página inteira (S2.products/variations/families já tinham sido filtrados no
+          // boot e nunca eram reabertos para incluir o registro recém-saído do legado) — mesmo padrão
+          // já usado em productIdentityMappingLegacyReassign, replicado aqui por consistência.
+          if (activeOperationId && activeOperationId !== OP_ALL && targetOpId === activeOperationId) S2[arrKey].push(rec);
+          reindex();
+          onChange();
+          return rec;
+        });
       },
     };
   }
