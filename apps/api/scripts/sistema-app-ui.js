@@ -15472,6 +15472,21 @@
       '<div class="footnote" style="margin-top:8px">Mostrando os ' + nn((adminS.audit || []).length) + ' eventos mais recentes — trilha paralela e imutável (item 23): nunca altera nenhum cálculo financeiro, só registra quem fez o quê.</div>';
   }
 
+  // window.__qaAudit — hook SÓ-LEITURA de auditoria (achado real de auditoria, ponto 8 do prompt de
+  // 300 pedidos: permitido usar as funções canônicas do app pra capturar o que o SISTEMA acredita,
+  // NUNCA pra produzir o valor independente de auditoria — o recálculo independente continua vindo
+  // exclusivamente dos arquivos-fonte, fora deste hook). Nunca escreve em nenhuma store, nunca altera
+  // estado — só chama as mesmas funções que a Ficha do Pedido já chama pra renderizar, permitindo
+  // comparar UI×Engine e rodar auditoria em massa (milhares de pedidos) sem abrir a Ficha um por um
+  // via clique, que é o gargalo real de qualquer varredura grande.
+  window.__qaAudit = Object.freeze({
+    orderIds: function () { return orders.map(function (o) { return o.id; }); },
+    ordersCount: function () { return orders.length; },
+    composicao: function (orderId) { return pedidoComposicaoFinanceira(orderId); },
+    auditoria: function (orderId) { return auditarComposicaoFinanceiraPedido(orderId); },
+    resolverCustoSku: function (sku, itemHint) { return resolveSkuCost ? resolveSkuCost(sku, itemHint) : null; },
+  });
+
   var bootedOnce = false;
   function authInit() {
     AUTH_OVERLAY.style.display = 'flex';
