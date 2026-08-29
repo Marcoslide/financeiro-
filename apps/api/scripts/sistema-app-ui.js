@@ -5906,8 +5906,13 @@
       if (!parsed.type) throw new Error('Relatório de afiliados não reconhecido (esperado Conversão de Pedidos, RPA ou Validation Bill da Shopee).');
       var importedAt = new Date().toISOString(); var novo = 0, upd = 0, unch = 0, changed = []; var store, typeLabel;
       if (parsed.type === 'conversion') {
+        // CRÍTICO (achado da Prioridade 15): a chave nunca incluía operationId — mesmo padrão do bug
+        // já corrigido em mrRenda/mrShip/mrAdj/wallet/caixafechamentos. Como `affConv` em memória já
+        // vem filtrado pela operação ativa desde o boot, o risco nunca aparecia DENTRO de uma sessão —
+        // só na escrita direta ao IndexedDB: reimportar o mesmo relatório numa 2ª operação colidia
+        // com a chave já persistida pela 1ª (invisível em memória) e a sobrescrevia silenciosamente.
         store = 'affconv'; typeLabel = 'Afiliados — Conversão de Pedidos'; var byId = {}; affConv.forEach(function (x) { byId[x.id] = x; });
-        parsed.rows.forEach(function (row) { var id = row.orderId + '|' + row.productId + '|' + row.modelId + '|' + row.attrId + '|' + row.orderTime; var ex = byId[id];
+        parsed.rows.forEach(function (row) { var id = opId + '|' + row.orderId + '|' + row.productId + '|' + row.modelId + '|' + row.attrId + '|' + row.orderTime; var ex = byId[id];
           if (!ex) { var rec = Object.assign({ id: id, operationId: opId, firstImportAt: importedAt, lastImportAt: importedAt, fileName: file.name, history: [] }, row); byId[id] = rec; changed.push(rec); novo++; return; }
           var same = ex.orderStatus === row.orderStatus && ex.dedState === row.dedState && ex.comItemAff === row.comItemAff && ex.svcFee === row.svcFee && ex.refund === row.refund && ex.chargePeriod === row.chargePeriod;
           if (same) { unch++; return; }
@@ -5916,14 +5921,14 @@
         affConv = Object.values(byId);
       } else if (parsed.type === 'rpa') {
         store = 'affrpa'; typeLabel = 'Afiliados — RPA / Fechamento Mensal'; var byId2 = {}; affRpa.forEach(function (x) { byId2[x.id] = x; });
-        parsed.rows.forEach(function (row) { var id = row.month + '|' + row.affId; var ex = byId2[id];
+        parsed.rows.forEach(function (row) { var id = opId + '|' + row.month + '|' + row.affId; var ex = byId2[id];
           if (!ex) { var rec = Object.assign({ id: id, operationId: opId, firstImportAt: importedAt, lastImportAt: importedAt, fileName: file.name, history: [] }, row); byId2[id] = rec; changed.push(rec); novo++; return; }
           if (ex.gross === row.gross && ex.legalName === row.legalName) { unch++; return; }
           ex.history = ex.history || []; ex.history.unshift({ at: importedAt, grossOld: ex.gross, grossNew: row.gross }); ex.gross = row.gross; ex.legalName = row.legalName; ex.lastImportAt = importedAt; changed.push(ex); upd++; });
         affRpa = Object.values(byId2);
       } else {
         store = 'affvb'; typeLabel = 'Afiliados — Comissão Extra / Validation Bill'; var byId3 = {}; affVb.forEach(function (x) { byId3[x.id] = x; });
-        parsed.rows.forEach(function (row) { var id = row.validationId; var ex = byId3[id];
+        parsed.rows.forEach(function (row) { var id = opId + '|' + row.validationId; var ex = byId3[id];
           if (!ex) { var rec = Object.assign({ id: id, operationId: opId, firstImportAt: importedAt, lastImportAt: importedAt, fileName: file.name, history: [] }, row); byId3[id] = rec; changed.push(rec); novo++; return; }
           if (ex.totalDeducted === row.totalDeducted && ex.totalPending === row.totalPending && ex.status === row.status) { unch++; return; }
           ex.history = ex.history || []; ex.history.unshift({ at: importedAt, dedOld: ex.totalDeducted, dedNew: row.totalDeducted }); ex.monthlyExpense = row.monthlyExpense; ex.status = row.status; ex.totalDeducted = row.totalDeducted; ex.amsCredit = row.amsCredit; ex.totalPending = row.totalPending; ex.lastImportAt = importedAt; changed.push(ex); upd++; });
