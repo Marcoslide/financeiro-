@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 12d6fcc · 2026-08-29 18:48 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 10747c0 · 2026-08-29 21:21 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -4083,6 +4083,40 @@ buffer/index.js:
   // opActiveOrNull() no início e devolve Promise.reject() explicitamente quando bloqueado.
   function opActiveOrNull() { return (activeOperationId && activeOperationId !== OP_ALL) ? activeOperationId : null; }
   var OP_BLOCK_MSG = 'Escolha uma operação específica (empresa/loja) no topo antes de importar este arquivo.';
+  // GATE 2 (certificação pré-go-live) — identidade escopada por operação, sem quebrar nenhum dos
+  // ~170 pontos do código que comparam `orders`/`occ`/`fatorpedidosnapshots`/`productidentitymappings`
+  // pelo ID de negócio puro (orderId Shopee, occurrenceKey, idKey de SKU+produto+variação). Em vez de
+  // renomear esse campo em toda parte (o próprio pedido do usuário alertou contra isso — risco real de
+  // quebrar dezenas de referências), a chave FÍSICA no IndexedDB é sempre `operationId+'|'+id`
+  // (nunca condicional a detectar colisão — mesmo padrão já usado 6x nesta auditoria em caixaClose/
+  // walletClose/skuFamilyOverrides/etc.), enquanto o campo `.id`/`.idKey` do objeto EM MEMÓRIA
+  // continua sendo sempre o ID de negócio puro, nunca prefixado — decodificado de volta no boot/leitura
+  // usando o próprio `operationId` do registro. Efeito: 2 operações podem ter o MESMO ID de negócio sem
+  // colidir fisicamente (a escrita de uma nunca sobrescreve a da outra), e como o array em memória de
+  // cada store passa a ser filtrado pela operação ativa no boot (ver bootApp), no máximo 1 registro por
+  // ID de negócio jamais coexiste na visão ativa — todo `.find(x => x.id === algumId)` existente continua
+  // funcionando sem nenhuma alteração. Nunca reescreve um registro já existente com uma chave diferente
+  // da que ele já tinha (AUD-OP1 nunca é tocada por este mecanismo: seus registros continuam com a
+  // mesma chave física que sempre tiveram, porque nunca colidiram com nada e nunca são reimportados).
+  // ACHADO CRÍTICO DO PRÓPRIO DESENHO (corrigido antes de aplicar): "sempre prefixar na escrita" —
+  // seguro para stores pequenos/pontuais (caixaClose, skuFamilyOverrides, já corrigidos assim nesta
+  // auditoria) — quebra stores em massa/reimportados como orders/occ: um UPDATE de um registro que já
+  // existe com chave simples passaria a gravar sob uma chave NOVA (prefixada), deixando o registro
+  // ANTIGO órfão no disco (nunca sobrescrito) — no boot seguinte os 2 decodificam pro MESMO `.id`,
+  // gerando um registro FANTASMA duplicado em memória (o antigo, desatualizado, podendo vencer a
+  // leitura por acaso e reverter a edição do usuário em silêncio). Pior ainda para AUD-OP1: uma
+  // reimportação normal de Order.all pelo cliente real reescreveria os 3.227 pedidos sob chaves novas
+  // TODA VEZ, duplicando o store inteiro a cada import. Por isso a chave física de um registro QUE JÁ
+  // EXISTE nunca é recalculada — só é decidida uma vez, na criação, e nunca muda depois:
+  // `scopedNewKey` decide a chave (simples por padrão; só prefixada quando o ID de negócio já está
+  // fisicamente ocupado por OUTRA operação — colisão real, verificada contra o disco, não presumida)
+  // e deve ser usada SÓ para registros genuinamente novos (nunca para reescrever um `ex` existente,
+  // que deve sempre preservar sua própria chave física original, guardada em `_diskId`).
+  function scopedNewKey(businessId, operationId, claimedByOtherOp) { return (claimedByOtherOp && operationId) ? (operationId + '|' + businessId) : businessId; }
+  function scopedDecodeId(storedId, operationId) {
+    if (operationId && typeof storedId === 'string') { var p = operationId + '|'; if (storedId.indexOf(p) === 0) return storedId.slice(p.length); }
+    return storedId;
+  }
   var walletF = { search: '', cat: '', flow: '' }; // filtros da tabela de movimentações
   var Produtos = null;
   var sub = { pedidos: 'pedidos', posvenda: 'visao' };
@@ -4288,7 +4322,13 @@ buffer/index.js:
   function occGuessCause(o) { var s = (o.causeFamily || o.internalCause || o.reason || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); if (/quebr|avar|dano|trinc|rachad/.test(s)) return 'AVARIA'; if (/errad|troca|separac|item faltando|faltan|divergent/.test(s)) return 'SEPARACAO'; if (/arrepend|desist|nao quero|gostei/.test(s)) return 'ARREPENDIMENTO'; if (/entreg|extravi|transport|correi|logistic|nao recebi/.test(s)) return 'LOGISTICA'; if (/defeit|qualidade|funciona|apresent/.test(s)) return 'QUALIDADE'; return 'SEM_MOTIVO'; }
   function occApproved(o) { return /conclu|aprovad|reembols|pago|finaliz|sucesso|deferid/.test((o.status || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()); }
   function occGiveup(o) { return /cancel|desist|recus|rejeit/.test((o.status || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()); }
-  function saveOcc(o) { if (o.isDemo) return Promise.resolve(); return putMany('occ', [o]); } // demo nunca vai ao banco real (§11)
+  // GATE 2 — helper central de escrita de occ (usado por toda edição/transição de status/recebimento):
+  // registro que já existe (imutavelmente identificado por `_diskId`, guardado no boot) SEMPRE grava
+  // de volta na MESMA chave física que já tinha — nunca recalcula (ver nota grande em scopedNewKey
+  // sobre o risco de registro fantasma duplicado + reescrita indevida de dados reais em toda
+  // atualização). Só um registro genuinamente novo (sem `_diskId`, nunca visto antes nesta sessão)
+  // ganha `scopedNewKey`. `o` em memória nunca é mutado por esta função.
+  function saveOcc(o) { if (o.isDemo) return Promise.resolve(); var c = Object.assign({}, o); c.id = o._diskId || o.id; delete c._diskId; return putMany('occ', [c]); } // demo nunca vai ao banco real (§11)
   // Normaliza ocorrências salvas por versões anteriores (sem impact/events/campos operacionais),
   // para que a análise nunca quebre e o impacto reflita a exposição. Idempotente.
   function migrateOcc(o) {
@@ -4669,14 +4709,25 @@ buffer/index.js:
     var idKey = productIdentityMappingKey(skuKey, productName, variationName);
     // operationId: mesmo escopo já aplicado ao catálogo de Produtos (Fase 2 da correção de identidade
     // canônica) — null em "Todas as Operações" (nunca bloqueia o vínculo, só não isola).
-    var rec = { id: idKey, skuKey: skuKey, skuOriginal: skuRaw, productName: productName || null, variationName: variationName || null, variationId: variationId, operationId: opActiveOrNull(), resolvedAt: new Date().toISOString(), method: 'MANUAL_IDENTITY', status: 'ACTIVE' };
+    var opId = opActiveOrNull();
+    // GATE 2 — mesmo SKU+produto+variação pode existir em 2 operações reais distintas (ex.: "CAMISETA-P"
+    // é um texto de SKU plausível em qualquer loja) sem colidir fisicamente: se esta operação já tinha
+    // seu PRÓPRIO mapeamento pra este idKey, preserva a mesma chave física (nunca recalcula — ver nota
+    // grande em scopedNewKey); só ganha chave nova quando o idKey já está ocupado por OUTRA operação.
+    var existing = productIdentityMappingsAll[idKey];
+    var diskId = (existing && existing.operationId === opId) ? (existing._diskId || existing.id)
+      : (existing && existing.operationId && existing.operationId !== opId) ? scopedNewKey(idKey, opId, true)
+      : idKey;
+    var rec = { id: idKey, _diskId: diskId, skuKey: skuKey, skuOriginal: skuRaw, productName: productName || null, variationName: variationName || null, variationId: variationId, operationId: opId, resolvedAt: new Date().toISOString(), method: 'MANUAL_IDENTITY', status: 'ACTIVE' };
     productIdentityMappings[idKey] = rec; productIdentityMappingsAll[idKey] = rec;
-    return putMany('productidentitymappings', [rec]).then(function () { rebuildSkuCost(); return rec; });
+    var toWrite = Object.assign({}, rec, { id: diskId }); delete toWrite._diskId;
+    return putMany('productidentitymappings', [toWrite]).then(function () { rebuildSkuCost(); return rec; });
   }
   function productIdentityMappingRemove(idKey) {
-    if (!idKey || !productIdentityMappings[idKey]) return Promise.resolve();
+    var rec = productIdentityMappings[idKey];
+    if (!idKey || !rec) return Promise.resolve();
     delete productIdentityMappings[idKey]; delete productIdentityMappingsAll[idKey];
-    return delOne('productidentitymappings', idKey).then(function () { rebuildSkuCost(); });
+    return delOne('productidentitymappings', rec._diskId || rec.id).then(function () { rebuildSkuCost(); });
   }
   // Espelha Produtos.legacyReassign() (§5-7 do painel de cobertura) pro mapeamento manual: só
   // atribui um registro LEGACY_UNASSIGNED a uma operação real quando o operador escolhe
@@ -4685,9 +4736,13 @@ buffer/index.js:
     var rec = productIdentityMappingsAll[idKey];
     if (!rec || rec.operationId !== LEGACY_UNASSIGNED) return Promise.reject(new Error('Mapeamento não está em LEGACY_UNASSIGNED — recarregue a página e tente novamente.'));
     var now = new Date().toISOString();
+    var oldDiskId = rec._diskId || rec.id;
     rec.reassignHistory = (rec.reassignHistory || []).concat([{ de: LEGACY_UNASSIGNED, para: targetOpId, em: now, metodo: 'MANUAL', motivo: motivo || null }]);
     rec.operationId = targetOpId;
-    return putMany('productidentitymappings', [rec]).then(function () {
+    // GATE 2 — preserva a mesma chave física (um mapeamento LEGACY_UNASSIGNED é o único dono do seu
+    // idKey; a reatribuição só muda o `operationId` do registro, nunca sua chave em disco).
+    var toWrite = Object.assign({}, rec, { id: oldDiskId }); delete toWrite._diskId;
+    return putMany('productidentitymappings', [toWrite]).then(function () {
       if (activeOperationId && activeOperationId !== OP_ALL && targetOpId === activeOperationId) productIdentityMappings[idKey] = rec;
       rebuildSkuCost();
       return rec;
@@ -4822,7 +4877,15 @@ buffer/index.js:
   // ============================================================ IMPORTS (Pedidos / Pós-venda)
   function importPedidos(file) {
     var opId = opActiveOrNull(); if (!opId) return Promise.reject(new Error(OP_BLOCK_MSG));
-    return file.arrayBuffer().then(function (ab) {
+    // GATE 2 (certificação pré-go-live, item 9): 1 leitura extra do store INTEIRO (todas as operações,
+    // não só a ativa) só para saber quais orderId já estão fisicamente ocupados por OUTRA operação —
+    // nunca usado para nada além de decidir a chave física de um pedido GENUINAMENTE NOVO (nunca visto
+    // nesta operação). Pedidos que já existem nesta operação preservam sua própria chave física
+    // (`_diskId`, ver decode no boot) e NUNCA são reescritos com uma chave diferente.
+    return Promise.all([file.arrayBuffer(), getAll('orders')]).then(function (res) {
+      var ab = res[0]; var allOrdersOnDisk = res[1] || [];
+      var claimedByOtherOp = {};
+      allOrdersOnDisk.forEach(function (o) { if (o.operationId && o.operationId !== opId) claimedByOtherOp[scopedDecodeId(o.id, o.operationId)] = true; });
       var parsed = S.pedidos.parse(ab, file.name);
       if (parsed.notRecognized) throw new Error('Planilha de pedidos não reconhecida (esperado Order.all… da Shopee).');
       var groups = {};
@@ -4868,6 +4931,10 @@ buffer/index.js:
           paidAt: keepDate(rep.paidAt, 'paidAt'), shipByDate: keepDate(rep.shipByDate, 'shipByDate'), shippedAt: keepDate(rep.shippedAt, 'shippedAt'), deliveredAt: keepDate(rep.deliveredAt, 'deliveredAt'), completedAt: keepDate(rep.completedAt, 'completedAt'), cancelledAt: keepDate(rep.cancelledAt, 'cancelledAt') };
         var ex = prev;
         var nowIso = new Date().toISOString();
+        // GATE 2: pedido que já existe NESTA operação preserva sua própria chave física para sempre
+        // (nunca recalculada); só um pedido genuinamente novo pode ganhar chave prefixada, e só quando
+        // o orderId já está fisicamente ocupado por OUTRA operação (colisão real, verificada acima).
+        next._diskId = ex ? (ex._diskId || ex.id) : (claimedByOtherOp[id] ? scopedNewKey(id, opId, true) : id);
         if (!ex) { novo++; next.statusHistory = [{ status: next.normalizedStatus, at: next.createdAt || nowIso, detectedAt: nowIso }]; byId[id] = next; }
         else {
           var diff = ex.orderStatus !== next.orderStatus || ex.tracking !== next.tracking || ex.totalAmount !== next.totalAmount;
@@ -4886,7 +4953,10 @@ buffer/index.js:
       orders = Object.values(byId);
       var batch = { id: 'b' + Date.now() + Math.round(performance.now()), module: 'Pedidos', filename: file.name, createdAt: new Date().toISOString(), seen: Object.keys(groups).length, itemsSeen: itemsSeen, novo: novo, upd: upd, unch: unch, statusChanged: statusChanged, brFilled: brFilled, periodStart: parsed.periodStart, periodEnd: parsed.periodEnd };
       batches.unshift(batch);
-      return Promise.all([putMany('orders', changed), putMany('batches', [batch])]).then(function () { return batch; });
+      // GATE 2 (certificação pré-go-live, item 9): grava cada pedido na chave física já decidida acima
+      // (`_diskId` — a própria, se já existia; nova só se genuinamente novo) — nunca recalculada aqui.
+      var changedToPersist = changed.map(function (o) { var c = Object.assign({}, o); c.id = o._diskId || o.id; delete c._diskId; return c; });
+      return Promise.all([putMany('orders', changedToPersist), putMany('batches', [batch])]).then(function () { return batch; });
     });
   }
   // Campos vindos da SHOPEE que o importador controla e compara (§44). Os campos internos
@@ -4907,7 +4977,11 @@ buffer/index.js:
   }
   function importPosVenda(type, file) {
     var opId = opActiveOrNull(); if (!opId) return Promise.reject(new Error(OP_BLOCK_MSG));
-    return file.arrayBuffer().then(function (ab) {
+    // GATE 2 — mesma checagem de colisão real (não presumida) já aplicada a importPedidos().
+    return Promise.all([file.arrayBuffer(), getAll('occ')]).then(function (res) {
+      var ab = res[0]; var allOccOnDisk = res[1] || [];
+      var claimedByOtherOp = {};
+      allOccOnDisk.forEach(function (o) { if (o.operationId && o.operationId !== opId) claimedByOtherOp[scopedDecodeId(o.id, o.operationId)] = true; });
       var parsed = S.posVenda.parse(ab, file.name, type);
       if (parsed.notRecognized) throw new Error('Relatório de devolução não reconhecido para o tipo selecionado.');
       var groups = {};
@@ -4942,6 +5016,8 @@ buffer/index.js:
         var ex = byId[uid];
         if (!ex) {
           var o = newOcc(uid, type); o.operationId = opId; o.orderId = rep.orderId; o.returnId = rep.returnId;
+          // GATE 2 — chave física decidida uma única vez, na criação (nunca recalculada depois).
+          o._diskId = claimedByOtherOp[uid] ? scopedNewKey(uid, opId, true) : uid;
           SOURCE_FIELDS.forEach(function (f) { if (incoming[f[0]] != null) o[f[0]] = incoming[f[0]]; });
           o.requested = incoming.requested || 0; o.compensation = incoming.compensation || 0;
           o.occurredAt = incoming.occurredAt; o.orderCreatedAt = incoming.orderCreatedAt; o.returnOpenedAt = incoming.returnOpenedAt;
@@ -4975,7 +5051,10 @@ buffer/index.js:
       var label = { RETURN_REFUND: 'Devoluções', ORDER_CANCELLATION: 'Cancelamentos', FAILED_DELIVERY: 'Falhas de entrega' }[type];
       var batch = { id: batchId, module: 'Devolução · ' + label, filename: file.name, createdAt: importedAt, seen: Object.keys(groups).length, itemsSeen: itemsSeen, novo: novo, upd: upd, unch: unch, stale: stale, periodStart: parsed.periodStart ? new Date(parsed.periodStart).toISOString() : null, periodEnd: parsed.periodEnd ? new Date(parsed.periodEnd).toISOString() : null, newStatuses: Object.keys(newStatuses), statusChanged: statusChanged, novaCompensacao: novaCompensacao, rastreioAtualizado: rastreioAtualizado, dadosInternosPreservados: dadosInternosPreservados };
       batches.unshift(batch); lastImportStamp = importedAt;
-      return Promise.all([putMany('occ', changed), putMany('batches', [batch])]).then(function () { return { batch: batch, changed: changed }; });
+      // GATE 2 — grava cada ocorrência na chave física já decidida (própria, se já existia; nova só se
+      // genuinamente nova) — nunca recalculada aqui.
+      var occToPersist = changed.map(function (o) { var c = Object.assign({}, o); c.id = o._diskId || o.id; delete c._diskId; return c; });
+      return Promise.all([putMany('occ', occToPersist), putMany('batches', [batch])]).then(function () { return { batch: batch, changed: changed }; });
     });
   }
   function fileInput(cb) { var inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.xlsx,.xls,.csv'; inp.onchange = function () { if (inp.files[0]) cb(inp.files[0]); }; inp.click(); }
@@ -7817,7 +7896,8 @@ buffer/index.js:
       if (ownerName) o.ownerName = ownerName;
       addActivity(o, 'BULK', { message: 'Edição em massa: ' + labels.join(' · '), userName: 'Operador' });
       changed.push(o); });
-    return putMany('occ', changed).then(function () { return changed.length; });
+    // GATE 2 — registro já existente: preserva a própria chave física (nunca recalcula, ver saveOcc).
+    return putMany('occ', changed.map(function (o) { var c = Object.assign({}, o); c.id = o._diskId || o.id; delete c._diskId; return c; })).then(function () { return changed.length; });
   }
   function openManageStatus() {
     function body() {
@@ -7842,7 +7922,7 @@ buffer/index.js:
           var i = +b.dataset.delst; var s = devCustomStatus[i]; if (!s) return;
           var inUse = occ.filter(function (o) { return !o.isDemo && o.internalStatus === s.key; }).length;
           if (inUse && !confirm(inUse + ' caso(s) usam "' + s.label + '". Ao remover, eles voltam para "Nova". Continuar?')) return;
-          if (inUse) { var ch = []; occ.forEach(function (o) { if (!o.isDemo && o.internalStatus === s.key) { o.internalStatus = 'NOVA'; ch.push(o); } }); putMany('occ', ch); }
+          if (inUse) { var ch = []; occ.forEach(function (o) { if (!o.isDemo && o.internalStatus === s.key) { o.internalStatus = 'NOVA'; ch.push(o); } }); putMany('occ', ch.map(function (o) { var c = Object.assign({}, o); c.id = o._diskId || o.id; delete c._diskId; return c; })); }
           devCustomStatus.splice(i, 1);
           saveDevSettings().then(function () { refresh(); render(); toast('Status removido', s.label); });
         }; });
@@ -13736,16 +13816,28 @@ buffer/index.js:
     // nunca a partir de um snapshot antigo, para que reabrir+fechar de novo capture uma config
     // atualizada (mesmo comportamento já aplicado a rec.snapshot acima).
     var now = at;
-    var fatorSnapsNovos = vendas.pedidos.map(function (o) {
-      var live = fatorCustoIndustrialPedidoLive(o.id);
-      return Object.assign({}, live, { id: o.id, congelado: undefined, dateKey: dateKey, congeladoEm: now });
-    });
-    fatorSnapsNovos.forEach(function (s) { delete s.congelado; });
-    var fatorIds = {}; fatorSnapsNovos.forEach(function (s) { fatorIds[s.orderId] = true; });
-    fatorPedidoSnapshots = fatorPedidoSnapshots.filter(function (s) { return !fatorIds[s.orderId]; }).concat(fatorSnapsNovos);
-    // Fase 8: a integração financeira (AR/AP/transferências) roda SEMPRE que o dia é fechado (normal
-    // ou com ressalva) — idempotente, nunca duplica ao rodar de novo pro mesmo dia.
-    return caixaAplicarIntegracaoFinanceira(dateKey).then(function () { return putMany('caixafechamentos', [rec]); }).then(function () { return putMany('fatorpedidosnapshots', fatorSnapsNovos); }).then(function (r) {
+    // GATE 2 — snapshot que já existe (nesta operação) preserva a própria chave física; um snapshot
+    // genuinamente novo (orderId nunca fechado antes NESTA operação) só ganha chave prefixada quando
+    // já está fisicamente ocupado por OUTRA operação (colisão real, verificada contra o disco).
+    var existingByOrderId = {}; fatorPedidoSnapshots.forEach(function (s) { existingByOrderId[s.orderId] = s; });
+    var thisOpId = opActiveOrNull();
+    return getAll('fatorpedidosnapshots').then(function (allOnDisk) {
+      var claimedByOtherOp = {};
+      (allOnDisk || []).forEach(function (s) { if (s.operationId && s.operationId !== thisOpId) claimedByOtherOp[scopedDecodeId(s.id, s.operationId)] = true; });
+      var fatorSnapsNovos = vendas.pedidos.map(function (o) {
+        var live = fatorCustoIndustrialPedidoLive(o.id);
+        var existing = existingByOrderId[o.id];
+        var diskId = existing ? (existing._diskId || existing.id) : (claimedByOtherOp[o.id] ? scopedNewKey(o.id, thisOpId, true) : o.id);
+        return Object.assign({}, live, { id: o.id, _diskId: diskId, congelado: undefined, dateKey: dateKey, congeladoEm: now });
+      });
+      fatorSnapsNovos.forEach(function (s) { delete s.congelado; });
+      var fatorIds = {}; fatorSnapsNovos.forEach(function (s) { fatorIds[s.orderId] = true; });
+      fatorPedidoSnapshots = fatorPedidoSnapshots.filter(function (s) { return !fatorIds[s.orderId]; }).concat(fatorSnapsNovos);
+      var toPersist = fatorSnapsNovos.map(function (s) { var c = Object.assign({}, s); c.id = s._diskId || s.id; delete c._diskId; return c; });
+      // Fase 8: a integração financeira (AR/AP/transferências) roda SEMPRE que o dia é fechado (normal
+      // ou com ressalva) — idempotente, nunca duplica ao rodar de novo pro mesmo dia.
+      return caixaAplicarIntegracaoFinanceira(dateKey).then(function () { return putMany('caixafechamentos', [rec]); }).then(function () { return putMany('fatorpedidosnapshots', toPersist); });
+    }).then(function (r) {
       auditLocal('CASH_CLOSE_LOCAL', 'caixa', 'CashClosure', dateKey, null, { status: status, justificativa: justificativa || null, vendasN: vendas.n, vendasValor: vendas.valor });
       return r;
     });
@@ -19069,7 +19161,14 @@ buffer/index.js:
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
     return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers'), getAll('bankaccounts'), getAll('companies'), getAll('operations'), getAll('cpheader'), getAll('cpitems'), getAll('cppayments'), getAll('cpattach'), getAll('cpcategories'), getAll('cpaccounting'), getAll('cpcostcenters'), getAll('cpsuppliers'), getAll('cpsupplylinks'), getAll('pricingopconfig'), getAll('pricingfamilyrules'), getAll('financialaccounts'), getAll('financialevents'), getAll('crheader'), getAll('crreceipts'), getAll('financialtransfers'), getAll('fatorfuncionarios'), getAll('fatorcustosfixos'), getAll('fatorcustosvariaveis'), getAll('fatorpedidosnapshots'), getAll('skufamilyoverrides'), getAll('fatorconfigs'), getAll('fatorsetores'), getAll('fatorimpostos'), getAll('fatorprocessos'), getAll('fatorroteiros'), getAll('fatorroteirosku'), getAll('skufamilyoverridehistory'), getAll('crcategories'), getAll('crcostcenters'), getAll('productidentitymappings')]);
   }).then(function (r) {
-    orders = r[0]; occ = (r[1] || []).map(migrateOcc); batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
+    // GATE 2 — decodifica a chave física (só existe quando havia colisão real de ID de negócio entre
+    // operações, ver scopedStoreKey/scopedDecodeId acima) de volta para o ID de negócio puro. Não-op
+    // para 100% dos registros legados/nunca-colididos (inclui todos os 3.227 pedidos reais de AUD-OP1,
+    // que nunca colidiram com nada) — só normaliza o `.id` para os poucos registros que precisaram da
+    // chave composta na gravação.
+    orders = (r[0] || []).map(function (o) { o._diskId = o.id; o.id = scopedDecodeId(o.id, o.operationId); return o; });
+    occ = (r[1] || []).map(migrateOcc).map(function (o) { o._diskId = o.id; o.id = scopedDecodeId(o.id, o.operationId); return o; });
+    batches = (r[2] || []).sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); });
     wallet = r[5] || [];
     walletCls = {}; (r[6] || []).forEach(function (c) { walletCls[c.id] = c; });
     walletClose = {}; (r[19] || []).forEach(function (c) { walletClose[c.id] = c; });
@@ -19096,7 +19195,13 @@ buffer/index.js:
     pricingOpConfig = r[35] || []; pricingFamilyRules = r[36] || [];
     financialAccounts = r[37] || []; financialEvents = r[38] || []; contasReceber = r[39] || []; crReceipts = r[40] || []; financialTransfers = r[41] || [];
     crCategories = r[54] || []; crCostCenters = r[55] || [];
-    fatorFuncionarios = r[42] || []; fatorCustosFixos = r[43] || []; fatorCustosVariaveis = r[44] || []; fatorPedidoSnapshots = r[45] || [];
+    fatorFuncionarios = r[42] || []; fatorCustosFixos = r[43] || []; fatorCustosVariaveis = r[44] || [];
+    // GATE 2 — achado real (item 14 da certificação): fatorpedidosnapshots nunca tinha filtro por
+    // operação nem chave física escopada — 2 operações com um pedido de mesmo orderId Shopee podiam ter
+    // seus snapshots de custo colidindo (a gravação da 2ª sobrescrevia a da 1ª) e fatorSnapshotPedido()
+    // (`.find(s => s.orderId === orderId)`) podia devolver o snapshot ERRADO (de outra operação). Decode
+    // da chave física + filtro por operação abaixo (com `wallet`/`orders`/etc.) fecham os dois lados.
+    fatorPedidoSnapshots = (r[45] || []).map(function (s) { s.id = scopedDecodeId(s.id, s.operationId); return s; });
     var fatorCfgRow = settings.filter(function (x) { return x.id === 'fatorConfig'; })[0]; if (fatorCfgRow && fatorCfgRow.data) fatorConfig = fatorCfgRow.data;
     // Achado crítico da Prioridade 15: registros gravados ANTES do fix (sem operationId) continuam
     // indexados pela chave simples `skuKey` (compatibilidade retroativa — nunca some); registros
@@ -19110,7 +19215,10 @@ buffer/index.js:
     // (legado: `id===skuKey`; pós-fix: `id===operationId+'|'+skuKey`).
     fatorRoteiroSkuOverrides = {}; (r[52] || []).forEach(function (rt) { fatorRoteiroSkuOverrides[rt.id] = rt; });
     skuFamilyOverrideHistory = r[53] || [];
-    productIdentityMappingsAll = {}; (r[56] || []).forEach(function (m) { productIdentityMappingsAll[m.id] = m; });
+    // GATE 2 — mesma decodificação: a leitura de productIdentityMappings já era filtrada por operação
+    // (abaixo, na filtragem por activeOperationId) — só faltava a chave física não colidir na gravação
+    // entre 2 operações com o mesmo SKU+produto+variação (ver productIdentityMappingSave/Remove).
+    productIdentityMappingsAll = {}; (r[56] || []).forEach(function (m) { m.id = scopedDecodeId(m.id, m.operationId); productIdentityMappingsAll[m.id] = m; });
     productIdentityMappings = productIdentityMappingsAll; // filtrado por operação mais abaixo, quando activeOperationId for conhecido
     fatorMigrarTempoProducaoLegado();
     cpMigrarCategoriasSemCentro().catch(function () { });
@@ -19138,6 +19246,7 @@ buffer/index.js:
       if (activeOperationId !== OP_ALL) {
         var byOp = function (arr) { return arr.filter(function (x) { return !x.operationId || x.operationId === activeOperationId; }); };
         orders = byOp(orders); occ = byOp(occ); wallet = byOp(wallet); acelera = byOp(acelera);
+        fatorPedidoSnapshots = byOp(fatorPedidoSnapshots);
         affConv = byOp(affConv); affRpa = byOp(affRpa); affVb = byOp(affVb);
         mrRenda = byOp(mrRenda); mrShip = byOp(mrShip); mrAdj = byOp(mrAdj); mrSvc = byOp(mrSvc);
         contasPagar = byOp(contasPagar);
@@ -19148,6 +19257,11 @@ buffer/index.js:
         Produtos.scopeToOperation(activeOperationId);
       }
       if (lastImportStamp == null && batches.length) { var last = batches.map(function (b) { return b.createdAt; }).sort().pop(); lastImportStamp = last || null; }
+      // GATE 2: NUNCA recalcula/reescreve a chave física aqui — esta linha roda em TODO boot (inclusive
+      // com AUD-OP1 ativa) só para tirar casos demo do banco real; usar scopedStoreKey aqui reescreveria
+      // a chave de TODA devolução real a cada boot, o que violaria a regra de nunca escrever em AUD-OP1
+      // com uma chave diferente da que o registro já tinha. A prevenção de colisão física acontece só no
+      // caminho de IMPORTAÇÃO (importPosVenda/saveOcc/bulkApplyDev), nunca nesta rotina de higiene.
       if (occ.length) putMany('occ', occ);
       occ = occ.concat(DEMO_CASES()); // injeta demo apenas em memória (§10-11), depois de persistir os reais
       rebuildSkuCost();
