@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 99fd167 · 2026-08-29 22:58 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 0d0fd46 · 2026-08-29 23:03 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -4153,7 +4153,8 @@ buffer/index.js:
   var mrProdCfg = { margemMeta: 0.10 }; // meta padrão de margem para classificar "abaixo da meta" (§41 do prompt de reorganização)
   var mrProdFilter = 'todos'; // filtro rápido da tabela de Produtos e SKUs (§9-13 do prompt de alterações pontuais)
   // Expedição / Bipe (Pedidos): registro de saída física, chave = ID do pedido (idempotente).
-  var shipBip = {};   // orderId -> { id, orderId, bipedAt, bipedBy, note, history: [] }
+  var shipBip = {};   // orderId -> { id, orderId, bipedAt, bipedBy, note, history: [] } — já filtrado pra operação ativa
+  var shipBipAll = {}; // orderId -> [{...}] — TODOS os candidatos (1 por operação/legado), nunca filtrado; mesmo padrão de productIdentityMappingsAll
   // PROMPT MESTRE §59-73: Expedição vira tela operacional única — Full/FBS sempre aparece na fila
   // (nunca mais um toggle "Incluir Full" escondendo pedidos), só que rotulado como "aguardando
   // confirmação Shopee"/"confirmação Shopee" em vez de "falta bipar"/"bipado" (nunca exige bip para
@@ -19502,7 +19503,20 @@ buffer/index.js:
     // (`operationId+'|'+orderId`, ver bipRegister) mas o boot nunca guardava `_diskId`; qualquer
     // resave recalculava a chave a partir de `b.orderId` (sempre puro), arriscando gravar sob uma
     // chave física diferente da original quando havia colisão real entre operações.
-    shipBip = {}; (r[18] || []).forEach(function (b) { b._diskId = b.id; b.id = b.orderId; shipBip[b.orderId] = b; });
+    // BUG REAL #2 (achado ao vivo da bateria de verificação pós-193e2f2) — mesma classe de bug já
+    // corrigida em productIdentityMappingsAll (B28): construir `shipBip` como dict de 1 slot por
+    // orderId, direto do disco INTEIRO (sem filtro), colapsava em memória sempre que 2 operações
+    // bipavam o MESMO orderId — o candidato que "perdia" o slot (ordem de enumeração do IndexedDB)
+    // simplesmente desaparecia da memória ANTES do filtro por operação (abaixo) sequer rodar, então
+    // essa operação via "Falta bipar" mesmo com o registro físico intacto em disco. Agora `shipBipAll`
+    // guarda um ARRAY de candidatos por orderId (1 por operação/legado); `shipBip` (dict de 1 valor)
+    // só é derivado DEPOIS, já resolvido pra operação certa (ver filtro por operação mais abaixo).
+    shipBipAll = {}; (r[18] || []).forEach(function (b) { b._diskId = b.id; b.id = b.orderId; (shipBipAll[b.orderId] = shipBipAll[b.orderId] || []).push(b); });
+    // OP_ALL ("Todas as Operações") é visão consolidada, somente leitura — mesma ressalva já aplicada
+    // a productIdentityMappingsAll: nunca teve garantia de escolher o candidato "certo" quando 2
+    // operações compartilham o mesmo orderId (exigiria saber a operação de cada pedido, fora do
+    // escopo desta correção); mantém 1 candidato por orderId só pra não regredir esse modo.
+    shipBip = {}; Object.keys(shipBipAll).forEach(function (k) { var arr = shipBipAll[k]; shipBip[k] = arr[arr.length - 1]; });
     expSessions = (r[20] || []).sort(function (a, b) { return b.horaInicio.localeCompare(a.horaInicio); });
     var pendR = settings.filter(function (x) { return x.id === 'pendResolucoes'; })[0]; if (pendR && pendR.data) pendResolucoes = pendR.data;
     caixaClose = {}; (r[21] || []).forEach(function (c) { caixaClose[c.id] = c; });
@@ -19597,7 +19611,10 @@ buffer/index.js:
         // corrigido): bipe/sessão de expedição de uma operação vazava pra tela de Expedição de
         // outra. `shipBip` é dict (chave=orderId), não array — filtro dedicado, mesma regra do
         // byOp() acima.
-        (function () { var f = {}; Object.keys(shipBip).forEach(function (k) { var b = shipBip[k]; if (!b.operationId || b.operationId === activeOperationId) f[k] = b; }); shipBip = f; })();
+        // BUG REAL #2 (achado ao vivo) — resolve a partir de `shipBipAll` (todos os candidatos),
+        // NUNCA a partir de `shipBip` (já colapsado a 1 valor por orderId no boot) — senão a
+        // operação "certa" pode já ter perdido seu próprio candidato antes deste filtro rodar.
+        (function () { var f = {}; Object.keys(shipBipAll).forEach(function (k) { var b = (shipBipAll[k] || []).filter(function (x) { return !x.operationId || x.operationId === activeOperationId; })[0]; if (b) f[k] = b; }); shipBip = f; })();
         expSessions = byOp(expSessions);
         productIdentityMappings = {}; Object.keys(productIdentityMappingsAll).forEach(function (k) { var m = (productIdentityMappingsAll[k] || []).filter(function (x) { return !x.operationId || x.operationId === activeOperationId; })[0]; if (m) productIdentityMappings[k] = m; });
         Produtos.scopeToOperation(activeOperationId);
