@@ -10434,7 +10434,15 @@
     // aqui é sempre "Todas" porque o fechamento concilia a operação inteira de propósito (nunca um
     // recorte por conta — ver Camada 1-4 do motor, já aprovadas em fases anteriores; um seletor real
     // mudaria o ESCOPO do cálculo, não só a exibição) — e as ações Reabrir/Exportar/Ver auditoria.
-    var closedNow = st.status === 'FECHADO' || st.status === 'FECHADO_COM_RESSALVA';
+    // BUG REAL (achado do Gate 3, agente de QA): usar `st.status` aqui é errado — esse é o status
+    // DERIVADO exibido no badge, que já virava REVISAO_NECESSARIA antes mesmo do ledger de Eventos
+    // Posteriores existir (§20-21, pendência mudou depois do fechamento) e passou a virar bem mais
+    // often agora (qualquer evento posterior não reconhecido). `closedNow` precisa refletir se o
+    // registro persistido (`st.rec.status`) está de fato fechado — nunca o status derivado — senão a
+    // seção inteira "Eventos Posteriores" (incluindo o único botão "Reconhecer" da tela) e o botão
+    // "Reabrir caixa" somem assim que o dia entra em revisão, exatamente quando o operador mais
+    // precisa deles.
+    var closedNow = !!(st.rec && (st.rec.status === 'FECHADO' || st.rec.status === 'FECHADO_COM_RESSALVA'));
     // Fase 7.1 (migração para componentes padrão): mesmo HTML de antes, agora via PageHeader
     // ({variant:'financial'}) — variant modelada originalmente neste exato cabeçalho (ver comentário
     // de PageHeader). Nenhum id/atributo/texto mudou — só a montagem da string.
