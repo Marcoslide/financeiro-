@@ -73,6 +73,12 @@
   // de propósito (mesmo ciclo de vida já aprovado), mas as duas nunca compartilham registro — são
   // fechamentos de coisas diferentes, cada um no seu módulo, sem fundir dados.
   var walletClose = {};
+  // CRÍTICO (achado da Prioridade 15 — mesmíssimo padrão de `caixaClose` acima): a conciliação
+  // diária da Carteira também usava `id = dateKey` puro, sem operationId, nunca filtrada — 2
+  // operações fechando a conciliação da Carteira no mesmo dia se sobrescreviam. Mesma correção:
+  // chave composta, compatibilidade retroativa total com fechamentos legados.
+  function walletCloseStoreKey(dateKey) { var op = opActiveOrNull(); return op ? (op + '|' + dateKey) : dateKey; }
+  function walletCloseGet(dateKey) { return walletClose[walletCloseStoreKey(dateKey)] || walletClose[dateKey] || null; }
   var walletSub = 'visao';    // sub-aba da Carteira: visao | mov | ajustes | pendencias | fechamento
   // PROMPT "Refazer o Caixa" §11/§12/§14: clicar em CAIXA precisa cair DIRETO no Fechamento (fluxo
   // do dinheiro) — nunca num dashboard antigo escondendo o que foi pedido atrás de mais um clique.
@@ -88,6 +94,14 @@
   // saldo esperado). Uma tela nunca fecha a outra — um dia pode estar "fechado" no Caixa e "aberto"
   // na Conferência de Extrato da Carteira ao mesmo tempo, e isso é esperado, não um bug.
   var caixaClose = {};
+  // CRÍTICO (achado da Prioridade 15 — auditoria de stores/keyPath, o mais grave da lista inteira):
+  // o fechamento OFICIAL do Caixa usava `id = dateKey` puro (a própria data), sem nenhum campo
+  // operationId, nunca filtrado — 2 operações fechando o Caixa no MESMO dia calendário (cenário
+  // normal em uso multiempresa, não de borda) sobrescreviam o fechamento oficial uma da outra.
+  // Mesma correção das demais (chave composta operationId+'|'+dateKey, compatibilidade retroativa
+  // total com fechamentos legados sem operationId — nunca perdidos, sempre visíveis).
+  function caixaCloseStoreKey(dateKey) { var op = opActiveOrNull(); return op ? (op + '|' + dateKey) : dateKey; }
+  function caixaCloseGet(dateKey) { return caixaClose[caixaCloseStoreKey(dateKey)] || caixaClose[dateKey] || null; }
   // Camada 1 (Saldo do Dia): "Transferência para o banco" — evento manual PURO Carteira→Banco.
   // Nunca altera Acelera/Pedido/receita/lucro — só registra que dinheiro saiu da carteira para o
   // banco, com histórico. Lista simples (não indexada por dia: pode ser lançada a qualquer momento).
@@ -4643,7 +4657,7 @@
   }
   // status real do dia: nunca "fechado" sem um registro explícito de fechamento (walletClose[dk]).
   function walletDayStatus(dateKey) {
-    var dm = walletDayMetrics(dateKey); var rec = walletClose[dateKey] || null;
+    var dm = walletDayMetrics(dateKey); var rec = walletCloseGet(dateKey);
     var closed = rec && (rec.status === 'FECHADO' || rec.status === 'FECHADO_COM_PENDENCIAS' || rec.status === 'REVISAO_NECESSARIA');
     var novoDepois = !!(closed && rec.snapshot && rec.snapshot.n !== dm.n);
     var status = !closed ? 'ABERTO' : (novoDepois ? 'REVISAO_NECESSARIA' : rec.status);
@@ -4651,22 +4665,26 @@
   }
   function walletCloseDay(dateKey, status, userName, justificativa) {
     var dm = walletDayMetrics(dateKey);
-    var rec = walletClose[dateKey] || { id: dateKey, history: [] };
+    var storeKey = walletCloseStoreKey(dateKey);
+    var rec = walletCloseGet(dateKey) || { id: storeKey, dateKey: dateKey, history: [] };
+    rec.id = storeKey; rec.dateKey = dateKey; rec.operationId = opActiveOrNull();
     var at = new Date().toISOString();
     rec.status = status; rec.closedBy = userName || 'Operador'; rec.closedAt = at;
     rec.snapshot = { entradas: dm.entradas, saidas: dm.saidas, conciliado: dm.conciliado, pendente: dm.pendente, n: dm.n, pendN: dm.pendN };
     rec.justificativa = justificativa || null;
     rec.history = rec.history || []; rec.history.unshift({ at: at, user: rec.closedBy, status: status, justificativa: justificativa || null, n: dm.n, pendN: dm.pendN });
-    walletClose[dateKey] = rec; return putMany('walletclose', [rec]);
+    walletClose[storeKey] = rec; return putMany('walletclose', [rec]);
   }
   // "Salvar revisão" não fecha o dia — só registra progresso (§25: status só muda com Fechar dia/Fechar com pendências).
   function walletSaveReview(dateKey, userName, note) {
     var dm = walletDayMetrics(dateKey);
-    var rec = walletClose[dateKey] || { id: dateKey, history: [] };
+    var storeKey = walletCloseStoreKey(dateKey);
+    var rec = walletCloseGet(dateKey) || { id: storeKey, dateKey: dateKey, history: [] };
+    rec.id = storeKey; rec.dateKey = dateKey; rec.operationId = opActiveOrNull();
     var at = new Date().toISOString();
     rec.lastReviewedAt = at; rec.lastReviewedBy = userName || 'Operador';
     rec.history = rec.history || []; rec.history.unshift({ at: at, user: rec.lastReviewedBy, status: 'REVISAO_SALVA', justificativa: note || null, n: dm.n, pendN: dm.pendN });
-    walletClose[dateKey] = rec; return putMany('walletclose', [rec]);
+    walletClose[storeKey] = rec; return putMany('walletclose', [rec]);
   }
   // Correção de arquitetura: o fechamento diário OFICIAL é o Caixa (menu próprio) — esta tela
   // continua existindo como conferência de extrato/saldo da Carteira (nunca apagada, já aprovada),
@@ -8875,7 +8893,7 @@
     var creditos = linhasCreditos.reduce(function (s, l) { return s + l.valor; }, 0);
     var outros = linhasOutros.reduce(function (s, l) { return s + l.valor; }, 0);
     var ac = aceleraResultadoFechamento(dateKey); var acTaxa = ac.resgatesN ? -Math.abs(ac.taxaAcelera) : 0;
-    var eventosPosteriores = (caixaClose[dateKey] && caixaClose[dateKey].eventosPosteriores) || [];
+    var eventosPosteriores = (caixaCloseGet(dateKey) && caixaCloseGet(dateKey).eventosPosteriores) || [];
     // BUG 1 (Fase final de ajuste gerencial): Receita Líquida Real = Venda Bruta − Taxas Shopee
     // (inclui Afiliados, já que "Taxa de comissão Afiliados do Vendedor" é DEBITO_VENDEDOR e soma em
     // taxasCobradas) − Devoluções (descComerciais já inclui a linha REEMBOLSO_DEVOLUCAO do Income
@@ -9533,7 +9551,7 @@
   function caixaDayStatus(dateKey) {
     var pend = caixaDayPendencias(dateKey);
     var pendCart = caixaDayPendenciasCarteira(dateKey);
-    var rec = caixaClose[dateKey] || null;
+    var rec = caixaCloseGet(dateKey);
     var closed = rec && (rec.status === 'FECHADO' || rec.status === 'FECHADO_COM_RESSALVA');
     // §20-21: fechamento é uma fotografia — se pendências mudaram de contagem depois de fechado
     // (movimento posterior), nunca reescreve o snapshot; só sinaliza revisão necessária. Camada 4
@@ -9743,13 +9761,15 @@
     // Venda/Recebido/Transferido/Pendências por dia, não só faturamento/lucro — reaproveita
     // caixaFluxoDia() (mesmo motor já usado na tela do dia), nunca recalcula nada novo aqui.
     var fluxoSnap = caixaFluxoDia(dateKey);
-    var rec = caixaClose[dateKey] || { id: dateKey, history: [], eventosPosteriores: [] };
+    var storeKey = caixaCloseStoreKey(dateKey);
+    var rec = caixaCloseGet(dateKey) || { id: storeKey, dateKey: dateKey, history: [], eventosPosteriores: [] };
+    rec.id = storeKey; rec.dateKey = dateKey; rec.operationId = opActiveOrNull();
     var at = new Date().toISOString();
     rec.status = status; rec.closedBy = userName || 'Operador'; rec.closedAt = at;
     rec.snapshot = { vendasN: vendas.n, vendasValor: vendas.valor, lucroC: vendas.nLucroConhecido ? vendas.lucroC : null, expEsperados: exp.esperados, expExpedidos: exp.expedidos, acN: ac.resgatesN || 0, pendTotal: pend.total, pendCartTotal: pendCart.total, recebidoLiquido: ac.resgatesN ? ac.valorLiquido / 100 : 0, transferido: fluxoSnap.transferido };
     rec.justificativa = justificativa || null;
     rec.history = (rec.history || []).concat([{ at: at, user: rec.closedBy, status: status, justificativa: justificativa || null, pendTotal: pend.total }]);
-    caixaClose[dateKey] = rec;
+    caixaClose[storeKey] = rec;
     // PROMPT "Implementação do Fator de Custo dentro do módulo Caixa" §7 "Regras de Histórico": o
     // custo aplicado no pedido deve ser CONGELADO no momento do fechamento — pedidos antigos não podem
     // mudar se a config (funcionários/custos fixos/variáveis/imposto) mudar depois. Gera/atualiza, para
@@ -9778,7 +9798,7 @@
   // idempotente por sourceEventKey — um novo "Fechar dia" só atualiza os mesmos registros, nunca
   // duplica). O histórico completo de aberturas/fechamentos fica em rec.history, nunca sobrescrito.
   function caixaReabrirDia(dateKey) {
-    var rec = caixaClose[dateKey]; if (!rec) return Promise.resolve();
+    var rec = caixaCloseGet(dateKey); if (!rec) return Promise.resolve();
     var at = new Date().toISOString();
     rec.status = 'ABERTO';
     rec.history = (rec.history || []).concat([{ at: at, user: 'Operador', status: 'ABERTO', justificativa: 'Reaberto manualmente' }]);
@@ -10654,12 +10674,18 @@
   }
   function caixaHistoricoView() {
     var head = PageHeader({ variant: 'eyebrow', eyebrow: 'CAIXA · HISTÓRICO', title: 'Fechamentos anteriores', compact: true });
-    var allDays = Object.keys(caixaClose).sort().reverse();
+    // Achado da Prioridade 15: desde o fix de isolamento por operação, as chaves de `caixaClose`
+    // deixaram de ser diretamente a data (registros novos usam `operationId+'|'+dateKey`) — o
+    // Histórico precisa listar por `.dateKey`/`.id` do REGISTRO escopado à operação ativa (mais os
+    // fechamentos legados sem operationId, sempre visíveis), nunca mais pelas chaves brutas do mapa.
+    var opIdHist = opActiveOrNull();
+    var recsHist = Object.values(caixaClose).filter(function (c) { return !c.operationId || c.operationId === opIdHist; });
+    var allDays = recsHist.map(function (c) { return c.dateKey || c.id; }).sort().reverse();
     if (!allDays.length) return head + emptyBox('Nenhum dia fechado ainda.');
     // PROMPT "REESTRUTURAÇÃO PROFISSIONAL DO CAIXA" §7: mesmo period global de todo o sistema
     // (periodSel/customRange) — nunca um segundo seletor de data só para o Histórico.
     var days = allDays.filter(inPeriod);
-    if (caixaHistF.status) days = days.filter(function (dk) { return caixaClose[dk].status === caixaHistF.status; });
+    if (caixaHistF.status) days = days.filter(function (dk) { return caixaCloseGet(dk).status === caixaHistF.status; });
     var statusOptions = [['', 'Status: todos'], ['FECHADO', '🟢 Fechado'], ['ABERTO', '🟡 Em conferência'], ['FECHADO_COM_RESSALVA', '🟡 Fechado com ressalva'], ['REVISAO_NECESSARIA', '🔴 Revisão necessária']];
     var filtros = '<div class="toolbar2" style="margin-bottom:10px">' +
       '<select class="select sm" id="caixahist-status">' + statusOptions.map(function (o) { return '<option value="' + o[0] + '"' + (caixaHistF.status === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>' +
@@ -10668,7 +10694,7 @@
     if (!days.length) return head + filtros + emptyBox('Nenhum fechamento neste filtro.');
     // §6: cards em vez de linha crua de data — Venda/Recebido/Transferido/Pendências em 1 olhar.
     var cards = days.map(function (dk) {
-      var rec = caixaClose[dk]; var lbl = CAIXA_LABEL[rec.status] || ['—', 'neutral']; var snap = rec.snapshot || {};
+      var rec = caixaCloseGet(dk); var lbl = CAIXA_LABEL[rec.status] || ['—', 'neutral']; var snap = rec.snapshot || {};
       var pendTotal = (snap.pendTotal || 0) + (snap.pendCartTotal || 0);
       return '<div class="panel rowlink" data-caixadia="' + esc(dk) + '" style="margin-bottom:10px;cursor:pointer"><div class="pb" style="display:flex;align-items:center;gap:24px;flex-wrap:wrap;padding:14px 18px">' +
         '<div style="min-width:110px"><div style="font-weight:700;font-size:15px">' + dbr(dk) + '</div><span class="tag ' + lbl[1] + '" style="margin-top:4px;display:inline-block">' + lbl[0] + '</span></div>' +
@@ -10795,7 +10821,7 @@
       dreRows.push(['Lucro', dre.lucro != null ? dre.lucro / 100 : '']);
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dreRows), 'DRE');
     }
-    var rec = caixaClose[dateKey];
+    var rec = caixaCloseGet(dateKey);
     var histRows = [['Data/hora', 'Status', 'Justificativa', 'Pendências no momento']];
     (rec && rec.history || []).forEach(function (h) { histRows.push([new Date(h.at).toLocaleString('pt-BR'), h.status, h.justificativa || '', h.pendTotal]); });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(histRows), 'Histórico');
