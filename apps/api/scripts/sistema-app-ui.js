@@ -7618,7 +7618,7 @@
     function wireTabs() { appEl.querySelectorAll('[data-ptab2]').forEach(function (t) { t.onclick = function () { S2.tab = t.dataset.ptab2; render(); }; }); }
 
     function renderProdutos() {
-      var s = stats(), last = S2.imports[0];
+      var s = stats(), last = S2.imports[0], nConflicts = auditSkuConflicts().length;
       appEl.innerHTML = head('Catálogo Shopee: anúncios, variações/SKUs, famílias e custos.') + tabsHtml('produtos') +
         '<div class="importbar"><div><div class="ib-title">Atualizar catálogo Shopee</div><div class="ib-meta">' + (last ? 'Última atualização: ' + new Date(last.createdAt).toLocaleString('pt-BR') + ' · ' : '') + nn(s.products) + ' anúncios · ' + nn(s.variations) + ' SKUs</div></div><div class="spacer"></div><button class="link-btn" id="goImports">Ver histórico</button><button class="btn-sm primary" id="openImport">Importar planilha</button></div>' +
         MetricGrid([
@@ -7626,6 +7626,7 @@
           MetricCard({ label: 'Variações / SKUs', value: nn(s.variations), variant: 'filter', filterKey: 'k-all', active: kpiOn('k-all') }),
           MetricCard({ label: 'SKUs sem família', value: nn(s.withoutFamily), variant: 'filter', filterKey: 'k-nofam', active: kpiOn('k-nofam'), cls: s.withoutFamily > 0 ? 'amber' : '' }),
           MetricCard({ label: 'SKUs sem preço de fechamento', value: nn(s.withoutClosing), variant: 'filter', filterKey: 'k-noclose', active: kpiOn('k-noclose'), cls: s.withoutClosing > 0 ? 'amber' : '' }),
+          MetricCard({ label: 'SKUs em conflito (bloqueiam custo)', value: nn(nConflicts), variant: 'filter', filterKey: 'k-conflict', active: false, cls: nConflicts > 0 ? 'amber' : '' }),
         ]) +
         '<div class="panel"><div class="pb">' + toolbarHtml() + '<div id="countline"></div><div id="selbanner"></div></div><div class="pb" style="padding:0" id="results"></div><div class="pb" id="pager"></div></div><div id="bulk"></div>';
       q('#openImport').onclick = openImportModal; q('#goImports').onclick = function () { S2.tab = 'importacoes'; render(); };
@@ -7633,7 +7634,7 @@
       wireToolbar(); refresh();
     }
     function kpiOn(k) { return (k === 'k-nofam' && S2.filters.family === 'without') || (k === 'k-noclose' && S2.filters.closingPrice === 'without'); }
-    function onKpi(k) { if (k === 'k-all') S2.filters = Object.assign({}, EMPTY); else if (k === 'k-nofam') S2.filters = Object.assign({}, EMPTY, { family: 'without', sort: 'without_family' }); else if (k === 'k-noclose') S2.filters = Object.assign({}, EMPTY, { closingPrice: 'without', sort: 'without_closing' }); S2.page = 1; S2.allFiltered = false; render(); }
+    function onKpi(k) { if (k === 'k-conflict') { S2.tab = 'auditoria'; render(); return; } if (k === 'k-all') S2.filters = Object.assign({}, EMPTY); else if (k === 'k-nofam') S2.filters = Object.assign({}, EMPTY, { family: 'without', sort: 'without_family' }); else if (k === 'k-noclose') S2.filters = Object.assign({}, EMPTY, { closingPrice: 'without', sort: 'without_closing' }); S2.page = 1; S2.allFiltered = false; render(); }
     function toolbarHtml() { var f = S2.filters; function sel(id, val, opts2) { return '<select class="select sm" data-f="' + id + '">' + opts2.map(function (o) { return '<option value="' + o[0] + '"' + (val === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>'; } return '<div class="toolbar2"><input class="input sm" id="psearch" style="width:260px" placeholder="Buscar título, SKU, variação ou ID…" value="' + esc(f.search) + '">' + sel('familyId', f.familyId, [['', 'Família: todas']].concat(S2.families.map(function (fm) { return [fm.id, fm.name]; }))) + sel('family', f.family, [['', 'Classificação: todos'], ['with', 'Com família'], ['without', 'Sem família']]) + sel('closingPrice', f.closingPrice, [['', 'Preço fechamento: todos'], ['with', 'Configurado'], ['without', 'Não configurado']]) + sel('stock', f.stock, [['', 'Estoque: todos'], ['with', 'Com estoque'], ['without', 'Sem estoque'], ['zero', 'Zerado']]) + sel('variations', f.variations, [['', 'Variações: todas'], ['single', 'Sem variação'], ['multiple', 'Com variações']]) + sel('status', f.status, [['', 'Status: todos'], ['ACTIVE', 'Ativo'], ['INACTIVE', 'Inativo']]) + sel('sort', f.sort, [['name_asc', 'Nome A–Z'], ['name_desc', 'Nome Z–A'], ['stock_desc', 'Maior estoque'], ['stock_asc', 'Menor estoque'], ['price_desc', 'Maior preço'], ['price_asc', 'Menor preço'], ['variations_desc', 'Mais variações'], ['variations_asc', 'Menos variações'], ['without_family', 'Sem família 1º'], ['without_closing', 'Sem fechamento 1º']]) + '<button class="link-btn" id="clearF">Limpar filtros</button></div>'; }
     function wireToolbar() { var si = q('#psearch'); si.oninput = debounce(function () { S2.filters.search = si.value; S2.page = 1; S2.allFiltered = false; refresh(); }, 220); appEl.querySelectorAll('select[data-f]').forEach(function (se) { se.onchange = function () { var k = se.dataset.f; S2.filters[k] = se.value; if (k === 'familyId' && se.value) S2.filters.family = ''; if (k === 'family') S2.filters.familyId = ''; S2.page = 1; S2.allFiltered = false; render(); }; }); q('#clearF').onclick = function () { S2.filters = Object.assign({}, EMPTY); S2.page = 1; S2.allFiltered = false; render(); }; }
 
@@ -7908,7 +7909,56 @@
       });
       return out;
     }
+    // Achado da Auditoria Pré-Go-Live (29/08/2026): quando um código de SKU é usado por >=2 anúncios
+    // com famílias diferentes (ou algum deles ainda sem família), resolveSkuCost() corretamente se
+    // recusa a adivinhar (skuConflicts, populado em rebuildSkuCost()) — o pedido fica com custo
+    // "pendente" sem nenhum aviso proativo ao operador, que só descobria entrando pedido a pedido no
+    // Diagnóstico. Esta auditoria não recalcula nada nem decide sozinha: só lista, por CÓDIGO DE SKU
+    // (nunca por pedido/variação individual — um único SKU pode aparecer em centenas de pedidos), os
+    // conflitos que ainda não têm uma classificação manual (skuFamilyOverrides) — para que o operador
+    // resolva em lote pela mesma via já existente (skuFamilyOverrideSave, prioridade 1 absoluta em
+    // resolveSkuCostByKeyRaw): a escolha vale de uma vez para todos os pedidos/anúncios com este SKU.
+    function auditSkuConflicts() {
+      var out = [];
+      Object.keys(skuConflicts).forEach(function (key) {
+        if (skuFamilyOverrides[key]) return; // já resolvido por classificação manual — não é mais pendência
+        var cands = skuAliasIndex[key] || [];
+        var active = cands.filter(function (c) { return c.status !== 'INACTIVE'; });
+        var relevant = active.length ? active : cands;
+        var prodIds = uniq(relevant.map(function (c) { return c.productId; }));
+        var famIds = uniq(relevant.map(function (c) { var v = skuVarById[c.variationId]; return v ? (v.familyId || null) : null; }));
+        var sampleV = null;
+        for (var i = 0; i < relevant.length && !sampleV; i++) { var v = skuVarById[relevant[i].variationId]; if (v) sampleV = v; }
+        var prod = sampleV ? S2.products.find(function (p) { return p.id === sampleV.productId; }) : null;
+        var r = resolveSkuCostByKey(key, sampleV ? (sampleV.sku || sampleV.referenceSku) : key);
+        out.push({
+          key: key,
+          sku: sampleV ? (sampleV.sku || sampleV.referenceSku) : key,
+          produto: prod ? prod.name : null,
+          nProdutos: prodIds.length,
+          nFamilias: famIds.filter(Boolean).length,
+          semFamilia: famIds.indexOf(null) >= 0,
+          motivo: r.motivo,
+        });
+      });
+      out.sort(function (a, b) { return b.nProdutos - a.nProdutos; });
+      return out;
+    }
+    function skuConflictsPanelHtml(conflicts) {
+      return '<div class="panel" style="margin-bottom:14px"><div class="ph"><h3>SKUs compartilhados entre anúncios (custo bloqueado por conflito)</h3><span class="footnote" style="margin:0">' + nn(conflicts.length) + ' código(s) de SKU pendente(s)</span></div><div class="pb">' +
+        (conflicts.length === 0 ? '<span class="tag ok">🟢 Nenhum SKU em conflito sem resolução — todo SKU compartilhado por mais de um anúncio já tem uma família definida (a mesma em todos, ou classificação manual aplicada).</span>' :
+          ('<div class="footnote" style="margin-bottom:8px">Estes códigos de SKU aparecem em mais de um anúncio com famílias diferentes (ou algum anúncio ainda sem família) — o motor de custo não decide sozinho qual usar, então o pedido fica com custo pendente. Escolha a família correta abaixo: a escolha resolve o custo para TODOS os pedidos e anúncios que usam este SKU de uma vez, sem precisar entrar pedido a pedido.</div>' +
+          '<div class="table-wrap"><table class="report"><thead><tr><th>SKU</th><th>Produto (exemplo)</th><th>Anúncios envolvidos</th><th>Situação</th><th>Escolher família manualmente</th></tr></thead><tbody>' +
+          conflicts.map(function (c) {
+            var situacao = c.nFamilias > 1 ? (c.nFamilias + ' famílias diferentes' + (c.semFamilia ? ' + algum anúncio sem família' : '')) : (c.semFamilia ? 'algum anúncio ainda sem família' : (SKU_MOTIVO_LABEL[c.motivo] || c.motivo));
+            return '<tr><td class="mono">' + esc(c.sku) + '</td><td class="cell-text">' + esc(c.produto || '—') + '</td><td>' + nn(c.nProdutos) + '</td><td><span class="tag warn">' + esc(situacao) + '</span></td>' +
+              '<td><div style="display:flex;gap:6px;align-items:center"><select class="select sm" data-skuconfsel="' + esc(c.sku) + '">' + familySelectOptionsHtml(null) + '</select><button class="btn-sm" data-skuconfapply="' + esc(c.sku) + '">Aplicar</button></div></td></tr>';
+          }).join('') +
+          '</tbody></table></div>')) +
+        '</div></div>';
+    }
     function renderAuditoria() {
+      var conflicts = auditSkuConflicts();
       var audit = auditOrphans();
       var nUnamb = audit.unambiguous.reduce(function (s, g) { return s + g.orphans.length; }, 0);
       var nAmb = audit.ambiguous.reduce(function (s, g) { return s + g.orphans.length; }, 0);
@@ -7923,7 +7973,8 @@
         });
         return rows.join('');
       }
-      appEl.innerHTML = head('Variações sem família em produtos que já têm classificação — mostra exatamente quais SKUs ficaram órfãos e por quê.') + tabsHtml('auditoria') +
+      appEl.innerHTML = head('SKUs duplicados entre anúncios e variações sem família — mostra exatamente por que o custo não chega ao Pedido.') + tabsHtml('auditoria') +
+        skuConflictsPanelHtml(conflicts) +
         '<div class="panel"><div class="ph"><h3>Variações sem família em produtos com custo cadastrado</h3><span class="footnote" style="margin:0">' + nn(total) + ' variação(ões) órfã(s)</span></div><div class="pb">' +
         (total === 0 ? '<span class="tag ok">🟢 Nenhuma variação órfã encontrada — todo produto com família cadastrada tem todas as suas variações vinculadas.</span>' :
           ('<div class="footnote" style="margin-bottom:8px">' + nn(nUnamb) + ' reparável(is) automaticamente (o produto tem uma única família entre as variações já classificadas) · ' + nn(nAmb) + ' ambígua(s) (mais de uma família entre as classificadas — nunca decidido por adivinhação, exige escolha manual em Produtos).</div>' +
@@ -7933,6 +7984,15 @@
           '</tbody></table></div>')) +
         '</div></div>';
       wireTabs();
+      appEl.querySelectorAll('[data-skuconfapply]').forEach(function (b) {
+        b.onclick = function () {
+          var sku = b.dataset.skuconfapply;
+          var sel = appEl.querySelector('[data-skuconfsel="' + CSS.escape(sku) + '"]');
+          var familyId = sel ? sel.value : '';
+          if (!familyId) { toast('Escolha uma família', 'Selecione a família antes de aplicar.', true); return; }
+          skuFamilyOverrideSave(sku, familyId).then(function () { render(); toast('Custo resolvido', 'SKU "' + sku + '" vinculado — todos os pedidos e anúncios com este SKU já mostram o custo, sem precisar resolver pedido a pedido.'); });
+        };
+      });
       var btn = q('#repairAll');
       if (btn) btn.onclick = function () {
         Promise.all(audit.unambiguous.map(function (g) { return assignFamilyToVariations(g.orphans.map(function (v) { return v.id; }), g.familyId); }))
