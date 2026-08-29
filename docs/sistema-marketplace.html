@@ -337,7 +337,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build f6c052c · 2026-08-29 17:14 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 523f08c · 2026-08-29 17:24 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -6278,7 +6278,7 @@ buffer/index.js:
     // PROMPT DEFINITIVO "Ficha do Pedido — Taxas Shopee + Custos da Loja + Cabeçalho + Resultado":
     // fonte única do cabeçalho, da seção 3 e do Resultado do Pedido — ver resolveSellerCharges().
     var sellerCharges = resolveSellerCharges(orderId);
-    var shipRow = mrShip.find(function (s) { return s.id === orderId; });
+    var shipRow = mrShip.find(function (s) { return s.orderId === orderId; });
     var wtx = wallet.filter(function (t) { return t.orderId === orderId; });
     var bip = shipBip[orderId];
     var st = pedidoConciliacaoStatus(orderId);
@@ -10339,10 +10339,20 @@ buffer/index.js:
       // ocorrência LOCAL AO GRUPO (orderId+ver+sku+refundId) — estável entre reexportações, porque o
       // bloco de linhas de um mesmo pedido mantém a mesma ordem relativa interna em qualquer exportação
       // Shopee do mesmo período de dados, mesmo que a posição do pedido no arquivo inteiro mude.
+      // RODADA 3 (auditoria) — achado real, confirmado empiricamente: nenhuma das 3 chaves abaixo
+      // (Renda/Shipping/Adjustment) incluía `opId`, ao contrário de Service Fee (ver comentário logo
+      // adiante, correção já feita numa fase anterior para ESSE MESMO padrão de bug). Como `byR`/`byS`/
+      // `byA` são reconstruídos a partir de `mrRenda`/`mrShip`/`mrAdj` — arrays em memória que carregam
+      // TODAS as operações juntas, sem filtro — reimportar o MESMO arquivo Income (mesmo conteúdo) numa
+      // operação QA diferente colidia com a chave já persistida pela operação anterior e a apagava por
+      // completo: teste com 2 operações reais no mesmo IndexedDB mostrou os 5.354 registros de Renda e
+      // os 71 de Adjustment da primeira operação sumindo inteiramente, substituídos pelos da segunda,
+      // assim que os mesmos 2 arquivos-fonte reais foram reimportados numa operação nova. `opId` incluído
+      // nas 3 chaves agora, replicando exatamente o padrão que já funcionava em Service Fee.
       var byR = {}; mrRenda.forEach(function (x) { byR[x.id] = x; }); var chR = [];
       var occCount = {};
       p.renda.forEach(function (row) {
-        var groupKey = row.orderId + '|' + row.ver + '|' + (row.sku || '') + '|' + (row.refundId || '');
+        var groupKey = opId + '|' + row.orderId + '|' + row.ver + '|' + (row.sku || '') + '|' + (row.refundId || '');
         var occ = occCount[groupKey] || 0; occCount[groupKey] = occ + 1;
         var id = groupKey + '|' + occ;
         if (!byR[id]) { var rec = Object.assign({ id: id, operationId: opId, fileName: file.name, importedAt: importedAt }, row); byR[id] = rec; chR.push(rec); stats.renda++; }
@@ -10350,7 +10360,7 @@ buffer/index.js:
       mrRenda = Object.values(byR);
       // Shipping (preserva investigação manual §21)
       var byS = {}; mrShip.forEach(function (x) { byS[x.id] = x; }); var chS = [];
-      p.ship.forEach(function (row) { var id = row.orderId; var ex = byS[id]; if (!ex) { byS[id] = Object.assign({ id: id, operationId: opId, invStatus: 'NAO_ANALISADO', invNote: '', invResp: '', importedAt: importedAt, fileName: file.name }, row); chS.push(byS[id]); stats.ship++; } else { ex.esperado = row.esperado; ex.real = row.real; ex.motivo = row.motivo; chS.push(ex); } });
+      p.ship.forEach(function (row) { var id = opId + '|' + row.orderId; var ex = byS[id]; if (!ex) { byS[id] = Object.assign({ id: id, operationId: opId, invStatus: 'NAO_ANALISADO', invNote: '', invResp: '', importedAt: importedAt, fileName: file.name }, row); chS.push(byS[id]); stats.ship++; } else { ex.esperado = row.esperado; ex.real = row.real; ex.motivo = row.motivo; chS.push(ex); } });
       mrShip = Object.values(byS);
       // Adjustment — mesmo achado real de auditoria do Renda (janelas sobrepostas duplicando
       // pedidos): `row.seq` era um contador de POSIÇÃO bruta entre todas as abas Adjustment desta
@@ -10359,7 +10369,7 @@ buffer/index.js:
       var byA = {}; mrAdj.forEach(function (x) { byA[x.id] = x; }); var chA = [];
       var occCountA = {};
       p.adj.forEach(function (row) {
-        var groupKey = (row.orderId || 'sem') + '|' + row.valor + '|' + (row.data || '');
+        var groupKey = opId + '|' + (row.orderId || 'sem') + '|' + row.valor + '|' + (row.data || '');
         var occ = occCountA[groupKey] || 0; occCountA[groupKey] = occ + 1;
         var id = groupKey + '|' + occ;
         if (!byA[id]) { byA[id] = Object.assign({ id: id, operationId: opId, importedAt: importedAt }, row); chA.push(byA[id]); stats.adj++; }
@@ -11210,13 +11220,13 @@ buffer/index.js:
     var rows = orders2.map(function (s) { return '<tr><td class="mono">' + esc(s.orderId) + '</td><td class="nowrap">' + brlC(s.esperado) + '</td><td class="nowrap">' + brlC(s.real) + '</td><td class="nowrap neg">' + brlC(s.real - s.esperado) + '</td><td><select class="select sm mrinv" data-oid="' + esc(s.orderId) + '">' + Object.keys(INV).map(function (k) { return '<option value="' + k + '"' + (s.invStatus === k ? ' selected' : '') + '>' + INV[k] + '</option>'; }).join('') + '</select></td></tr>'; }).join('');
     panel.innerHTML = '<div class="dh"><div><b>SKU ' + esc(sku) + '</b> · ' + nn(orders2.length) + ' pedidos com divergência</div><button class="x">&times;</button></div><div class="dbd"><div class="panel"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Esperado</th><th>Real</th><th>Diferença</th><th>Investigação</th></tr></thead><tbody>' + rows + '</tbody></table></div></div><div class="footnote">A classificação de investigação é interna e preservada em novas importações.</div></div>';
     panel.querySelector('.x').onclick = function () { d.remove(); };
-    panel.querySelectorAll('.mrinv').forEach(function (sel) { sel.onchange = function () { var rec = mrShip.find(function (x) { return x.id === sel.dataset.oid; }); if (rec) { rec.invStatus = sel.value; putMany('mrship', [rec]).then(function () { toast('Investigação atualizada', INV[sel.value]); }); } }; });
+    panel.querySelectorAll('.mrinv').forEach(function (sel) { sel.onchange = function () { var rec = mrShip.find(function (x) { return x.orderId === sel.dataset.oid; }); if (rec) { rec.invStatus = sel.value; putMany('mrship', [rec]).then(function () { toast('Investigação atualizada', INV[sel.value]); }); } }; });
   }
   function openMrPedido(orderId) {
     var e = mrEngine(); var o = e.orders.find(function (x) { return x.orderId === orderId; }); if (!o) { toast('Não encontrado', orderId, true); return; }
     var d = document.createElement('div'); d.className = 'drawer'; var panel = document.createElement('div'); panel.className = 'drawer-panel'; panel.style.width = '620px'; panel.style.maxWidth = '96vw';
     d.appendChild(panel); d.onclick = function (ev) { if (ev.target === d) d.remove(); }; document.body.appendChild(d);
-    var ord = orders.find(function (x) { return x.id === orderId; }); var oc = occ.find(function (x) { return !x.isDemo && x.orderId === orderId; }); var ship = mrShip.find(function (x) { return x.id === orderId; });
+    var ord = orders.find(function (x) { return x.id === orderId; }); var oc = occ.find(function (x) { return !x.isDemo && x.orderId === orderId; }); var ship = mrShip.find(function (x) { return x.orderId === orderId; });
     var svc = resolveServiceFeeDetails((ord && ord.operationId) || opActiveOrNull() || null, orderId).rows;
     panel.innerHTML = '<div class="dh"><div><b>Pedido ' + esc(orderId) + '</b> <span class="footnote">Extrato financeiro</span></div><button class="x">&times;</button></div><div class="dbd">' +
       '<div class="panel"><div class="ph"><h3>Renda (Income)</h3></div><div class="pb">' + kv('Preço do produto', brlC(o.preco)) + kv('Reembolso', brlC(o.reembolso)) + kv('PIX', brlC(o.pix)) + kv('Cupom', brlC(o.cupom)) + kv('Comissão', brlC(o.comissao)) + kv('Serviço', brlC(o.servico)) + kv('Afiliado', brlC(o.afiliado)) + kv('Frete parceiro', brlC(o.freteParceiro)) + kv('Pagamento liberado', brlC(o.liberado)) + '</div></div>' +
