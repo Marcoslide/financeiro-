@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build b794edb · 2026-08-29 22:19 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build c6384e6 · 2026-08-29 22:35 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -4684,6 +4684,7 @@ buffer/index.js:
   function skuFamilyOverrideHistoryLog(skuKey, skuOriginal, familiaAnteriorId, familiaNovaId, origem) {
     var rec = {
       id: 'SFOH-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+      operationId: opActiveOrNull(),
       skuKey: skuKey, skuOriginal: skuOriginal,
       familiaAnteriorId: familiaAnteriorId || null, familiaAnteriorNome: familiaAnteriorId ? (skuFamById[familiaAnteriorId] ? skuFamById[familiaAnteriorId].name : null) : null,
       familiaNovaId: familiaNovaId || null, familiaNovaNome: familiaNovaId ? (skuFamById[familiaNovaId] ? skuFamById[familiaNovaId].name : null) : null,
@@ -4694,7 +4695,8 @@ buffer/index.js:
   }
   function skuFamilyOverrideHistoryFor(skuRaw) {
     var key = normalizeSkuKey(skuRaw);
-    return skuFamilyOverrideHistory.filter(function (h) { return h.skuKey === key; }).sort(function (a, b) { return b.alteradoEm.localeCompare(a.alteradoEm); });
+    var opId = opActiveOrNull();
+    return skuFamilyOverrideHistory.filter(function (h) { return h.skuKey === key && (opId === OP_ALL || !opId || !h.operationId || h.operationId === opId); }).sort(function (a, b) { return b.alteradoEm.localeCompare(a.alteradoEm); });
   }
   // CRÍTICO (achado da Prioridade 15 — auditoria de stores/keyPath): `skuFamilyOverrides` nunca
   // gravava `operationId` e o mapa em memória nunca era filtrado por operação (nem escrita nem
@@ -4744,26 +4746,34 @@ buffer/index.js:
     // é um texto de SKU plausível em qualquer loja) sem colidir fisicamente: se esta operação já tinha
     // seu PRÓPRIO mapeamento pra este idKey, preserva a mesma chave física (nunca recalcula — ver nota
     // grande em scopedNewKey); só ganha chave nova quando o idKey já está ocupado por OUTRA operação.
-    var existing = productIdentityMappingsAll[idKey];
-    var diskId = (existing && existing.operationId === opId) ? (existing._diskId || existing.id)
-      : (existing && existing.operationId && existing.operationId !== opId) ? scopedNewKey(idKey, opId, true)
-      : idKey;
+    // BUG REAL (regressão multiop desta auditoria) — `productIdentityMappingsAll` era um dict de UM
+    // slot por idKey; 2 operações resolvendo o MESMO SKU+produto+variação (texto plausível em
+    // qualquer loja) colidiam em memória — a última carregada no boot vencia o slot, e a "perdedora"
+    // ficava sem seu próprio registro em toda sessão seguinte (mesmo com o disco correto), revertendo
+    // pra custo não resolvido. Agora cada idKey guarda um ARRAY de candidatos (1 por operação/legado).
+    var candidates = productIdentityMappingsAll[idKey] || [];
+    var existingMine = candidates.filter(function (m) { return m.operationId === opId; })[0];
+    var existingOther = candidates.filter(function (m) { return m.operationId && m.operationId !== opId; })[0];
+    var diskId = existingMine ? (existingMine._diskId || existingMine.id) : (existingOther ? scopedNewKey(idKey, opId, true) : idKey);
     var rec = { id: idKey, _diskId: diskId, skuKey: skuKey, skuOriginal: skuRaw, productName: productName || null, variationName: variationName || null, variationId: variationId, operationId: opId, resolvedAt: new Date().toISOString(), method: 'MANUAL_IDENTITY', status: 'ACTIVE' };
-    productIdentityMappings[idKey] = rec; productIdentityMappingsAll[idKey] = rec;
+    productIdentityMappings[idKey] = rec;
+    productIdentityMappingsAll[idKey] = candidates.filter(function (m) { return m.operationId !== opId; }).concat([rec]);
     var toWrite = Object.assign({}, rec, { id: diskId }); delete toWrite._diskId;
     return putMany('productidentitymappings', [toWrite]).then(function () { rebuildSkuCost(); return rec; });
   }
   function productIdentityMappingRemove(idKey) {
     var rec = productIdentityMappings[idKey];
     if (!idKey || !rec) return Promise.resolve();
-    delete productIdentityMappings[idKey]; delete productIdentityMappingsAll[idKey];
+    delete productIdentityMappings[idKey];
+    var candidates = productIdentityMappingsAll[idKey] || [];
+    productIdentityMappingsAll[idKey] = candidates.filter(function (m) { return m !== rec; });
     return delOne('productidentitymappings', rec._diskId || rec.id).then(function () { rebuildSkuCost(); });
   }
   // Espelha Produtos.legacyReassign() (§5-7 do painel de cobertura) pro mapeamento manual: só
   // atribui um registro LEGACY_UNASSIGNED a uma operação real quando o operador escolhe
   // explicitamente registro + destino, preserva histórico dentro do próprio registro.
   function productIdentityMappingLegacyReassign(idKey, targetOpId, motivo) {
-    var rec = productIdentityMappingsAll[idKey];
+    var rec = (productIdentityMappingsAll[idKey] || []).filter(function (m) { return m.operationId === LEGACY_UNASSIGNED; })[0];
     if (!rec || rec.operationId !== LEGACY_UNASSIGNED) return Promise.reject(new Error('Mapeamento não está em LEGACY_UNASSIGNED — recarregue a página e tente novamente.'));
     var now = new Date().toISOString();
     var oldDiskId = rec._diskId || rec.id;
@@ -4981,7 +4991,7 @@ buffer/index.js:
         changed.push(next);
       });
       orders = Object.values(byId);
-      var batch = { id: 'b' + Date.now() + Math.round(performance.now()), module: 'Pedidos', filename: file.name, createdAt: new Date().toISOString(), seen: Object.keys(groups).length, itemsSeen: itemsSeen, novo: novo, upd: upd, unch: unch, statusChanged: statusChanged, brFilled: brFilled, periodStart: parsed.periodStart, periodEnd: parsed.periodEnd };
+      var batch = { id: 'b' + Date.now() + Math.round(performance.now()), operationId: opId, module: 'Pedidos', filename: file.name, createdAt: new Date().toISOString(), seen: Object.keys(groups).length, itemsSeen: itemsSeen, novo: novo, upd: upd, unch: unch, statusChanged: statusChanged, brFilled: brFilled, periodStart: parsed.periodStart, periodEnd: parsed.periodEnd };
       batches.unshift(batch);
       // GATE 2 (certificação pré-go-live, item 9): grava cada pedido na chave física já decidida acima
       // (`_diskId` — a própria, se já existia; nova só se genuinamente novo) — nunca recalculada aqui.
@@ -5079,7 +5089,7 @@ buffer/index.js:
       });
       occ = Object.values(byId);
       var label = { RETURN_REFUND: 'Devoluções', ORDER_CANCELLATION: 'Cancelamentos', FAILED_DELIVERY: 'Falhas de entrega' }[type];
-      var batch = { id: batchId, module: 'Devolução · ' + label, filename: file.name, createdAt: importedAt, seen: Object.keys(groups).length, itemsSeen: itemsSeen, novo: novo, upd: upd, unch: unch, stale: stale, periodStart: parsed.periodStart ? new Date(parsed.periodStart).toISOString() : null, periodEnd: parsed.periodEnd ? new Date(parsed.periodEnd).toISOString() : null, newStatuses: Object.keys(newStatuses), statusChanged: statusChanged, novaCompensacao: novaCompensacao, rastreioAtualizado: rastreioAtualizado, dadosInternosPreservados: dadosInternosPreservados };
+      var batch = { id: batchId, operationId: opId, module: 'Devolução · ' + label, filename: file.name, createdAt: importedAt, seen: Object.keys(groups).length, itemsSeen: itemsSeen, novo: novo, upd: upd, unch: unch, stale: stale, periodStart: parsed.periodStart ? new Date(parsed.periodStart).toISOString() : null, periodEnd: parsed.periodEnd ? new Date(parsed.periodEnd).toISOString() : null, newStatuses: Object.keys(newStatuses), statusChanged: statusChanged, novaCompensacao: novaCompensacao, rastreioAtualizado: rastreioAtualizado, dadosInternosPreservados: dadosInternosPreservados };
       batches.unshift(batch); lastImportStamp = importedAt;
       // GATE 2 — grava cada ocorrência na chave física já decidida (própria, se já existia; nova só se
       // genuinamente nova) — nunca recalculada aqui.
@@ -5347,14 +5357,31 @@ buffer/index.js:
     if (!res.ok) return Promise.reject(new Error(res.message));
     var orderId = res.order.id;
     var now = new Date().toISOString(); var ex = shipBip[orderId];
-    if (ex) { ex.history = ex.history || []; ex.history.unshift({ at: now, note: note || '' }); ex.lastScanAt = now; if (note) ex.note = note; }
+    if (ex) {
+      ex.history = ex.history || []; ex.history.unshift({ at: now, note: note || '' }); ex.lastScanAt = now; if (note) ex.note = note;
+      var toWriteEx = Object.assign({}, ex, { id: ex._diskId || ex.id }); delete toWriteEx._diskId;
+      return putMany('shipbip', [toWriteEx]).then(function () { return ex; });
+    }
     // Achado real da Prioridade 13 (auditoria): shipBip nunca gravava operationId e o boot nunca
     // filtrava esse objeto por operação (byOp() só cobria orders/wallet/mrRenda/etc — ver comentário
     // §AS/§AT/§AU) — bipes de uma operação vazavam para a tela de Expedição de outra operação vazia.
     // `res.order` já vem do array `orders` já escopado pela operação ativa, então o `orderId`
-    // resolvido aqui já pertence à operação certa — só falta persistir o rótulo.
-    else { ex = shipBip[orderId] = { id: orderId, orderId: orderId, operationId: opActiveOrNull(), bipedAt: now, lastScanAt: now, bipedBy: 'Operador', note: note || '', scannedVia: res.via, scannedValue: rawInput, history: [] }; }
-    return putMany('shipbip', [ex]).then(function () { return ex; });
+    // resolvido aqui já pertence à operação certa.
+    // BUG REAL (regressão multiop desta auditoria) — mesmo com o operationId gravado acima, a chave
+    // FÍSICA em disco continuava sempre o `orderId` cru, sem nenhum escopo: bipar o mesmo texto de
+    // orderId em 2 operações diferentes sobrescrevia fisicamente o bipe da 1ª. Mesmo padrão
+    // já validado em importPedidos/importPosVenda/syncRows (Gate 2): 1 leitura extra do disco
+    // INTEIRO só pra descobrir se este orderId já está ocupado por OUTRA operação, usada apenas
+    // pra decidir a chave física de um bipe GENUINAMENTE NOVO nesta operação.
+    var opId = opActiveOrNull();
+    return getAll('shipbip').then(function (allOnDisk) {
+      var claimedByOtherOp = {};
+      (allOnDisk || []).forEach(function (b) { if (b.operationId && b.operationId !== opId) claimedByOtherOp[b.orderId] = true; });
+      var diskId = claimedByOtherOp[orderId] ? scopedNewKey(orderId, opId, true) : orderId;
+      ex = shipBip[orderId] = { id: orderId, _diskId: diskId, orderId: orderId, operationId: opId, bipedAt: now, lastScanAt: now, bipedBy: 'Operador', note: note || '', scannedVia: res.via, scannedValue: rawInput, history: [] };
+      var toWrite = Object.assign({}, ex, { id: diskId }); delete toWrite._diskId;
+      return putMany('shipbip', [toWrite]).then(function () { return ex; });
+    });
   }
   // Full/FBS não é despachado por bipe interno — a Shopee expede pelo próprio centro de
   // distribuição. A confirmação de saída de um Full vem da própria transição de status
@@ -7675,7 +7702,7 @@ buffer/index.js:
   }
   function createPlan(dto) {
     var now = new Date().toISOString();
-    var p = { id: 'p' + Date.now() + Math.round(Math.random() * 1e6), title: dto.title, problem: dto.problem || null, origin: dto.origin || 'user', status: dto.status || 'PLANEJADO', ownerName: dto.ownerName || null,
+    var p = { id: 'p' + Date.now() + Math.round(Math.random() * 1e6), operationId: opActiveOrNull(), title: dto.title, problem: dto.problem || null, origin: dto.origin || 'user', status: dto.status || 'PLANEJADO', ownerName: dto.ownerName || null,
       indicator: dto.indicator || 'Impacto líquido do escopo (R$)', indicatorKind: dto.indicatorKind || 'liquido', causeKey: dto.causeKey || null,
       scopeSkus: dto.scopeSkus || dto.relatedSkus || [], targetValue: dto.targetValue != null ? dto.targetValue : null, windowBeforeDays: 30, windowAfterDays: 30,
       relatedFindings: dto.relatedFindings || [], checklist: [], implementedAt: null, baselineValue: null, createdAt: now };
@@ -8428,7 +8455,7 @@ buffer/index.js:
       // que é a sequência autoritativa para a reconciliação (mesmo com timestamps repetidos).
       parsed.rows.slice().reverse().forEach(function (row) { var id = walletKey(row, opId); if (byId[id]) { unch++; return; } var cat = walletCat(row.tipo, row.desc, row.amount); var orderId = extractWalletOrderId(row.orderId, row.desc); var t = { id: id, operationId: opId, seq: ++maxSeq, origin: 'SHOPEE', date: row.date, dateRaw: row.dateRaw, tipo: row.tipo, desc: row.desc, category: cat, orderId: orderId, dir: row.dir, amount: row.amount, balance: row.balance, adjust: row.adjust, status: row.status, fileName: file.name, importedAt: importedAt }; byId[id] = t; changed.push(t); novo++; });
       wallet = Object.values(byId);
-      var batch = { id: 'wb' + Date.now() + Math.round(performance.now()), module: 'Carteira', filename: file.name, createdAt: importedAt, seen: parsed.rows.length, novo: novo, upd: 0, unch: unch, itemsSeen: parsed.rows.length };
+      var batch = { id: 'wb' + Date.now() + Math.round(performance.now()), operationId: opId, module: 'Carteira', filename: file.name, createdAt: importedAt, seen: parsed.rows.length, novo: novo, upd: 0, unch: unch, itemsSeen: parsed.rows.length };
       batches.unshift(batch); lastImportStamp = importedAt;
       return Promise.all([putMany('wallet', changed), putMany('batches', [batch])]).then(function () { return batch; });
     });
@@ -9372,7 +9399,7 @@ buffer/index.js:
       // §20: metadados do ARQUIVO (não do resgate) para a aba Importações — computados uma vez aqui,
       // a partir de TODAS as linhas deste arquivo (novas + atualizadas + sem alteração).
       var pedSet = {}, resgSet = {}; parsed.rows.forEach(function (row) { pedSet[row.pedido] = 1; resgSet[row.resgate] = 1; });
-      var batch = { id: 'ac' + Date.now() + Math.round(performance.now()), module: 'Shopee Acelera', filename: file.name, createdAt: importedAt, seen: parsed.rows.length, novo: novo, upd: upd, unch: unch, itemsSeen: parsed.rows.length, pedidosUnicos: Object.keys(pedSet).length, resgatesUnicos: Object.keys(resgSet).length, periodMin: parsed.periodReal ? parsed.periodReal.min : null, periodMax: parsed.periodReal ? parsed.periodReal.max : null };
+      var batch = { id: 'ac' + Date.now() + Math.round(performance.now()), operationId: opId, module: 'Shopee Acelera', filename: file.name, createdAt: importedAt, seen: parsed.rows.length, novo: novo, upd: upd, unch: unch, itemsSeen: parsed.rows.length, pedidosUnicos: Object.keys(pedSet).length, resgatesUnicos: Object.keys(resgSet).length, periodMin: parsed.periodReal ? parsed.periodReal.min : null, periodMax: parsed.periodReal ? parsed.periodReal.max : null };
       batches.unshift(batch); lastImportStamp = importedAt;
       return Promise.all([putMany('acelera', changed), putMany('batches', [batch]), putMany('settings', [{ id: 'aceleraSummary', data: aceleraSummary }])]).then(function () { return { batch: batch, novo: novo, upd: upd, unch: unch }; });
     });
@@ -10011,7 +10038,7 @@ buffer/index.js:
           ex.history = ex.history || []; ex.history.unshift({ at: importedAt, dedOld: ex.totalDeducted, dedNew: row.totalDeducted }); ex.monthlyExpense = row.monthlyExpense; ex.status = row.status; ex.totalDeducted = row.totalDeducted; ex.amsCredit = row.amsCredit; ex.totalPending = row.totalPending; ex.lastImportAt = importedAt; changed.push(ex); upd++; });
         affVb = Object.values(byId3);
       }
-      var batch = { id: 'af' + Date.now() + Math.round(performance.now()), module: 'Afiliados', filename: file.name, typeLabel: typeLabel, createdAt: importedAt, seen: parsed.rows.length, novo: novo, upd: upd, unch: unch, itemsSeen: parsed.rows.length };
+      var batch = { id: 'af' + Date.now() + Math.round(performance.now()), operationId: opId, module: 'Afiliados', filename: file.name, typeLabel: typeLabel, createdAt: importedAt, seen: parsed.rows.length, novo: novo, upd: upd, unch: unch, itemsSeen: parsed.rows.length };
       batches.unshift(batch); lastImportStamp = importedAt;
       return Promise.all([putMany(store, changed), putMany('batches', [batch])]).then(function () { return { batch: batch, type: parsed.type, typeLabel: typeLabel, novo: novo, upd: upd, unch: unch }; });
     });
@@ -10595,7 +10622,7 @@ buffer/index.js:
       });
       mrSvc = Object.values(byV);
       mrSummary = { summary: p.summary, period: p.period, importedAt: importedAt, fileName: file.name, diag: p.diag };
-      var batch = { id: 'mr' + Date.now() + Math.round(performance.now()), module: 'Minha Renda', filename: file.name, createdAt: importedAt, seen: p.renda.length, novo: stats.renda, upd: 0, unch: p.renda.length - stats.renda, itemsSeen: p.renda.length };
+      var batch = { id: 'mr' + Date.now() + Math.round(performance.now()), operationId: opId, module: 'Minha Renda', filename: file.name, createdAt: importedAt, seen: p.renda.length, novo: stats.renda, upd: 0, unch: p.renda.length - stats.renda, itemsSeen: p.renda.length };
       batches.unshift(batch); lastImportStamp = importedAt;
       // persiste em segundo plano (não bloqueia a UI); a memória já está atualizada, então a tela reflete na hora
       putMany('mrrenda', chR); putMany('mrship', chS); putMany('mradj', chA); putMany('mrsvc', chV); putMany('settings', [{ id: 'mrSummary', data: mrSummary }]); putMany('batches', [batch]);
@@ -12082,7 +12109,9 @@ buffer/index.js:
     function q(sel) { return appEl.querySelector(sel); }
     function reindex() { S2.varByProduct = {}; S2.variations.forEach(function (v) { (S2.varByProduct[v.productId] = S2.varByProduct[v.productId] || []).push(v); }); }
     function famById() { var m = {}; S2.families.forEach(function (f) { m[f.id] = f; }); return m; }
-    function saveVars(vs) { return dbPut('variations', vs).then(function () { onChange(); }); }
+    // BUG REAL (regressão multiop desta auditoria) — grava sempre pela própria chave física
+    // (`_diskId`, se existir), nunca recalculada, mesmo padrão de saveOcc/importPedidos (Gate 2).
+    function saveVars(vs) { return dbPut('variations', vs.map(function (v) { var c = Object.assign({}, v); c.id = v._diskId || v.id; delete c._diskId; return c; })).then(function () { onChange(); }); }
     function afterFamChange(items) { return dbPut('pfamilies', items).then(function () { onChange(); }); }
     // §5/§6 do prompt "custo de Produtos não chega em Pedidos" — função canônica ÚNICA para atribuir
     // família a variações, usada por toda ação de classificação (individual, master ou em massa):
@@ -12106,6 +12135,18 @@ buffer/index.js:
     // (mesma regra de compatibilidade retroativa dos outros stores).
     function syncRows(rows, filename) {
       var opId = opActiveOrNull(); if (!opId) return Promise.reject(new Error(OP_BLOCK_MSG));
+      // BUG REAL (regressão multiop desta auditoria) — antes desta correção a chave física de
+      // `products`/`variations` era sempre `shopeeProductId`/`productId+'::'+variationKey`
+      // crus, sem nenhum escopo por operação: importar o mesmo Shopee Product ID numa 2ª
+      // operação sobrescrevia fisicamente o catálogo inteiro da 1ª. Mesmo padrão já validado em
+      // importPedidos/importPosVenda/caixaCloseDay (Gate 2): 1 leitura extra do disco INTEIRO só
+      // para descobrir quais ids já estão ocupados por OUTRA operação, usada apenas para decidir
+      // a chave física de um registro GENUINAMENTE NOVO nesta operação.
+      return Promise.all([dbGetAll('products'), dbGetAll('variations')]).then(function (diskRes) {
+      var allProdOnDisk = diskRes[0] || [], allVarOnDisk = diskRes[1] || [];
+      var claimedProdByOther = {}, claimedVarByOther = {};
+      allProdOnDisk.forEach(function (p) { if (p.operationId && p.operationId !== opId) claimedProdByOther[scopedDecodeId(p.id, p.operationId)] = true; });
+      allVarOnDisk.forEach(function (v) { if (v.operationId && v.operationId !== opId) claimedVarByOther[scopedDecodeId(v.id, v.operationId)] = true; });
       var now = new Date().toISOString();
       var errors = rows.filter(function (r) { return r.error; }).length;
       var valid = rows.filter(function (r) { return !r.error && r.shopeeProductId; });
@@ -12117,10 +12158,13 @@ buffer/index.js:
       valid.forEach(function (r) { seen[r.shopeeProductId] = 1; lastRowByKey[r.shopeeProductId + '::' + r.variationKey] = r; });
       res.productsSeen = Object.keys(seen).length;
       var cp = [], cv = [];
-      Object.keys(seen).forEach(function (pid) { var name = nameById[pid] || pid, ex = prodById[pid]; if (!ex) { var p = { id: pid, shopeeProductId: pid, name: name, principalSku: null, status: 'ACTIVE', operationId: opId, firstSeenAt: now, lastSeenAt: now }; prodById[pid] = p; S2.products.push(p); cp.push(p); res.newProducts++; } else { ex.lastSeenAt = now; if (ex.name !== name) { ex.name = name; res.updated++; } cp.push(ex); } });
-      Object.keys(lastRowByKey).forEach(function (key) { var r = lastRowByKey[key]; res.variationsSeen++; var id = r.shopeeProductId + '::' + r.variationKey, ex = varById[id], price = r.shopeeFullPrice == null ? null : Number(r.shopeeFullPrice); var prod = prodById[r.shopeeProductId]; if (prod && !prod.principalSku && r.referenceSku) prod.principalSku = r.referenceSku; if (!ex) { var v = { id: id, productId: r.shopeeProductId, shopeeVariationId: r.shopeeVariationId || '', variationKey: r.variationKey, variationName: r.variationName, sku: r.sku, referenceSku: r.referenceSku, gtin: r.gtin, shopeeFullPrice: price, sellerStock: r.sellerStock, failReason: r.failReason, familyId: null, closingPrice: null, operationId: opId, firstSeenAt: now, lastSeenAt: now }; varById[id] = v; S2.variations.push(v); cv.push(v); res.newVariations++; } else { var chg = ex.variationName !== r.variationName || ex.sku !== r.sku || ex.referenceSku !== r.referenceSku || ex.gtin !== r.gtin || ex.sellerStock !== r.sellerStock || (ex.shopeeFullPrice == null ? null : Number(ex.shopeeFullPrice)) !== price; ex.lastSeenAt = now; if (chg) { ex.variationName = r.variationName; ex.sku = r.sku; ex.referenceSku = r.referenceSku; ex.gtin = r.gtin; ex.shopeeFullPrice = price; ex.sellerStock = r.sellerStock; ex.shopeeVariationId = r.shopeeVariationId || ''; res.updated++; } else res.unchanged++; cv.push(ex); } });
+      Object.keys(seen).forEach(function (pid) { var name = nameById[pid] || pid, ex = prodById[pid]; if (!ex) { var p = { id: pid, shopeeProductId: pid, name: name, principalSku: null, status: 'ACTIVE', operationId: opId, firstSeenAt: now, lastSeenAt: now }; p._diskId = claimedProdByOther[pid] ? scopedNewKey(pid, opId, true) : pid; prodById[pid] = p; S2.products.push(p); cp.push(p); res.newProducts++; } else { ex.lastSeenAt = now; if (ex.name !== name) { ex.name = name; res.updated++; } cp.push(ex); } });
+      Object.keys(lastRowByKey).forEach(function (key) { var r = lastRowByKey[key]; res.variationsSeen++; var id = r.shopeeProductId + '::' + r.variationKey, ex = varById[id], price = r.shopeeFullPrice == null ? null : Number(r.shopeeFullPrice); var prod = prodById[r.shopeeProductId]; if (prod && !prod.principalSku && r.referenceSku) prod.principalSku = r.referenceSku; if (!ex) { var v = { id: id, productId: r.shopeeProductId, shopeeVariationId: r.shopeeVariationId || '', variationKey: r.variationKey, variationName: r.variationName, sku: r.sku, referenceSku: r.referenceSku, gtin: r.gtin, shopeeFullPrice: price, sellerStock: r.sellerStock, failReason: r.failReason, familyId: null, closingPrice: null, operationId: opId, firstSeenAt: now, lastSeenAt: now }; v._diskId = claimedVarByOther[id] ? scopedNewKey(id, opId, true) : id; varById[id] = v; S2.variations.push(v); cv.push(v); res.newVariations++; } else { var chg = ex.variationName !== r.variationName || ex.sku !== r.sku || ex.referenceSku !== r.referenceSku || ex.gtin !== r.gtin || ex.sellerStock !== r.sellerStock || (ex.shopeeFullPrice == null ? null : Number(ex.shopeeFullPrice)) !== price; ex.lastSeenAt = now; if (chg) { ex.variationName = r.variationName; ex.sku = r.sku; ex.referenceSku = r.referenceSku; ex.gtin = r.gtin; ex.shopeeFullPrice = price; ex.sellerStock = r.sellerStock; ex.shopeeVariationId = r.shopeeVariationId || ''; res.updated++; } else res.unchanged++; cv.push(ex); } });
       reindex();
-      return Promise.all([dbPut('products', cp), dbPut('variations', cv)]).then(function () { var b = { id: uuid(), createdAt: now, filename: filename || 'planilha.xlsx', total: res.total, productsSeen: res.productsSeen, variationsSeen: res.variationsSeen, newProducts: res.newProducts, newVariations: res.newVariations, updated: res.updated, unchanged: res.unchanged, errors: res.errors }; S2.imports.unshift(b); return dbPut('pimports', [b]).then(function () { onChange(); return res; }); });
+      var cpDisk = cp.map(function (p) { var c = Object.assign({}, p); c.id = p._diskId || p.id; delete c._diskId; return c; });
+      var cvDisk = cv.map(function (v) { var c = Object.assign({}, v); c.id = v._diskId || v.id; delete c._diskId; return c; });
+      return Promise.all([dbPut('products', cpDisk), dbPut('variations', cvDisk)]).then(function () { var b = { id: uuid(), operationId: opId, createdAt: now, filename: filename || 'planilha.xlsx', total: res.total, productsSeen: res.productsSeen, variationsSeen: res.variationsSeen, newProducts: res.newProducts, newVariations: res.newVariations, updated: res.updated, unchanged: res.unchanged, errors: res.errors }; S2.imports.unshift(b); return dbPut('pimports', [b]).then(function () { onChange(); return res; }); });
+      });
     }
     function stats() { return { products: S2.products.length, variations: S2.variations.length, withoutFamily: S2.variations.filter(function (v) { return !v.familyId; }).length, withoutClosing: S2.variations.filter(function (v) { return v.closingPrice == null; }).length, families: S2.families.length }; }
 
@@ -12245,7 +12289,7 @@ buffer/index.js:
     // Ativar/Inativar muda o status do PRODUTO, que agora também afeta a resolução de conflito de SKU
     // (rebuildSkuCost ignora variações de anúncios inativos) — por isso precisa disparar onChange()
     // igual a saveVars/afterFamChange, e não só persistir o array de produtos sozinho.
-    function statusBulk(st) { var pset = {}; selIds().forEach(function (id) { var v = S2.variations.find(function (x) { return x.id === id; }); if (v) pset[v.productId] = 1; }); var ch = []; S2.products.forEach(function (p) { if (pset[p.id]) { p.status = st; ch.push(p); } }); dbPut('products', ch).then(function () { onChange(); S2.selected.clear(); S2.allFiltered = false; refresh(); toast('Status alterado', 'Anúncios ' + (st === 'ACTIVE' ? 'ativados' : 'inativados') + '.'); }); }
+    function statusBulk(st) { var pset = {}; selIds().forEach(function (id) { var v = S2.variations.find(function (x) { return x.id === id; }); if (v) pset[v.productId] = 1; }); var ch = []; S2.products.forEach(function (p) { if (pset[p.id]) { p.status = st; ch.push(p); } }); dbPut('products', ch.map(function (p) { var c = Object.assign({}, p); c.id = p._diskId || p.id; delete c._diskId; return c; })).then(function () { onChange(); S2.selected.clear(); S2.allFiltered = false; refresh(); toast('Status alterado', 'Anúncios ' + (st === 'ACTIVE' ? 'ativados' : 'inativados') + '.'); }); }
     function openAssign() {
       var ids = selIds(), actives = S2.families.filter(function (f) { return f.status === 'ACTIVE'; });
       var creating = false, chosen = '';
@@ -12503,7 +12547,7 @@ buffer/index.js:
       };
     }
     function legacyMappingsNow() {
-      return Object.keys(productIdentityMappingsAll).map(function (k) { return productIdentityMappingsAll[k]; }).filter(function (m) { return m.operationId === LEGACY_UNASSIGNED; });
+      return Object.keys(productIdentityMappingsAll).reduce(function (out, k) { return out.concat(productIdentityMappingsAll[k] || []); }, []).filter(function (m) { return m.operationId === LEGACY_UNASSIGNED; });
     }
     // §9 do prompt "SKU compartilhado — definição correta": SKU repetido em OUTRA operação nunca é
     // conflito — só conta como compartilhado quando 2+ productId DIFERENTES reivindicam o mesmo SKU
@@ -12727,7 +12771,17 @@ buffer/index.js:
     return {
       render: render,
       getData: function () { return { products: S2.products, variations: S2.variations, families: S2.families }; },
-      load: function () { return Promise.all([dbGetAll('products'), dbGetAll('variations'), dbGetAll('pfamilies'), dbGetAll('pimports')]).then(function (r) { S2.products = r[0]; S2.variations = r[1]; S2.families = r[2]; S2.imports = r[3].sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); }); reindex(); }); },
+      // BUG REAL (regressão multiop desta auditoria, achado #1) — `products`/`variations` nunca
+      // passavam pelo padrão de identidade escopada do Gate 2: 2 operações com o mesmo `ID do
+      // Produto` Shopee colidiam fisicamente na chave, destruindo o catálogo de uma delas. Mesmo
+      // tratamento já validado em orders/occ: decodifica o `.id` (remove prefixo de colisão, se
+      // houver) e guarda a chave física real em `_diskId` — nunca recalculada nas escritas
+      // (syncRows/saveVars/statusBulk), só atribuída na criação de um registro genuinamente novo.
+      load: function () { return Promise.all([dbGetAll('products'), dbGetAll('variations'), dbGetAll('pfamilies'), dbGetAll('pimports')]).then(function (r) {
+        S2.products = (r[0] || []).map(function (p) { p._diskId = p.id; p.id = scopedDecodeId(p.id, p.operationId); return p; });
+        S2.variations = (r[1] || []).map(function (v) { v._diskId = v.id; v.id = scopedDecodeId(v.id, v.operationId); return v; });
+        S2.families = r[2]; S2.imports = r[3].sort(function (a, b) { return b.createdAt.localeCompare(a.createdAt); }); reindex();
+      }); },
       reset: function () { S2.products = []; S2.variations = []; S2.families = []; S2.imports = []; S2.selected.clear(); S2.expanded.clear(); reindex(); },
       // Correção "Identidade canônica — Fase 2" (fechamento de escopo, §2 da auditoria pré-go-live):
       // filtra o catálogo já carregado em memória para a operação ativa, EXATAMENTE o mesmo padrão
@@ -12757,6 +12811,10 @@ buffer/index.js:
         S2.products = S2.products.filter(function (p) { var keep = !p.operationId || p.operationId === opId; if (keep) keepP[p.id] = 1; return keep; });
         S2.variations = S2.variations.filter(function (v) { return (!v.operationId || v.operationId === opId) && keepP[v.productId]; });
         S2.families = S2.families.filter(function (f) { return !f.operationId || f.operationId === opId; });
+        // BUG REAL (achado novo da auditoria estática de 60 stores) — `pimports` (log de importação do
+        // catálogo) gravava sem `operationId` e nunca era filtrado: histórico de import de Produtos de
+        // uma operação aparecia em todas as outras. Mesma classe de bug de `batches`/`plans`.
+        S2.imports = S2.imports.filter(function (b) { return !b.operationId || b.operationId === opId; });
         reindex();
       },
       // Robusto também em "Todas as Operações" (scopeToOperation nunca roda nesse modo, então
@@ -13200,7 +13258,8 @@ buffer/index.js:
   function caixaDayTransferenciasBancarias(dateKey) {
     var autoTxs = wallet.filter(function (t) { return t.origin === 'SHOPEE' && t.date && walletLocalDayKey(t) === dateKey && wIsTransferenciaBancaria(t); });
     var autoTotal = autoTxs.reduce(function (s, t) { return s + Math.abs(t.amount); }, 0);
-    var manual = bankTransfers.filter(function (t) { return t.quando && t.quando.slice(0, 10) === dateKey; });
+    var btOpId = opActiveOrNull();
+    var manual = bankTransfers.filter(function (t) { return t.quando && t.quando.slice(0, 10) === dateKey && (btOpId === OP_ALL || !btOpId || !t.operationId || t.operationId === btOpId); });
     var manualTotal = manual.reduce(function (s, t) { return s + t.valor; }, 0);
     var manualComDuplicidade = manual.map(function (m) { return { t: m, possivelDuplicado: autoTxs.some(function (a) { return Math.abs(Math.abs(a.amount) - m.valor) <= 1; }) }; });
     return { autoTxs: autoTxs, autoTotal: r2(autoTotal), manual: manual, manualTotal: r2(manualTotal), manualComDuplicidade: manualComDuplicidade, total: r2(autoTotal + manualTotal) };
@@ -13314,7 +13373,7 @@ buffer/index.js:
   // Acelera/Pedido/receita/lucro — só um log auditável de "dinheiro saiu da carteira para o banco".
   // §102-104: permite mais de uma por dia, sempre vinculada a uma conta cadastrada (contaId).
   function caixaRegistrarTransferenciaBanco(valor, quandoISO, conta, observacao, contaId) {
-    var rec = { id: 'BT-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8), valor: r2(valor), quando: quandoISO, conta: conta || null, contaId: contaId || null, observacao: observacao || null, criadoPor: 'Operador', createdAt: new Date().toISOString() };
+    var rec = { id: 'BT-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8), operationId: opActiveOrNull(), valor: r2(valor), quando: quandoISO, conta: conta || null, contaId: contaId || null, observacao: observacao || null, criadoPor: 'Operador', createdAt: new Date().toISOString() };
     bankTransfers = [rec].concat(bankTransfers);
     return putMany('banktransfers', [rec]).then(function () { return rec; });
   }
@@ -13456,7 +13515,7 @@ buffer/index.js:
       if (changed.length) stampsToSave.push(putMany(STORE_BY_ARRKEY[key], changed));
     });
     var pim = raw.productIdentityMappingsAll || {}; var pimChanged = [];
-    Object.keys(pim).forEach(function (k) { var rec = pim[k]; if (!rec.operationId) { rec.operationId = alvo; pimChanged.push(rec); } });
+    Object.keys(pim).forEach(function (k) { (pim[k] || []).forEach(function (rec) { if (!rec.operationId) { rec.operationId = alvo; pimChanged.push(rec); } }); });
     if (pimChanged.length) stampsToSave.push(putMany('productidentitymappings', pimChanged));
     return Promise.all(stampsToSave);
   }
@@ -19394,7 +19453,11 @@ buffer/index.js:
     var mrMCfg = settings.filter(function (x) { return x.id === 'mrMetaCfg'; })[0]; if (mrMCfg && mrMCfg.data) Object.keys(mrMCfg.data).forEach(function (k) { mrMetaCfg[k] = mrMCfg.data[k]; });
     var peCfg = settings.filter(function (x) { return x.id === 'pontoEquilibrioCfg'; })[0]; if (peCfg && peCfg.data) pontoEquilibrioCfg = peCfg.data;
     var mlCfg = settings.filter(function (x) { return x.id === 'metaLucroCfg'; })[0]; if (mlCfg && mlCfg.data) metaLucroCfg = mlCfg.data;
-    shipBip = {}; (r[18] || []).forEach(function (b) { shipBip[b.orderId] = b; });
+    // BUG REAL (regressão multiop desta auditoria) — `id` em disco podia vir escopado
+    // (`operationId+'|'+orderId`, ver bipRegister) mas o boot nunca guardava `_diskId`; qualquer
+    // resave recalculava a chave a partir de `b.orderId` (sempre puro), arriscando gravar sob uma
+    // chave física diferente da original quando havia colisão real entre operações.
+    shipBip = {}; (r[18] || []).forEach(function (b) { b._diskId = b.id; b.id = b.orderId; shipBip[b.orderId] = b; });
     expSessions = (r[20] || []).sort(function (a, b) { return b.horaInicio.localeCompare(a.horaInicio); });
     var pendR = settings.filter(function (x) { return x.id === 'pendResolucoes'; })[0]; if (pendR && pendR.data) pendResolucoes = pendR.data;
     caixaClose = {}; (r[21] || []).forEach(function (c) { caixaClose[c.id] = c; });
@@ -19429,8 +19492,21 @@ buffer/index.js:
     // GATE 2 — mesma decodificação: a leitura de productIdentityMappings já era filtrada por operação
     // (abaixo, na filtragem por activeOperationId) — só faltava a chave física não colidir na gravação
     // entre 2 operações com o mesmo SKU+produto+variação (ver productIdentityMappingSave/Remove).
-    productIdentityMappingsAll = {}; (r[56] || []).forEach(function (m) { m.id = scopedDecodeId(m.id, m.operationId); productIdentityMappingsAll[m.id] = m; });
-    productIdentityMappings = productIdentityMappingsAll; // filtrado por operação mais abaixo, quando activeOperationId for conhecido
+    // BUG REAL (regressão multiop desta auditoria) — antes desta correção, `productIdentityMappingsAll`
+    // era um dict de 1 slot por idKey DECODIFICADO: 2 operações resolvendo o MESMO SKU+produto+variação
+    // (texto plausível em qualquer loja) colapsavam no boot — a última carregada vencia o slot inteiro,
+    // e a "perdedora" ficava permanentemente sem seu próprio mapeamento em memória (mesmo com os dois
+    // registros corretos no disco, sob chaves físicas distintas), revertendo pra custo não resolvido em
+    // fatorPedidoSnapshots sempre que essa operação era reaberta. Também nunca guardava `_diskId` —
+    // qualquer resave após o boot recomputava a chave a partir do idKey decodificado, arriscando gravar
+    // sob uma chave física diferente da original. Agora guarda um ARRAY de candidatos por idKey (1 por
+    // operação/legado) e preserva a chave física de origem.
+    productIdentityMappingsAll = {}; (r[56] || []).forEach(function (m) { m._diskId = m.id; m.id = scopedDecodeId(m.id, m.operationId); (productIdentityMappingsAll[m.id] = productIdentityMappingsAll[m.id] || []).push(m); });
+    // OP_ALL ("Todas as Operações") é visão consolidada, somente leitura — nunca teve garantia de
+    // escolher o candidato "certo" por pedido quando 2 operações compartilham o mesmo idKey (exigiria
+    // saber a operação do pedido em cada resolução, fora do escopo desta correção); mantém o mesmo
+    // comportamento de antes (1 candidato por idKey) só pra não regredir esse modo consolidado.
+    productIdentityMappings = {}; Object.keys(productIdentityMappingsAll).forEach(function (k) { var arr = productIdentityMappingsAll[k]; productIdentityMappings[k] = arr[arr.length - 1]; }); // filtrado por operação mais abaixo, quando activeOperationId for conhecido
     fatorMigrarTempoProducaoLegado();
     cpMigrarCategoriasSemCentro().catch(function () { });
     crMigrarClassificacaoLegadaDeCP().catch(function () { });
@@ -19458,13 +19534,27 @@ buffer/index.js:
         var byOp = function (arr) { return arr.filter(function (x) { return !x.operationId || x.operationId === activeOperationId; }); };
         orders = byOp(orders); occ = byOp(occ); wallet = byOp(wallet); acelera = byOp(acelera);
         fatorPedidoSnapshots = byOp(fatorPedidoSnapshots);
+        // BUG REAL (achados novos da auditoria estática de 60 stores) — `batches` (logs de importação)
+        // e `plans` (Planos de Ação) gravavam `operationId` na criação mas nunca eram filtrados na
+        // leitura: histórico de import e planos de uma operação vazavam pra todas as outras. Mesma
+        // classe de bug já corrigida em orders/occ/etc — só faltava incluir aqui. `pimports` (log de
+        // import de Produtos) é filtrado separadamente dentro de Produtos.scopeToOperation() abaixo,
+        // por viver no state privado `S2.imports` do módulo Produtos.
+        batches = byOp(batches); plans = byOp(plans);
         affConv = byOp(affConv); affRpa = byOp(affRpa); affVb = byOp(affVb);
         mrRenda = byOp(mrRenda); mrShip = byOp(mrShip); mrAdj = byOp(mrAdj); mrSvc = byOp(mrSvc);
         contasPagar = byOp(contasPagar);
         pricingOpConfig = byOp(pricingOpConfig);
         financialAccounts = byOp(financialAccounts); financialEvents = byOp(financialEvents);
         contasReceber = byOp(contasReceber); financialTransfers = byOp(financialTransfers);
-        productIdentityMappings = {}; Object.keys(productIdentityMappingsAll).forEach(function (k) { var m = productIdentityMappingsAll[k]; if (!m.operationId || m.operationId === activeOperationId) productIdentityMappings[k] = m; });
+        // BUG REAL (regressão multiop desta auditoria) — `shipBip`/`expSessions` nunca entravam
+        // nesta filtragem (documentado nos comentários de bipRegister/expSessionStart, mas nunca
+        // corrigido): bipe/sessão de expedição de uma operação vazava pra tela de Expedição de
+        // outra. `shipBip` é dict (chave=orderId), não array — filtro dedicado, mesma regra do
+        // byOp() acima.
+        (function () { var f = {}; Object.keys(shipBip).forEach(function (k) { var b = shipBip[k]; if (!b.operationId || b.operationId === activeOperationId) f[k] = b; }); shipBip = f; })();
+        expSessions = byOp(expSessions);
+        productIdentityMappings = {}; Object.keys(productIdentityMappingsAll).forEach(function (k) { var m = (productIdentityMappingsAll[k] || []).filter(function (x) { return !x.operationId || x.operationId === activeOperationId; })[0]; if (m) productIdentityMappings[k] = m; });
         Produtos.scopeToOperation(activeOperationId);
       }
       if (lastImportStamp == null && batches.length) { var last = batches.map(function (b) { return b.createdAt; }).sort().pop(); lastImportStamp = last || null; }
