@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build b898e65 · 2026-08-29 21:40 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 8b254ec · 2026-08-29 21:54 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -13665,15 +13665,38 @@ buffer/index.js:
   // sentido); é também o mesmo campo que a DRE do dia já lê (caixaDreDia → dre.eventosPosteriores,
   // linha "Eventos Posteriores: N registrado(s)").
   //
-  // Competência do evento posterior na DRE (item 27 do Gate 3): o evento pertence à COMPETÊNCIA DO
-  // FECHAMENTO ORIGINAL (dateKey) — nunca à data em que o evento chegou, nem a uma "competência do
-  // evento" separada. Justificativa: é o MESMO padrão já aprovado e em produção na Fase 10 Item 2
-  // ("competência de títulos automáticos usa data de origem, não fechamento") — a origem econômica do
-  // evento posterior é sempre o pedido que já foi vendido/pago naquele dia; o evento só corrige/
-  // complementa o resultado daquele dia, não cria um novo dia de venda. Por isso caixaRegistrarEvento
-  // Posterior() exige um dateKey de um fechamento JÁ FECHADO — nunca cria um evento "solto" sem
-  // fechamento relacionado. A UI (caixaFechamentoBodyHtml) mostra o total separado ("Impacto
-  // posterior") ao lado do "Resultado original fechado" — nunca soma dentro do mesmo número.
+  // Competência do evento posterior na DRE (item 27 do Gate 3; detalhado nos itens 20-21 da rodada
+  // seguinte) — RESPOSTA EXPLÍCITA, usando só regras já existentes no sistema, nenhuma contabilidade
+  // nova inventada:
+  //
+  // Exemplo de referência: pedido vendido/pago em AGOSTO, dia fechado em AGOSTO, devolução chega em
+  // SETEMBRO.
+  //   • Fechamento de Agosto (rec.snapshot): permanece 100% INTACTO — nunca é sobrescrito só por um
+  //     evento posterior chegar (garantia central deste Gate). A ÚNICA forma do snapshot de Agosto
+  //     mudar é o operador clicar EXPLICITAMENTE em "Reabrir caixa" + fechar de novo — uma ação visível,
+  //     deliberada e registrada em rec.history (mesmo mecanismo de auditoria de sempre); isso NUNCA
+  //     acontece sozinho/automaticamente por causa de um evento posterior chegar.
+  //   • DRE Competência do evento: AGOSTO — mesmo mês do pedido/fechamento original, nunca o mês em que
+  //     o evento chegou (Setembro). Motivo: é o MESMO campo `dataOrigemPedido` (= o.paidAt) que TODA
+  //     linha de taxa/desconto/reembolso ligada a um pedido já usa em caixaMontarIntegracaoFinanceira
+  //     (Fase 10 Item 2) — inclusive as linhas REEMBOLSO_DEVOLUCAO/comp.gDescontos, que já são
+  //     competência do pedido, nunca da data do evento. O evento posterior aparece no ledger do
+  //     FECHAMENTO DE AGOSTO (rec.eventosPosteriores), nunca "solto" em Setembro.
+  //   • DRE Caixa (regime de caixa/títulos reais de Contas a Pagar/Receber) do evento: por desenho
+  //     deste Gate, o evento posterior SÓ é REGISTRADO no ledger informativo — ele NÃO gera sozinho um
+  //     novo título de CP/CR nem reprocessa caixaAplicarIntegracaoFinanceira do dia fechado (isso só
+  //     roda de novo se o operador reabrir+fechar o dia manualmente, ação explícita citada acima). Se o
+  //     operador precisar lançar o impacto financeiro real (ex.: baixa bancária da devolução), o
+  //     caminho é o já existente — lançar manualmente em Contas a Pagar/Receber ou reabrir+refechar —
+  //     nunca um lançamento automático "escondido" gerado só pelo ledger de Eventos Posteriores.
+  //   • Setembro (mês em que o evento chegou): não recebe NENHUM lançamento de DRE Competência nem de
+  //     DRE Caixa por causa deste evento — Setembro só entra se o operador criar manualmente um título
+  //     com competência/vencimento em Setembro (fora do escopo automático deste ledger).
+  //
+  // Por isso caixaRegistrarEventoPosterior() exige um dateKey de um fechamento JÁ FECHADO — nunca cria
+  // um evento "solto" sem fechamento relacionado. A UI (caixaFechamentoBodyHtml) mostra o total
+  // separado ("Impacto posterior") ao lado do "Resultado original fechado" — nunca soma dentro do
+  // mesmo número, e nunca rotula como "resultado original atualizado".
   var EVENTO_POST_TIPO_LABEL = { DEVOLUCAO: 'Devolução', ADJUSTMENT: 'Adjustment', RECUPERACAO: 'Recuperação', DESPESA: 'Despesa posterior', RECEITA: 'Receita posterior', DISPUTA: 'Disputa', OUTRO: 'Outro' };
   function pedidoDateKeyFechamento(orderId) { var o = orders.find(function (x) { return x.id === orderId; }); return (o && o.paidAt) ? o.paidAt.slice(0, 10) : null; }
   function caixaFechamentoEstaFechado(dateKey) { var rec = caixaCloseGet(dateKey); return !!(rec && (rec.status === 'FECHADO' || rec.status === 'FECHADO_COM_RESSALVA')); }
@@ -13738,8 +13761,13 @@ buffer/index.js:
     // (movimento posterior), nunca reescreve o snapshot; só sinaliza revisão necessária. Camada 4
     // (Carteira) entra na mesma checagem — as duas famílias de pendência protegem o fechamento.
     var novoDepois = !!(closed && rec.snapshot && (rec.snapshot.pendTotal !== pend.total || (rec.snapshot.pendCartTotal || 0) !== pendCart.total));
-    var status = !closed ? 'ABERTO' : (novoDepois ? 'REVISAO_NECESSARIA' : rec.status);
-    return { pend: pend, pendCart: pendCart, rec: rec, novoDepois: novoDepois, status: status };
+    // GATE 3 (auditoria pré-go-live) item 15: um Evento Posterior REGISTRADO e ainda não Reconhecido
+    // pelo operador também precisa sinalizar revisão — mesmo símbolo (🔴/🟡 REVISAO_NECESSARIA) já
+    // usado para pendência posterior, nunca um 3º status novo. Só considera não reconhecidos
+    // (status 'REGISTRADO'); um evento já Reconhecido não mantém o dia em revisão para sempre.
+    var eventosPosterioresPendentes = closed && rec.eventosPosteriores ? rec.eventosPosteriores.filter(function (e) { return e.status !== 'RECONHECIDO'; }).length : 0;
+    var status = !closed ? 'ABERTO' : ((novoDepois || eventosPosterioresPendentes) ? 'REVISAO_NECESSARIA' : rec.status);
+    return { pend: pend, pendCart: pendCart, rec: rec, novoDepois: novoDepois, eventosPosterioresPendentes: eventosPosterioresPendentes, status: status };
   }
   // ============================================================ INTEGRAÇÃO FINANCEIRA DO FECHAMENTO
   // Fases 5-8 do "PROMPT MESTRE — REESTRUTURAÇÃO DEFINITIVA DO CAIXA...": ao fechar o dia, gera/
@@ -14373,7 +14401,7 @@ buffer/index.js:
       summary: esc(opLbl) + ' <span style="margin:0 6px">·</span> Conta financeira: Todas',
       select: { id: 'cx-date-sel', optionsHtml: dateOptions },
       badge: { cls: lbl[1], label: lbl[0] },
-      note: st.status === 'REVISAO_NECESSARIA' ? '⚠ movimento posterior' : null,
+      note: st.status === 'REVISAO_NECESSARIA' ? (st.eventosPosterioresPendentes ? '⚠ ' + nn(st.eventosPosterioresPendentes) + ' evento(s) posterior(es) a reconhecer' : '⚠ movimento posterior') : null,
       actions: cxHeaderActions,
     });
 
@@ -14814,9 +14842,14 @@ buffer/index.js:
       };
     });
     // GATE 3 — "Reconhecer" um Evento Posterior: ação explícita do operador, só marca como revisado
-    // (nunca altera valor/tipo/origem do evento — ver caixaEventoPosteriorReconhecer).
+    // (nunca altera valor/tipo/origem do evento — ver caixaEventoPosteriorReconhecer). Mesma guarda de
+    // reentrância do "Fechar dia" (achado real de auditoria, Prioridade 18): desabilita o botão no
+    // primeiro clique para 2 cliques síncronos nunca disparar 2 vezes.
     app.querySelectorAll('[data-evpreconhecer]').forEach(function (b) {
-      b.onclick = function () { caixaEventoPosteriorReconhecer(dateKey, b.dataset.evpreconhecer, 'Operador').then(function () { toast('Evento posterior reconhecido', ''); render(); }); };
+      b.onclick = function () {
+        if (b.disabled) return; b.disabled = true;
+        caixaEventoPosteriorReconhecer(dateKey, b.dataset.evpreconhecer, 'Operador').then(function () { toast('Evento posterior reconhecido', ''); render(); }, function () { b.disabled = false; });
+      };
     });
     // Achado real de auditoria (Prioridade 18, teste de duplo clique): sem guarda de reentrância, 2
     // cliques síncronos no mesmo botão disparavam 2 execuções completas de caixaCloseDay() (2 entradas
