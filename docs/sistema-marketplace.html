@@ -337,7 +337,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 59c9de9 · 2026-08-29 02:35 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 33f731a · 2026-08-29 03:09 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -10175,24 +10175,55 @@ buffer/index.js:
       var p = mrParseIncome(ab, file.name);
       if (p.notRecognized) throw new Error('Arquivo não reconhecido como relatório Income da Shopee (esperado abas Renda / Shipping Fee Discrepancy / Adjustment).');
       var importedAt = new Date().toISOString(); var stats = { renda: 0, ship: 0, adj: 0, svc: 0 };
-      // Renda (idempotente)
+      // Renda (idempotente) — achado real de auditoria (janelas de exportação sobrepostas, ex.:
+      // 11/07-10/08 e 25/07-24/08, com 832 pedidos em comum): a chave antiga usava o índice bruto de
+      // posição da linha DENTRO DESTA IMPORTAÇÃO (`i`), que muda de arquivo para arquivo mesmo para o
+      // MESMO pedido — cada reexportação da Shopee reordena o arquivo inteiro, então o mesmo pedido
+      // pousa em posições diferentes em cada janela e nunca batia com o registro já persistido. Isso
+      // duplicava silenciosamente todo pedido presente em mais de uma janela. A chave correta usa uma
+      // ocorrência LOCAL AO GRUPO (orderId+ver+sku+refundId) — estável entre reexportações, porque o
+      // bloco de linhas de um mesmo pedido mantém a mesma ordem relativa interna em qualquer exportação
+      // Shopee do mesmo período de dados, mesmo que a posição do pedido no arquivo inteiro mude.
       var byR = {}; mrRenda.forEach(function (x) { byR[x.id] = x; }); var chR = [];
-      p.renda.forEach(function (row, i) { var id = row.orderId + '|' + row.ver + '|' + (row.sku || '') + '|' + (row.refundId || '') + '|' + i; if (!byR[id]) { var rec = Object.assign({ id: id, operationId: opId, fileName: file.name, importedAt: importedAt }, row); byR[id] = rec; chR.push(rec); stats.renda++; } });
+      var occCount = {};
+      p.renda.forEach(function (row) {
+        var groupKey = row.orderId + '|' + row.ver + '|' + (row.sku || '') + '|' + (row.refundId || '');
+        var occ = occCount[groupKey] || 0; occCount[groupKey] = occ + 1;
+        var id = groupKey + '|' + occ;
+        if (!byR[id]) { var rec = Object.assign({ id: id, operationId: opId, fileName: file.name, importedAt: importedAt }, row); byR[id] = rec; chR.push(rec); stats.renda++; }
+      });
       mrRenda = Object.values(byR);
       // Shipping (preserva investigação manual §21)
       var byS = {}; mrShip.forEach(function (x) { byS[x.id] = x; }); var chS = [];
       p.ship.forEach(function (row) { var id = row.orderId; var ex = byS[id]; if (!ex) { byS[id] = Object.assign({ id: id, operationId: opId, invStatus: 'NAO_ANALISADO', invNote: '', invResp: '', importedAt: importedAt, fileName: file.name }, row); chS.push(byS[id]); stats.ship++; } else { ex.esperado = row.esperado; ex.real = row.real; ex.motivo = row.motivo; chS.push(ex); } });
       mrShip = Object.values(byS);
-      // Adjustment
+      // Adjustment — mesmo achado real de auditoria do Renda (janelas sobrepostas duplicando
+      // pedidos): `row.seq` era um contador de POSIÇÃO bruta entre todas as abas Adjustment desta
+      // importação, que muda de arquivo para arquivo mesmo para o mesmo lançamento. Troca por
+      // ocorrência local ao grupo semântico (orderId+valor+data) — estável entre reexportações.
       var byA = {}; mrAdj.forEach(function (x) { byA[x.id] = x; }); var chA = [];
-      p.adj.forEach(function (row) { var id = (row.orderId || 'sem') + '|' + row.valor + '|' + row.seq; if (!byA[id]) { byA[id] = Object.assign({ id: id, operationId: opId, importedAt: importedAt }, row); chA.push(byA[id]); stats.adj++; } });
+      var occCountA = {};
+      p.adj.forEach(function (row) {
+        var groupKey = (row.orderId || 'sem') + '|' + row.valor + '|' + (row.data || '');
+        var occ = occCountA[groupKey] || 0; occCountA[groupKey] = occ + 1;
+        var id = groupKey + '|' + occ;
+        if (!byA[id]) { byA[id] = Object.assign({ id: id, operationId: opId, importedAt: importedAt }, row); chA.push(byA[id]); stats.adj++; }
+      });
       mrAdj = Object.values(byA);
       // Service Fee — §5 do prompt "Taxa de Serviço até a raiz": a chave persistida PRECISA incluir
       // operationId, senão o mesmo orderId+seq de duas operações diferentes se sobrescreve no import
       // (o filtro por operação em resolveServiceFeeDetails() já era correto — o defeito estava aqui,
       // na gravação, que perdia silenciosamente a linha da operação B ao reimportar a operação A).
-      var byV = {}; mrSvc.forEach(function (x) { byV[(x.operationId || '') + '|' + x.orderId + '|' + x.seq] = x; }); var chV = [];
-      p.svc.forEach(function (row) { var id = opId + '|' + row.orderId + '|' + row.seq; if (!byV[id]) { var rec = Object.assign({ id: id, operationId: opId, importedAt: importedAt }, row); byV[id] = rec; chV.push(rec); stats.svc++; } });
+      // Mesmo achado real de auditoria do Renda: `row.seq` também era posição bruta entre abas desta
+      // importação — troca por ocorrência local ao grupo semântico (orderId+valores da linha).
+      var byV = {}; mrSvc.forEach(function (x) { byV[x.id] = x; }); var chV = [];
+      var occCountV = {};
+      p.svc.forEach(function (row) {
+        var groupKey = opId + '|' + row.orderId + '|' + row.afiliadosVendedor + '|' + row.transacao + '|' + row.porItem;
+        var occ = occCountV[groupKey] || 0; occCountV[groupKey] = occ + 1;
+        var id = groupKey + '|' + occ;
+        if (!byV[id]) { var rec = Object.assign({ id: id, operationId: opId, importedAt: importedAt }, row); byV[id] = rec; chV.push(rec); stats.svc++; }
+      });
       mrSvc = Object.values(byV);
       mrSummary = { summary: p.summary, period: p.period, importedAt: importedAt, fileName: file.name, diag: p.diag };
       var batch = { id: 'mr' + Date.now() + Math.round(performance.now()), module: 'Minha Renda', filename: file.name, createdAt: importedAt, seen: p.renda.length, novo: stats.renda, upd: 0, unch: p.renda.length - stats.renda, itemsSeen: p.renda.length };
@@ -11213,7 +11244,7 @@ buffer/index.js:
       diagGrupoAbasHtml('Shipping Fee Discrepancy', diagImp.abasShipping) +
       diagGrupoAbasHtml('Adjustment', diagImp.abasAdjustment) +
       diagGrupoAbasHtml('Service Fee Details', diagImp.abasServiceFee) +
-      kv('Total de linhas de Renda (todas as abas somadas)', nn(diagImp.linhasPorAba['Renda'] || 0)) +
+      kv('Total de linhas de Renda (todas as abas somadas)', nn(diagImp.linhasPorAba['abasRenda'] || 0)) +
       kv('Colunas da aba Renda', diagImp.colunasRenda != null ? nn(diagImp.colunasRenda) : '—') +
       kv('Última coluna da Renda', diagImp.ultimaColunaRenda || '—') +
       '<div class="table-wrap" style="margin-top:8px"><table class="report"><thead><tr><th>Campo financeiro crítico</th><th>Encontrado?</th><th>Coluna</th></tr></thead><tbody>' +
