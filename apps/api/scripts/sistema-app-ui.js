@@ -4030,7 +4030,12 @@
     app.querySelectorAll('.devrowsel').forEach(function (c) { c.onchange = function () { if (c.checked) devSel[c.dataset.selid] = true; else delete devSel[c.dataset.selid]; render(); }; });
     var sa = document.getElementById('devselall'); if (sa) sa.onchange = function () { app.querySelectorAll('.devrowsel').forEach(function (c) { if (sa.checked) devSel[c.dataset.selid] = true; else delete devSel[c.dataset.selid]; }); render(); };
     // edição inline de status interno
-    app.querySelectorAll('.devinlinest').forEach(function (s) { s.onchange = function () { var o = occ.find(function (x) { return x.id === s.dataset.inlid && !x.isDemo; }); if (!o) return; var prev = o.internalStatus; o.internalStatus = s.value; addActivity(o, 'STATUS', { field: 'internalStatus', oldValue: prev, newValue: s.value, message: 'Status interno → ' + istLabel(s.value), userName: 'Operador' }); putMany('occ', [o]).then(function () { toast('Status atualizado', istLabel(s.value)); }); }; });
+    // GATE 2 — BUG REAL encontrado no teste de colisão em massa (100x2): esta linha gravava `o` direto
+    // com `putMany('occ', [o])`, ou seja, com `o.id` já DECODIFICADO — mesmo anti-padrão da linha de
+    // higiene do boot (ver comentário em bootApp()), que sobrescrevia na chave física SEM prefixo o
+    // registro colidido de outra operação. Fix: mesmo padrão de `saveOcc` — reusa a própria chave
+    // física (`_diskId`), nunca `.id` decodificado, nunca recalcula.
+    app.querySelectorAll('.devinlinest').forEach(function (s) { s.onchange = function () { var o = occ.find(function (x) { return x.id === s.dataset.inlid && !x.isDemo; }); if (!o) return; var prev = o.internalStatus; o.internalStatus = s.value; addActivity(o, 'STATUS', { field: 'internalStatus', oldValue: prev, newValue: s.value, message: 'Status interno → ' + istLabel(s.value), userName: 'Operador' }); saveOcc(o).then(function () { toast('Status atualizado', istLabel(s.value)); }); }; });
     // ações em massa
     var ba = document.getElementById('blkapply'); if (ba) ba.onclick = function () {
       var selIds = Object.keys(devSel).filter(function (id) { return devSel[id]; });
@@ -15469,12 +15474,20 @@
         Produtos.scopeToOperation(activeOperationId);
       }
       if (lastImportStamp == null && batches.length) { var last = batches.map(function (b) { return b.createdAt; }).sort().pop(); lastImportStamp = last || null; }
-      // GATE 2: NUNCA recalcula/reescreve a chave física aqui — esta linha roda em TODO boot (inclusive
-      // com AUD-OP1 ativa) só para tirar casos demo do banco real; usar scopedStoreKey aqui reescreveria
-      // a chave de TODA devolução real a cada boot, o que violaria a regra de nunca escrever em AUD-OP1
-      // com uma chave diferente da que o registro já tinha. A prevenção de colisão física acontece só no
-      // caminho de IMPORTAÇÃO (importPosVenda/saveOcc/bulkApplyDev), nunca nesta rotina de higiene.
-      if (occ.length) putMany('occ', occ);
+      // GATE 2 — BUG REAL encontrado e corrigido nesta rodada (teste de colisão em massa 100x2): esta
+      // linha roda em TODO boot (inclusive com AUD-OP1 ativa) só para tirar casos demo do banco real,
+      // mas gravava `occ` DIRETO — e nesse ponto cada `o.id` já foi DECODIFICADO (scopedDecodeId, ver
+      // "occ = ... .map(...)" no boot, mais acima) para o id de negócio puro, sem o prefixo de
+      // colisão. Gravar com esse `.id` decodificado (em vez da chave física real `._diskId`)
+      // reescrevia, em TODO reload/troca de operação, qualquer devolução colidida de volta na chave
+      // física SEM prefixo — exatamente a mesma chave que a operação que "perdeu" a colisão original
+      // ocupava, apagando o registro dela silenciosamente. Confirmado ao vivo: reproduzido com 100
+      // devoluções colididas entre 2 operações reais — a operação ativa no boot seguinte sobrescrevia
+      // as 100 devoluções da outra. Fix: nunca usar `.id` para persistir aqui — cada registro reusa a
+      // PRÓPRIA chave física já decidida (`_diskId`, se existir), nunca uma recalculada — mesmo padrão
+      // já usado em saveOcc/bulkApplyDev/importPosVenda (GATE 2). Isso não recalcula nem reatribui
+      // nenhuma chave nova — só evita que a "higiene" de boot regrave a chave errada.
+      if (occ.length) putMany('occ', occ.map(function (o) { var c = Object.assign({}, o); c.id = o._diskId || o.id; delete c._diskId; return c; }));
       occ = occ.concat(DEMO_CASES()); // injeta demo apenas em memória (§10-11), depois de persistir os reais
       rebuildSkuCost();
       opUpdateSelectorLabel();
