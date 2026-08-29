@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 193e2f2 · 2026-08-29 22:44 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 99fd167 · 2026-08-29 22:58 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -12840,7 +12840,12 @@ buffer/index.js:
         var now = new Date().toISOString();
         rec.reassignHistory = (rec.reassignHistory || []).concat([{ de: LEGACY_UNASSIGNED, para: targetOpId, em: now, metodo: 'MANUAL', motivo: motivo || null }]);
         rec.operationId = targetOpId;
-        return dbPut(storeName, [rec]).then(function () {
+        // ACHADO (auditoria de write paths pós-193e2f2) — mesmo padrão já usado em
+        // productIdentityMappingLegacyReassign: grava pela chave física (_diskId, se existir), nunca
+        // deixa o campo `_diskId` vazar pro disco. Hoje inofensivo (um registro LEGACY_UNASSIGNED
+        // nunca tem `_diskId` diferente de `id`), mas nunca reescreve pela chave decodificada.
+        var toWriteLR = Object.assign({}, rec, { id: rec._diskId || rec.id }); delete toWriteLR._diskId;
+        return dbPut(storeName, [toWriteLR]).then(function () {
           S2.legacyUnassigned[arrKey] = legacyArr.filter(function (x) { return x.id !== id; });
           // Sem isso, um registro atribuído à operação ATUALMENTE ativa só aparecia no catálogo após
           // recarregar a página inteira (S2.products/variations/families já tinham sido filtrados no
@@ -13509,14 +13514,18 @@ buffer/index.js:
     var alvo = ativas.length === 1 ? ativas[0].id : (ativas.length >= 2 ? LEGACY_UNASSIGNED : null);
     if (!alvo) return Promise.resolve(); // 0 operações ativas (todas desativadas) — nenhum destino seguro, não migra
     var stampsToSave = [];
+    // ACHADO (auditoria de write paths pós-193e2f2) — mesmo padrão dos demais writes: grava pela
+    // chave física (_diskId, se existir), nunca deixa `_diskId` vazar pro disco. Hoje inofensivo (um
+    // registro órfão — sem operationId — nunca teve `_diskId` diferente de `id`), mas roda a CADA
+    // boot (não só no primeiro), então nunca reescreve pela chave decodificada por segurança.
     ['products', 'variations', 'families'].forEach(function (key) {
       var arr = raw[key] || []; var changed = [];
       arr.forEach(function (rec) { if (!rec.operationId) { rec.operationId = alvo; changed.push(rec); } });
-      if (changed.length) stampsToSave.push(putMany(STORE_BY_ARRKEY[key], changed));
+      if (changed.length) stampsToSave.push(putMany(STORE_BY_ARRKEY[key], changed.map(function (rec) { var c = Object.assign({}, rec, { id: rec._diskId || rec.id }); delete c._diskId; return c; })));
     });
     var pim = raw.productIdentityMappingsAll || {}; var pimChanged = [];
     Object.keys(pim).forEach(function (k) { (pim[k] || []).forEach(function (rec) { if (!rec.operationId) { rec.operationId = alvo; pimChanged.push(rec); } }); });
-    if (pimChanged.length) stampsToSave.push(putMany('productidentitymappings', pimChanged));
+    if (pimChanged.length) stampsToSave.push(putMany('productidentitymappings', pimChanged.map(function (rec) { var c = Object.assign({}, rec, { id: rec._diskId || rec.id }); delete c._diskId; return c; })));
     return Promise.all(stampsToSave);
   }
   // ---- Seletor de operação no topo (§AR/§AS/§AT) ----
