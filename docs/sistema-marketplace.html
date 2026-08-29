@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 10747c0 · 2026-08-29 21:21 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build dd06d9d · 2026-08-29 21:35 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -4308,6 +4308,36 @@ buffer/index.js:
   function recomputeOccImpact(occ) { occ.impact = computeImpact(occ.events, occ.recoverableValue || 0); occ.knownNetImpact = occ.impact.knownNetImpact; return occ.impact; }
   function putEvent(occ, dedupeKey, type, direction, amount, source, note) { occ.events = occ.events || []; var ex = occ.events.find(function (e) { return e.dedupeKey === dedupeKey; }); if (ex) { ex.amount = amount; ex.type = type; ex.direction = direction; } else { occ.events.push({ id: 'e' + Date.now() + Math.round(Math.random() * 1e6), dedupeKey: dedupeKey, type: type, direction: direction, amount: amount, source: source || 'MANUAL', note: note || null, createdByName: source === 'IMPORT' ? 'Importação' : 'Operador', occurredAt: new Date().toISOString() }); } }
   function upsertImportEvents(occ, exposure, requested, compensation) { if (exposure.bucket === 'CONFIRMED' && requested > 0) putEvent(occ, 'import:refund', 'REEMBOLSO_PAGO', 'COST', requested, 'IMPORT'); if (compensation > 0) putEvent(occ, 'import:compensation', 'COMPENSACAO_SHOPEE', 'RECOVERY', compensation, 'IMPORT'); }
+  // GATE 3 (auditoria pré-go-live) — sincroniza para o ledger de Eventos Posteriores do Caixa
+  // (caixaRegistrarEventoPosterior, definida junto de caixaDayStatus) todo evento financeiro real de
+  // um Caso (devolução/reembolso/despesa adicional/recuperação/disputa) cujo pedido já pertence a um
+  // dia FECHADO — mesma fonte de verdade que já alimenta occ.events/occ.impact (nunca um cálculo
+  // paralelo), só espelhado no fechamento a que o pedido pertence. Chamada depois de toda persistência
+  // de occ (import em lote e salvamento manual — ver importPosVenda/saveOcc) — idempotente por
+  // fonteRef, então reimportar o mesmo arquivo nunca duplica. REEMBOLSO_SOLICITADO fica de fora
+  // (ainda é só intenção, não dinheiro) — só os tipos que representam impacto financeiro confirmado
+  // viram Evento Posterior.
+  var OCC_EVENTO_TIPO_POSTERIOR = { REEMBOLSO_PAGO: 'DEVOLUCAO', FRETE_REVERSO: 'DESPESA', FRETE_ADICIONAL: 'DESPESA', CUSTO_RETRABALHO: 'DESPESA', PRODUTO_PERDIDO: 'DESPESA', COMPENSACAO_SHOPEE: 'RECUPERACAO', RECUPERACAO_DISPUTA: 'DISPUTA', PRODUTO_RECUPERADO: 'RECUPERACAO', AJUSTE_MANUAL: 'OUTRO', OUTRO: 'OUTRO' };
+  function caixaSyncEventosPosterioresDeOcc(o) {
+    if (!o || o.isDemo || !o.orderId || !o.events || !o.events.length) return Promise.resolve();
+    var dateKey = pedidoDateKeyFechamento(o.orderId);
+    if (!dateKey || !caixaFechamentoEstaFechado(dateKey)) return Promise.resolve();
+    var chain = Promise.resolve();
+    o.events.forEach(function (ev) {
+      var tipo = OCC_EVENTO_TIPO_POSTERIOR[ev.type]; if (!tipo) return;
+      var meta = EVENT_META[ev.type] || {};
+      var valorSinal = meta.direction === 'RECOVERY' ? Math.abs(ev.amount || 0) : -Math.abs(ev.amount || 0);
+      chain = chain.then(function () {
+        return caixaRegistrarEventoPosterior(dateKey, {
+          tipo: tipo, origem: ev.source === 'IMPORT' ? 'IMPORTACAO_DEVOLUCAO' : 'MANUAL_DEVOLUCAO', orderId: o.orderId,
+          descricao: (meta.label || ev.type) + ' — Pedido ' + o.orderId + (o.returnId ? ' (Caso ' + o.returnId + ')' : ''),
+          valor: valorSinal, fonteRef: 'OCC|' + o.id + '|' + ev.dedupeKey,
+          usuario: ev.source === 'IMPORT' ? null : (ev.createdByName || 'Operador'),
+        });
+      });
+    });
+    return chain;
+  }
   function addActivity(occ, kind, data) { occ.activities = occ.activities || []; occ.activities.unshift(Object.assign({ id: 'a' + Date.now() + Math.round(Math.random() * 1e6), kind: kind, createdAt: new Date().toISOString() }, data)); }
   function occEffectiveLoss(o) { return Math.max(0, (o.impact && o.impact.knownNetImpact) || 0); }
   // Resultado provisório × confirmado (§24): antes da baixa, só temos o impacto financeiro (reembolso
@@ -4328,7 +4358,7 @@ buffer/index.js:
   // sobre o risco de registro fantasma duplicado + reescrita indevida de dados reais em toda
   // atualização). Só um registro genuinamente novo (sem `_diskId`, nunca visto antes nesta sessão)
   // ganha `scopedNewKey`. `o` em memória nunca é mutado por esta função.
-  function saveOcc(o) { if (o.isDemo) return Promise.resolve(); var c = Object.assign({}, o); c.id = o._diskId || o.id; delete c._diskId; return putMany('occ', [c]); } // demo nunca vai ao banco real (§11)
+  function saveOcc(o) { if (o.isDemo) return Promise.resolve(); var c = Object.assign({}, o); c.id = o._diskId || o.id; delete c._diskId; return putMany('occ', [c]).then(function (r) { return caixaSyncEventosPosterioresDeOcc(o).then(function () { return r; }); }); } // demo nunca vai ao banco real (§11)
   // Normaliza ocorrências salvas por versões anteriores (sem impact/events/campos operacionais),
   // para que a análise nunca quebre e o impacto reflita a exposição. Idempotente.
   function migrateOcc(o) {
@@ -5054,7 +5084,12 @@ buffer/index.js:
       // GATE 2 — grava cada ocorrência na chave física já decidida (própria, se já existia; nova só se
       // genuinamente nova) — nunca recalculada aqui.
       var occToPersist = changed.map(function (o) { var c = Object.assign({}, o); c.id = o._diskId || o.id; delete c._diskId; return c; });
-      return Promise.all([putMany('occ', occToPersist), putMany('batches', [batch])]).then(function () { return { batch: batch, changed: changed }; });
+      return Promise.all([putMany('occ', occToPersist), putMany('batches', [batch])]).then(function () {
+        // GATE 3 — sincroniza Eventos Posteriores do Caixa para os casos alterados por esta importação
+        // cujo pedido já pertence a um dia FECHADO (idempotente por fonteRef — reimportar o mesmo
+        // arquivo nunca duplica; ver caixaSyncEventosPosterioresDeOcc).
+        return changed.reduce(function (p, o) { return p.then(function () { return caixaSyncEventosPosterioresDeOcc(o); }); }, Promise.resolve());
+      }).then(function () { return { batch: batch, changed: changed }; });
     });
   }
   function fileInput(cb) { var inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.xlsx,.xls,.csv'; inp.onchange = function () { if (inp.files[0]) cb(inp.files[0]); }; inp.click(); }
@@ -8271,7 +8306,11 @@ buffer/index.js:
     return putMany('walletcls', [c]).then(function (r) {
       // item 22 — só registra quando algo de fato mudou (evita ruído de silent no-ops).
       if (changes.length) auditLocal('WALLET_CLASSIFY_LOCAL', 'carteira', 'WalletTransactionClassification', id, null, { changes: changes });
-      return r;
+      // GATE 3 (auditoria pré-go-live) — classificar/resolver um lançamento da Carteira que pertence a
+      // um dia JÁ FECHADO é a fonte de "receita posterior"/"despesa posterior" (o crédito/débito
+      // existia na Shopee, mas só ganhou natureza conhecida depois do fechamento) — ver
+      // caixaSyncEventoPosteriorDeWallet, definida junto do ledger.
+      return caixaSyncEventoPosteriorDeWallet(id).then(function () { return r; });
     });
   }
   // Categoria efetiva (manual sobrepõe automática); responsabilidade (manual → devolução vinculada → não definida).
@@ -10517,6 +10556,24 @@ buffer/index.js:
         if (!byA[id]) { byA[id] = Object.assign({ id: id, operationId: opId, importedAt: importedAt }, row); chA.push(byA[id]); stats.adj++; }
       });
       mrAdj = Object.values(byA);
+      // GATE 3 (auditoria pré-go-live) — Adjustment chegando para um pedido cujo dia já foi fechado no
+      // Caixa é o caso canônico de "evento posterior": a própria razão de existir de um Adjustment é
+      // corrigir/complementar uma taxa depois do fato. `chA` só contém linhas GENUINAMENTE NOVAS desta
+      // operação (dedupe por groupKey+ocorrência já feito acima) — reimportar o mesmo arquivo Income
+      // nunca gera um segundo evento (idempotente por natureza, reforçado pelo fonteRef abaixo).
+      var evpChainAdj = Promise.resolve();
+      chA.forEach(function (rowAdj) {
+        if (!rowAdj.orderId) return;
+        var dateKeyAdj = pedidoDateKeyFechamento(rowAdj.orderId);
+        if (!dateKeyAdj || !caixaFechamentoEstaFechado(dateKeyAdj)) return;
+        evpChainAdj = evpChainAdj.then(function () {
+          return caixaRegistrarEventoPosterior(dateKeyAdj, {
+            tipo: 'ADJUSTMENT', origem: 'IMPORTACAO_INCOME_ADJUSTMENT', orderId: rowAdj.orderId,
+            descricao: 'Adjustment — Pedido ' + rowAdj.orderId + (rowAdj.desc ? ' (' + rowAdj.desc + ')' : ''),
+            valor: r2((Number(rowAdj.valor) || 0) / 100), fonteRef: 'ADJ|' + rowAdj.id,
+          });
+        });
+      });
       // Service Fee — §5 do prompt "Taxa de Serviço até a raiz": a chave persistida PRECISA incluir
       // operationId, senão o mesmo orderId+seq de duas operações diferentes se sobrescreve no import
       // (o filtro por operação em resolveServiceFeeDetails() já era correto — o defeito estava aqui,
@@ -10537,6 +10594,7 @@ buffer/index.js:
       batches.unshift(batch); lastImportStamp = importedAt;
       // persiste em segundo plano (não bloqueia a UI); a memória já está atualizada, então a tela reflete na hora
       putMany('mrrenda', chR); putMany('mrship', chS); putMany('mradj', chA); putMany('mrsvc', chV); putMany('settings', [{ id: 'mrSummary', data: mrSummary }]); putMany('batches', [batch]);
+      evpChainAdj.catch(function () {}); // GATE 3 — segundo plano também, mesmo padrão das linhas acima
       return { batch: batch, stats: stats, kind: 'xlsx' };
     });
   }
@@ -13586,6 +13644,86 @@ buffer/index.js:
   // PROMPT "OTIMIZAÇÃO COMPLETA DE UX/UI DESKTOP" §5/§9: status visual padronizado 🟢/🟡/🔴 — só
   // troca o texto do rótulo (emoji), a lógica de status (caixaDayStatus) continua exatamente a mesma.
   var CAIXA_LABEL = { ABERTO: ['🟡 Em conferência', 'neutral'], FECHADO: ['🟢 Fechado', 'ok'], FECHADO_COM_RESSALVA: ['🟡 Fechado com ressalva', 'warn'], REVISAO_NECESSARIA: ['🔴 Revisão necessária', 'warn'] };
+  // ==================== GATE 3 — LEDGER DE EVENTOS POSTERIORES (auditoria pré-go-live) ====================
+  // Diferença deliberada em relação a caixaDayStatus/§20-21 logo abaixo: aquele mecanismo (já existia,
+  // já provado correto na Prioridade 19) só DETECTA que a contagem de pendências mudou depois do
+  // fechamento e sinaliza "🔴 Revisão necessária" — nunca grava O QUÊ mudou nem QUANTO. Este ledger é o
+  // REGISTRO explícito: cada evento financeiro real que chega depois de um dia já fechado (Adjustment,
+  // devolução/reembolso, disputa, recuperação, despesa/receita posterior) vira uma linha estruturada e
+  // permanente em rec.eventosPosteriores — 100% ADITIVO, nunca reescreve rec.snapshot (a fotografia
+  // original do fechamento, ver caixaCloseDay, continua imutável para sempre — a mesma garantia que
+  // caixaDayStatus já protegia, agora também com registro, não só detecção).
+  //
+  // Campo usado: rec.eventosPosteriores já existia no shape de caixaCloseDay desde a Fase "Caixa:
+  // Eventos Posteriores" (bloco 8 do índice de fases), mas nunca era populado (achado da Prioridade 19
+  // desta auditoria) — GATE 4 revive o MESMO campo (nunca cria uma segunda estrutura com o mesmo
+  // sentido); é também o mesmo campo que a DRE do dia já lê (caixaDreDia → dre.eventosPosteriores,
+  // linha "Eventos Posteriores: N registrado(s)").
+  //
+  // Competência do evento posterior na DRE (item 27 do Gate 3): o evento pertence à COMPETÊNCIA DO
+  // FECHAMENTO ORIGINAL (dateKey) — nunca à data em que o evento chegou, nem a uma "competência do
+  // evento" separada. Justificativa: é o MESMO padrão já aprovado e em produção na Fase 10 Item 2
+  // ("competência de títulos automáticos usa data de origem, não fechamento") — a origem econômica do
+  // evento posterior é sempre o pedido que já foi vendido/pago naquele dia; o evento só corrige/
+  // complementa o resultado daquele dia, não cria um novo dia de venda. Por isso caixaRegistrarEvento
+  // Posterior() exige um dateKey de um fechamento JÁ FECHADO — nunca cria um evento "solto" sem
+  // fechamento relacionado. A UI (caixaFechamentoBodyHtml) mostra o total separado ("Impacto
+  // posterior") ao lado do "Resultado original fechado" — nunca soma dentro do mesmo número.
+  var EVENTO_POST_TIPO_LABEL = { DEVOLUCAO: 'Devolução', ADJUSTMENT: 'Adjustment', RECUPERACAO: 'Recuperação', DESPESA: 'Despesa posterior', RECEITA: 'Receita posterior', DISPUTA: 'Disputa', OUTRO: 'Outro' };
+  function pedidoDateKeyFechamento(orderId) { var o = orders.find(function (x) { return x.id === orderId; }); return (o && o.paidAt) ? o.paidAt.slice(0, 10) : null; }
+  function caixaFechamentoEstaFechado(dateKey) { var rec = caixaCloseGet(dateKey); return !!(rec && (rec.status === 'FECHADO' || rec.status === 'FECHADO_COM_RESSALVA')); }
+  // Registro IDEMPOTENTE: fonteRef é a chave de deduplicação (mesmo padrão já usado por
+  // putEvent()/dedupeKey, cpUpsertBySourceKey()/sourceEventKey, feKey() no resto do sistema) —
+  // reimportar o MESMO Adjustment/evento nunca cria um segundo registro, só atualiza o já existente.
+  function caixaRegistrarEventoPosterior(dateKey, evento) {
+    if (!caixaFechamentoEstaFechado(dateKey)) return Promise.resolve(null); // só existe "posterior" depois de um fechamento real — nunca cria evento solto
+    var rec = caixaCloseGet(dateKey); rec.eventosPosteriores = rec.eventosPosteriores || [];
+    var now = new Date().toISOString();
+    var ex = rec.eventosPosteriores.find(function (e) { return e.fonteRef === evento.fonteRef; });
+    if (ex) { ex.valor = evento.valor; ex.impacto = evento.valor; ex.descricao = evento.descricao; ex.tipo = evento.tipo; ex.origem = evento.origem; ex.atualizadoEm = now; }
+    else {
+      rec.eventosPosteriores.push({
+        id: 'evp_' + Date.now() + '_' + Math.round(Math.random() * 1e6),
+        operationId: rec.operationId || opActiveOrNull(),
+        dateKeyFechamento: dateKey, dataOriginalFechamento: rec.closedAt, fechamentoRelacionado: dateKey,
+        orderId: evento.orderId || null, tipo: evento.tipo, origem: evento.origem, descricao: evento.descricao,
+        valor: evento.valor, impacto: evento.valor, fonteRef: evento.fonteRef,
+        status: 'REGISTRADO', registradoEm: now, dataReconhecimento: null, usuario: evento.usuario || null,
+      });
+    }
+    return putMany('caixafechamentos', [rec]);
+  }
+  function caixaEventosPosterioresDia(dateKey) { var rec = caixaCloseGet(dateKey); return (rec && rec.eventosPosteriores) || []; }
+  // "Reconhecer" (item 21 do Gate 3): ação explícita do operador — nunca automática — que só marca o
+  // evento como revisado; nunca altera valor/tipo/origem (esses só mudam por reimportação/nova
+  // ocorrência do mesmo fonteRef, tratada acima).
+  function caixaEventoPosteriorReconhecer(dateKey, eventoId, userName) {
+    var rec = caixaCloseGet(dateKey); if (!rec) return Promise.resolve();
+    var ev = (rec.eventosPosteriores || []).find(function (e) { return e.id === eventoId; }); if (!ev) return Promise.resolve();
+    ev.status = 'RECONHECIDO'; ev.dataReconhecimento = new Date().toISOString(); ev.usuario = userName || ev.usuario || 'Operador';
+    return putMany('caixafechamentos', [rec]);
+  }
+  // GATE 3 — classificar/resolver um lançamento da Carteira que pertence a um dia JÁ FECHADO é a
+  // origem de "receita posterior"/"despesa posterior": o crédito/débito já existia no extrato da
+  // Shopee no dia do fechamento, mas só ganhou natureza conhecida (Receita/Despesa/Devolução/Outro)
+  // depois — mesma classificação (caixaMovCategoria/CAIXA_MOV_CAT_LABEL) já usada pelas Pendências da
+  // Carteira (Camada 4) e pela integração financeira do fechamento, nunca um cálculo paralelo.
+  // Transferência bancária real (Pix/saque) nunca é resultado — fica de fora (é movimentação
+  // patrimonial, já tratada à parte no Fechamento).
+  var WALLET_TIPO_POSTERIOR = { CREDITOS_COMPENSACOES: 'RECEITA', OUTROS_CREDITOS: 'RECEITA', AJUSTES_SHOPEE: 'DESPESA', OUTROS_DEBITOS: 'DESPESA', AJUSTES_ACELERA: 'OUTRO', DEVOLUCOES_REEMBOLSOS: 'DEVOLUCAO', NAO_IDENTIFICADOS: 'OUTRO' };
+  function caixaSyncEventoPosteriorDeWallet(txId) {
+    var t = wallet.find(function (x) { return x.id === txId; }); if (!t || !t.date) return Promise.resolve();
+    if (wIsTransferenciaBancaria(t)) return Promise.resolve();
+    var dateKey = walletLocalDayKey(t);
+    if (!dateKey || !caixaFechamentoEstaFechado(dateKey)) return Promise.resolve();
+    var cat = caixaMovCategoria(t, aceleraResultadoFechamento(dateKey)); if (!cat) return Promise.resolve();
+    var tipo = WALLET_TIPO_POSTERIOR[cat]; if (!tipo) return Promise.resolve();
+    return caixaRegistrarEventoPosterior(dateKey, {
+      tipo: tipo, origem: 'CLASSIFICACAO_CARTEIRA', orderId: wOrderId(t) || null,
+      descricao: (CAIXA_MOV_CAT_LABEL[cat] || cat) + ' — Carteira (' + (t.desc || t.tipo || t.id) + ')',
+      valor: t.amount, fonteRef: 'WALLET|' + t.id,
+    });
+  }
   function caixaDayStatus(dateKey) {
     var pend = caixaDayPendencias(dateKey);
     var pendCart = caixaDayPendenciasCarteira(dateKey);
@@ -14537,6 +14675,28 @@ buffer/index.js:
       ) : '<div class="footnote">Nenhum pedido pago neste dia.</div>') +
       '</div>';
 
+    // ---- GATE 3 (auditoria pré-go-live) — Eventos Posteriores: drill-down separado do resultado
+    // original fechado (item 26/17-22 do Gate 3). "Resultado original fechado" vem SEMPRE de
+    // st.rec.snapshot.lucroC — a fotografia congelada em caixaCloseDay, nunca de dre.lucro (que é
+    // recalculado ao vivo e pode já refletir os próprios eventos posteriores dos pedidos deste dia,
+    // via occ.impact/pedidoComposicaoFinanceira) — só assim os dois números ficam realmente separados
+    // e o snapshot nunca é confundido com o efeito líquido pós-evento. ----
+    var eventosPosterioresLista = caixaEventosPosterioresDia(dateKey);
+    var snapOriginal = st.rec && st.rec.snapshot;
+    var resultadoOriginalC = snapOriginal ? snapOriginal.lucroC : null;
+    var impactoPosteriorC = Math.round(eventosPosterioresLista.reduce(function (s, e) { return s + (e.valor || 0); }, 0) * 100);
+    var evpRows = eventosPosterioresLista.map(function (e) {
+      var tag = e.status === 'RECONHECIDO' ? '<span class="tag ok">Reconhecido' + (e.dataReconhecimento ? ' em ' + dbr(e.dataReconhecimento.slice(0, 10)) : '') + '</span>' : '<span class="tag warn">Registrado</span>';
+      return '<tr><td class="nowrap">' + dbr((e.registradoEm || '').slice(0, 10)) + '</td><td>' + esc(EVENTO_POST_TIPO_LABEL[e.tipo] || e.tipo) + '</td><td class="mono rowlink" ' + (e.orderId ? 'data-goped360="' + esc(e.orderId) + '"' : '') + '>' + esc(e.orderId || '—') + '</td><td class="cell-text">' + esc(e.descricao || '') + '</td><td class="nowrap ' + (e.valor < 0 ? 'neg' : e.valor > 0 ? 'pos' : '') + '">' + brl(e.valor) + '</td><td>' + tag + (e.status !== 'RECONHECIDO' ? ' <button class="btn-sm" data-evpreconhecer="' + esc(e.id) + '">Reconhecer</button>' : '') + '</td></tr>';
+    }).join('');
+    var eventosPosterioresBlock = closedNow ? ('<div class="cx-section"><h4>Eventos Posteriores' + h4sub(eventosPosterioresLista.length ? (nn(eventosPosterioresLista.length) + ' registrado(s)') : null) + '</h4>' +
+      '<div class="footnote" style="margin:-4px 0 8px">Eventos financeiros (devolução/Adjustment/disputa/recuperação/despesa/receita) que chegaram DEPOIS deste fechamento — nunca alteram o Resultado original fechado abaixo, só se somam a ele como registro separado e permanente.</div>' +
+      '<div class="cx-kv"><span class="cxl">Resultado original fechado</span><span class="cxv">' + (resultadoOriginalC != null ? brlC(resultadoOriginalC) : 'não disponível') + '</span></div>' +
+      '<div class="cx-kv"><span class="cxl">Eventos posteriores</span><span class="cxv">' + nn(eventosPosterioresLista.length) + '</span></div>' +
+      '<div class="cx-kv" style="border-top:1px solid var(--line);margin-top:4px;padding-top:8px"><span class="cxl" style="font-weight:800">Impacto posterior</span><span class="cxv ' + (impactoPosteriorC < 0 ? 'neg' : impactoPosteriorC > 0 ? 'pos' : '') + '" style="font-size:16px">' + brlC(impactoPosteriorC) + '</span></div>' +
+      (eventosPosterioresLista.length ? ('<details class="cx-collapse" open><summary>Ver eventos posteriores</summary><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>Registrado em</th><th>Tipo</th><th>Pedido</th><th>Descrição</th><th>Valor</th><th>Status</th></tr></thead><tbody>' + evpRows + '</tbody></table></div></div></details>') : '<div class="footnote">Nenhum evento posterior registrado para este fechamento até agora.</div>') +
+      '</div>') : '';
+
     // ---- CONFERÊNCIAS (Pedidos/Expedição/Pendências/Auditoria) — colapsáveis, não dominam a tela ----
     var pedRowsC = vendas.pedidos.map(function (o) { var c = pedidoComposicaoFinanceira(o.id); return '<tr class="rowlink" data-goped360="' + esc(o.id) + '"><td class="mono">' + esc(o.id) + '</td><td>' + esc(S.pedidos.labels[o.normalizedStatus] || o.orderStatus) + '</td><td class="nowrap">' + brl(c.receitaC != null ? c.receitaC / 100 : (o.totalAmount || 0)) + '</td><td class="nowrap">' + (c.resultadoC != null ? brlC(c.resultadoC) : '—') + '</td></tr>'; }).join('');
     var pedidosDetails = '<details class="cx-collapse"><summary>Pedidos do dia · ' + nn(vendas.n) + ' pedido(s)</summary><div class="pb"><div class="table-wrap"><table class="report"><thead><tr><th>Pedido</th><th>Status</th><th>Valor</th><th>Lucro</th></tr></thead><tbody>' + (pedRowsC || '<tr><td colspan="4" class="empty">Nenhum pedido pago neste dia.</td></tr>') + '</tbody></table></div></div></details>';
@@ -14622,7 +14782,7 @@ buffer/index.js:
 
     var transfManualBtn = '<div style="margin:6px 0 0"><button class="btn-sm" id="bt-abrir-manual">+ Adicionar transferência não encontrada</button></div>';
 
-    return header + resumoTopo + fluxoDinheiro + creditosSection + debitosSection + conciliacaoFinanceira + dreResumo + lancamentosFinanceiros + conferencias + integracaoResumo + transfManualBtn + footer;
+    return header + resumoTopo + fluxoDinheiro + creditosSection + debitosSection + conciliacaoFinanceira + dreResumo + eventosPosterioresBlock + lancamentosFinanceiros + conferencias + integracaoResumo + transfManualBtn + footer;
   }
   function bindCaixaFechamentoBody(dateKey) {
     var dateSel = document.getElementById('cx-date-sel'); if (dateSel) dateSel.onchange = function () { caixaAbrirDia(dateSel.value); };
@@ -14647,6 +14807,11 @@ buffer/index.js:
         var motivo = prompt('Observação para "' + pendenciaMotivoAcao(acao) + '":') || '';
         pendenciaResolver('FIN:' + orderId, acao, motivo, motivo, 'ABERTA').then(function () { toast('Pendência financeira resolvida', orderId); render(); });
       };
+    });
+    // GATE 3 — "Reconhecer" um Evento Posterior: ação explícita do operador, só marca como revisado
+    // (nunca altera valor/tipo/origem do evento — ver caixaEventoPosteriorReconhecer).
+    app.querySelectorAll('[data-evpreconhecer]').forEach(function (b) {
+      b.onclick = function () { caixaEventoPosteriorReconhecer(dateKey, b.dataset.evpreconhecer, 'Operador').then(function () { toast('Evento posterior reconhecido', ''); render(); }); };
     });
     // Achado real de auditoria (Prioridade 18, teste de duplo clique): sem guarda de reentrância, 2
     // cliques síncronos no mesmo botão disparavam 2 execuções completas de caixaCloseDay() (2 entradas
