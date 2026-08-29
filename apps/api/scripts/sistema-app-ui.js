@@ -4274,7 +4274,13 @@
     if (!m) m = d.match(/#\s*([A-Za-z0-9]{6,})/);
     return m ? m[1] : '';
   }
-  function walletKey(row) { return 'w:' + (row.date || row.dateRaw) + '|' + row.amount + '|' + (row.balance == null ? '' : row.balance) + '|' + (row.orderId || '') + '|' + (row.desc || '').slice(0, 48); }
+  // CRÍTICO (achado da Prioridade 10, replicando o mesmo bug já corrigido em mrRenda/mrShip/mrAdj —
+  // commit 9bdf751): a chave nunca incluía operationId. Como `wallet` carrega TODAS as operações
+  // juntas em memória (sem filtro) e `importWallet` indexa por `byId[id]` do array inteiro, reimportar
+  // o MESMO extrato (mesma data/valor/saldo/orderId/descrição) em uma operação QA diferente colidia
+  // com a chave já persistida por outra operação e apagava seus registros silenciosamente — reproduzido
+  // ao vivo com 832 linhas reais do mesmo extrato importadas em 2 operações distintas.
+  function walletKey(row, opId) { return 'w:' + (opId || '') + '|' + (row.date || row.dateRaw) + '|' + row.amount + '|' + (row.balance == null ? '' : row.balance) + '|' + (row.orderId || '') + '|' + (row.desc || '').slice(0, 48); }
   function parseWallet(ab, filename) {
     var res = { notRecognized: true, rows: [] };
     var wb; try { wb = XLSX.read(new Uint8Array(ab), { type: 'array' }); } catch (e) { return res; }
@@ -4302,7 +4308,7 @@
       var maxSeq = wallet.reduce(function (m, t) { return Math.max(m, t.seq || 0); }, 0);
       // O extrato vem do mais NOVO para o mais antigo; invertendo obtemos a ordem cronológica real,
       // que é a sequência autoritativa para a reconciliação (mesmo com timestamps repetidos).
-      parsed.rows.slice().reverse().forEach(function (row) { var id = walletKey(row); if (byId[id]) { unch++; return; } var cat = walletCat(row.tipo, row.desc, row.amount); var orderId = extractWalletOrderId(row.orderId, row.desc); var t = { id: id, operationId: opId, seq: ++maxSeq, origin: 'SHOPEE', date: row.date, dateRaw: row.dateRaw, tipo: row.tipo, desc: row.desc, category: cat, orderId: orderId, dir: row.dir, amount: row.amount, balance: row.balance, adjust: row.adjust, status: row.status, fileName: file.name, importedAt: importedAt }; byId[id] = t; changed.push(t); novo++; });
+      parsed.rows.slice().reverse().forEach(function (row) { var id = walletKey(row, opId); if (byId[id]) { unch++; return; } var cat = walletCat(row.tipo, row.desc, row.amount); var orderId = extractWalletOrderId(row.orderId, row.desc); var t = { id: id, operationId: opId, seq: ++maxSeq, origin: 'SHOPEE', date: row.date, dateRaw: row.dateRaw, tipo: row.tipo, desc: row.desc, category: cat, orderId: orderId, dir: row.dir, amount: row.amount, balance: row.balance, adjust: row.adjust, status: row.status, fileName: file.name, importedAt: importedAt }; byId[id] = t; changed.push(t); novo++; });
       wallet = Object.values(byId);
       var batch = { id: 'wb' + Date.now() + Math.round(performance.now()), module: 'Carteira', filename: file.name, createdAt: importedAt, seen: parsed.rows.length, novo: novo, upd: 0, unch: unch, itemsSeen: parsed.rows.length };
       batches.unshift(batch); lastImportStamp = importedAt;
@@ -12922,7 +12928,14 @@
       });
     }
 
+    // Achado real da Prioridade 7 (auditoria): "Salvar e Dar Baixa" ligava direto em doSave(true) sem
+    // nenhum bloqueio contra duplo clique — 5/5 cliques duplos geraram 2 registros de pagamento (1
+    // com o valor cheio + 1 fantasma de R$0,00). O botão "Salvar" simples nunca teve esse bug porque
+    // usa o modal genérico openModal(), que já bloqueia reentrância via a flag `loading`
+    // (linhas ~7800-7809) — replicando aqui o MESMO padrão, escopado a este editor específico.
+    var cpSaving = false;
     function doSave(andBaixa) {
+      if (cpSaving) return;
       if (!fieldVal('cp-fornecedor-sel')) { toast('Fornecedor obrigatório', 'Selecione ou cadastre um fornecedor antes de salvar.', true); return; }
       if (!fieldVal('cp-vencimento')) { toast('Vencimento obrigatório', '', true); return; }
       collectDraftFromForm();
@@ -12937,6 +12950,9 @@
       // cpAplicarUpsertProtegido), que só volta a preenchê-las se o operador algum dia limpar o campo.
       draft.manualFields = CP_CAMPOS_PROTEGIVEIS_MANUAL.slice();
       var isNewSeries = !existing && draft.occurrence && draft.occurrence.type !== 'UNICA';
+      cpSaving = true;
+      var btnSave = panel.querySelector('#cp-save'), btnBaixa = panel.querySelector('#cp-savebaixa');
+      if (btnSave) btnSave.disabled = true; if (btnBaixa) btnBaixa.disabled = true;
       var chain;
       if (isNewSeries) {
         var drafts = cpGenerateOccurrenceDrafts(Object.assign({}, draft, { valor: cpValorOriginal(items, draft.freteValor, draft.outrasDespesasValor) }), draft.occurrence);
@@ -12949,7 +12965,7 @@
         if (existing == null && !isNewSeries && saved && draft.nfe && draft.nfe.parcelas && draft.nfe.parcelas.length > 1) {
           // parcelas da NF-e (§30) já foram tratadas na importação do XML (ver cpApplyNFeToDraft) — nada extra aqui.
         }
-      }).catch(function (e) { toast('Não foi possível salvar', e.message || String(e), true); });
+      }).catch(function (e) { cpSaving = false; if (btnSave) btnSave.disabled = false; if (btnBaixa) btnBaixa.disabled = false; toast('Não foi possível salvar', e.message || String(e), true); });
     }
 
     function wire() {
