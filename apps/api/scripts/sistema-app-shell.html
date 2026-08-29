@@ -152,10 +152,16 @@
      .overlay em 50 (< 60) o diagnóstico renderizava ATRÁS do painel que o abriu. .overlay agora fica
      acima de .drawer (mas abaixo do .toast, que precisa ficar sempre visível por cima de tudo). */
   .overlay{position:fixed;inset:0;background:rgba(16,26,51,.45);display:flex;align-items:center;justify-content:center;z-index:65;padding:20px}
-  .modal{background:#fff;border-radius:14px;width:520px;max-width:96vw;box-shadow:0 30px 80px rgba(0,0,0,.4)}
-  .modal .mh{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
-  .modal .mh h3{margin:0;font-size:16px}.modal .mbd{padding:20px}
-  .modal .mf{padding:14px 20px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px}
+  /* Achado real da Prioridade 17 (auditoria de burn-in): sem max-height/overflow, um modal com
+     conteúdo que cresce (ex.: "Histórico de custo" da Família, uma linha por edição salva) empurrava
+     o rodapé com Salvar/Cancelar para fora da viewport, sem nenhum caminho de rolagem até ele — a
+     única saída era Esc, que descarta a edição em vez de salvá-la (risco real de perda de dado do
+     operador). Modal agora é flex-column com altura máxima de 90vh; só o corpo (.mbd) rola — cabeçalho
+     e rodapé ficam sempre fixos e alcançáveis, qualquer que seja o tamanho do conteúdo. */
+  .modal{background:#fff;border-radius:14px;width:520px;max-width:96vw;max-height:90vh;box-shadow:0 30px 80px rgba(0,0,0,.4);display:flex;flex-direction:column}
+  .modal .mh{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;flex:0 0 auto}
+  .modal .mh h3{margin:0;font-size:16px}.modal .mbd{padding:20px;overflow-y:auto;flex:1 1 auto;min-height:0}
+  .modal .mf{padding:14px 20px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px;flex:0 0 auto}
   .x{border:none;background:none;font-size:20px;color:var(--muted);cursor:pointer}
   .drawer{position:fixed;inset:0;background:rgba(16,26,51,.45);display:flex;justify-content:flex-end;z-index:60}
   .drawer-panel{background:#fff;width:440px;max-width:96vw;height:100%;box-shadow:-20px 0 60px rgba(0,0,0,.25);display:flex;flex-direction:column}
