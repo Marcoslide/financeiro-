@@ -337,7 +337,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 33f731a · 2026-08-29 03:09 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 53942b5 · 2026-08-29 03:15 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -4491,22 +4491,34 @@ buffer/index.js:
       var strong = (candidates || []).filter(function (c) { return c.variationId === itemHint.variationId; })[0];
       if (strong) return finalize(strong, 'STRONG_VARIATION_ID');
     }
-    // Identidade manual persistida por item (SKU+produto+variação) — prioridade sobre qualquer
-    // resolução automática quando existe conflito real de candidatas, porque aponta pra uma variação
-    // específica (não pra uma família cega aplicada a todo o texto de SKU).
-    if (itemHint && (itemHint.productName || itemHint.variationName)) {
-      var idKey = productIdentityMappingKey(key, itemHint.productName, itemHint.variationName);
-      var idMap = productIdentityMappings[idKey];
-      if (idMap && skuVarById[idMap.variationId]) {
-        return finalize({ variationId: idMap.variationId, matchedBy: 'IDENTITY_MAPPING' }, 'MANUAL_IDENTITY');
+    // Identidade manual persistida por item (SKU+produto+variação) — hierarquia de prioridade §6 da
+    // correção pós-auditoria: (1) empresa/loja e (2) marketplace já isolam o índice antes de chegar
+    // aqui; (3-4) ID nativo do pedido/variação vêm acima; (5) SKU exato/referência (com desambiguação
+    // por nome combinado) SEMPRE tenta primeiro — nome/mapeamento manual nunca supera um ID nativo ou
+    // um SKU exato sem ambiguidade real. Só quando a resolução automática (tiers abaixo) não consegue
+    // decidir sozinha (SKU_CONFLITANTE) é que o mapeamento manual entra, como prioridade 7 — ÚLTIMO
+    // recurso, nunca atalho — porque aponta pra uma variação específica, não pra uma família cega
+    // aplicada a todo o texto de SKU.
+    function manualIdentityFallback(notFoundResult) {
+      if (itemHint && (itemHint.productName || itemHint.variationName)) {
+        var idKey = productIdentityMappingKey(key, itemHint.productName, itemHint.variationName);
+        var idMap = productIdentityMappings[idKey];
+        if (idMap && skuVarById[idMap.variationId]) {
+          return finalize({ variationId: idMap.variationId, matchedBy: 'IDENTITY_MAPPING' }, 'MANUAL_IDENTITY');
+        }
+        // mapeamento aponta pra uma variação que foi excluída depois — nunca trava: mantém o motivo original.
       }
-      // mapeamento aponta pra uma variação que foi excluída depois — nunca trava: cai pra resolução normal.
+      return notFoundResult;
     }
     if (!candidates || !candidates.length) {
       // Nenhum anúncio no catálogo reivindica este texto de SKU — não há candidato real com o qual
-      // confundir, então o override cego histórico (classificação manual de SKU sem NENHUM vínculo em
-      // Produtos) continua seguro aqui. Ele NUNCA se aplica quando existem candidatas reais (ver acima).
+      // confundir. Ainda assim, um mapeamento manual específico (se existir) vence o override cego
+      // histórico, porque aponta pra uma variação real; o override cego (classificação manual de SKU
+      // sem NENHUM vínculo em Produtos) continua seguro como último recurso, aplicado só aqui — NUNCA
+      // quando existem candidatas reais (ver os tiers abaixo).
       var overrideNone = skuFamilyOverrides[key];
+      var fallbackNone = manualIdentityFallback(null);
+      if (fallbackNone) return fallbackNone;
       if (overrideNone) {
         var fNone = skuFamById[overrideNone.familyId];
         if (fNone) {
@@ -4539,17 +4551,17 @@ buffer/index.js:
     }
     var activeSku = tier('SKU', true);
     if (activeSku.length === 1) return finalize(activeSku[0], 'ACTIVE_EXACT_SKU');
-    if (activeSku.length > 1) { if (sameFamilyAll(activeSku)) return finalize(activeSku[0], 'MULTIPLE_LISTINGS_SAME_FAMILY'); var dis1 = disambiguateByName(activeSku, itemHint); if (dis1) return finalize(dis1, 'SKU_PRODUCT_NAME_MATCH'); return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE', candidatos: activeSku }; }
+    if (activeSku.length > 1) { if (sameFamilyAll(activeSku)) return finalize(activeSku[0], 'MULTIPLE_LISTINGS_SAME_FAMILY'); var dis1 = disambiguateByName(activeSku, itemHint); if (dis1) return finalize(dis1, 'SKU_PRODUCT_NAME_MATCH'); return manualIdentityFallback({ found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE', candidatos: activeSku }); }
     var activeRef = tier('REFERENCE_SKU', true);
     if (activeRef.length === 1) return finalize(activeRef[0], 'ACTIVE_REFERENCE_SKU');
-    if (activeRef.length > 1) { if (sameFamilyAll(activeRef)) return finalize(activeRef[0], 'MULTIPLE_LISTINGS_SAME_FAMILY'); var dis2 = disambiguateByName(activeRef, itemHint); if (dis2) return finalize(dis2, 'SKU_PRODUCT_NAME_MATCH'); return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE', candidatos: activeRef }; }
+    if (activeRef.length > 1) { if (sameFamilyAll(activeRef)) return finalize(activeRef[0], 'MULTIPLE_LISTINGS_SAME_FAMILY'); var dis2 = disambiguateByName(activeRef, itemHint); if (dis2) return finalize(dis2, 'SKU_PRODUCT_NAME_MATCH'); return manualIdentityFallback({ found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE', candidatos: activeRef }); }
     var inactiveSku = tier('SKU', false);
     if (inactiveSku.length === 1) return finalize(inactiveSku[0], 'HISTORICAL_INACTIVE_MATCH');
-    if (inactiveSku.length > 1) { if (sameFamilyAll(inactiveSku)) return finalize(inactiveSku[0], 'MULTIPLE_LISTINGS_SAME_FAMILY'); var dis3 = disambiguateByName(inactiveSku, itemHint); if (dis3) return finalize(dis3, 'SKU_PRODUCT_NAME_MATCH'); return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE_HISTORICAL', candidatos: inactiveSku }; }
+    if (inactiveSku.length > 1) { if (sameFamilyAll(inactiveSku)) return finalize(inactiveSku[0], 'MULTIPLE_LISTINGS_SAME_FAMILY'); var dis3 = disambiguateByName(inactiveSku, itemHint); if (dis3) return finalize(dis3, 'SKU_PRODUCT_NAME_MATCH'); return manualIdentityFallback({ found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE_HISTORICAL', candidatos: inactiveSku }); }
     var inactiveRef = tier('REFERENCE_SKU', false);
     if (inactiveRef.length === 1) return finalize(inactiveRef[0], 'HISTORICAL_INACTIVE_MATCH');
-    if (inactiveRef.length > 1) { if (sameFamilyAll(inactiveRef)) return finalize(inactiveRef[0], 'MULTIPLE_LISTINGS_SAME_FAMILY'); var dis4 = disambiguateByName(inactiveRef, itemHint); if (dis4) return finalize(dis4, 'SKU_PRODUCT_NAME_MATCH'); return { found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE_HISTORICAL', candidatos: inactiveRef }; }
-    return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
+    if (inactiveRef.length > 1) { if (sameFamilyAll(inactiveRef)) return finalize(inactiveRef[0], 'MULTIPLE_LISTINGS_SAME_FAMILY'); var dis4 = disambiguateByName(inactiveRef, itemHint); if (dis4) return finalize(dis4, 'SKU_PRODUCT_NAME_MATCH'); return manualIdentityFallback({ found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE_HISTORICAL', candidatos: inactiveRef }); }
+    return manualIdentityFallback({ found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' });
   }
   function resolveSkuCost(sku, itemHint) {
     // Refatoração N5: cache por (sku bruto + itemHint) — não pela chave normalizada sozinha, porque o
