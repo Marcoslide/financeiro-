@@ -3,6 +3,12 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- Identificador de versão/observabilidade (go-live) — substituído em build time por
+     apps/api/scripts/build-sistema-app-html.cjs com o commit real (git rev-parse HEAD) no
+     momento do build. Nunca contém segredo; só existe para provar depois qual commit está
+     de fato publicado em produção (ver DEPLOY_ARCHITECTURE.md / verify-production.sh). -->
+<meta name="app-version" content="build-3537f34">
+<meta name="git-commit" content="3537f34e8f77e9fb612e4393f121df58cdc02882">
 <title>Sistema Marketplace — Líder</title>
 <style>
   :root{
@@ -343,7 +349,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build d789d7e · 2026-08-30 01:48 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 3537f34 · 2026-08-30 02:51 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -427,9 +433,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     mod
   ));
 
-  // node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js
+  // ../../node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js
   var require_base64_js = __commonJS({
-    "node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js"(exports) {
+    "../../node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js"(exports) {
       "use strict";
       exports.byteLength = byteLength;
       exports.toByteArray = toByteArray;
@@ -528,9 +534,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js
+  // ../../node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js
   var require_ieee754 = __commonJS({
-    "node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js"(exports) {
+    "../../node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js"(exports) {
       exports.read = function(buffer, offset, isLE, mLen, nBytes) {
         var e, m;
         var eLen = nBytes * 8 - mLen - 1;
@@ -611,9 +617,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js
+  // ../../node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js
   var require_buffer = __commonJS({
-    "node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js"(exports) {
+    "../../node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js"(exports) {
       "use strict";
       var base64 = require_base64_js();
       var ieee754 = require_ieee754();
@@ -1982,9 +1988,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // packages/shared/dist/index.js
+  // ../../packages/shared/dist/index.js
   var require_dist = __commonJS({
-    "packages/shared/dist/index.js"(exports) {
+    "../../packages/shared/dist/index.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.ImportIssueSeverity = exports.IMPORT_ROW_STATUS_LABELS = exports.ImportRowStatus = exports.IMPORT_BATCH_STATUS_LABELS = exports.ImportBatchStatus = exports.FileFormat = exports.REPORT_TYPE_LABELS = exports.ReportType = exports.AuditAction = exports.TemporalStatus = exports.ReconciliationState = exports.IngestionSource = exports.EntityStatus = exports.ROLE_LABELS = exports.Role = void 0;
@@ -2162,19 +2168,19 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // apps/api/src/imports/parsing/browser/shim-xlsx.js
+  // src/imports/parsing/browser/shim-xlsx.js
   var require_shim_xlsx = __commonJS({
-    "apps/api/src/imports/parsing/browser/shim-xlsx.js"(exports, module) {
+    "src/imports/parsing/browser/shim-xlsx.js"(exports, module) {
       "use strict";
       var XLSX2 = typeof globalThis !== "undefined" && globalThis.XLSX || {};
       module.exports = XLSX2;
     }
   });
 
-  // apps/api/src/all/entry.ts
+  // src/all/entry.ts
   var import_buffer = __toESM(require_buffer());
 
-  // apps/api/src/imports/parsing/format.ts
+  // src/imports/parsing/format.ts
   var import_shared = __toESM(require_dist());
   function detectFileFormat(buffer) {
     if (buffer.length >= 4) {
@@ -2197,7 +2203,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return !(ext === "csv" || ext === "txt" || ext === "tsv" || ext === "");
   }
 
-  // apps/api/src/imports/parsing/workbook.ts
+  // src/imports/parsing/workbook.ts
   var XLSX = __toESM(require_shim_xlsx());
   var import_shared2 = __toESM(require_dist());
   function sniffDelimiter(sample) {
@@ -2338,7 +2344,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { sheets };
   }
 
-  // apps/api/src/imports/parsing/value-parsers.ts
+  // src/imports/parsing/value-parsers.ts
   var NULLISH = /* @__PURE__ */ new Set(["", "-", "--", "\u2014", "n/a", "na", "null"]);
   function stripCurrency(input) {
     let s = input.trim().replace(/\u00a0/g, " ").trim();
@@ -2457,7 +2463,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return label.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
   }
 
-  // apps/api/src/imports/parsing/row-accessor.ts
+  // src/imports/parsing/row-accessor.ts
   var RowAccessor = class {
     constructor(headers, cells) {
       this.headers = headers;
@@ -2506,7 +2512,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   };
 
-  // apps/api/src/imports/parsing/browser/shim-crypto.js
+  // src/imports/parsing/browser/shim-crypto.js
   function sha256(bytes) {
     const K = [
       1116352408,
@@ -2658,7 +2664,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // apps/api/src/imports/parsing/hashing.ts
+  // src/imports/parsing/hashing.ts
   function sha2562(value) {
     return createHash("sha256").update(value).digest("hex");
   }
@@ -2666,7 +2672,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return sha2562(buffer);
   }
 
-  // apps/api/src/products/parsing/product-sheet.ts
+  // src/products/parsing/product-sheet.ts
   var SCAN_LIMIT = 40;
   var REQUIRED_LABELS = ["ID do Produto", "Nome do Produto"].map(normalizeLabel);
   var STRONG_LABELS = ["SKU", "Variante Identificador", "Pre\xE7o", "Estoque do Vendedor"].map(normalizeLabel);
@@ -2840,10 +2846,10 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // apps/api/src/orders/parsing/orders-rows.ts
+  // src/orders/parsing/orders-rows.ts
   var import_shared6 = __toESM(require_dist());
 
-  // apps/api/src/imports/parsing/report-specs.ts
+  // src/imports/parsing/report-specs.ts
   var import_shared3 = __toESM(require_dist());
   function canonicalDecimal(s) {
     if (s == null) return "";
@@ -3311,7 +3317,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return REPORT_SPECS.find((s) => s.type === type);
   }
 
-  // apps/api/src/imports/parsing/detect.ts
+  // src/imports/parsing/detect.ts
   var import_shared4 = __toESM(require_dist());
   var SCAN_LIMIT2 = 40;
   var ORDER_FAMILY = [
@@ -3461,7 +3467,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { columns, headerNames, dataStartRow: headerRow + 1 };
   }
 
-  // apps/api/src/imports/parsing/analyze.ts
+  // src/imports/parsing/analyze.ts
   var import_shared5 = __toESM(require_dist());
   var PERSONAL_DATA_LABELS = [
     "Telefone",
@@ -3541,7 +3547,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // apps/api/src/orders/parsing/orders-rows.ts
+  // src/orders/parsing/orders-rows.ts
   function first(acc, labels) {
     for (const l of labels) {
       const v = acc.get(l);
@@ -3700,7 +3706,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return null;
   }
 
-  // apps/api/src/orders/status.ts
+  // src/orders/status.ts
   var NORMALIZED_LABELS = {
     NAO_PAGO: "N\xE3o pago",
     A_ENVIAR: "A enviar",
@@ -3731,7 +3737,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return "OUTRO";
   }
 
-  // apps/api/src/orders/finance.ts
+  // src/orders/finance.ts
   var round2 = (n) => Math.round(n * 100) / 100;
   function computeOrderFinance(input) {
     const fees = round2(
@@ -3764,7 +3770,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // apps/api/src/postsale/parsing/postsale-rows.ts
+  // src/postsale/parsing/postsale-rows.ts
   var import_shared7 = __toESM(require_dist());
   var REPORT_OF = {
     RETURN_REFUND: import_shared7.ReportType.RETURN_REFUND,
@@ -3894,7 +3900,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { ...base, rows, periodStart, periodEnd };
   }
 
-  // apps/api/src/postsale/exposure.ts
+  // src/postsale/exposure.ts
   var norm2 = (s) => (s != null ? s : "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   function classifyExposureNumbers(status, requested, compensation) {
     const s = norm2(status);
@@ -3916,7 +3922,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
   var EXPOSURE_METHODOLOGY = "Classifica\xE7\xE3o por status Shopee: CANCELADA/RECUSADA/DESIST\xCANCIA = sem perda; COMPENSA\xC7\xC3O ao vendedor = recuperado; CONCLU\xCDDA/APROVADA/REEMBOLSADA = preju\xEDzo confirmado (solicitado \u2212 compensa\xE7\xE3o); EM AN\xC1LISE/PENDENTE/DISPUTA = em risco. Valor solicitado nunca \xE9 tratado automaticamente como preju\xEDzo.";
 
-  // apps/api/src/all/entry.ts
+  // src/all/entry.ts
   globalThis.Buffer = import_buffer.Buffer;
   var toBuf = (ab) => import_buffer.Buffer.from(new Uint8Array(ab));
   globalThis.SISTEMA = {

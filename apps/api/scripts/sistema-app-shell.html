@@ -3,6 +3,12 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- Identificador de versão/observabilidade (go-live) — substituído em build time por
+     apps/api/scripts/build-sistema-app-html.cjs com o commit real (git rev-parse HEAD) no
+     momento do build. Nunca contém segredo; só existe para provar depois qual commit está
+     de fato publicado em produção (ver DEPLOY_ARCHITECTURE.md / verify-production.sh). -->
+<meta name="app-version" content="__APP_VERSION__">
+<meta name="git-commit" content="__GIT_COMMIT__">
 <title>Sistema Marketplace — Líder</title>
 <style>
   :root{

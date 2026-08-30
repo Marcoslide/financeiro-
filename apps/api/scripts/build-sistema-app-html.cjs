@@ -78,18 +78,33 @@ function gitShortSha() {
   try { return execSync('git rev-parse --short HEAD', { cwd: ROOT }).toString().trim(); }
   catch (e) { return null; }
 }
+function gitFullSha() {
+  try { return execSync('git rev-parse HEAD', { cwd: ROOT }).toString().trim(); }
+  catch (e) { return null; }
+}
 const buildSha = process.env.VERCEL_GIT_COMMIT_SHA ? process.env.VERCEL_GIT_COMMIT_SHA.slice(0, 7) : gitShortSha();
+const buildShaFull = process.env.VERCEL_GIT_COMMIT_SHA || gitFullSha();
 const buildAt = new Date().toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
-// Fase 10.1 "Congelamento e Preparação para Teste Real": rótulo textual do congelamento, visível na
-// tela (não só o hash) — set TEST_LABEL='' para voltar ao rodapé padrão depois da validação.
-const TEST_LABEL = 'TESTE OPERACIONAL — 28/08/2026';
+// Congelamento pré-go-live encerrado (certificação concluída) — rótulo de "teste operacional"
+// removido do rodapé (era temporário, ver histórico do commit que o introduziu). set TEST_LABEL
+// de novo se uma futura rodada de teste operacional precisar do aviso na tela.
+const TEST_LABEL = '';
 const buildInfo = (TEST_LABEL ? TEST_LABEL + ' · ' : '') + 'build ' + (buildSha || '(sem git)') + ' · ' + buildAt;
+// Identificador de versão/observabilidade (go-live, release engineering) — meta tags no <head>
+// (ver sistema-app-shell.html) para provar depois, sem precisar de acesso ao servidor, qual commit
+// está de fato publicado (comparar com o commit certificado em RELEASE_MANIFEST.json). Nunca um
+// segredo — só o hash e um rótulo de versão. APP_RELEASE_VERSION permite ao processo de release
+// carimbar a tag oficial (ex.: "v1.0.0-certified"); sem a env var, cai no build-info textual já
+// existente (curto, sempre presente).
+const appVersion = process.env.APP_RELEASE_VERSION || ('build-' + (buildSha || 'unknown'));
 
 const html = shell
   .replace('<!--XLSX-->', () => '<script>' + xlsx + '\n</script>')
   .replace('<!--BUNDLE-->', () => '<script>' + bundle + '\n</script>')
   .replace('<!--UI-->', () => '<script>' + ui + '\n</script>')
-  .replace('<!--BUILDINFO-->', () => buildInfo);
+  .replace('<!--BUILDINFO-->', () => buildInfo)
+  .replace('__APP_VERSION__', () => appVersion)
+  .replace('__GIT_COMMIT__', () => (buildShaFull || 'unknown'));
 
 const out = path.join(ROOT, 'docs/sistema-marketplace.html');
 fs.writeFileSync(out, html);
