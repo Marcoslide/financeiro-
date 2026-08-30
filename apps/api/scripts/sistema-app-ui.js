@@ -11268,8 +11268,17 @@
     var movPost = caixaDayMovimentosPosteriores(dateKey); var pcatX = movPost.porCategoria;
     var pc = conc.porCategoria; var outrasReceitasValor = ((pc.PENDENCIA_ANTERIOR ? pc.PENDENCIA_ANTERIOR.valor : 0) + (pc.COMPENSACAO ? pc.COMPENSACAO.valor : 0) + (pc.OUTRAS_RECEITAS ? pc.OUTRAS_RECEITAS.valor : 0));
     var pendNaoExplicadaValor = pendCart.itens.reduce(function (s, it) { return s + Math.abs(it.t.amount); }, 0);
+    // Fechamento cirúrgico (§9-13) — mesma lacuna do PDF (ver caixaVersionAuditInfo): a versão vigente
+    // não indicava quantas vezes o dia foi reaberto/refechado, nem separava o resultado original dos
+    // Eventos Posteriores. Reaproveita a mesma função central usada pelo PDF.
+    var vInfo = caixaVersionAuditInfo(dateKey);
     var wb = XLSX.utils.book_new();
-    var resumo = [['Fechamento de Caixa', dbr(dateKey)], [],
+    var resumo = [['Fechamento de Caixa', dbr(dateKey)],
+      ['Versão vigente', vInfo.versaoVigente != null ? ('v' + vInfo.versaoVigente) : ''],
+      ['Versões anteriores (revisões)', vInfo.snapshotHistoryLista.length],
+      ['Última reabertura', vInfo.ultimaReabertura ? (new Date(vInfo.ultimaReabertura.at).toLocaleString('pt-BR') + ' · ' + (vInfo.ultimaReabertura.user || '—') + (vInfo.ultimaReabertura.justificativa ? ' · ' + vInfo.ultimaReabertura.justificativa : '')) : ''],
+      ['Último refechamento (versão superada)', vInfo.ultimoRefechamento ? (new Date(vInfo.ultimoRefechamento.supersededAt).toLocaleString('pt-BR') + ' · ' + (vInfo.ultimoRefechamento.supersededBy || '—') + ' · ' + (vInfo.ultimoRefechamento.motivo || '—')) : ''],
+      [],
       ['Pedidos pagos', vendas.n], ['Faturamento — Receita Bruta (R$)', vendas.valor], ['Lucro atual (R$)', vendas.nLucroConhecido ? vendas.lucroC / 100 : ''],
       ['Esperados (Expedição)', exp.esperados != null ? exp.esperados : ''], ['Expedidos', exp.expedidos], ['Faltaram', exp.faltaram != null ? exp.faltaram : ''],
       ['Resgates Acelera', ac.resgatesN || 0], ['Pedidos antecipados', ac.pedidosAceleraN || 0], ['Bruto Acelera (R$)', ac.resgatesN ? ac.valorBruto / 100 : ''], ['Taxa Acelera (R$)', ac.resgatesN ? ac.taxaAcelera / 100 : ''], ['Recebido do Acelera — líquido (R$)', ac.resgatesN ? ac.valorLiquido / 100 : ''],
@@ -11359,7 +11368,37 @@
     var histRows = [['Data/hora', 'Status', 'Justificativa', 'Pendências no momento']];
     (rec && rec.history || []).forEach(function (h) { histRows.push([new Date(h.at).toLocaleString('pt-BR'), h.status, h.justificativa || '', h.pendTotal]); });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(histRows), 'Histórico');
+    // Fechamento cirúrgico (§9-13) — Eventos Posteriores SEPARADOS do resultado original/vigente
+    // (nunca somados silenciosamente ao mesmo número — mesma separação já feita na tela/PDF).
+    var evpRows2 = [['Resultado original/vigente do fechamento (R$)', vInfo.resultadoOriginalC != null ? vInfo.resultadoOriginalC / 100 : ''], ['Impacto posterior — soma dos eventos (R$)', vInfo.impactoPosteriorC / 100], []];
+    evpRows2.push(['Registrado em', 'Tipo', 'Pedido', 'Descrição', 'Valor (R$)', 'Status']);
+    vInfo.eventosPosterioresLista.forEach(function (e) { evpRows2.push([e.registradoEm ? dbr(e.registradoEm.slice(0, 10)) : '', EVENTO_POST_TIPO_LABEL[e.tipo] || e.tipo, e.orderId || '—', e.descricao || '', e.valor, e.status === 'RECONHECIDO' ? 'Reconhecido' : 'Registrado']); });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(evpRows2), 'Eventos Posteriores');
+    // Histórico de VERSÕES do snapshot (rec.snapshotHistory, distinto da aba "Histórico" acima, que é
+    // o log de mudança de status) — só existe a partir do 2º fechamento do dia (reabertura consciente).
+    var versoesRows = [['Versão', 'Fechado em', 'Fechado por', 'Resultado (R$)', 'Substituída em', 'Substituída por', 'Motivo']];
+    vInfo.snapshotHistoryLista.forEach(function (v) { versoesRows.push(['v' + v.version, v.closedAt ? new Date(v.closedAt).toLocaleString('pt-BR') : '', v.closedBy || '', v.snapshot && v.snapshot.lucroC != null ? v.snapshot.lucroC / 100 : '', v.supersededAt ? new Date(v.supersededAt).toLocaleString('pt-BR') : '', v.supersededBy || '', v.motivo || '']); });
+    if (vInfo.versaoVigente != null) versoesRows.push(['v' + vInfo.versaoVigente + ' (vigente)', (rec && rec.closedAt) ? new Date(rec.closedAt).toLocaleString('pt-BR') : '', (rec && rec.closedBy) || '', vInfo.resultadoOriginalC != null ? vInfo.resultadoOriginalC / 100 : '', '', '', '']);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(versoesRows), 'Versões');
     XLSX.writeFile(wb, 'Fechamento_Caixa_' + dateKey + '.xlsx');
+  }
+  // Fechamento cirúrgico (§9-13) — BUG REAL/gap documentado: o PDF e o XLSX do Fechamento sempre
+  // mostravam só a versão VIGENTE (rec.snapshot), sem indicar que o dia foi reaberto/refechado —
+  // quem consumisse só o arquivo exportado (não a tela) não tinha como saber que existiam versões
+  // anteriores (rec.snapshotHistory, ver caixaCloseDay) nem via os Eventos Posteriores separados do
+  // resultado original. Esta função centraliza os dados que faltavam nos 2 exports (nunca um motor
+  // novo — reaproveita exatamente `caixaEventosPosterioresDia`/`rec.snapshotHistory`, já usados e
+  // provados na tela).
+  function caixaVersionAuditInfo(dateKey) {
+    var rec = caixaCloseGet(dateKey);
+    var snapshotHistoryLista = (rec && rec.snapshotHistory) || [];
+    var versaoVigente = (rec && rec.snapshot) ? (snapshotHistoryLista.length + 1) : null;
+    var ultimaReabertura = rec ? (rec.history || []).filter(function (h) { return h.status === 'ABERTO'; }).slice(-1)[0] : null;
+    var ultimoRefechamento = snapshotHistoryLista.length ? snapshotHistoryLista[snapshotHistoryLista.length - 1] : null;
+    var eventosPosterioresLista = caixaEventosPosterioresDia(dateKey);
+    var resultadoOriginalC = (rec && rec.snapshot) ? rec.snapshot.lucroC : null;
+    var impactoPosteriorC = Math.round(eventosPosterioresLista.reduce(function (s, e) { return s + (e.valor || 0); }, 0) * 100);
+    return { rec: rec, snapshotHistoryLista: snapshotHistoryLista, versaoVigente: versaoVigente, ultimaReabertura: ultimaReabertura, ultimoRefechamento: ultimoRefechamento, eventosPosterioresLista: eventosPosterioresLista, resultadoOriginalC: resultadoOriginalC, impactoPosteriorC: impactoPosteriorC };
   }
   // §125-129 do prompt mestre: documento de impressão/PDF DEDICADO — nunca a tela inteira. Monta
   // #caixa-print-doc (escondido normalmente; a folha de estilo do shell só o exibe em @media print,
@@ -11373,10 +11412,28 @@
     var pendNaoExplicadaValor = pendCart.itens.reduce(function (s, it) { return s + Math.abs(it.t.amount); }, 0);
     var pc = conc.porCategoria; var outrasReceitasValor = ((pc.PENDENCIA_ANTERIOR ? pc.PENDENCIA_ANTERIOR.valor : 0) + (pc.COMPENSACAO ? pc.COMPENSACAO.valor : 0) + (pc.OUTRAS_RECEITAS ? pc.OUTRAS_RECEITAS.valor : 0));
     var dre = caixaDreDia(dateKey, caixaOrigemAntecipacao(dateKey).pedidos);
+    var vInfo = caixaVersionAuditInfo(dateKey);
     var prow = function (label, v, total) { return '<div class="prow' + (total ? ' ptotal' : '') + '"><span>' + esc(label) + '</span><span class="' + (typeof v === 'number' ? (v < 0 ? 'pneg' : 'ppos') : '') + '">' + (typeof v === 'number' ? brl(v) : esc(v)) + '</span></div>'; };
     var thTable = function (headers, rows) { return '<table><thead><tr>' + headers.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') + '</tr></thead><tbody>' + (rows.length ? rows.join('') : '<tr><td colspan="' + headers.length + '">—</td></tr>') + '</tbody></table>'; };
+    var versaoTitulo = vInfo.snapshotHistoryLista.length ? (' — Versão vigente v' + nn(vInfo.versaoVigente)) : '';
+    var versaoAuditoriaSection = '<div class="psection"><h2>Auditoria da Versão</h2>' +
+      prow('Versão vigente', vInfo.versaoVigente != null ? ('v' + nn(vInfo.versaoVigente)) : '—') +
+      prow('Versões anteriores (revisões)', nn(vInfo.snapshotHistoryLista.length)) +
+      (vInfo.ultimaReabertura ? prow('Última reabertura', new Date(vInfo.ultimaReabertura.at).toLocaleString('pt-BR') + ' · ' + (vInfo.ultimaReabertura.user || '—') + (vInfo.ultimaReabertura.justificativa ? ' · ' + vInfo.ultimaReabertura.justificativa : '')) : '') +
+      (vInfo.ultimoRefechamento ? prow('Último refechamento (versão superada)', new Date(vInfo.ultimoRefechamento.supersededAt).toLocaleString('pt-BR') + ' · ' + (vInfo.ultimoRefechamento.supersededBy || '—') + ' · ' + (vInfo.ultimoRefechamento.motivo || '—')) : '') +
+      (vInfo.snapshotHistoryLista.length ? '<div class="footnote">Este fechamento foi revisado ' + nn(vInfo.snapshotHistoryLista.length) + ' vez(es) — a(s) versão(ões) anterior(es) fica(m) preservada(s) na aba/seção "Histórico de Versões", nunca sobrescrita(s).</div>' : '<div class="footnote">Este fechamento nunca foi reaberto — versão única.</div>') +
+      '</div>';
+    var svhRowsPdf = vInfo.snapshotHistoryLista.map(function (v) { return '<tr><td>v' + nn(v.version) + '</td><td>' + (v.closedAt ? new Date(v.closedAt).toLocaleString('pt-BR') : '—') + '</td><td>' + esc(v.closedBy || '—') + '</td><td>' + (v.snapshot && v.snapshot.lucroC != null ? brlC(v.snapshot.lucroC) : 'não disponível') + '</td><td>' + (v.supersededAt ? new Date(v.supersededAt).toLocaleString('pt-BR') : '—') + '</td><td>' + esc(v.supersededBy || '—') + '</td><td>' + esc(v.motivo || '—') + '</td></tr>'; });
+    var historicoVersoesSection = vInfo.snapshotHistoryLista.length ? ('<div class="psection"><h2>Histórico de Versões (' + nn(vInfo.snapshotHistoryLista.length) + ')</h2>' + thTable(['Versão', 'Fechado em', 'Fechado por', 'Resultado', 'Substituída em', 'Substituída por', 'Motivo'], svhRowsPdf) + '</div>') : '';
+    var evpRowsPdf = vInfo.eventosPosterioresLista.map(function (e) { return '<tr><td>' + dbr((e.registradoEm || '').slice(0, 10)) + '</td><td>' + esc(EVENTO_POST_TIPO_LABEL[e.tipo] || e.tipo) + '</td><td>' + esc(e.orderId || '—') + '</td><td>' + esc(e.descricao || '') + '</td><td>' + brl(e.valor) + '</td><td>' + (e.status === 'RECONHECIDO' ? 'Reconhecido' : 'Registrado') + '</td></tr>'; });
+    var eventosPosterioresSection = '<div class="psection"><h2>Eventos Posteriores</h2>' +
+      '<div class="footnote" style="margin:0 0 6px">Eventos financeiros que chegaram DEPOIS deste fechamento — nunca alteram o resultado original/vigente abaixo, só se somam a ele como registro separado e permanente.</div>' +
+      prow('Resultado original/vigente do fechamento', vInfo.resultadoOriginalC != null ? vInfo.resultadoOriginalC / 100 : 'não disponível') +
+      prow('Impacto posterior (soma dos eventos)', vInfo.impactoPosteriorC / 100, true) +
+      (vInfo.eventosPosterioresLista.length ? thTable(['Registrado em', 'Tipo', 'Pedido', 'Descrição', 'Valor', 'Status'], evpRowsPdf) : '<div class="footnote">Nenhum evento posterior registrado para este fechamento.</div>') +
+      '</div>';
     var html = '<div class="pdoc">' +
-      '<h1>FECHAMENTO DE CAIXA — ' + esc(dbr(dateKey)) + '</h1><div class="psub">Sistema Marketplace — Líder</div>' +
+      '<h1>FECHAMENTO DE CAIXA — ' + esc(dbr(dateKey)) + esc(versaoTitulo) + '</h1><div class="psub">Sistema Marketplace — Líder' + (vInfo.snapshotHistoryLista.length ? ' · revisado ' + nn(vInfo.snapshotHistoryLista.length) + ' vez(es)' : '') + '</div>' +
       '<div class="psection"><h2>Resumo do Dia</h2>' + prow('Pedidos pagos', vendas.n) + prow('Faturamento — Receita Bruta', vendas.valor) + prow('Lucro', vendas.nLucroConhecido ? vendas.lucroC / 100 : 'aguardando custo') + prow('Margem', margem != null ? pct(margem) : '—') + prow('Bruto Acelera', ac.resgatesN ? ac.valorBruto / 100 : '—') + prow('Taxa Acelera', ac.resgatesN ? -Math.abs(ac.taxaAcelera) / 100 : '—') + prow('Recebido do Acelera', ac.resgatesN ? ac.valorLiquido / 100 : '—') + prow('Transferido para banco', transf.total) + prow('Pendência não explicada', pendNaoExplicadaValor) + '</div>' +
       '<div class="psection"><h2>Expedição</h2>' + prow('Esperados', exp.esperados != null ? exp.esperados : '—') + prow('Expedidos', exp.expedidos) + prow('Pendentes', exp.faltaram != null ? exp.faltaram : '—') + '</div>' +
       '<div class="psection"><h2>Acelera</h2>' + prow('Resgates', ac.resgatesN) + prow('Pedidos antecipados', ac.pedidosAceleraN) + prow('Bruto', ac.resgatesN ? ac.valorBruto / 100 : '—') + prow('Taxa', ac.resgatesN ? -Math.abs(ac.taxaAcelera) / 100 : '—') + prow('Líquido', ac.resgatesN ? ac.valorLiquido / 100 : '—') + '</div>' +
@@ -11391,6 +11448,7 @@
         // filhos entram logo abaixo, mais indentados, sem alterar o total (que é sempre o pai).
         dre.linhasTaxas.map(function (l) { var isServico = dre.linhasSvcChildren.length && SVC_REAL_LABELS[l.label]; return prow('　' + l.label, l.valor / 100) + (isServico ? dre.linhasSvcChildren.map(function (c) { return prow('　　↳ ' + c.label, c.valor / 100); }).join('') : ''); }).join('') +
         (dre.creditos ? prow('Créditos / Incentivos', dre.creditos / 100) : '') + prow('Receita Líquida', dre.receitaLiquida / 100, true) + prow('Custo dos Produtos', dre.custoTotal != null ? dre.custoTotal / 100 : '—') + (dre.temAcelera ? prow('Taxa do Acelera', dre.acTaxa / 100) : '') + prow('Lucro', dre.lucro != null ? dre.lucro / 100 : '—', true) + prow('Margem', dre.margem != null ? pct(dre.margem) : '—')) : '<div class="prow">Nenhum pedido pago neste dia.</div>') + '</div>' +
+      eventosPosterioresSection + versaoAuditoriaSection + historicoVersoesSection +
       '<div class="pfooter"><div class="prow"><span>Responsável pelo fechamento</span><span>' + esc((st.rec && st.rec.closedBy) || '—') + '</span></div><div class="prow"><span>Status</span><span>' + esc(lbl ? lbl[0] : st.status) + '</span></div><div class="prow"><span>Impresso em</span><span>' + new Date().toLocaleString('pt-BR') + '</span></div></div>' +
       '</div>';
     var target = document.getElementById('caixa-print-doc');
