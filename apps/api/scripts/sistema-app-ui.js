@@ -11069,12 +11069,21 @@
 
     // ---- Fechar (rodapé) ----
     var podeFechar = pend.total === 0 && pendCart.total === 0;
+    // BUG REAL (achado ao vivo, auditoria GAP3 — exportação/versionamento do Fechamento): os botões
+    // "Fechar dia"/"Fechar com ressalva" eram renderizados e ligados (onclick) SEM checar `closedNow`
+    // — ao contrário do comentário de caixaCloseDay ("o botão 'Fechar' só aparece com o dia ABERTO"),
+    // eles continuavam ativos mesmo com o dia já FECHADO/FECHADO_COM_RESSALVA. Um clique nesse estado
+    // chamava caixaCloseDay() de novo sem nenhuma reabertura consciente antes — criava uma versão nova
+    // em rec.snapshotHistory com "Última reabertura" em branco e motivo genérico "Refechamento sem
+    // motivo informado", quebrando a garantia de auditabilidade que esta própria função existe para
+    // proteger. Mesmo padrão já usado no botão "Reabrir caixa" (só aparece `if (closedNow)`, linha
+    // ~10645) — aqui é o espelho: só aparecem quando NÃO fechado.
     var footer = '<div class="cx-footer">' +
       '<div class="footnote" style="margin:0">Diferença: <b>' + brlC(diferencaRealC) + '</b> · ' + nn(pendTotal) + ' pendência(s)' + (st.rec ? ' · último registro: ' + esc(CAIXA_LABEL[st.rec.status] ? CAIXA_LABEL[st.rec.status][0] : st.rec.status) + ' por ' + esc(st.rec.closedBy || '—') : '') + '</div>' +
-      '<div style="display:flex;gap:8px">' +
+      (closedNow ? '' : '<div style="display:flex;gap:8px">' +
       '<button class="btn-sm' + (podeFechar ? '' : ' primary') + '" id="caixa-closeress">Fechar com ressalva</button>' +
       '<button class="btn-sm' + (podeFechar ? ' primary' : '') + '"' + (podeFechar ? '' : ' disabled title="Só é possível Fechar sem pendências — use Fechar com ressalva"') + ' id="caixa-close">Fechar dia</button>' +
-      '</div></div>';
+      '</div>') + '</div>';
 
     var transfManualBtn = '<div style="margin:6px 0 0"><button class="btn-sm" id="bt-abrir-manual">+ Adicionar transferência não encontrada</button></div>';
 
