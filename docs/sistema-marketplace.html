@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 23c8c76 · 2026-08-29 23:28 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 525e2c6 · 2026-08-29 23:59 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -4117,6 +4117,22 @@ buffer/index.js:
     if (operationId && typeof storedId === 'string') { var p = operationId + '|'; if (storedId.indexOf(p) === 0) return storedId.slice(p.length); }
     return storedId;
   }
+  // B36 — settings de "cache derivado" (resumo de import, meta cfg) eram gravados sob um `id` fixo
+  // (ex.: 'mrSummary'), sem componente de operação: trocar de operação e voltar exibia o resumo da
+  // ÚLTIMA operação que importou, não o da operação ativa. settingsOpKey/settingsOpRead escopam esse
+  // `id` por operação SEM quebrar dados já gravados antes desta correção: a leitura sempre tenta a
+  // chave escopada primeiro e cai pro `id` legado (não-escopado) se a operação nunca gravou a sua.
+  function settingsOpKey(baseId, opId) { return opId ? (baseId + '::' + opId) : baseId; }
+  function settingsOpRead(list, baseId, opId) {
+    if (opId) { var scoped = list.filter(function (x) { return x.id === settingsOpKey(baseId, opId); })[0]; if (scoped) return scoped; }
+    return list.filter(function (x) { return x.id === baseId; })[0];
+  }
+  // B36 — pendResolucoes é um dict interno (não um settings id por operação) chaveado só por orderId;
+  // duas operações com o mesmo orderId (ou 'FIN:'+orderId) colidiam na mesma entrada. pendResKey prefixa
+  // a chave interna com a operação ativa; pendResGet cai pra chave legada (sem prefixo) se a operação
+  // ativa nunca resolveu aquele orderId — preserva histórico gravado antes desta correção.
+  function pendResKey(id) { var op = opActiveOrNull(); return op ? (op + '|' + id) : id; }
+  function pendResGet(id) { var op = opActiveOrNull(); if (op) { var scoped = pendResolucoes[op + '|' + id]; if (scoped) return scoped; } return pendResolucoes[id]; }
   var walletF = { search: '', cat: '', flow: '' }; // filtros da tabela de movimentações
   var Produtos = null;
   var sub = { pedidos: 'pedidos', posvenda: 'visao' };
@@ -4176,16 +4192,17 @@ buffer/index.js:
   var pendF = { situacao: '' };
   function pendenciaResolver(orderId, acao, motivo, observacao, estadoAnterior) {
     var now = new Date().toISOString();
-    var hist = (pendResolucoes[orderId] && pendResolucoes[orderId].history) || [];
+    var existing = pendResGet(orderId);
+    var hist = (existing && existing.history) || [];
     hist = hist.concat([{ acao: acao, motivo: motivo || '', observacao: observacao || '', operador: 'Operador', at: now, estadoAnterior: estadoAnterior }]);
-    pendResolucoes[orderId] = { atual: acao, motivo: motivo || '', observacao: observacao || '', operador: 'Operador', at: now, estadoAnterior: estadoAnterior, history: hist };
+    pendResolucoes[pendResKey(orderId)] = { atual: acao, motivo: motivo || '', observacao: observacao || '', operador: 'Operador', at: now, estadoAnterior: estadoAnterior, history: hist };
     return putMany('settings', [{ id: 'pendResolucoes', data: pendResolucoes }]);
   }
   function pendenciaReabrir(orderId) {
-    var ex = pendResolucoes[orderId]; if (!ex || !ex.atual) return Promise.resolve();
+    var ex = pendResGet(orderId); if (!ex || !ex.atual) return Promise.resolve();
     var hist = (ex.history || []).concat([{ acao: 'REABERTO', motivo: '', observacao: '', operador: 'Operador', at: new Date().toISOString(), estadoAnterior: ex.atual }]);
     // preserva o histórico completo (nunca apaga) — só remove o estado "resolvido" ativo
-    pendResolucoes[orderId] = { history: hist };
+    pendResolucoes[pendResKey(orderId)] = { history: hist };
     return putMany('settings', [{ id: 'pendResolucoes', data: pendResolucoes }]);
   }
   var devSel = {};            // seleção múltipla em Casos: id -> true (em memória)
@@ -4736,6 +4753,21 @@ buffer/index.js:
   // no texto de SKU. Guarda variationId (nunca familyId direto) — a família é sempre lida ao vivo em
   // resolveSkuCostByKeyRaw, então uma reclassificação de família do anúncio depois nunca fica presa a
   // um valor congelado no mapeamento.
+  // Fechamento cirúrgico — histórico de ações do vínculo manual (vincular/alterar/remover). Mesmo
+  // padrão já usado por pendResolucoes (um registro em `settings`, nunca uma tabela nova) — dict
+  // idKey -> array de ações, cada uma marcada com a operação ativa no momento (a leitura filtra por
+  // operação, mesma regra de productIdentityMappings; nunca physically-keyed, então não tem risco de
+  // colisão de chave em disco — é só trilha de auditoria, não a identidade em si).
+  var productIdentityMappingHistory = {};
+  function pimHistPush(idKey, entry) {
+    entry.operationId = opActiveOrNull();
+    productIdentityMappingHistory[idKey] = (productIdentityMappingHistory[idKey] || []).concat([entry]);
+    return putMany('settings', [{ id: 'productIdentityMappingHistory', data: productIdentityMappingHistory }]);
+  }
+  function pimHistFor(idKey) {
+    var op = opActiveOrNull();
+    return (productIdentityMappingHistory[idKey] || []).filter(function (h) { return !op || !h.operationId || h.operationId === op; });
+  }
   function productIdentityMappingSave(skuRaw, productName, variationName, variationId) {
     var skuKey = normalizeSkuKey(skuRaw);
     if (!skuKey || !variationId) return Promise.resolve();
@@ -4756,19 +4788,27 @@ buffer/index.js:
     var existingMine = candidates.filter(function (m) { return m.operationId === opId; })[0];
     var existingOther = candidates.filter(function (m) { return m.operationId && m.operationId !== opId; })[0];
     var diskId = existingMine ? (existingMine._diskId || existingMine.id) : (existingOther ? scopedNewKey(idKey, opId, true) : idKey);
+    // trilha de auditoria (ver §8/§10 do fechamento cirúrgico) — captura o vínculo ANTERIOR (se
+    // houver) antes de sobrescrever `rec`, pra registrar VINCULADO (1ª vez) vs ALTERADO (troca).
+    var deVarId = existingMine ? existingMine.variationId : null;
+    var deV = deVarId ? skuVarById[deVarId] : null; var deP = deV ? skuProdById[deV.productId] : null;
     var rec = { id: idKey, _diskId: diskId, skuKey: skuKey, skuOriginal: skuRaw, productName: productName || null, variationName: variationName || null, variationId: variationId, operationId: opId, resolvedAt: new Date().toISOString(), method: 'MANUAL_IDENTITY', status: 'ACTIVE' };
     productIdentityMappings[idKey] = rec;
     productIdentityMappingsAll[idKey] = candidates.filter(function (m) { return m.operationId !== opId; }).concat([rec]);
     var toWrite = Object.assign({}, rec, { id: diskId }); delete toWrite._diskId;
-    return putMany('productidentitymappings', [toWrite]).then(function () { rebuildSkuCost(); return rec; });
+    return putMany('productidentitymappings', [toWrite]).then(function () { rebuildSkuCost(); }).then(function () {
+      return pimHistPush(idKey, { action: existingMine ? 'ALTERADO' : 'VINCULADO', de: deVarId ? { variationId: deVarId, productName: deP ? deP.name : null, variationName: deV ? deV.variationName : null } : null, para: { variationId: variationId, productName: productName || null, variationName: variationName || null }, em: rec.resolvedAt, operador: 'Operador' });
+    }).then(function () { return rec; });
   }
-  function productIdentityMappingRemove(idKey) {
+  function productIdentityMappingRemove(idKey, motivo) {
     var rec = productIdentityMappings[idKey];
     if (!idKey || !rec) return Promise.resolve();
     delete productIdentityMappings[idKey];
     var candidates = productIdentityMappingsAll[idKey] || [];
     productIdentityMappingsAll[idKey] = candidates.filter(function (m) { return m !== rec; });
-    return delOne('productidentitymappings', rec._diskId || rec.id).then(function () { rebuildSkuCost(); });
+    return delOne('productidentitymappings', rec._diskId || rec.id).then(function () { rebuildSkuCost(); }).then(function () {
+      return pimHistPush(idKey, { action: 'REMOVIDO', de: { variationId: rec.variationId }, para: null, em: new Date().toISOString(), operador: 'Operador', motivo: motivo || null });
+    });
   }
   // Espelha Produtos.legacyReassign() (§5-7 do painel de cobertura) pro mapeamento manual: só
   // atribui um registro LEGACY_UNASSIGNED a uma operação real quando o operador escolhe
@@ -5539,7 +5579,7 @@ buffer/index.js:
     var itens = Object.keys(universo).map(function (id) {
       var o = orders.find(function (x) { return x.id === id; });
       var esp = esperadosSet[id]; var info = exp[id]; var expedido = !!info; var acRecs = acByOrder[id]; var noAcelera = !!acRecs;
-      var res = pendResolucoes[id]; var resolvido = res && res.atual;
+      var res = pendResGet(id); var resolvido = res && res.atual;
       var valorAcelera = noAcelera ? acRecs.reduce(function (s, r) { return s + r.antecipado; }, 0) : null;
       var isFbs = (esp && esp.isFbs) || (o && o.isFbs) || (info && info.isFbs) || false;
       // origem: qual módulo detectou o problema — nunca "Divergente" sem dono. PEND_OPERACIONAL/
@@ -9402,7 +9442,7 @@ buffer/index.js:
       var pedSet = {}, resgSet = {}; parsed.rows.forEach(function (row) { pedSet[row.pedido] = 1; resgSet[row.resgate] = 1; });
       var batch = { id: 'ac' + Date.now() + Math.round(performance.now()), operationId: opId, module: 'Shopee Acelera', filename: file.name, createdAt: importedAt, seen: parsed.rows.length, novo: novo, upd: upd, unch: unch, itemsSeen: parsed.rows.length, pedidosUnicos: Object.keys(pedSet).length, resgatesUnicos: Object.keys(resgSet).length, periodMin: parsed.periodReal ? parsed.periodReal.min : null, periodMax: parsed.periodReal ? parsed.periodReal.max : null };
       batches.unshift(batch); lastImportStamp = importedAt;
-      return Promise.all([putMany('acelera', changed), putMany('batches', [batch]), putMany('settings', [{ id: 'aceleraSummary', data: aceleraSummary }])]).then(function () { return { batch: batch, novo: novo, upd: upd, unch: unch }; });
+      return Promise.all([putMany('acelera', changed), putMany('batches', [batch]), putMany('settings', [{ id: settingsOpKey('aceleraSummary', opActiveOrNull()), data: aceleraSummary }])]).then(function () { return { batch: batch, novo: novo, upd: upd, unch: unch }; });
     });
   }
   // ---- motor determinístico ----
@@ -10626,7 +10666,7 @@ buffer/index.js:
       var batch = { id: 'mr' + Date.now() + Math.round(performance.now()), operationId: opId, module: 'Minha Renda', filename: file.name, createdAt: importedAt, seen: p.renda.length, novo: stats.renda, upd: 0, unch: p.renda.length - stats.renda, itemsSeen: p.renda.length };
       batches.unshift(batch); lastImportStamp = importedAt;
       // persiste em segundo plano (não bloqueia a UI); a memória já está atualizada, então a tela reflete na hora
-      putMany('mrrenda', chR); putMany('mrship', chS); putMany('mradj', chA); putMany('mrsvc', chV); putMany('settings', [{ id: 'mrSummary', data: mrSummary }]); putMany('batches', [batch]);
+      putMany('mrrenda', chR); putMany('mrship', chS); putMany('mradj', chA); putMany('mrsvc', chV); putMany('settings', [{ id: settingsOpKey('mrSummary', opId), data: mrSummary }]); putMany('batches', [batch]);
       evpChainAdj.catch(function () {}); // GATE 3 — segundo plano também, mesmo padrão das linhas acima
       return { batch: batch, stats: stats, kind: 'xlsx' };
     });
@@ -11283,7 +11323,7 @@ buffer/index.js:
     return '<div class="panel"><div class="ph"><h3>Alertas</h3></div><div class="pb">' + alerts.map(function (a) { return '<div class="fin-line"><span>' + a.icon + ' ' + esc(a.text) + '</span>' + (a.go === 'acelera-bipados' ? '<button class="btn-sm" data-goacbip="1">abrir</button>' : a.go === 'posvenda-recebimentos' ? '<button class="btn-sm" data-gorecb="1">abrir</button>' : a.go === 'carteira' ? '<button class="btn-sm" data-gowal="1">abrir</button>' : '<button class="btn-sm" data-mrgo="' + a.go + '">abrir</button>'); }).join('') + '</div></div>';
   }
   // ---- Meta & Projeção (§7,10,11 do prompt de reorganização) ----
-  function saveMrMetaCfg() { return putMany('settings', [{ id: 'mrMetaCfg', data: mrMetaCfg }]); }
+  function saveMrMetaCfg() { return putMany('settings', [{ id: settingsOpKey('mrMetaCfg', opActiveOrNull()), data: mrMetaCfg }]); }
   function mrMetaPeriodRange() {
     var now = new Date();
     if (mrMetaCfg.periodMode === 'proximo_mes') { var f = new Date(now.getFullYear(), now.getMonth() + 1, 1); var t2 = new Date(now.getFullYear(), now.getMonth() + 2, 1); return { from: f, to: t2 }; }
@@ -12528,6 +12568,49 @@ buffer/index.js:
       }).join('') : '<span class="footnote">Nenhum anúncio candidato encontrado em Produtos para este SKU.</span>';
       return '<div class="panel" style="margin-bottom:10px;border:1px solid var(--border)"><div class="ph" style="padding:10px 12px"><div><div class="mono" style="font-size:13px">SKU: ' + esc(c.sku) + '</div><div class="footnote" style="margin:0">No pedido: <b>' + esc(c.productName || '(sem nome)') + '</b>' + (c.variationName ? ' · ' + esc(c.variationName) : '') + '</div></div><span class="footnote" style="margin:0">' + nn(c.count) + ' pedido(s) afetado(s)</span></div><div class="pb" style="padding:8px 12px">' + candRows + '</div></div>';
     }
+    // Fechamento cirúrgico (§8-10) — antes desta correção, uma identidade vinculada manualmente
+    // ("Vincular a este anúncio", acima) nunca aparecia em lugar nenhum pra ser revista: não existia
+    // ação de alterar ou remover o vínculo, nem qualquer lista das identidades já resolvidas dessa
+    // forma. `productIdentityMappingSave`/`productIdentityMappingRemove` (linha ~803/~829) sempre
+    // aceitaram essa operação — só faltava a tela. Reaproveita os mesmos dados já corretos (nunca um
+    // motor novo): `productIdentityMappings` (dict já escopado pela operação ativa) e `skuAliasIndex`
+    // (candidatos de troca, mesma fonte do painel de conflitos acima).
+    function manualMappingsList() {
+      return Object.keys(productIdentityMappings).map(function (k) { return productIdentityMappings[k]; })
+        .filter(function (r) { return r.method === 'MANUAL_IDENTITY'; })
+        .sort(function (a, b) { return (b.resolvedAt || '').localeCompare(a.resolvedAt || ''); });
+    }
+    function manualMappingRowHtml(rec) {
+      var idKey = productIdentityMappingKey(rec.skuKey, rec.productName, rec.variationName);
+      var v = skuVarById[rec.variationId]; var p = v ? skuProdById[v.productId] : null; var f = v && v.familyId ? skuFamById[v.familyId] : null;
+      var vinculoLabel = p ? (esc(p.name) + (v.variationName ? ' · ' + esc(v.variationName) : '')) : '<span class="tag warn">anúncio não encontrado (excluído?)</span>';
+      var famLabel = f ? '<span class="tag ok">' + esc(f.name) + '</span>' : '<span class="tag warn">sem família</span>';
+      var cands = skuAliasIndex[rec.skuKey] || [];
+      var candRows = cands.filter(function (c) { return c.variationId !== rec.variationId; }).map(function (cand) {
+        var cv = skuVarById[cand.variationId]; var cp = cv ? skuProdById[cv.productId] : null; var cf = cv && cv.familyId ? skuFamById[cv.familyId] : null;
+        return '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)"><span class="cell-text">' + esc(cp ? cp.name : '(produto não encontrado)') + (cv && cv.variationName ? ' · ' + esc(cv.variationName) : '') + ' ' + (cf ? '<span class="tag ok">' + esc(cf.name) + '</span>' : '<span class="tag warn">sem família</span>') + '</span>' +
+          '<button class="btn-sm" data-identvincular="1" data-identsku="' + esc(rec.skuOriginal) + '" data-identproduto="' + esc(rec.productName || '') + '" data-identvariacao="' + esc(rec.variationName || '') + '" data-identvarid="' + esc(cand.variationId) + '">Vincular a este anúncio</button></div>';
+      }).join('');
+      var hist = pimHistFor(idKey);
+      var histRows = hist.length ? hist.slice().reverse().map(function (h) {
+        return '<div class="footnote" style="padding:3px 0">' + (h.em ? new Date(h.em).toLocaleString('pt-BR') : '—') + ' — <b>' + esc(h.action) + '</b>' +
+          (h.de && h.de.productName ? (' · de: ' + esc(h.de.productName) + (h.de.variationName ? ' · ' + esc(h.de.variationName) : '')) : '') +
+          (h.para && h.para.productName ? (' · para: ' + esc(h.para.productName) + (h.para.variationName ? ' · ' + esc(h.para.variationName) : '')) : '') +
+          (h.motivo ? (' · motivo: ' + esc(h.motivo)) : '') + '</div>';
+      }).join('') : '<span class="footnote">Sem histórico registrado.</span>';
+      return '<div class="panel" style="margin-bottom:10px;border:1px solid var(--border)"><div class="ph" style="padding:10px 12px"><div><div class="mono" style="font-size:13px">SKU: ' + esc(rec.skuOriginal) + '</div><div class="footnote" style="margin:0">No pedido: <b>' + esc(rec.productName || '(sem nome)') + '</b>' + (rec.variationName ? ' · ' + esc(rec.variationName) : '') + '</div></div><span class="footnote" style="margin:0">Vinculado em ' + (rec.resolvedAt ? new Date(rec.resolvedAt).toLocaleString('pt-BR') : '—') + '</span></div><div class="pb" style="padding:8px 12px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px"><span class="cell-text">Vinculado a: <b>' + vinculoLabel + '</b> ' + famLabel + '</span><span><button class="btn-sm" data-pimtoggle="1">Alterar vínculo</button> <button class="btn-sm" data-pimremove="' + esc(idKey) + '" style="color:var(--err)">Remover vínculo</button></span></div>' +
+        '<div class="pim-cands" hidden>' + (candRows || '<span class="footnote">Nenhum outro anúncio candidato encontrado para este SKU.</span>') + '</div>' +
+        '<details style="margin-top:6px"><summary class="footnote" style="cursor:pointer">Histórico (' + hist.length + ')</summary>' + histRows + '</details>' +
+        '</div></div>';
+    }
+    function manualMappingsPanelHtml() {
+      var list = manualMappingsList();
+      var body = list.length === 0
+        ? '<span class="footnote">Nenhuma identidade foi vinculada manualmente ainda — vínculos criados em "Vincular a este anúncio" (abaixo) aparecem aqui.</span>'
+        : list.map(manualMappingRowHtml).join('');
+      return '<div class="panel" style="margin-bottom:14px"><div class="ph"><h3>Resolvidos manualmente</h3><span class="footnote" style="margin:0">' + nn(list.length) + ' identidade(s) com vínculo manual</span></div><div class="pb">' + body + '</div></div>';
+    }
     function skuConflictsPanelHtml(conflicts) {
       var body = conflicts.length === 0
         ? '<span class="tag ok">🟢 Nenhuma identidade ambígua sem resolução — todo SKU compartilhado já foi desambiguado automaticamente por nome ou vinculado manualmente.</span>'
@@ -12741,6 +12824,7 @@ buffer/index.js:
         '<div style="margin-top:8px">' + (integridadeOk ? '<span class="tag ok">✅ íntegro — nenhum registro aguardando classificação</span>' : '<span class="tag warn" style="cursor:pointer" data-catdrill="legado">⚠ existem ' + nn(stats.legadoTotal) + ' registro(s) legado(s) aguardando classificação — clique para revisar e atribuir</span>') + '</div>' +
         '</div></div>' +
         skuConflictsPanelHtml(conflicts) +
+        manualMappingsPanelHtml() +
         '<div class="panel"><div class="ph"><h3>Variações sem família em produtos com custo cadastrado</h3><span class="footnote" style="margin:0">' + nn(total) + ' variação(ões) órfã(s)</span></div><div class="pb">' +
         (total === 0 ? '<span class="tag ok">🟢 Nenhuma variação órfã encontrada — todo produto com família cadastrada tem todas as suas variações vinculadas.</span>' :
           ('<div class="footnote" style="margin-bottom:8px">' + nn(nUnamb) + ' reparável(is) automaticamente (o produto tem uma única família entre as variações já classificadas) · ' + nn(nAmb) + ' ambígua(s) (mais de uma família entre as classificadas — nunca decidido por adivinhação, exige escolha manual em Produtos).</div>' +
@@ -12758,6 +12842,20 @@ buffer/index.js:
           productIdentityMappingSave(sku, produto, variacao, variationId).then(function () {
             render();
             toast('Identidade vinculada', 'Pedidos com SKU "' + sku + '" e produto "' + (produto || '(sem nome)') + '" já mostram o custo deste anúncio específico — outros produtos que só coincidem no texto de SKU continuam intactos.');
+          });
+        };
+      });
+      appEl.querySelectorAll('[data-pimtoggle]').forEach(function (b) {
+        b.onclick = function () { var box = b.closest('.panel').querySelector('.pim-cands'); if (box) box.hidden = !box.hidden; };
+      });
+      appEl.querySelectorAll('[data-pimremove]').forEach(function (b) {
+        b.onclick = function () {
+          var idKey = b.dataset.pimremove;
+          var motivo = window.prompt('Motivo da remoção do vínculo manual (fica registrado no histórico):', '');
+          if (motivo == null) return; // cancelado — nunca remove sem confirmação explícita
+          productIdentityMappingRemove(idKey, motivo).then(function () {
+            render();
+            toast('Vínculo removido', 'A identidade volta a ser resolvida automaticamente, ou aparece em "Identidades ainda ambíguas" se precisar de nova escolha.');
           });
         };
       });
@@ -12879,7 +12977,7 @@ buffer/index.js:
     var out = [];
     pedidoIds.forEach(function (id) {
       var comp = pedidoComposicaoFinanceira(id); if (!comp.pendencia) return;
-      var res = pendResolucoes['FIN:' + id]; if (res && res.atual) return; // já resolvida — não aparece mais como pendência aberta
+      var res = pendResGet('FIN:' + id); if (res && res.atual) return; // já resolvida — não aparece mais como pendência aberta
       out.push(comp.pendencia);
     });
     return out;
@@ -19527,6 +19625,7 @@ buffer/index.js:
     shipBip = {}; Object.keys(shipBipAll).forEach(function (k) { var arr = shipBipAll[k]; shipBip[k] = arr[arr.length - 1]; });
     expSessions = (r[20] || []).sort(function (a, b) { return b.horaInicio.localeCompare(a.horaInicio); });
     var pendR = settings.filter(function (x) { return x.id === 'pendResolucoes'; })[0]; if (pendR && pendR.data) pendResolucoes = pendR.data;
+    var pimHistR = settings.filter(function (x) { return x.id === 'productIdentityMappingHistory'; })[0]; if (pimHistR && pimHistR.data) productIdentityMappingHistory = pimHistR.data;
     caixaClose = {}; (r[21] || []).forEach(function (c) { caixaClose[c.id] = c; });
     bankTransfers = (r[22] || []).sort(function (a, b) { return (b.quando || '').localeCompare(a.quando || ''); });
     bankAccounts = (r[23] || []).sort(function (a, b) { return (a.nome || '').localeCompare(b.nome || ''); });
@@ -19626,6 +19725,17 @@ buffer/index.js:
         expSessions = byOp(expSessions);
         productIdentityMappings = {}; Object.keys(productIdentityMappingsAll).forEach(function (k) { var m = (productIdentityMappingsAll[k] || []).filter(function (x) { return !x.operationId || x.operationId === activeOperationId; })[0]; if (m) productIdentityMappings[k] = m; });
         Produtos.scopeToOperation(activeOperationId);
+        // B36 — BUG REAL (auditoria de fechamento cirúrgico): mrSummary/aceleraSummary/mrMetaCfg eram
+        // lidos ACIMA (antes de `activeOperationId` ser conhecido, ver leitura de `settings` no início
+        // do boot) sob o `id` legado sem componente de operação — trocar de operação e voltar exibia o
+        // resumo/config da ÚLTIMA operação que gravou, não da operação ativa. Agora que a operação
+        // ativa é conhecida, sobrescreve com a versão ESCOPADA se ela existir (settingsOpRead cai pro
+        // `id` legado — já lido acima — quando esta operação nunca gravou a sua própria).
+        var acSumOp = settingsOpRead(settings, 'aceleraSummary', activeOperationId); aceleraSummary = acSumOp ? acSumOp.data : null;
+        var mrSOp = settingsOpRead(settings, 'mrSummary', activeOperationId); mrSummary = mrSOp ? mrSOp.data : null;
+        var mrMCfgOp = settingsOpRead(settings, 'mrMetaCfg', activeOperationId);
+        mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null, gerada: false, nome: '', geradaEm: null, margemNaCriacao: null, faturamentoNecessarioNaCriacao: null };
+        if (mrMCfgOp && mrMCfgOp.data) Object.keys(mrMCfgOp.data).forEach(function (k) { mrMetaCfg[k] = mrMCfgOp.data[k]; });
       }
       if (lastImportStamp == null && batches.length) { var last = batches.map(function (b) { return b.createdAt; }).sort().pop(); lastImportStamp = last || null; }
       // GATE 2 — BUG REAL encontrado e corrigido nesta rodada (teste de colisão em massa 100x2): esta
