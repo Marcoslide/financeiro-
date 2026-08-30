@@ -8885,6 +8885,13 @@
       appEl.querySelectorAll('[data-catdrill]').forEach(function (el) { el.onclick = function () { catalogDrillOpen(el.dataset.catdrill); }; });
       appEl.querySelectorAll('[data-identvincular]').forEach(function (b) {
         b.onclick = function () {
+          // Achado real de auditoria (GAP2 desta rodada, duplo clique): sem guarda de reentrância,
+          // 2 cliques síncronos no mesmo botão disparavam 2 execuções completas de
+          // productIdentityMappingSave() — o valor final ficava correto (2ª chamada só reafirmava o
+          // mesmo candidato), mas gerava uma 2ª entrada de histórico espúria (ALTERADO de X pra X).
+          // Mesma guarda já usada em [data-evpreconhecer] (linha ~11114): desabilita o botão no
+          // primeiro clique; render() recria os botões (já habilitados) ao final.
+          if (b.disabled) return; b.disabled = true;
           var sku = b.dataset.identsku, produto = b.dataset.identproduto || null, variacao = b.dataset.identvariacao || null, variationId = b.dataset.identvarid;
           productIdentityMappingSave(sku, produto, variacao, variationId).then(function () {
             render();

@@ -343,7 +343,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build 3601f87 · 2026-08-30 00:26 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">TESTE OPERACIONAL — 28/08/2026 · build e6a929c · 2026-08-30 01:33 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -12838,6 +12838,13 @@ buffer/index.js:
       appEl.querySelectorAll('[data-catdrill]').forEach(function (el) { el.onclick = function () { catalogDrillOpen(el.dataset.catdrill); }; });
       appEl.querySelectorAll('[data-identvincular]').forEach(function (b) {
         b.onclick = function () {
+          // Achado real de auditoria (GAP2 desta rodada, duplo clique): sem guarda de reentrância,
+          // 2 cliques síncronos no mesmo botão disparavam 2 execuções completas de
+          // productIdentityMappingSave() — o valor final ficava correto (2ª chamada só reafirmava o
+          // mesmo candidato), mas gerava uma 2ª entrada de histórico espúria (ALTERADO de X pra X).
+          // Mesma guarda já usada em [data-evpreconhecer] (linha ~11114): desabilita o botão no
+          // primeiro clique; render() recria os botões (já habilitados) ao final.
+          if (b.disabled) return; b.disabled = true;
           var sku = b.dataset.identsku, produto = b.dataset.identproduto || null, variacao = b.dataset.identvariacao || null, variationId = b.dataset.identvarid;
           productIdentityMappingSave(sku, produto, variacao, variationId).then(function () {
             render();
