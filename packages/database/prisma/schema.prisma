@@ -115,6 +115,7 @@ model Organization {
   aiAnalyses            AiAnalysis[]
   actionPlans           ActionPlan[]
   salesImportBatches    SalesImportBatch[]
+  workspaceStores       OrganizationWorkspaceStore[]
 
   @@map("organizations")
 }
@@ -177,31 +178,31 @@ model MarketplaceConnection {
 
 /// Usuário do sistema. Senha com Argon2. Vinculado a uma organização.
 model User {
-  id                 String       @id @default(cuid())
-  organizationId     String
-  name               String
-  email              String       @unique
-  passwordHash       String
-  role               Role         @default(VIEWER)
+  id                  String       @id @default(cuid())
+  organizationId      String
+  name                String
+  email               String       @unique
+  passwordHash        String
+  role                Role         @default(VIEWER)
   /// Perfil granular (Fase 10.2) — se nulo, o usuário só tem o que o Role legado
   /// concede (compatibilidade com registros criados antes desta fase).
-  appRoleId          String?
-  status             EntityStatus @default(ACTIVE)
+  appRoleId           String?
+  status              EntityStatus @default(ACTIVE)
   /// Item 26: força troca de senha no login seguinte (primeiro acesso ou
   /// redefinição feita por um administrador).
-  mustChangePassword Boolean      @default(false)
-  lastLoginAt        DateTime?
-  createdAt          DateTime     @default(now())
-  updatedAt          DateTime     @updatedAt
-  createdBy          String?
-  updatedBy          String?
+  mustChangePassword  Boolean      @default(false)
+  lastLoginAt         DateTime?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  createdBy           String?
+  updatedBy           String?
   /// Item 15 (multiempresa/multioperação) — restrição por NOME de
   /// empresa/operação, comparada no cliente contra as empresas que o
   /// "Sistema Marketplace — Líder" tem cadastradas no IndexedDB de quem
   /// logou. Lista vazia = sem restrição (vê todas). Documentado como
   /// fronteira client-side, não isolamento de dado real (item 48): o
   /// Postgres não conhece as empresas do IndexedDB do usuário.
-  allowedCompanyNames String[] @default([])
+  allowedCompanyNames String[]     @default([])
 
   organization             Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   appRole                  AppRole?                   @relation(fields: [appRoleId], references: [id], onDelete: SetNull)
@@ -249,6 +250,28 @@ model RefreshToken {
 
   @@index([userId])
   @@map("refresh_tokens")
+}
+
+/// Espelho por organização das stores operacionais da V1 certificada.
+///
+/// A V1 continua usando exatamente os mesmos registros/IDs do IndexedDB e os
+/// mesmos motores financeiros no navegador. Esta tabela apenas torna cada
+/// store durável e compartilhada entre o Proprietário e suas subcontas, sem
+/// criar uma segunda regra de negócio ou um cálculo financeiro paralelo.
+model OrganizationWorkspaceStore {
+  organizationId  String
+  storeName       String
+  revision        Int      @default(1)
+  payload         Json
+  updatedByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, storeName])
+  @@index([organizationId, updatedAt])
+  @@map("organization_workspace_stores")
 }
 
 /// Trilha de auditoria (quem, o quê, antes/depois). Camada paralela de

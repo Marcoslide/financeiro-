@@ -108,9 +108,9 @@ export enum AuditAction {
   PASSWORD_CHANGE = 'PASSWORD_CHANGE',
   PASSWORD_RESET = 'PASSWORD_RESET',
   // Fase 10.2 — ações locais do "Sistema Marketplace — Líder" (item 22),
-  // gravadas via POST /audit/log a partir do app 100% client-side; a
-  // mutação em si continua só no IndexedDB do navegador — isto é só o
-  // registro paralelo e imutável de que ela aconteceu (ver item 23).
+  // gravadas via POST /audit/log a partir do app. O runtime continua no
+  // IndexedDB e, desde a v1.0.2, a mesma mutação é espelhada por organização;
+  // o audit log permanece um registro paralelo e imutável (ver item 23).
   CP_CREATE = 'CP_CREATE',
   CP_EDIT = 'CP_EDIT',
   CP_CANCEL = 'CP_CANCEL',

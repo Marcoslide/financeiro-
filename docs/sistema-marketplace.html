@@ -7,8 +7,8 @@
      apps/api/scripts/build-sistema-app-html.cjs com o commit real (git rev-parse HEAD) no
      momento do build. Nunca contém segredo; só existe para provar depois qual commit está
      de fato publicado em produção (ver DEPLOY_ARCHITECTURE.md / verify-production.sh). -->
-<meta name="app-version" content="build-9c75c0e">
-<meta name="git-commit" content="9c75c0ed2006258e042af1c81e54160d4edf7389">
+<meta name="app-version" content="v1.0.2">
+<meta name="git-commit" content="fca7883af9ff23a281eb64bb910e8a7e287ee405">
 <title>Sistema Marketplace — Líder</title>
 <style>
   :root{
@@ -365,8 +365,8 @@
       <button class="nav-expand" id="nav-expand" title="Expandir menu">»</button>
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
-      <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 9c75c0e · 2026-08-31 14:03 UTC</div>
+      <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados da organização</button>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build fca7883 · 2026-08-31 17:55 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -3980,7 +3980,8 @@ buffer/index.js:
  * em massa, edição inline, famílias com histórico, paginação), Pedidos, Pós-venda,
  * Dashboard e Inteligência. Usa os MESMOS parsers/regras do backend (window.SISTEMA)
  * e persiste em IndexedDB. Integrações reais: Produtos→(família/custo)→Pedidos (lucro)
- * e Pedidos↔Pós-venda pelo ID do pedido. Nenhum dado sai do navegador.
+ * e Pedidos↔Pós-venda pelo ID do pedido. Desde a v1.0.2, as mesmas stores são
+ * espelhadas por organização no servidor para sincronizar Proprietário/subcontas.
  *
  * REGRA DO PROJETO: desenvolvimento cumulativo — módulo novo nunca empobrece módulo
  * existente. Este arquivo é sempre a versão acumulada mais completa de TODO o sistema.
@@ -4472,9 +4473,62 @@ buffer/index.js:
     return openDB().then(function () { return DB; }).catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); return Promise.reject({ __mem: true }); });
   }
   function getAll(store) { return ensureDB().then(function (db) { return new Promise(function (res, rej) { var rq = db.transaction(store).objectStore(store).getAll(); rq.onsuccess = function () { res(rq.result || []); }; rq.onerror = function () { rej(rq.error); }; }); }).catch(function (e) { if (e && e.__mem) return Object.keys(DB_MEM[store] || {}).map(function (k) { return DB_MEM[store][k]; }); throw e; }); }
-  function putMany(store, items) { if (!items || !items.length) return Promise.resolve(); return ensureDB().then(function (db) { return new Promise(function (res, rej) { var tx = db.transaction(store, 'readwrite'); var os = tx.objectStore(store); items.forEach(function (it) { os.put(it); }); tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); }; }); }).catch(function (e) { if (e && e.__mem) { var key = STORES[store]; DB_MEM[store] = DB_MEM[store] || {}; items.forEach(function (it) { DB_MEM[store][it[key]] = it; }); return; } throw e; }); }
-  function delOne(store, id) { return ensureDB().then(function (db) { return new Promise(function (res, rej) { var tx = db.transaction(store, 'readwrite'); tx.objectStore(store).delete(id); tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); }; }); }).catch(function (e) { if (e && e.__mem) { if (DB_MEM[store]) delete DB_MEM[store][id]; return; } throw e; }); }
-  function clearAll() { if (DB_MEM) { Object.keys(STORES).forEach(function (s) { DB_MEM[s] = {}; }); return Promise.resolve(); } return ensureDB().then(function (db) { return new Promise(function (res, rej) { var names = Object.keys(STORES); var tx = db.transaction(names, 'readwrite'); names.forEach(function (s) { tx.objectStore(s).clear(); }); tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); }; }); }).catch(function (e) { if (e && e.__mem) { Object.keys(STORES).forEach(function (s) { DB_MEM[s] = {}; }); return; } throw e; }); }
+  // Hotfix v1.0.2 — o IndexedDB continua sendo a cache/runtime da V1 e todos
+  // os motores financeiros continuam lendo exatamente as mesmas stores. Cada
+  // mutação passa também pela fila de persistência da ORGANIZAÇÃO no servidor,
+  // para Proprietário e subcontas enxergarem a mesma base sem duplicar regras.
+  function putMany(store, items) {
+    if (!items || !items.length) return Promise.resolve();
+    return ensureDB().then(function (db) {
+      return new Promise(function (res, rej) {
+        var tx = db.transaction(store, 'readwrite'); var os = tx.objectStore(store);
+        items.forEach(function (it) { os.put(it); });
+        tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); };
+      });
+    }).catch(function (e) {
+      if (e && e.__mem) {
+        var key = STORES[store]; DB_MEM[store] = DB_MEM[store] || {};
+        items.forEach(function (it) { DB_MEM[store][it[key]] = it; }); return;
+      }
+      throw e;
+    }).then(function () { return workspaceQueuePuts(store, items); });
+  }
+  function delOne(store, id) {
+    return ensureDB().then(function (db) {
+      return new Promise(function (res, rej) {
+        var tx = db.transaction(store, 'readwrite'); tx.objectStore(store).delete(id);
+        tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); };
+      });
+    }).catch(function (e) {
+      if (e && e.__mem) { if (DB_MEM[store]) delete DB_MEM[store][id]; return; }
+      throw e;
+    }).then(function () { workspaceQueueDeletes(store, [id]); });
+  }
+  function workspaceClearAllRaw() {
+    if (DB_MEM) { Object.keys(STORES).forEach(function (s) { DB_MEM[s] = {}; }); return Promise.resolve(); }
+    return ensureDB().then(function (db) {
+      return new Promise(function (res, rej) {
+        var names = Object.keys(STORES); var tx = db.transaction(names, 'readwrite');
+        names.forEach(function (s) { tx.objectStore(s).clear(); });
+        tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); };
+      });
+    }).catch(function (e) {
+      if (e && e.__mem) { Object.keys(STORES).forEach(function (s) { DB_MEM[s] = {}; }); return; }
+      throw e;
+    });
+  }
+  function clearAll() {
+    if (workspaceSyncSuppressed || !authSession || !authSession.user) return workspaceClearAllRaw();
+    var names = Object.keys(STORES); var rowsByStore = {};
+    return Promise.all(names.map(function (s) { return getAll(s).then(function (rows) { rowsByStore[s] = rows || []; }); }))
+      .then(workspaceClearAllRaw)
+      .then(function () {
+        names.forEach(function (s) {
+          workspaceQueueDeletes(s, rowsByStore[s].map(function (row) { return row && row.id; }).filter(function (id) { return id != null; }));
+        });
+        return workspaceFlushAll();
+      });
+  }
   function showMemBanner() {
     if (document.getElementById('membanner')) return;
     var el = document.createElement('div'); el.id = 'membanner';
@@ -19668,7 +19722,7 @@ buffer/index.js:
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('Limpar todos os dados importados deste navegador?')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; pricingOpConfig = []; pricingFamilyRules = []; pontoEquilibrioCfg = {}; metaLucroCfg = {}; financialAccounts = []; financialEvents = []; contasReceber = []; crReceipts = []; financialTransfers = []; fatorFuncionarios = []; fatorCustosFixos = []; fatorCustosVariaveis = []; fatorPedidoSnapshots = []; fatorConfig = {}; skuFamilyOverrides = {}; fatorConfigs = []; fatorSetores = []; fatorImpostos = []; fatorProcessos = []; fatorRoteiros = {}; fatorRoteiroSkuOverrides = {}; fatorSub = 'geral'; skuFamilyOverrideHistory = []; productIdentityMappings = {}; productIdentityMappingsAll = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados locais limpos', ''); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('ATENÇÃO: limpar todos os dados compartilhados desta organização para todos os usuários? Esta ação não pode ser desfeita pela tela.')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; pricingOpConfig = []; pricingFamilyRules = []; pontoEquilibrioCfg = {}; metaLucroCfg = {}; financialAccounts = []; financialEvents = []; contasReceber = []; crReceipts = []; financialTransfers = []; fatorFuncionarios = []; fatorCustosFixos = []; fatorCustosVariaveis = []; fatorPedidoSnapshots = []; fatorConfig = {}; skuFamilyOverrides = {}; fatorConfigs = []; fatorSetores = []; fatorImpostos = []; fatorProcessos = []; fatorRoteiros = {}; fatorRoteiroSkuOverrides = {}; fatorSub = 'geral'; skuFamilyOverrideHistory = []; productIdentityMappings = {}; productIdentityMappingsAll = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados da organização limpos', 'Alteração sincronizada para todos os usuários.'); }).catch(function (e) { toast('Não foi possível limpar', e.message || 'Falha de sincronização.', true); }); };
   var opSelBtn = document.getElementById('op-selector'); if (opSelBtn) opSelBtn.onclick = function () { openOperationSelector(); };
 
   // Fase 10.2: todo o boot local (abrir IndexedDB, carregar os dados, primeiro render()) virou
@@ -19883,11 +19937,10 @@ buffer/index.js:
   // existir — ocultar menu não é segurança (por isso as rotas administrativas
   // reais — /api/users, /api/roles, /api/audit-logs — também checam
   // permissão no servidor, não só aqui). O que ESTE arquivo não pode fazer:
-  // impedir que alguém com acesso ao navegador leia o IndexedDB local — os
-  // dados operacionais continuam 100% client-side, então a autorização por
-  // permissão AQUI (menu, telas, campos da Ficha 360) é uma fronteira de
-  // experiência/disciplina operacional, não uma garantia de isolamento de
-  // dado como as rotas da API têm. Documentado explicitamente no relatório.
+  // impedir que alguém com acesso ao navegador leia o IndexedDB local. Desde a
+  // v1.0.2, as stores são espelhadas no servidor com isolamento por organização;
+  // as permissões de módulo AQUI continuam sendo a barreira de navegação/uso da
+  // V1, enquanto o endpoint de workspace garante o limite entre organizações.
   var authSession = { accessToken: null, user: null, permissions: [] };
   var AUTH_OVERLAY = document.getElementById('auth-overlay');
 
@@ -19916,6 +19969,250 @@ buffer/index.js:
       return res.json();
     });
   }
+
+  // ==========================================================================
+  // Hotfix v1.0.2 — sincronização organizacional das 60 stores da V1
+  // ==========================================================================
+  // O servidor é somente a camada de DURABILIDADE/COMPARTILHAMENTO. Os dados
+  // mantêm o mesmo formato, as mesmas chaves e continuam sendo consumidos pelos
+  // mesmos motores da V1 no IndexedDB; nenhum cálculo é reimplementado aqui.
+  var WORKSPACE_META_KEY = 'financeiro_workspace_sync_v1';
+  var workspaceSyncSuppressed = false;
+  var workspacePending = {};
+  var workspaceInFlight = {};
+  var workspaceTimers = {};
+  var workspacePollTimer = null;
+
+  function workspaceReadMeta() {
+    try {
+      var parsed = JSON.parse(localStorage.getItem(WORKSPACE_META_KEY) || '{}');
+      return {
+        activeOrganizationId: parsed.activeOrganizationId || null,
+        revisions: parsed.revisions && typeof parsed.revisions === 'object' ? parsed.revisions : {},
+        dirtyStores: Array.isArray(parsed.dirtyStores) ? parsed.dirtyStores : [],
+      };
+    } catch (e) { return { activeOrganizationId: null, revisions: {}, dirtyStores: [] }; }
+  }
+  function workspaceWriteMeta(meta) {
+    try { localStorage.setItem(WORKSPACE_META_KEY, JSON.stringify(meta)); } catch (e) { }
+  }
+  function workspaceSetDirty(store, dirty) {
+    var meta = workspaceReadMeta();
+    if (authSession && authSession.user) meta.activeOrganizationId = authSession.user.organizationId;
+    var set = {}; meta.dirtyStores.forEach(function (s) { set[s] = true; });
+    if (dirty) set[store] = true; else delete set[store];
+    meta.dirtyStores = Object.keys(set); workspaceWriteMeta(meta);
+  }
+  function workspaceShowBanner(message, canReload) {
+    var el = document.getElementById('workspace-sync-banner');
+    if (!el) { el = document.createElement('div'); el.id = 'workspace-sync-banner'; document.body.appendChild(el); }
+    el.setAttribute('role', 'alert'); el.setAttribute('aria-live', 'assertive');
+    el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:10000;background:#7f1d1d;color:#fff;padding:10px 14px;font-size:13.5px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.2)';
+    el.innerHTML = '⚠ <b>Sincronização:</b> ' + esc(message) + (canReload ? ' <button id="workspace-sync-reload" style="margin-left:10px;background:#fff;color:#7f1d1d;border:0;border-radius:6px;padding:4px 10px;font-weight:700;cursor:pointer">Recarregar agora</button>' : '');
+    var reload = document.getElementById('workspace-sync-reload'); if (reload) reload.onclick = function () { location.reload(); };
+  }
+  function workspaceClearBanner() { var el = document.getElementById('workspace-sync-banner'); if (el) el.remove(); }
+
+  function workspacePendingEntry(store) {
+    return workspacePending[store] || (workspacePending[store] = { puts: {}, deletes: {} });
+  }
+  function workspaceEncodeRows(store, items) {
+    if (store !== 'cpattach') return Promise.resolve(items || []);
+    return Promise.all((items || []).map(function (row) {
+      if (!row || typeof Blob === 'undefined' || !(row.blob instanceof Blob)) return row;
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function () {
+          var dataUrl = String(reader.result || ''); var comma = dataUrl.indexOf(',');
+          resolve(Object.assign({}, row, { blob: { __workspaceBlobV1: true, type: row.blob.type || 'application/octet-stream', base64: comma >= 0 ? dataUrl.slice(comma + 1) : '' } }));
+        };
+        reader.onerror = function () { reject(reader.error || new Error('Falha ao preparar anexo para sincronização.')); };
+        reader.readAsDataURL(row.blob);
+      });
+    }));
+  }
+  function workspaceDecodeRows(store, rows) {
+    if (store !== 'cpattach') return Promise.resolve(rows || []);
+    return Promise.resolve((rows || []).map(function (row) {
+      var marker = row && row.blob;
+      if (!marker || !marker.__workspaceBlobV1 || typeof marker.base64 !== 'string') return row;
+      var binary = atob(marker.base64); var bytes = new Uint8Array(binary.length);
+      for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return Object.assign({}, row, { blob: new Blob([bytes], { type: marker.type || 'application/octet-stream' }) });
+    }));
+  }
+  function workspaceQueuePuts(store, items) {
+    if (workspaceSyncSuppressed || !authSession || !authSession.user || !items || !items.length) return Promise.resolve();
+    // Marca ANTES de converter anexos: se a aba fechar durante um FileReader,
+    // o próximo boot preserva e reenvia a store local inteira.
+    workspaceSetDirty(store, true);
+    return workspaceEncodeRows(store, items).then(function (encoded) {
+      var pending = workspacePendingEntry(store); var changed = false;
+      encoded.forEach(function (row) {
+        if (!row || row.id == null) return;
+        var id = String(row.id); pending.puts[id] = row; delete pending.deletes[id]; changed = true;
+      });
+      if (!changed) return;
+      workspaceScheduleStore(store);
+    });
+  }
+  function workspaceQueueDeletes(store, ids) {
+    if (workspaceSyncSuppressed || !authSession || !authSession.user || !ids || !ids.length) return;
+    var pending = workspacePendingEntry(store); var changed = false;
+    ids.forEach(function (rawId) {
+      if (rawId == null) return;
+      var id = String(rawId); delete pending.puts[id]; pending.deletes[id] = true; changed = true;
+    });
+    if (!changed) return;
+    workspaceSetDirty(store, true); workspaceScheduleStore(store);
+  }
+  function workspaceScheduleStore(store) {
+    if (workspaceTimers[store]) clearTimeout(workspaceTimers[store]);
+    workspaceTimers[store] = setTimeout(function () {
+      delete workspaceTimers[store];
+      workspaceFlushStore(store).catch(function () { });
+    }, 600);
+  }
+  function workspaceMergeOps(older, newer) {
+    var merged = { puts: {}, deletes: {} };
+    function apply(ops) {
+      Object.keys((ops && ops.puts) || {}).forEach(function (id) { merged.puts[id] = ops.puts[id]; delete merged.deletes[id]; });
+      Object.keys((ops && ops.deletes) || {}).forEach(function (id) { delete merged.puts[id]; merged.deletes[id] = true; });
+    }
+    apply(older); apply(newer); return merged;
+  }
+  function workspaceErrorMessage(body, fallback) {
+    if (!body) return fallback;
+    if (typeof body.message === 'string') return body.message;
+    if (Array.isArray(body.message)) return body.message.join('; ');
+    return fallback;
+  }
+  function workspaceSendPatch(store, ops, expectedRevision, attempt) {
+    return authFetch('/workspace/' + encodeURIComponent(store), {
+      method: 'PATCH',
+      body: JSON.stringify({ expectedRevision: expectedRevision, puts: Object.keys(ops.puts).map(function (id) { return ops.puts[id]; }), deletes: Object.keys(ops.deletes) }),
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (body) { return { status: res.status, ok: res.ok, body: body }; });
+    }).then(function (result) {
+      if (result.status === 409 && attempt < 4) {
+        return authFetchJson('/workspace/versions').then(function (latest) {
+          var row = (latest.stores || []).filter(function (candidate) { return candidate.storeName === store; })[0];
+          return workspaceSendPatch(store, ops, row ? (row.revision || 0) : 0, attempt + 1);
+        });
+      }
+      if (!result.ok) throw new Error(workspaceErrorMessage(result.body, 'Não foi possível sincronizar ' + store + '.'));
+      return result.body;
+    });
+  }
+  function workspaceFlushStore(store) {
+    if (workspaceInFlight[store]) return workspaceInFlight[store];
+    var ops = workspacePending[store];
+    if (!ops || (!Object.keys(ops.puts).length && !Object.keys(ops.deletes).length)) return Promise.resolve();
+    delete workspacePending[store];
+    if (workspaceTimers[store]) { clearTimeout(workspaceTimers[store]); delete workspaceTimers[store]; }
+    var meta = workspaceReadMeta(); var expected = Number(meta.revisions[store] || 0);
+    var job = workspaceSendPatch(store, ops, expected, 0).then(function (result) {
+      var fresh = workspaceReadMeta(); fresh.activeOrganizationId = authSession.user.organizationId;
+      fresh.revisions[store] = Number(result.revision || expected + 1);
+      if (!workspacePending[store]) fresh.dirtyStores = fresh.dirtyStores.filter(function (s) { return s !== store; });
+      workspaceWriteMeta(fresh); workspaceClearBanner();
+    }).catch(function (e) {
+      workspacePending[store] = workspaceMergeOps(ops, workspacePending[store]);
+      workspaceSetDirty(store, true);
+      workspaceShowBanner('os dados locais foram preservados, mas ainda não chegaram ao servidor. ' + (e.message || 'Falha de rede.'), false);
+      throw e;
+    });
+    workspaceInFlight[store] = job.then(function (value) {
+      delete workspaceInFlight[store]; if (workspacePending[store]) workspaceScheduleStore(store); return value;
+    }, function (error) {
+      delete workspaceInFlight[store]; return Promise.reject(error);
+    });
+    return workspaceInFlight[store];
+  }
+  function workspaceFlushAll() {
+    Object.keys(workspaceTimers).forEach(function (store) { clearTimeout(workspaceTimers[store]); delete workspaceTimers[store]; });
+    var names = {}; Object.keys(workspacePending).forEach(function (s) { names[s] = true; }); Object.keys(workspaceInFlight).forEach(function (s) { names[s] = true; });
+    return Promise.all(Object.keys(names).map(workspaceFlushStore)).then(function () {
+      return Object.keys(workspacePending).length ? workspaceFlushAll() : undefined;
+    });
+  }
+  function workspaceReplaceLocal(store, rows) {
+    rows = Array.isArray(rows) ? rows : [];
+    return workspaceDecodeRows(store, rows).then(function (decodedRows) {
+      if (DB_MEM) {
+        DB_MEM[store] = {}; var key = STORES[store]; decodedRows.forEach(function (row) { if (row && row[key] != null) DB_MEM[store][row[key]] = row; });
+        return;
+      }
+      return ensureDB().then(function (db) {
+        return new Promise(function (res, rej) {
+          var tx = db.transaction(store, 'readwrite'); var os = tx.objectStore(store); os.clear();
+          decodedRows.forEach(function (row) { os.put(row); });
+          tx.oncomplete = function () { res(); }; tx.onerror = function () { rej(tx.error); };
+        });
+      });
+    });
+  }
+  function workspaceSnapshotLocal() {
+    var snapshot = {};
+    return Promise.all(Object.keys(STORES).map(function (store) {
+      return getAll(store).then(function (rows) { snapshot[store] = rows || []; });
+    })).then(function () { return snapshot; });
+  }
+  function workspacePrepare() {
+    if (!authSession.user || !authSession.user.organizationId) return Promise.reject(new Error('Organização da sessão não identificada.'));
+    workspaceSyncSuppressed = true;
+    var organizationId = authSession.user.organizationId; var meta = workspaceReadMeta();
+    return openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
+      if (meta.activeOrganizationId && meta.activeOrganizationId !== organizationId) {
+        if (meta.dirtyStores.length) throw new Error('Existem dados pendentes da organização usada anteriormente neste navegador. Entre novamente nela para concluir a sincronização.');
+        return workspaceClearAllRaw().then(function () { meta = { activeOrganizationId: organizationId, revisions: {}, dirtyStores: [] }; });
+      }
+      meta.activeOrganizationId = organizationId;
+    }).then(function () {
+      return Promise.all([workspaceSnapshotLocal(), authFetchJson('/workspace')]);
+    }).then(function (result) {
+      var local = result[0]; var remoteList = result[1] && result[1].stores || []; var remote = {};
+      remoteList.forEach(function (row) { remote[row.storeName] = row; });
+      var chain = Promise.resolve();
+      Object.keys(STORES).forEach(function (store) {
+        chain = chain.then(function () {
+          var serverRow = remote[store]; var localRows = local[store] || []; var wasDirty = meta.dirtyStores.indexOf(store) >= 0;
+          if (serverRow && wasDirty && localRows.length) {
+            return workspaceEncodeRows(store, localRows).then(function (encodedRows) {
+              var ops = { puts: {}, deletes: {} }; encodedRows.forEach(function (row) { if (row && row.id != null) ops.puts[String(row.id)] = row; });
+              return workspaceSendPatch(store, ops, Number(serverRow.revision || 0), 0);
+            }).then(function (saved) { meta.revisions[store] = Number(saved.revision || 0); return authFetchJson('/workspace/' + encodeURIComponent(store)); })
+              .then(function (fresh) { meta.revisions[store] = Number(fresh.revision || 0); meta.dirtyStores = meta.dirtyStores.filter(function (s) { return s !== store; }); return workspaceReplaceLocal(store, fresh.payload); });
+          }
+          if (serverRow) { meta.revisions[store] = Number(serverRow.revision || 0); meta.dirtyStores = meta.dirtyStores.filter(function (s) { return s !== store; }); return workspaceReplaceLocal(store, serverRow.payload); }
+          if (localRows.length) {
+            return workspaceEncodeRows(store, localRows).then(function (encodedRows) {
+              var seedOps = { puts: {}, deletes: {} }; encodedRows.forEach(function (row) { if (row && row.id != null) seedOps.puts[String(row.id)] = row; });
+              return workspaceSendPatch(store, seedOps, 0, 0);
+            }).then(function (saved) { meta.revisions[store] = Number(saved.revision || 1); meta.dirtyStores = meta.dirtyStores.filter(function (s) { return s !== store; }); });
+          }
+          meta.revisions[store] = 0; return undefined;
+        });
+      });
+      return chain;
+    }).then(function () {
+      workspaceWriteMeta(meta); workspaceSyncSuppressed = false; workspaceClearBanner(); workspaceStartPolling();
+    }).catch(function (e) {
+      workspaceSyncSuppressed = false;
+      workspaceShowBanner('não foi possível carregar a base compartilhada. Nenhum dado local foi apagado. ' + (e.message || ''), false);
+      throw e;
+    });
+  }
+  function workspaceStartPolling() {
+    if (workspacePollTimer) clearInterval(workspacePollTimer);
+    workspacePollTimer = setInterval(function () {
+      if (!authSession.user || Object.keys(workspacePending).length || Object.keys(workspaceInFlight).length) return;
+      authFetchJson('/workspace/versions').then(function (result) {
+        var meta = workspaceReadMeta(); var changed = (result.stores || []).some(function (row) { return Number(meta.revisions[row.storeName] || 0) !== Number(row.revision || 0); });
+        if (changed) workspaceShowBanner('outro usuário atualizou a base compartilhada. Recarregue para trabalhar com a versão mais recente.', true);
+      }).catch(function () { });
+    }, 30000);
+  }
   /** item 22 — registra uma ação local no audit log do servidor. Best-effort/fire-and-forget
    * (item 23): uma falha de rede aqui NUNCA bloqueia nem desfaz a ação local que já aconteceu. */
   function auditLocal(action, module, entityType, entityId, before, after, metadata) {
@@ -19940,10 +20237,11 @@ buffer/index.js:
    * item 13/14 — menu dinâmico por permissão + bloqueio de rota direta. Cada rota do #nav exige a
    * permissão de "ver" o módulo equivalente do catálogo (item 10); "dashboard" e "ia" ficam sem
    * gate porque não têm chave própria no catálogo (visão consolidada / módulo de apoio, sem dado
-   * exclusivo de nenhum perfil). MESMA RESSALVA do bloco acima: como os dados de pedidos/caixa/etc
-   * vivem só no IndexedDB do navegador (sem backend por trás deles), isto impede a NAVEGAÇÃO da UI
-   * — não é isolamento de dado real. Quem abre o DevTools ainda enxerga o IndexedDB inteiro,
-   * independente de qualquer rota estar "bloqueada" aqui. Documentado no relatório final (item 48).
+   * exclusivo de nenhum perfil). MESMA RESSALVA do bloco acima: a cache operacional inteira fica
+   * disponível ao runtime autenticado da organização; isto impede a NAVEGAÇÃO da UI
+   * — não impede que quem já controla o navegador veja a cache IndexedDB inteira. O servidor
+   * garante que uma organização nunca leia a workspace de outra; a UI decide quais módulos a
+   * subconta pode abrir dentro da própria organização.
    */
   var ROUTE_PERMISSION = {
     produtos: 'products.view', pedidos: 'orders.view', posvenda: 'returns.view',
@@ -20068,19 +20366,34 @@ buffer/index.js:
       if (novo !== confirm2) return renderMustChangePasswordForm('A confirmação não bate com a nova senha.');
       authFetch('/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword: current, newPassword: novo }) })
         .then(function (res) { if (!res.ok) return res.json().then(function (b) { throw new Error(b.message || 'Não foi possível trocar a senha.'); }); return authLoadMe(); })
-        .then(function () { hideAuthOverlay(); toast('Senha alterada', ''); })
+        .then(function () { return workspaceStartAuthenticatedApp(); })
+        .then(function () { toast('Senha alterada', ''); })
         .catch(function (e) { renderMustChangePasswordForm(e.message); });
     };
+  }
+
+  function workspaceStartAuthenticatedApp() {
+    if (bootedOnce) {
+      hideAuthOverlay(); applyMenuPermissions(); if (!canAccessRoute(route)) route = firstAccessibleRoute(); render();
+      return Promise.resolve();
+    }
+    AUTH_OVERLAY.style.display = 'flex';
+    AUTH_OVERLAY.innerHTML = '<div style="color:var(--muted);font-size:13px">Sincronizando os dados da organização…</div>';
+    return workspacePrepare().then(function () {
+      hideAuthOverlay(); applyMenuPermissions(); if (!canAccessRoute(route)) route = firstAccessibleRoute();
+      bootedOnce = true; bootApp();
+    }).catch(function (e) {
+      AUTH_OVERLAY.style.display = 'flex';
+      AUTH_OVERLAY.innerHTML = '<div style="' + AUTH_CARD_STYLE + '"><h2 style="margin:0 0 8px;font-size:19px">Não foi possível sincronizar</h2><p style="color:var(--muted);font-size:13px">Os dados locais foram preservados e o sistema não foi aberto com uma base incompleta.</p><div class="form-err" style="margin:14px 0">' + esc(e.message || 'Falha de rede.') + '</div><button class="btn-sm primary" id="workspace-start-retry" style="width:100%;padding:10px">Tentar novamente</button></div>';
+      document.getElementById('workspace-start-retry').onclick = function () { workspaceStartAuthenticatedApp(); };
+    });
   }
 
   function onAuthSuccess(body) {
     authSession.accessToken = body.accessToken;
     return authLoadMe().then(function () {
       if (body.mustChangePassword) { renderMustChangePasswordForm(); return; }
-      hideAuthOverlay();
-      applyMenuPermissions();
-      if (!canAccessRoute(route)) route = firstAccessibleRoute();
-      if (!bootedOnce) { bootedOnce = true; bootApp(); } else { render(); }
+      return workspaceStartAuthenticatedApp();
     });
   }
 
@@ -20123,37 +20436,21 @@ buffer/index.js:
   }
 
   function doLogout() {
-    authFetch('/auth/logout', { method: 'POST', body: JSON.stringify({}) }).catch(function () { }).then(function () {
-      authSession = { accessToken: null, user: null, permissions: [] };
-      // O dado operacional é local: esvazia os stores e remove a base antes de entregar o
-      // navegador ao próximo usuário, mesmo quando a chamada de logout ao servidor falha.
-      return clearAll().catch(function () { }).then(function () {
-        try { if (DB) DB.close(); } catch (e) { }
-        DB = null;
-        dbOpening = null;
-        if (DB_MEM) Object.keys(STORES).forEach(function (s) { DB_MEM[s] = {}; });
-        return new Promise(function (resolve) {
-          var finished = false;
-          function finish() { if (finished) return; finished = true; resolve(); }
-          try {
-            var request = indexedDB.deleteDatabase(DB_NAME);
-            request.onsuccess = finish;
-            request.onerror = finish;
-            // Outra aba pode manter a exclusão bloqueada; os stores já foram esvaziados acima.
-            request.onblocked = function () { setTimeout(finish, 300); };
-            setTimeout(finish, 1200);
-          } catch (e) { finish(); }
-        });
-      });
+    // Primeiro entrega tudo que ainda estiver na fila. Mesmo se a rede falhar,
+    // o IndexedDB NÃO é apagado: a marca dirty permite retomar no próximo login.
+    workspaceFlushAll().catch(function () { }).then(function () {
+      return authFetch('/auth/logout', { method: 'POST', body: JSON.stringify({}) }).catch(function () { });
     }).then(function () {
-      location.reload(); // reboot limpo — evita qualquer estado de tela anterior vazar pro próximo login
+      if (workspacePollTimer) { clearInterval(workspacePollTimer); workspacePollTimer = null; }
+      authSession = { accessToken: null, user: null, permissions: [] };
+      location.reload();
     });
   }
 
   // ============================================================ Fase 10.2 Commit 6 — Configurações >
   // Usuários e Acessos (itens 16-22). Única tela do sistema que fala com o backend pra dado de
-  // negócio (usuários/perfis/auditoria) — de propósito: é o próprio cadastro de acesso, não dado
-  // operacional da loja (que continua 100% IndexedDB). Mesma API real testada nos Commits 1/2, sem
+  // negócio (usuários/perfis/auditoria) — de propósito: é o próprio cadastro de acesso; a base
+  // operacional mantém o IndexedDB como runtime e é espelhada por organização no workspace. Mesma API real testada nos Commits 1/2, sem
   // nenhuma simulação local — cada ação aqui é uma chamada HTTP de verdade contra o Postgres.
   var adminS = { tab: 'usuarios', users: null, roles: null, catalog: null, audit: null, loadingTab: null };
   var ROLE_LABEL_LEGACY = { OWNER: 'Proprietário (legado)', ADMIN: 'Administrador (legado)', FINANCIAL: 'Financeiro (legado)', VIEWER: 'Consulta (legado)' };
@@ -20164,7 +20461,7 @@ buffer/index.js:
     var tabsDef = [{ k: 'usuarios', label: 'Usuários' }, { k: 'perfis', label: 'Perfis' }];
     if (hasPermission('audit.view')) tabsDef.push({ k: 'auditoria', label: 'Auditoria' });
     var tabsHtml = '<div class="tabs">' + tabsDef.map(function (t) { return '<div class="tab ' + (adminS.tab === t.k ? 'active' : '') + '" data-admintab="' + t.k + '">' + t.label + '</div>'; }).join('') + '</div>';
-    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'Configurações', title: 'Usuários e Acessos', description: 'Login, perfis de acesso e trilha de auditoria — dados reais do servidor (Postgres), não do IndexedDB local desta loja.' });
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'Configurações', title: 'Usuários e Acessos', description: 'Login, perfis de acesso e trilha de auditoria no servidor. As subcontas usam a mesma base operacional compartilhada da organização.' });
     var tab = adminS.tab;
     var needData = (tab === 'usuarios' && !adminS.users) || (tab === 'perfis' && !adminS.roles) || (tab === 'auditoria' && !adminS.audit);
     if (needData) {
@@ -20376,13 +20673,8 @@ buffer/index.js:
     AUTH_OVERLAY.style.display = 'flex';
     AUTH_OVERLAY.innerHTML = '<div style="color:var(--muted);font-size:13px">Carregando…</div>';
     authRefreshSilent().then(function (ok) {
-      if (!ok) { showAuthOverlay(); if (!bootedOnce) { bootedOnce = true; bootApp(); } return; }
-      authLoadMe().then(function (me) {
-        hideAuthOverlay();
-        applyMenuPermissions();
-        if (!canAccessRoute(route)) route = firstAccessibleRoute();
-        if (!bootedOnce) { bootedOnce = true; bootApp(); }
-      }).catch(function () { showAuthOverlay(); if (!bootedOnce) { bootedOnce = true; bootApp(); } });
+      if (!ok) { showAuthOverlay(); return; }
+      authLoadMe().then(function () { return workspaceStartAuthenticatedApp(); }).catch(function () { showAuthOverlay(); });
     });
   }
   authInit();

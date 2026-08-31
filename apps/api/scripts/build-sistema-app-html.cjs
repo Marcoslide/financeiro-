@@ -2,7 +2,8 @@
  * Monta docs/sistema-marketplace.html: o SISTEMA COMPLETO (Produtos, Pedidos,
  * Pós-venda e Inteligência) como um único arquivo offline navegável. Empacota os
  * MESMOS parsers/regras do backend (esbuild + shims), inlina SheetJS e a aplicação
- * (IndexedDB). Nenhum dado sai do navegador.
+ * (IndexedDB). Na v1.0.2, as mesmas stores são espelhadas por organização no
+ * backend para sincronização durável entre Proprietário e subcontas.
  *
  * Uso: node apps/api/scripts/build-sistema-app-html.cjs
  *  (ou) pnpm --filter @financeiro/api build:sistema-app

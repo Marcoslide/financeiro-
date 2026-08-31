@@ -6,14 +6,23 @@ import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { join } from 'path';
+import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/all-exceptions.filter';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: false });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bufferLogs: false,
+    bodyParser: false,
+  });
   app.use(helmet({ contentSecurityPolicy: false }));
   const config = app.get(ConfigService);
 
+  // As stores continuam divididas como na V1; algumas importações legítimas
+  // ultrapassam o limite padrão de 100 KB do Express. O serviço valida também
+  // o tamanho final de cada store antes de persistir no Postgres.
+  app.use(json({ limit: '50mb' }));
+  app.use(urlencoded({ extended: true, limit: '50mb' }));
   app.use(cookieParser());
   app.use(compression());
 
@@ -39,14 +48,20 @@ async function bootstrap(): Promise<void> {
     .map((o) => o.trim())
     .filter(Boolean);
   app.enableCors({
-    origin: [config.get<string>('NEXT_PUBLIC_API_URL') ?? 'http://localhost:3000', 'http://localhost:3000', ...extraOrigins],
+    origin: [
+      config.get<string>('NEXT_PUBLIC_API_URL') ?? 'http://localhost:3000',
+      'http://localhost:3000',
+      ...extraOrigins,
+    ],
     credentials: true,
   });
 
   const port = config.get<number>('API_PORT') ?? 3001;
   await app.listen(port, '0.0.0.0');
   new Logger('Bootstrap').log(`API ouvindo em http://localhost:${port}/api`);
-  new Logger('Bootstrap').log(`Sistema Marketplace (estático) em http://localhost:${port}/sistema-marketplace.html`);
+  new Logger('Bootstrap').log(
+    `Sistema Marketplace (estático) em http://localhost:${port}/sistema-marketplace.html`,
+  );
 }
 
 void bootstrap();

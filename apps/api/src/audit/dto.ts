@@ -2,7 +2,8 @@ import { IsEnum, IsObject, IsOptional, IsString } from 'class-validator';
 import { AuditAction } from '@financeiro/shared';
 
 /**
- * item 22 — o "Sistema Marketplace — Líder" (100% client-side, IndexedDB)
+ * item 22 — o "Sistema Marketplace — Líder" (runtime no IndexedDB, com
+ * workspace espelhada por organização desde a v1.0.2)
  * chama isto depois de cada ação local relevante (criar/editar/cancelar CP,
  * fechar Caixa, classificar Carteira, etc.). A mutação em si NUNCA passa por
  * aqui — só o registro paralelo, imutável, de que ela aconteceu (item 23).
