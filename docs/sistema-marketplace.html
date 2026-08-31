@@ -7,8 +7,8 @@
      apps/api/scripts/build-sistema-app-html.cjs com o commit real (git rev-parse HEAD) no
      momento do build. Nunca contém segredo; só existe para provar depois qual commit está
      de fato publicado em produção (ver DEPLOY_ARCHITECTURE.md / verify-production.sh). -->
-<meta name="app-version" content="build-213cc3a">
-<meta name="git-commit" content="213cc3a93944e1c565f12d614f17233fc81d151d">
+<meta name="app-version" content="build-83f00f8">
+<meta name="git-commit" content="83f00f8a36c033e4c31ea4e5dd1b674ed61410cd">
 <title>Sistema Marketplace — Líder</title>
 <style>
   :root{
@@ -366,7 +366,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 213cc3a · 2026-08-31 13:48 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 83f00f8 · 2026-08-31 13:48 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -4478,8 +4478,9 @@ buffer/index.js:
   function showMemBanner() {
     if (document.getElementById('membanner')) return;
     var el = document.createElement('div'); el.id = 'membanner';
-    el.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#7a3b00;color:#fff;padding:8px 14px;font-size:12.5px;display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap';
-    el.innerHTML = '⚠ Trabalhando em <b>modo temporário</b> — o armazenamento local não pôde ser aberto' + (memModeReason ? ' (' + esc(memModeReason) + ')' : '') + '. O sistema funciona normalmente, mas os dados <b>não serão salvos</b> ao recarregar. Feche outras abas do sistema e clique em Reparar. <button id="memrepair" style="background:#fff;color:#7a3b00;border:none;border-radius:6px;padding:4px 10px;font-weight:700;cursor:pointer">Reparar armazenamento</button>';
+    el.setAttribute('role', 'alert'); el.setAttribute('aria-live', 'assertive');
+    el.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#7f1d1d;color:#fff;border-top:3px solid #fecaca;padding:10px 14px;font-size:13.5px;display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap';
+    el.innerHTML = '⚠ <b>ATENÇÃO: armazenamento indisponível.</b> Não cadastre, edite nem importe dados importantes: toda alteração feita neste modo temporário <b>será perdida</b> ao recarregar' + (memModeReason ? ' (' + esc(memModeReason) + ')' : '') + '. Feche outras abas do sistema e clique em Reparar. <button id="memrepair" style="background:#fff;color:#7f1d1d;border:none;border-radius:6px;padding:4px 10px;font-weight:700;cursor:pointer">Reparar armazenamento</button>';
     document.body.appendChild(el);
     document.getElementById('memrepair').onclick = function () { try { indexedDB.deleteDatabase(DB_NAME); } catch (e) { } setTimeout(function () { location.reload(); }, 300); };
   }

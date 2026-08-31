@@ -502,8 +502,9 @@
   function showMemBanner() {
     if (document.getElementById('membanner')) return;
     var el = document.createElement('div'); el.id = 'membanner';
-    el.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#7a3b00;color:#fff;padding:8px 14px;font-size:12.5px;display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap';
-    el.innerHTML = '⚠ Trabalhando em <b>modo temporário</b> — o armazenamento local não pôde ser aberto' + (memModeReason ? ' (' + esc(memModeReason) + ')' : '') + '. O sistema funciona normalmente, mas os dados <b>não serão salvos</b> ao recarregar. Feche outras abas do sistema e clique em Reparar. <button id="memrepair" style="background:#fff;color:#7a3b00;border:none;border-radius:6px;padding:4px 10px;font-weight:700;cursor:pointer">Reparar armazenamento</button>';
+    el.setAttribute('role', 'alert'); el.setAttribute('aria-live', 'assertive');
+    el.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#7f1d1d;color:#fff;border-top:3px solid #fecaca;padding:10px 14px;font-size:13.5px;display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap';
+    el.innerHTML = '⚠ <b>ATENÇÃO: armazenamento indisponível.</b> Não cadastre, edite nem importe dados importantes: toda alteração feita neste modo temporário <b>será perdida</b> ao recarregar' + (memModeReason ? ' (' + esc(memModeReason) + ')' : '') + '. Feche outras abas do sistema e clique em Reparar. <button id="memrepair" style="background:#fff;color:#7f1d1d;border:none;border-radius:6px;padding:4px 10px;font-weight:700;cursor:pointer">Reparar armazenamento</button>';
     document.body.appendChild(el);
     document.getElementById('memrepair').onclick = function () { try { indexedDB.deleteDatabase(DB_NAME); } catch (e) { } setTimeout(function () { location.reload(); }, 300); };
   }
