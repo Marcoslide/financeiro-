@@ -7,8 +7,8 @@
      apps/api/scripts/build-sistema-app-html.cjs com o commit real (git rev-parse HEAD) no
      momento do build. Nunca contém segredo; só existe para provar depois qual commit está
      de fato publicado em produção (ver DEPLOY_ARCHITECTURE.md / verify-production.sh). -->
-<meta name="app-version" content="v1.1.0">
-<meta name="git-commit" content="24595778b8b14102ed37e52845eba54a0a26df41">
+<meta name="app-version" content="v1.1.1">
+<meta name="git-commit" content="06d52e0bdb1cee703afdcf04c6571fb8657902a4">
 <title>Sistema Marketplace — Líder</title>
 <style>
   :root{
@@ -366,7 +366,7 @@
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados da organização</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 2459577 · 2026-08-31 20:01 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 06d52e0 · 2026-08-31 22:10 UTC</div>
     </div>
   </aside>
   <div class="main">
@@ -450,9 +450,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     mod
   ));
 
-  // ../../node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js
+  // node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js
   var require_base64_js = __commonJS({
-    "../../node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js"(exports) {
+    "node_modules/.pnpm/base64-js@1.5.1/node_modules/base64-js/index.js"(exports) {
       "use strict";
       exports.byteLength = byteLength;
       exports.toByteArray = toByteArray;
@@ -551,9 +551,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // ../../node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js
+  // node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js
   var require_ieee754 = __commonJS({
-    "../../node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js"(exports) {
+    "node_modules/.pnpm/ieee754@1.2.1/node_modules/ieee754/index.js"(exports) {
       exports.read = function(buffer, offset, isLE, mLen, nBytes) {
         var e, m;
         var eLen = nBytes * 8 - mLen - 1;
@@ -634,9 +634,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // ../../node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js
+  // node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js
   var require_buffer = __commonJS({
-    "../../node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js"(exports) {
+    "node_modules/.pnpm/buffer@5.7.1/node_modules/buffer/index.js"(exports) {
       "use strict";
       var base64 = require_base64_js();
       var ieee754 = require_ieee754();
@@ -2005,9 +2005,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // ../../packages/shared/dist/index.js
+  // packages/shared/dist/index.js
   var require_dist = __commonJS({
-    "../../packages/shared/dist/index.js"(exports) {
+    "packages/shared/dist/index.js"(exports) {
       "use strict";
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.ImportIssueSeverity = exports.IMPORT_ROW_STATUS_LABELS = exports.ImportRowStatus = exports.IMPORT_BATCH_STATUS_LABELS = exports.ImportBatchStatus = exports.FileFormat = exports.REPORT_TYPE_LABELS = exports.ReportType = exports.AuditAction = exports.TemporalStatus = exports.ReconciliationState = exports.IngestionSource = exports.EntityStatus = exports.ROLE_LABELS = exports.Role = void 0;
@@ -2185,19 +2185,19 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   });
 
-  // src/imports/parsing/browser/shim-xlsx.js
+  // apps/api/src/imports/parsing/browser/shim-xlsx.js
   var require_shim_xlsx = __commonJS({
-    "src/imports/parsing/browser/shim-xlsx.js"(exports, module) {
+    "apps/api/src/imports/parsing/browser/shim-xlsx.js"(exports, module) {
       "use strict";
       var XLSX2 = typeof globalThis !== "undefined" && globalThis.XLSX || {};
       module.exports = XLSX2;
     }
   });
 
-  // src/all/entry.ts
+  // apps/api/src/all/entry.ts
   var import_buffer = __toESM(require_buffer());
 
-  // src/imports/parsing/format.ts
+  // apps/api/src/imports/parsing/format.ts
   var import_shared = __toESM(require_dist());
   function detectFileFormat(buffer) {
     if (buffer.length >= 4) {
@@ -2220,7 +2220,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return !(ext === "csv" || ext === "txt" || ext === "tsv" || ext === "");
   }
 
-  // src/imports/parsing/workbook.ts
+  // apps/api/src/imports/parsing/workbook.ts
   var XLSX = __toESM(require_shim_xlsx());
   var import_shared2 = __toESM(require_dist());
   function sniffDelimiter(sample) {
@@ -2361,7 +2361,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { sheets };
   }
 
-  // src/imports/parsing/value-parsers.ts
+  // apps/api/src/imports/parsing/value-parsers.ts
   var NULLISH = /* @__PURE__ */ new Set(["", "-", "--", "\u2014", "n/a", "na", "null"]);
   function stripCurrency(input) {
     let s = input.trim().replace(/\u00a0/g, " ").trim();
@@ -2480,7 +2480,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return label.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
   }
 
-  // src/imports/parsing/row-accessor.ts
+  // apps/api/src/imports/parsing/row-accessor.ts
   var RowAccessor = class {
     constructor(headers, cells) {
       this.headers = headers;
@@ -2529,7 +2529,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
   };
 
-  // src/imports/parsing/browser/shim-crypto.js
+  // apps/api/src/imports/parsing/browser/shim-crypto.js
   function sha256(bytes) {
     const K = [
       1116352408,
@@ -2681,7 +2681,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // src/imports/parsing/hashing.ts
+  // apps/api/src/imports/parsing/hashing.ts
   function sha2562(value) {
     return createHash("sha256").update(value).digest("hex");
   }
@@ -2689,7 +2689,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return sha2562(buffer);
   }
 
-  // src/products/parsing/product-sheet.ts
+  // apps/api/src/products/parsing/product-sheet.ts
   var SCAN_LIMIT = 40;
   var REQUIRED_LABELS = ["ID do Produto", "Nome do Produto"].map(normalizeLabel);
   var STRONG_LABELS = ["SKU", "Variante Identificador", "Pre\xE7o", "Estoque do Vendedor"].map(normalizeLabel);
@@ -2863,10 +2863,10 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // src/orders/parsing/orders-rows.ts
+  // apps/api/src/orders/parsing/orders-rows.ts
   var import_shared6 = __toESM(require_dist());
 
-  // src/imports/parsing/report-specs.ts
+  // apps/api/src/imports/parsing/report-specs.ts
   var import_shared3 = __toESM(require_dist());
   function canonicalDecimal(s) {
     if (s == null) return "";
@@ -3334,7 +3334,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return REPORT_SPECS.find((s) => s.type === type);
   }
 
-  // src/imports/parsing/detect.ts
+  // apps/api/src/imports/parsing/detect.ts
   var import_shared4 = __toESM(require_dist());
   var SCAN_LIMIT2 = 40;
   var ORDER_FAMILY = [
@@ -3484,7 +3484,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { columns, headerNames, dataStartRow: headerRow + 1 };
   }
 
-  // src/imports/parsing/analyze.ts
+  // apps/api/src/imports/parsing/analyze.ts
   var import_shared5 = __toESM(require_dist());
   var PERSONAL_DATA_LABELS = [
     "Telefone",
@@ -3564,7 +3564,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // src/orders/parsing/orders-rows.ts
+  // apps/api/src/orders/parsing/orders-rows.ts
   function first(acc, labels) {
     for (const l of labels) {
       const v = acc.get(l);
@@ -3723,7 +3723,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return null;
   }
 
-  // src/orders/status.ts
+  // apps/api/src/orders/status.ts
   var NORMALIZED_LABELS = {
     NAO_PAGO: "N\xE3o pago",
     A_ENVIAR: "A enviar",
@@ -3754,7 +3754,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return "OUTRO";
   }
 
-  // src/orders/finance.ts
+  // apps/api/src/orders/finance.ts
   var round2 = (n) => Math.round(n * 100) / 100;
   function computeOrderFinance(input) {
     const fees = round2(
@@ -3787,7 +3787,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     };
   }
 
-  // src/postsale/parsing/postsale-rows.ts
+  // apps/api/src/postsale/parsing/postsale-rows.ts
   var import_shared7 = __toESM(require_dist());
   var REPORT_OF = {
     RETURN_REFUND: import_shared7.ReportType.RETURN_REFUND,
@@ -3917,7 +3917,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return { ...base, rows, periodStart, periodEnd };
   }
 
-  // src/postsale/exposure.ts
+  // apps/api/src/postsale/exposure.ts
   var norm2 = (s) => (s != null ? s : "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   function classifyExposureNumbers(status, requested, compensation) {
     const s = norm2(status);
@@ -3939,7 +3939,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
   var EXPOSURE_METHODOLOGY = "Classifica\xE7\xE3o por status Shopee: CANCELADA/RECUSADA/DESIST\xCANCIA = sem perda; COMPENSA\xC7\xC3O ao vendedor = recuperado; CONCLU\xCDDA/APROVADA/REEMBOLSADA = preju\xEDzo confirmado (solicitado \u2212 compensa\xE7\xE3o); EM AN\xC1LISE/PENDENTE/DISPUTA = em risco. Valor solicitado nunca \xE9 tratado automaticamente como preju\xEDzo.";
 
-  // src/all/entry.ts
+  // apps/api/src/all/entry.ts
   globalThis.Buffer = import_buffer.Buffer;
   var toBuf = (ab) => import_buffer.Buffer.from(new Uint8Array(ab));
   globalThis.SISTEMA = {
@@ -3993,8 +3993,14 @@ buffer/index.js:
   var crumb = document.getElementById('crumb');
   var periodSel = document.getElementById('period');
 
+  function initialRouteFromHash() {
+    var raw = (location.hash || '').replace(/^#\/?/, '').split('?')[0];
+    var valid = ['dashboard', 'produtos', 'pedidos', 'posvenda', 'carteira', 'acelera', 'afiliados', 'minharenda', 'caixa', 'contaspagar', 'contasreceber', 'precificacao', 'ia', 'fator', 'admin-usuarios'];
+    return valid.indexOf(raw) >= 0 ? raw : 'dashboard';
+  }
+
   // ---------- estado compartilhado ----------
-  var route = 'dashboard', DB = null;
+  var route = initialRouteFromHash(), DB = null;
   var orders = [], occ = [], batches = [], plans = [];
   // Refatoração N5 (Fase 5 — Performance): caches por-renderização, estritamente aditivos — nunca
   // alteram nenhum valor retornado, só evitam recalcular o mesmo resultado puro para a mesma chave
@@ -4420,7 +4426,7 @@ buffer/index.js:
   // para disparar o onupgradeneeded que cria o que falta. Além disso, toda transação passa
   // por ensureDB(): se o handle estiver nulo, ele reabre antes de usar — assim a importação
   // nunca falha com "Cannot read properties of null (reading 'transaction')".
-  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id', bankaccounts: 'id', companies: 'id', operations: 'id', cpheader: 'id', cpitems: 'id', cppayments: 'id', cpattach: 'id', cpcategories: 'id', cpaccounting: 'id', cpcostcenters: 'id', cpsuppliers: 'id', cpsupplylinks: 'id', pricingopconfig: 'id', pricingfamilyrules: 'id', financialaccounts: 'id', financialevents: 'id', crheader: 'id', crreceipts: 'id', crcategories: 'id', crcostcenters: 'id', financialtransfers: 'id', fatorfuncionarios: 'id', fatorcustosfixos: 'id', fatorcustosvariaveis: 'id', fatorpedidosnapshots: 'id', skufamilyoverrides: 'id', fatorconfigs: 'id', fatorsetores: 'id', fatorimpostos: 'id', fatorprocessos: 'id', fatorroteiros: 'id', fatorroteirosku: 'id', skufamilyoverridehistory: 'id', productidentitymappings: 'id' };
+  var STORES = { orders: 'id', occ: 'id', batches: 'id', products: 'id', variations: 'id', pfamilies: 'id', pimports: 'id', plans: 'id', wallet: 'id', walletcls: 'id', settings: 'id', acelera: 'id', affconv: 'id', affrpa: 'id', affvb: 'id', affmaster: 'id', mrrenda: 'id', mrship: 'id', mradj: 'id', mrsvc: 'id', mrpdf: 'id', shipbip: 'id', walletclose: 'id', expsessions: 'id', caixafechamentos: 'id', banktransfers: 'id', bankaccounts: 'id', companies: 'id', operations: 'id', cpheader: 'id', cpitems: 'id', cppayments: 'id', cpattach: 'id', cpcategories: 'id', cpaccounting: 'id', cpcostcenters: 'id', cpsuppliers: 'id', cpsupplylinks: 'id', pricingopconfig: 'id', pricingfamilyrules: 'id', financialaccounts: 'id', financialevents: 'id', crheader: 'id', crreceipts: 'id', crcategories: 'id', crcostcenters: 'id', financialtransfers: 'id', fatorfuncionarios: 'id', fatorcustosfixos: 'id', fatorcustosvariaveis: 'id', fatorpedidosnapshots: 'id', skufamilyoverrides: 'id', fatorconfigs: 'id', fatorsetores: 'id', fatorimpostos: 'id', fatorprocessos: 'id', fatorroteiros: 'id', fatorroteirosku: 'id', skufamilyoverridehistory: 'id', productidentitymappings: 'id', fatorcategories: 'id' };
   var DB_NAME = 'sistema_marketplace';
   function createMissingStores(db) { Object.keys(STORES).forEach(function (s) { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: STORES[s] }); }); }
   function missingStores(db) { return Object.keys(STORES).filter(function (s) { return !db.objectStoreNames.contains(s); }); }
@@ -5233,7 +5239,31 @@ buffer/index.js:
 
   // ============================================================ RENDER (roteamento)
   function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', minharenda: 'Minha Renda', caixa: 'Caixa', contaspagar: 'Contas a Pagar', contasreceber: 'Contas a Receber', precificacao: 'Precificação', ia: 'Inteligência', fator: 'Fator de Custo', 'admin-usuarios': 'Usuários e Acessos' }[route] || ''; }
+  var routeStateRestored = false;
+  function routeTabValue() {
+    return { pedidos: sub.pedidos, posvenda: sub.posvenda, carteira: walletSub, acelera: aceleraSub, afiliados: affSub, caixa: caixaSub, contaspagar: cpSub, contasreceber: crSub, precificacao: precSub, fator: fatorSub }[route] || null;
+  }
+  function restoreRouteUiState() {
+    if (routeStateRestored) return; routeStateRestored = true;
+    var query = (location.hash || '').split('?')[1] || ''; var tab = new URLSearchParams(query).get('tab');
+    if (!tab) return;
+    if (route === 'pedidos') sub.pedidos = tab;
+    else if (route === 'posvenda') sub.posvenda = tab;
+    else if (route === 'carteira') walletSub = tab;
+    else if (route === 'acelera') aceleraSub = tab;
+    else if (route === 'afiliados') affSub = tab;
+    else if (route === 'caixa') caixaSub = tab;
+    else if (route === 'contaspagar') cpSub = tab;
+    else if (route === 'contasreceber') crSub = tab;
+    else if (route === 'precificacao') precSub = tab;
+    else if (route === 'fator') fatorSub = tab;
+  }
+  function persistRouteUiState() {
+    var tab = routeTabValue(); var next = '#/' + route + (tab ? '?tab=' + encodeURIComponent(tab) : '');
+    if (location.hash !== next) history.replaceState(null, '', next);
+  }
   function render() {
+    restoreRouteUiState(); persistRouteUiState();
     // item 14 — bloqueio de rota direta: mesmo se alguém forçar `route` (console, item de menu que
     // ficou "solto"), a tela do módulo nunca chega a montar sem a permissão de ver aquele módulo.
     if (authSession.user && !canAccessRoute(route)) {
@@ -9299,7 +9329,7 @@ buffer/index.js:
       var fullAP = cpUpsertBySourceKey(null, recAP);
       tasks.push(putMany('cpheader', [fullAP]));
       if (cls.apStatusManual === 'PAGO' && !cpPaymentsForHeader(fullAP.id).some(function (p) { return !p.estornado; })) {
-        tasks.push(cpRegistrarBaixa(fullAP.id, { valorPago: fullAP.valor, date: cpToday(), financialAccountId: contaFinId, paymentMethod: cls.paymentMethod || null, observacao: 'Retido/pago pela Shopee — classificação manual no Caixa.' }));
+        tasks.push(cpRegistrarBaixa(fullAP.id, { valorPago: fullAP.valor, date: cpToday(), financialAccountId: contaFinId, paymentMethod: cls.paymentMethod || null, observacao: 'Retido/pago pela Shopee — classificação manual no Caixa.', manual: false }));
       }
     }
     if (vaiAR) {
@@ -12469,14 +12499,14 @@ buffer/index.js:
       // uma variação fora do filtro fica órfã de família mesmo depois de "classificar todas".
       appEl.querySelectorAll('[data-mcost]').forEach(function (c) { c.onclick = function () { var m = masters.find(function (x) { return x.p.id === c.dataset.mcost; }); openCostEditor(m ? m.all.map(function (v) { return v.id; }) : []); }; });
     }
-    function editVarFamily(cell, vid) { var v = S2.variations.find(function (x) { return x.id === vid; }); if (!v) return; var actives = S2.families.filter(function (f) { return f.status === 'ACTIVE' || f.id === v.familyId; }); cell.innerHTML = '<select class="select sm inl"><option value="">— sem família —</option>' + actives.map(function (f) { return '<option value="' + f.id + '"' + (v.familyId === f.id ? ' selected' : '') + '>' + esc(f.name) + '</option>'; }).join('') + '<option value="__new">+ criar nova família…</option></select>'; var se = cell.querySelector('select'); se.focus(); se.onchange = function () { if (se.value === '__new') { familyEditor(null, function (f) { assignFamilyToVariations([v.id], f.id).then(function () { refresh(); toast('Família criada e aplicada', f.name); }); }); return; } assignFamilyToVariations([v.id], se.value || null).then(function () { refresh(); toast('Salvo', 'Família da variação atualizada.'); }); }; se.onkeydown = function (e) { if (e.key === 'Escape') refresh(); }; se.onblur = function () { setTimeout(function () { if (document.body.contains(se) && se.value !== '__new') refresh(); }, 150); }; }
-    function editVarClose(cell, vid) { var v = S2.variations.find(function (x) { return x.id === vid; }); if (!v) return; cell.innerHTML = '<input class="input sm inl" style="width:110px" value="' + (v.closingPrice != null ? v.closingPrice : '') + '" placeholder="0,00">'; var inp = cell.querySelector('input'); inp.focus(); inp.select(); function commit(next) { v.closingPrice = parseNum(inp.value); saveVars([v]).then(function () { refresh(); toast('Salvo', 'Preço de fechamento atualizado.'); if (next) focusNextClose(vid); }); } inp.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); commit(false); } else if (e.key === 'Tab') { e.preventDefault(); commit(true); } else if (e.key === 'Escape') refresh(); }; inp.onblur = function () { setTimeout(function () { if (document.body.contains(inp)) commit(false); }, 120); }; }
+    function editVarFamily(cell, vid) { var v = S2.variations.find(function (x) { return x.id === vid; }); if (!v) return; var actives = S2.families.filter(function (f) { return f.status === 'ACTIVE' || f.id === v.familyId; }); cell.innerHTML = '<select class="select sm inl"><option value="">— sem família —</option>' + actives.map(function (f) { return '<option value="' + f.id + '"' + (v.familyId === f.id ? ' selected' : '') + '>' + esc(f.name) + '</option>'; }).join('') + '<option value="__new">+ criar nova família…</option></select>'; var se = cell.querySelector('select'); se.focus(); se.onchange = function () { if (se.value === '__new') { familyEditor(null, function (f) { assignFamilyToVariations([v.id], f.id).then(function () { refresh(); toast('Família criada e aplicada', f.name); }); }); return; } assignFamilyToVariations([v.id], se.value || null).then(function () { refresh(); toast('Salvo', 'Família da variação atualizada.'); }); }; se.onkeydown = function (e) { if (e.key === 'Escape') refresh(); }; }
+    function editVarClose(cell, vid) { var v = S2.variations.find(function (x) { return x.id === vid; }); if (!v) return; cell.innerHTML = '<input class="input sm inl" style="width:110px" value="' + (v.closingPrice != null ? v.closingPrice : '') + '" placeholder="0,00">'; var inp = cell.querySelector('input'); inp.focus(); inp.select(); function commit(next) { v.closingPrice = parseNum(inp.value); saveVars([v]).then(function () { refresh(); toast('Salvo', 'Preço de fechamento atualizado.'); if (next) focusNextClose(vid); }); } inp.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); commit(false); } else if (e.key === 'Tab') { e.preventDefault(); commit(true); } else if (e.key === 'Escape') refresh(); }; }
     function focusNextClose(vid) { var cells = Array.from(appEl.querySelectorAll('[data-vclose]')); var i = cells.findIndex(function (c) { return c.dataset.vclose === vid; }); if (i >= 0 && i + 1 < cells.length) editVarClose(cells[i + 1], cells[i + 1].dataset.vclose); }
     // §8/§24: ações da linha MASTER (família/preço em massa) precisam alcançar TODAS as variações do
     // produto (m.all) — nunca só m.shown (o subconjunto visível sob o filtro/busca ativos), senão uma
     // variação fora do filtro fica órfã mesmo depois do usuário "classificar todas via master".
     function editMasterFamily(cell, pid, masters) { var m = masters.find(function (x) { return x.p.id === pid; }); if (!m) return; var actives = S2.families.filter(function (f) { return f.status === 'ACTIVE'; }); cell.innerHTML = '<select class="select sm inl"><option value="">— sem família —</option>' + actives.map(function (f) { return '<option value="' + f.id + '">' + esc(f.name) + '</option>'; }).join('') + '<option value="__new">+ criar nova família…</option></select>'; var se = cell.querySelector('select'); se.focus(); se.onkeydown = function (e) { if (e.key === 'Escape') refresh(); }; se.onchange = function () { var all = m.all; if (se.value === '__new') { familyEditor(null, function (f) { assignFamilyToVariations(all.map(function (v) { return v.id; }), f.id).then(function () { refresh(); toast('Família criada e aplicada', all.length + ' SKUs em “' + f.name + '”.'); }); }); return; } var fid = se.value || null; var mixed = uniq(all.map(function (v) { return v.familyId || null; })); var needConfirm = all.length > 1 && (mixed.length > 1 || (mixed.length === 1 && mixed[0] !== fid && mixed[0] != null)); var apply = function () { assignFamilyToVariations(all.map(function (v) { return v.id; }), fid).then(function () { refresh(); toast(fid ? 'Família aplicada' : 'Família removida', all.length + ' SKUs' + (fid ? ' classificados em “' + famName(fid) + '”' : '') + '.'); }); }; if (needConfirm) confirmModal('Aplicar família a ' + all.length + ' variações?', 'Este anúncio possui variações com classificações diferentes. Aplicar “' + (fid ? famName(fid) : 'sem família') + '” substituirá as famílias atuais em TODAS as ' + all.length + ' variações do produto (não só as visíveis no filtro atual).', apply, refresh); else apply(); }; }
-    function editMasterClose(cell, pid, masters) { var m = masters.find(function (x) { return x.p.id === pid; }); if (!m) return; cell.innerHTML = '<input class="input sm inl" style="width:120px" placeholder="0,00">'; var inp = cell.querySelector('input'); inp.focus(); function done() { var val = parseNum(inp.value), all = m.all, hasIndiv = all.some(function (v) { return v.closingPrice != null; }) && uniq(all.map(function (v) { return v.closingPrice == null ? null : v.closingPrice; })).length > 1; var apply = function () { all.forEach(function (v) { v.closingPrice = val; }); saveVars(all).then(function () { refresh(); toast('Preço aplicado', all.length + ' SKUs com ' + brl(val) + '.'); }); }; if (all.length > 1 && hasIndiv) confirmModal('Aplicar ' + brl(val) + ' a ' + all.length + ' variações?', 'Existem preços de fechamento individuais neste anúncio. Eles serão substituídos em TODAS as ' + all.length + ' variações do produto.', apply, refresh); else apply(); } inp.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); done(); } else if (e.key === 'Escape') refresh(); }; inp.onblur = function () { setTimeout(function () { if (document.body.contains(inp)) refresh(); }, 120); }; }
+    function editMasterClose(cell, pid, masters) { var m = masters.find(function (x) { return x.p.id === pid; }); if (!m) return; cell.innerHTML = '<input class="input sm inl" style="width:120px" placeholder="0,00">'; var inp = cell.querySelector('input'); inp.focus(); function done() { var val = parseNum(inp.value), all = m.all, hasIndiv = all.some(function (v) { return v.closingPrice != null; }) && uniq(all.map(function (v) { return v.closingPrice == null ? null : v.closingPrice; })).length > 1; var apply = function () { all.forEach(function (v) { v.closingPrice = val; }); saveVars(all).then(function () { refresh(); toast('Preço aplicado', all.length + ' SKUs com ' + brl(val) + '.'); }); }; if (all.length > 1 && hasIndiv) confirmModal('Aplicar ' + brl(val) + ' a ' + all.length + ' variações?', 'Existem preços de fechamento individuais neste anúncio. Eles serão substituídos em TODAS as ' + all.length + ' variações do produto.', apply, refresh); else apply(); } inp.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); done(); } else if (e.key === 'Escape') refresh(); }; }
     function confirmModal(title, body, onYes, onNo) {
       var m = openModal({
         title: title, width: 480, bodyHtml: '<p style="margin-top:0">' + esc(body) + '</p>',
@@ -13701,8 +13731,13 @@ buffer/index.js:
   // Contas visíveis para a empresa ativa: sem companyId (legado) OU companyId igual ao da operação
   // ativa. Nunca lista a conta de outro CNPJ por padrão.
   function bankAccountsForActiveCompany() {
-    var op = opActive(); var comp = op ? opCompany(op) : null; var compId = comp ? comp.id : null;
-    return bankAccounts.filter(function (b) { return !b.companyId || b.companyId === compId; });
+    var op = opActive(); var comp = op ? opCompany(op) : null; var compId = comp ? comp.id : null; var opId = op ? op.id : null;
+    var legacySafe = companies.filter(function (c) { return c.ativa !== false; }).length <= 1;
+    return bankAccounts.filter(function (b) {
+      var sameCompany = b.companyId ? b.companyId === compId : legacySafe;
+      var sameOperation = !b.operationId || b.operationId === opId;
+      return sameCompany && sameOperation;
+    });
   }
   // §W-Y do complemento: cadastrar conta DIRETO no fluxo do fechamento — nunca obrigar o operador a
   // sair da tela. Mesmo bankAccountSave/store já aprovado (§100-101); só um modal mais enxuto.
@@ -13936,9 +13971,30 @@ buffer/index.js:
       },
     });
   }
+  function cpCorrigirDataPagamentoConciliacao(paymentId, newDate, movementRef) {
+    var p = cpPayments.find(function (x) { return x.id === paymentId; }); if (!p || p.estornado) return Promise.reject(new Error('Pagamento ativo não encontrado.'));
+    if (!newDate || newDate > cpToday()) return Promise.reject(new Error('Informe uma data válida do extrato, não futura.'));
+    if (!String(movementRef || '').trim()) return Promise.reject(new Error('Informe a referência do movimento no extrato.'));
+    var h = contasPagar.find(function (x) { return x.id === p.accountsPayableId; }); if (!h) return Promise.reject(new Error('Conta a pagar não encontrada.'));
+    var oldDate = p.date; var now = new Date().toISOString(); var who = authSession.user && (authSession.user.name || authSession.user.email || authSession.user.id) || 'Operador';
+    p.date = newDate; p.reconciliationHistory = p.reconciliationHistory || [];
+    p.reconciliationHistory.unshift({ oldDate: oldDate, newDate: newDate, movementRef: String(movementRef).trim(), at: now, user: who, origin: 'Conciliação Bancária' });
+    cpPushHistory(h, 'CORRECAO_DATA_CONCILIACAO', 'Data do pagamento corrigida de ' + dbr(oldDate) + ' para ' + dbr(newDate) + ' pela Conciliação Bancária. Movimento: ' + String(movementRef).trim() + '.');
+    h.updatedAt = now;
+    return Promise.all([putMany('cppayments', [p]), putMany('cpheader', [h])]).then(function () {
+      auditLocal('CP_PAYMENT_DATE_RECONCILE', 'conciliacao-bancaria', 'AccountsPayablePayment', paymentId, { date: oldDate }, { date: newDate }, { movementRef: String(movementRef).trim(), origin: 'Conciliação Bancária' });
+      return p;
+    });
+  }
+  function openCpReconcilePaymentDate(paymentId, onDone) {
+    var p = cpPayments.find(function (x) { return x.id === paymentId; }); if (!p) return;
+    var bodyHtml = '<p class="footnote" style="margin-top:0">Use somente para reproduzir a data efetiva identificada no extrato bancário. A data anterior permanecerá no histórico.</p><label class="fld">Data efetiva no extrato</label><input type="date" class="input" id="cprec-date" max="' + cpToday() + '" value="' + esc(p.date || cpToday()) + '" style="width:100%"><label class="fld">Referência do movimento no extrato *</label><input class="input" id="cprec-ref" style="width:100%" placeholder="Ex.: ID/linha/descrição do extrato">';
+    openModal({ title: 'Corrigir data — Conciliação Bancária', width: 460, bodyHtml: bodyHtml, confirmLabel: 'Registrar correção', onConfirm: function (panel) { return cpCorrigirDataPagamentoConciliacao(paymentId, panel.querySelector('#cprec-date').value, panel.querySelector('#cprec-ref').value).then(function () { toast('Data corrigida', 'A alteração foi registrada com auditoria completa.'); if (onDone) onDone(); }); } });
+  }
   function openGerenciarBancos(onDone) {
     function body() {
-      var rows = bankAccounts.map(function (b) { var s = bankAccountSaldoAtual(b.id); return '<tr><td class="cell-text">' + esc(b.nome) + '</td><td class="cell-text">' + esc(b.banco || '—') + '</td><td class="mono">' + esc(b.agencia || '—') + '</td><td class="mono">' + esc(b.conta || '—') + '</td><td>' + esc(b.tipo || '—') + '</td><td class="nowrap">' + brl(s.saldoAtual) + '</td><td>' + (b.ativa !== false ? '<span class="tag ok">ativa</span>' : '<span class="tag neutral">inativa</span>') + '</td><td><button class="btn-sm" data-bankedit="' + esc(b.id) + '">Editar</button> <button class="btn-sm" data-banktoggle="' + esc(b.id) + '">' + (b.ativa !== false ? 'Desativar' : 'Ativar') + '</button></td></tr>'; }).join('');
+      var visibleBanks = bankAccountsForActiveCompany();
+      var rows = visibleBanks.map(function (b) { var s = bankAccountSaldoAtual(b.id); return '<tr><td class="cell-text">' + esc(b.nome) + '</td><td class="cell-text">' + esc(b.banco || '—') + '</td><td class="mono">' + esc(b.agencia || '—') + '</td><td class="mono">' + esc(b.conta || '—') + '</td><td>' + esc(b.tipo || '—') + '</td><td class="nowrap">' + brl(s.saldoAtual) + '</td><td>' + (b.ativa !== false ? '<span class="tag ok">ativa</span>' : '<span class="tag neutral">inativa</span>') + '</td><td><button class="btn-sm" data-bankedit="' + esc(b.id) + '">Editar</button> <button class="btn-sm" data-banktoggle="' + esc(b.id) + '">' + (b.ativa !== false ? 'Desativar' : 'Ativar') + '</button></td></tr>'; }).join('');
       var table = '<div class="table-wrap"><table class="report"><thead><tr><th>Nome</th><th>Banco</th><th>Agência</th><th>Conta</th><th>Tipo</th><th>Saldo atual</th><th>Status</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="8" class="empty">Nenhuma conta cadastrada ainda.</td></tr>') + '</tbody></table></div>';
       // PROMPT "Correção do fluxo financeiro": financialAccounts (Saldo Carteira Shopee/Recebíveis
       // Shopee) são contas internas geridas pelo próprio sistema (seed automático por operação) — só
@@ -13957,7 +14013,10 @@ buffer/index.js:
         '<input class="input sm" id="bk-saldo" placeholder="Saldo inicial" style="width:120px" value="0,00">' +
         '<input type="date" class="input sm" id="bk-data" placeholder="Data inicial" style="width:140px" value="' + cpToday() + '">' +
         '<button class="btn-sm primary" id="bk-salvar">Salvar</button></div></div></div>';
-      return table + tableFa + form;
+      var visibleIds = {}; visibleBanks.forEach(function (b) { visibleIds[b.id] = true; });
+      var payRows = cpPayments.filter(function (p) { return !p.estornado && visibleIds[p.financialAccountId]; }).sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); }).slice(0, 30).map(function (p) { var h = contasPagar.find(function (x) { return x.id === p.accountsPayableId; }); return '<tr><td>' + dbr(p.date) + '</td><td>' + esc(h ? (h.historico || cpSupplierLabel(h.supplierId)) : p.accountsPayableId) + '</td><td>' + esc(cpFinAccountLabel(p.financialAccountId)) + '</td><td>' + brl(p.valorPago) + '</td><td><button class="btn-sm" data-cpreconcile="' + p.id + '">Corrigir data</button></td></tr>'; }).join('');
+      var reconciliation = '<div class="panel" style="margin-top:12px"><div class="ph"><h3>Conciliação Bancária — pagamentos</h3><span class="footnote" style="margin:0">A correção retroativa preserva data anterior, usuário e referência do extrato.</span></div><div class="table-wrap">' + (payRows ? '<table class="report"><thead><tr><th>Data</th><th>Conta a pagar</th><th>Conta Bancária</th><th>Valor</th><th></th></tr></thead><tbody>' + payRows + '</tbody></table>' : '<div class="empty"><p>Nenhum pagamento bancário para conciliar.</p></div>') + '</div></div>';
+      return table + tableFa + reconciliation + form;
     }
     var dw = openDrawer({
       title: 'Gerenciar bancos / contas', width: 760, renderBody: body,
@@ -13972,6 +14031,7 @@ buffer/index.js:
           var acc = bankAccounts.find(function (x) { return x.id === b.dataset.bankedit; }); if (!acc) return;
           openBankAccountEdit(acc, refresh);
         }; });
+        panel.querySelectorAll('[data-cpreconcile]').forEach(function (b) { b.onclick = function () { openCpReconcilePaymentDate(b.dataset.cpreconcile, refresh); }; });
       },
     });
   }
@@ -14286,7 +14346,7 @@ buffer/index.js:
       });
       plano.ap.forEach(function (rec) {
         var full = cpUpsertBySourceKey(pendingAP, rec);
-        if (!cpPaymentsForHeader(full.id).some(function (p) { return !p.estornado; })) baixaPromises.push(cpRegistrarBaixa(full.id, { valorPago: full.valor, date: dateKey, financialAccountId: full.financialAccountId, observacao: 'Retido/pago pela Shopee — gerado automaticamente pelo fechamento de caixa.' }));
+        if (!cpPaymentsForHeader(full.id).some(function (p) { return !p.estornado; })) baixaPromises.push(cpRegistrarBaixa(full.id, { valorPago: full.valor, date: dateKey, financialAccountId: full.financialAccountId, observacao: 'Retido/pago pela Shopee — gerado automaticamente pelo fechamento de caixa.', manual: false }));
         fePut(pendingFE, { sourceEventKey: rec.sourceEventKey, operationId: rec.operationId, companyId: rec.companyId, type: 'PAYABLE', category: rec.historico, orderId: rec.orderId, amountC: Math.round(full.valor * 100), competenceDate: rec.competencia, settlementDate: dateKey, source: 'CAIXA_FECHAMENTO', sourceId: dateKey, debitAccountId: rec.financialAccountId, creditAccountId: null, status: 'PAGO', accountsPayableId: full.id });
       });
       plano.transfers.forEach(function (rec) {
@@ -15778,7 +15838,8 @@ buffer/index.js:
   // Seletor unificado: contas financeiras da operação ativa (Carteira/Recebíveis Shopee) + contas
   // bancárias já cadastradas (bankAccounts) — mescla os dois catálogos sem duplicar nenhum dos dois.
   function financialAccountsForSelector(opId) {
-    var fas = financialAccounts.filter(function (a) { return a.active !== false && (!a.operationId || a.operationId === opId); });
+    var op = operations.find(function (candidate) { return candidate.id === opId; }); var compId = op ? op.companyId : null;
+    var fas = financialAccounts.filter(function (a) { return a.active !== false && (!a.operationId || a.operationId === opId) && (!a.companyId || !compId || a.companyId === compId); });
     var banks = bankAccountsForActiveCompany().filter(function (b) { return b.ativa !== false; }).map(function (b) { return { id: b.id, type: 'BANK', name: b.nome + (b.banco ? ' — ' + b.banco : ''), __bank: true }; });
     return fas.map(function (a) { return { id: a.id, type: a.type, name: a.name, __bank: false }; }).concat(banks);
   }
@@ -15863,7 +15924,7 @@ buffer/index.js:
   // Renda/Dashboard/Precificação já usam. Custo do produto continua vindo de resolveSkuCost() (que
   // por sua vez já respeita skuFamilyOverrides — classificação manual sempre vence) — o Fator de
   // Custo NUNCA busca custo direto, nunca duplica essa resolução.
-  var fatorFuncionarios = [], fatorCustosFixos = [], fatorCustosVariaveis = [], fatorPedidoSnapshots = [];
+  var fatorFuncionarios = [], fatorCustosFixos = [], fatorCustosVariaveis = [], fatorPedidoSnapshots = [], fatorCategories = [];
   var fatorConfig = {}; // legado v1 (capacidadeProdutivaMin/impostoPct) — mantido só para não perder settings salvos antigos; não é mais lido pelo motor v2.
   var fatorConfigs = [];              // multi-configuração com vigência: {id, operationId, nome, dataInicio, status, metodoCalculo, createdAt, updatedAt}
   var fatorSetores = [];              // {id, operationId, nome, descricao, centroCusto, ativo, horasDisponiveisMes, diasTrabalhados, turnos, updatedAt}
@@ -15922,10 +15983,15 @@ buffer/index.js:
   function fatorFuncionarioMinutosProdutivos(f) { return Math.max(0, (f.horasProdutivasReaisMes != null ? f.horasProdutivasReaisMes : f.horasMes || 0) * 60); }
   function fatorFuncionarioPerdaPct(f) { var c = f.horasContratadasMes || f.horasMes || 0; var r = f.horasProdutivasReaisMes != null ? f.horasProdutivasReaisMes : c; return c > 0 ? r2((1 - r / c) * 100) : 0; }
   function fatorFuncionarioSave(opId, dto, id) {
+    var matricula = (dto.matricula || '').trim();
+    var matriculaKey = cpNorm(matricula);
+    if (matriculaKey && fatorFuncionarios.some(function (f) { return f.id !== id && fatorOpMatch(f, opId) && cpNorm(f.matricula || '') === matriculaKey; })) {
+      return Promise.reject(new Error('Já existe um funcionário cadastrado com esta matrícula.'));
+    }
     var rec = id ? fatorFuncionarios.find(function (f) { return f.id === id; }) : null;
     if (!rec) { rec = { id: fatorUid(), operationId: opId }; fatorFuncionarios.push(rec); }
     Object.assign(rec, {
-      nome: dto.nome, cpf: dto.cpf || '', cargo: dto.cargo || '', setorId: dto.setorId || null,
+      nome: dto.nome, matricula: matricula, cpf: dto.cpf || '', cargo: dto.cargo || '', setorId: dto.setorId || null,
       salario: cpParseNum(dto.salario) || 0, encargosPct: cpParseNum(dto.encargosPct) || 0, beneficios: cpParseNum(dto.beneficios) || 0,
       horasContratadasMes: cpParseNum(dto.horasContratadasMes) || 220, horasProdutivasReaisMes: cpParseNum(dto.horasProdutivasReaisMes) != null ? (cpParseNum(dto.horasProdutivasReaisMes) || 0) : (cpParseNum(dto.horasContratadasMes) || 220),
       motivosPerda: Array.isArray(dto.motivosPerda) ? dto.motivosPerda : [], ativo: dto.ativo !== false, updatedAt: new Date().toISOString(),
@@ -15934,6 +16000,31 @@ buffer/index.js:
     return putMany('fatorfuncionarios', [rec]).then(function () { return rec; });
   }
   function fatorFuncionarioRemove(id) { fatorFuncionarios = fatorFuncionarios.filter(function (f) { return f.id !== id; }); return delOne('fatorfuncionarios', id); }
+
+  // Cadastro administrativo das categorias industriais. O texto legado (`categoria`) continua
+  // preservado nos custos antigos; registros novos também guardam categoryId, sem criar qualquer
+  // vínculo com Contas a Pagar/Receber ou alterar o motor de custo.
+  function fatorCategoryLabel(id, fallback) { var c = fatorCategories.find(function (x) { return x.id === id; }); return c ? c.nome : (fallback || '—'); }
+  function fatorCategoryOptions(opId, selectedId) {
+    var list = fatorCategories.filter(function (c) { return fatorOpMatch(c, opId) && (c.ativo !== false || c.id === selectedId); }).sort(function (a, b) { return a.nome.localeCompare(b.nome); });
+    return '<option value="">— sem categoria —</option>' + list.map(function (c) { return '<option value="' + esc(c.id) + '"' + (c.id === selectedId ? ' selected' : '') + '>' + esc(c.nome) + (c.ativo === false ? ' (inativa)' : '') + '</option>'; }).join('');
+  }
+  function fatorCategorySave(opId, dto, id) {
+    var nome = (dto.nome || '').trim();
+    if (!nome) return Promise.reject(new Error('Informe o nome da categoria.'));
+    var duplicated = fatorCategories.some(function (c) { return c.id !== id && fatorOpMatch(c, opId) && cpNorm(c.nome) === cpNorm(nome); });
+    if (duplicated) return Promise.reject(new Error('Já existe uma categoria do Fator de Custo com este nome.'));
+    var rec = id ? fatorCategories.find(function (c) { return c.id === id; }) : null;
+    if (!rec) { rec = { id: fatorUid(), operationId: opId, createdAt: new Date().toISOString() }; fatorCategories.push(rec); }
+    Object.assign(rec, { nome: nome, ativo: dto.ativo !== false, removedAt: null, updatedAt: new Date().toISOString() });
+    return putMany('fatorcategories', [rec]).then(function () { return rec; });
+  }
+  function fatorCategoryRemove(id) {
+    var rec = fatorCategories.find(function (c) { return c.id === id; }); if (!rec) return Promise.resolve();
+    var used = fatorCustosFixos.some(function (x) { return x.categoryId === id; }) || fatorCustosVariaveis.some(function (x) { return x.categoryId === id; });
+    if (used) { rec.ativo = false; rec.removedAt = new Date().toISOString(); rec.updatedAt = rec.removedAt; return putMany('fatorcategories', [rec]); }
+    fatorCategories = fatorCategories.filter(function (c) { return c.id !== id; }); return delOne('fatorcategories', id);
+  }
   // Custo minuto homem POR SETOR — soma custo mensal dos funcionários ativos daquele setor ÷ soma dos
   // minutos produtivos reais deles. Sem funcionário no setor ou sem minutos > 0 → 0 (nunca div/0).
   function fatorCustoMinutoHomemSetorC(setorId, opId) {
@@ -15949,7 +16040,7 @@ buffer/index.js:
   function fatorCustoFixoSave(opId, dto, id) {
     var rec = id ? fatorCustosFixos.find(function (x) { return x.id === id; }) : null;
     if (!rec) { rec = { id: fatorUid(), operationId: opId }; fatorCustosFixos.push(rec); }
-    Object.assign(rec, { nome: dto.nome, categoria: dto.categoria || '', valorMensal: cpParseNum(dto.valorMensal) || 0, rateioTipo: dto.rateioTipo === 'SETORES' ? 'SETORES' : 'FABRICA', rateioSetores: Array.isArray(dto.rateioSetores) ? dto.rateioSetores : [], ativo: dto.ativo !== false, updatedAt: new Date().toISOString() });
+    Object.assign(rec, { nome: dto.nome, categoryId: dto.categoryId || null, categoria: fatorCategoryLabel(dto.categoryId, dto.categoria || ''), valorMensal: cpParseNum(dto.valorMensal) || 0, rateioTipo: dto.rateioTipo === 'SETORES' ? 'SETORES' : 'FABRICA', rateioSetores: Array.isArray(dto.rateioSetores) ? dto.rateioSetores : [], ativo: dto.ativo !== false, updatedAt: new Date().toISOString() });
     return putMany('fatorcustosfixos', [rec]).then(function () { return rec; });
   }
   function fatorCustoFixoRemove(id) { fatorCustosFixos = fatorCustosFixos.filter(function (x) { return x.id !== id; }); return delOne('fatorcustosfixos', id); }
@@ -15982,7 +16073,7 @@ buffer/index.js:
   function fatorCustoVariavelSave(opId, dto, id) {
     var rec = id ? fatorCustosVariaveis.find(function (x) { return x.id === id; }) : null;
     if (!rec) { rec = { id: fatorUid(), operationId: opId }; fatorCustosVariaveis.push(rec); }
-    Object.assign(rec, { nome: dto.nome, categoria: dto.categoria || '', valor: cpParseNum(dto.valor) || 0, unidade: ['UNIDADE', 'MINUTO'].indexOf(dto.unidade) >= 0 ? dto.unidade : 'UNIDADE', aplicacaoTipo: ['PRODUTO', 'FAMILIA', 'SETOR'].indexOf(dto.aplicacaoTipo) >= 0 ? dto.aplicacaoTipo : 'TODOS', aplicacaoId: dto.aplicacaoId || null, ativo: dto.ativo !== false, updatedAt: new Date().toISOString() });
+    Object.assign(rec, { nome: dto.nome, categoryId: dto.categoryId || null, categoria: fatorCategoryLabel(dto.categoryId, dto.categoria || ''), valor: cpParseNum(dto.valor) || 0, unidade: ['UNIDADE', 'MINUTO'].indexOf(dto.unidade) >= 0 ? dto.unidade : 'UNIDADE', aplicacaoTipo: ['PRODUTO', 'FAMILIA', 'SETOR'].indexOf(dto.aplicacaoTipo) >= 0 ? dto.aplicacaoTipo : 'TODOS', aplicacaoId: dto.aplicacaoId || null, ativo: dto.ativo !== false, updatedAt: new Date().toISOString() });
     return putMany('fatorcustosvariaveis', [rec]).then(function () { return rec; });
   }
   function fatorCustoVariavelRemove(id) { fatorCustosVariaveis = fatorCustosVariaveis.filter(function (x) { return x.id !== id; }); return delOne('fatorcustosvariaveis', id); }
@@ -16184,7 +16275,7 @@ buffer/index.js:
   var fatorRoteiroFamiliaSel = '', fatorRoteiroDraft = null; // {familyId, rows:[{processoId,tempoMin}]}
   var fatorRoteiroSkuSel = '', fatorRoteiroSkuDraft = null;  // {sku, rows:[{processoId,tempoMin}]}
   var fatorAuditPedidoId = '';
-  var FATOR_TABS = [['visao', 'Visão Geral'], ['geral', 'Configuração Geral'], ['setores', 'Setores Produtivos'], ['funcionarios', 'Funcionários'], ['fixos', 'Custos Fixos'], ['variaveis', 'Custos Variáveis'], ['impostos', 'Impostos'], ['processos', 'Processos Produtivos'], ['roteiro', 'Roteiro por Família'], ['capacidade', 'Capacidade Produtiva'], ['auditoria', 'Auditoria de Custos']];
+  var FATOR_TABS = [['visao', 'Visão Geral'], ['geral', 'Configuração Geral'], ['setores', 'Setores Produtivos'], ['funcionarios', 'Funcionários'], ['categorias', 'Categorias'], ['fixos', 'Custos Fixos'], ['variaveis', 'Custos Variáveis'], ['impostos', 'Impostos'], ['processos', 'Processos Produtivos'], ['roteiro', 'Roteiro por Família'], ['capacidade', 'Capacidade Produtiva'], ['auditoria', 'Auditoria de Custos']];
   var FATOR_MOTIVOS_PERDA = ['Pausa', 'Setup', 'Manutenção', 'Retrabalho', 'Organização'];
   function fatorFamilias() { return Produtos && typeof Produtos.getData === 'function' ? (Produtos.getData().families || []) : []; }
   function fatorSetorNome(id) { var s = fatorSetores.find(function (x) { return x.id === id; }); return s ? s.nome : '—'; }
@@ -16202,6 +16293,7 @@ buffer/index.js:
     if (sub === 'geral') return fatorGeralView(opId);
     if (sub === 'setores') return fatorSetoresView(opId);
     if (sub === 'funcionarios') return fatorFuncionariosView(opId);
+    if (sub === 'categorias') return fatorCategoriesView(opId);
     if (sub === 'fixos') return fatorFixosView(opId);
     if (sub === 'variaveis') return fatorVariaveisView(opId);
     if (sub === 'impostos') return fatorImpostosView(opId);
@@ -16215,6 +16307,7 @@ buffer/index.js:
     if (sub === 'geral') return bindFatorGeralView(opId);
     if (sub === 'setores') return bindFatorSetoresView(opId);
     if (sub === 'funcionarios') return bindFatorFuncionariosView(opId);
+    if (sub === 'categorias') return bindFatorCategoriesView(opId);
     if (sub === 'fixos') return bindFatorFixosView(opId);
     if (sub === 'variaveis') return bindFatorVariaveisView(opId);
     if (sub === 'impostos') return bindFatorImpostosView(opId);
@@ -16342,9 +16435,9 @@ buffer/index.js:
   // ---------- 3. Funcionários Produtivos ----------
   function fatorFuncionariosView(opId) {
     var list = fatorFuncionarios.filter(function (f) { return fatorOpMatch(f, opId); });
-    var rows = list.map(function (f) { return '<tr><td>' + esc(f.nome) + (f.cargo ? ' <span class="footnote" style="margin:0">(' + esc(f.cargo) + ')</span>' : '') + '</td><td>' + esc(fatorSetorNome(f.setorId)) + '</td><td class="nowrap">' + brl(f.salario) + '</td><td>' + nn(f.horasContratadasMes || 0) + 'h</td><td>' + nn(f.horasProdutivasReaisMes != null ? f.horasProdutivasReaisMes : f.horasContratadasMes || 0) + 'h</td><td>' + pct(fatorFuncionarioPerdaPct(f)) + '</td><td class="nowrap">' + brlC(fatorFuncionarioMinutosProdutivos(f) ? Math.round(fatorFuncionarioCustoMensalC(f) / fatorFuncionarioMinutosProdutivos(f)) : 0) + '/min</td><td>' + fatorStatusBadge(f.ativo) + '</td><td><button class="btn-sm" data-ffedit="' + f.id + '">Editar</button> <button class="btn-sm" data-ffdel="' + f.id + '">Remover</button></td></tr>'; }).join('');
+    var rows = list.map(function (f) { return '<tr><td class="mono">' + esc(f.matricula || '—') + '</td><td>' + esc(f.nome) + (f.cargo ? ' <span class="footnote" style="margin:0">(' + esc(f.cargo) + ')</span>' : '') + '</td><td>' + esc(fatorSetorNome(f.setorId)) + '</td><td class="nowrap">' + brl(f.salario) + '</td><td>' + nn(f.horasContratadasMes || 0) + 'h</td><td>' + nn(f.horasProdutivasReaisMes != null ? f.horasProdutivasReaisMes : f.horasContratadasMes || 0) + 'h</td><td>' + pct(fatorFuncionarioPerdaPct(f)) + '</td><td class="nowrap">' + brlC(fatorFuncionarioMinutosProdutivos(f) ? Math.round(fatorFuncionarioCustoMensalC(f) / fatorFuncionarioMinutosProdutivos(f)) : 0) + '/min</td><td>' + fatorStatusBadge(f.ativo) + '</td><td><button class="btn-sm" data-ffedit="' + f.id + '">Editar</button> <button class="btn-sm" data-ffdel="' + f.id + '">Remover</button></td></tr>'; }).join('');
     return '<div class="panel"><div class="ph"><h3>Funcionários produtivos</h3><button class="btn-sm primary" id="ff-new">+ Novo funcionário</button></div><div class="pb">' +
-      (list.length ? '<div class="table-wrap"><table class="report"><thead><tr><th>Nome</th><th>Setor</th><th>Salário</th><th>Horas contratadas</th><th>Horas produtivas reais</th><th>Perda</th><th>Custo/min</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' : emptyBox('Nenhum funcionário cadastrado — Hora Homem fica R$ 0,00 em todos os setores.')) +
+      (list.length ? '<div class="table-wrap"><table class="report"><thead><tr><th>Matrícula</th><th>Nome</th><th>Setor</th><th>Salário</th><th>Horas contratadas</th><th>Horas produtivas reais</th><th>Perda</th><th>Custo/min</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' : emptyBox('Nenhum funcionário cadastrado — Hora Homem fica R$ 0,00 em todos os setores.')) +
       '</div></div>';
   }
   function bindFatorFuncionariosView(opId) {
@@ -16358,6 +16451,7 @@ buffer/index.js:
     var bodyHtml =
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
       '<div><label class="fld">Nome *</label><input class="input" id="ff-nome" value="' + esc(f ? f.nome : '') + '"></div>' +
+      '<div><label class="fld">Matrícula</label><input class="input" id="ff-matricula" value="' + esc(f && f.matricula || '') + '" autocomplete="off"></div>' +
       '<div><label class="fld">Cargo</label><input class="input" id="ff-cargo" value="' + esc(f && f.cargo || '') + '"></div>' +
       '<div><label class="fld">CPF (opcional)</label><input class="input" id="ff-cpf" value="' + esc(f && f.cpf || '') + '"></div>' +
       '<div><label class="fld">Setor vinculado</label><select class="select" id="ff-setor" style="width:100%"><option value="">— sem setor —</option>' + setOpts + '</select></div>' +
@@ -16380,16 +16474,34 @@ buffer/index.js:
       onConfirm: function (panel) {
         var nome = panel.querySelector('#ff-nome').value.trim(); if (!nome) { toast('Informe o nome', '', true); return false; }
         var motivos = Array.from(panel.querySelectorAll('.ff-motivo:checked')).map(function (c) { return c.value; });
-        var dto = { nome: nome, cargo: panel.querySelector('#ff-cargo').value.trim(), cpf: panel.querySelector('#ff-cpf').value.trim(), setorId: panel.querySelector('#ff-setor').value || null, salario: panel.querySelector('#ff-salario').value, encargosPct: panel.querySelector('#ff-encargos').value, beneficios: panel.querySelector('#ff-beneficios').value, horasContratadasMes: panel.querySelector('#ff-hc').value, horasProdutivasReaisMes: panel.querySelector('#ff-hr').value, motivosPerda: motivos, ativo: panel.querySelector('#ff-ativo').checked };
+        var dto = { nome: nome, matricula: panel.querySelector('#ff-matricula').value.trim(), cargo: panel.querySelector('#ff-cargo').value.trim(), cpf: panel.querySelector('#ff-cpf').value.trim(), setorId: panel.querySelector('#ff-setor').value || null, salario: panel.querySelector('#ff-salario').value, encargosPct: panel.querySelector('#ff-encargos').value, beneficios: panel.querySelector('#ff-beneficios').value, horasContratadasMes: panel.querySelector('#ff-hc').value, horasProdutivasReaisMes: panel.querySelector('#ff-hr').value, motivosPerda: motivos, ativo: panel.querySelector('#ff-ativo').checked };
         return fatorFuncionarioSave(opId, dto, f ? f.id : null).then(function () { toast('Funcionário salvo', nome); render(); });
       },
     });
   }
 
+  function fatorCategoriesView(opId) {
+    var list = fatorCategories.filter(function (c) { return fatorOpMatch(c, opId); }).sort(function (a, b) { return a.nome.localeCompare(b.nome); });
+    var rows = list.map(function (c) {
+      var used = fatorCustosFixos.filter(function (x) { return x.categoryId === c.id; }).length + fatorCustosVariaveis.filter(function (x) { return x.categoryId === c.id; }).length;
+      return '<tr><td><b>' + esc(c.nome) + '</b></td><td>' + used + '</td><td>' + fatorStatusBadge(c.ativo !== false) + '</td><td><button class="btn-sm" data-fcatedit="' + c.id + '">Editar</button> <button class="btn-sm" data-fcattoggle="' + c.id + '">' + (c.ativo === false ? 'Ativar' : 'Inativar') + '</button> <button class="btn-sm" data-fcatdel="' + c.id + '">Remover</button></td></tr>';
+    }).join('');
+    return '<div class="panel"><div class="ph"><h3>Categorias do Fator de Custo</h3><button class="btn-sm primary" id="fcat-new">+ Nova categoria</button></div><div class="pb"><div class="footnote" style="margin-bottom:10px">Categorias inativas deixam de aparecer em novos custos, mas continuam visíveis nos registros históricos.</div>' + (rows ? '<div class="table-wrap"><table class="report"><thead><tr><th>Nome</th><th>Registros vinculados</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' : emptyBox('Nenhuma categoria cadastrada.')) + '</div></div>';
+  }
+  function bindFatorCategoriesView(opId) {
+    function edit(c) {
+      openModal({ title: c ? 'Editar categoria' : 'Nova categoria', width: 420, bodyHtml: '<label class="fld">Nome *</label><input class="input" id="fcat-nome" style="width:100%" value="' + esc(c ? c.nome : '') + '"><label class="fld"><input type="checkbox" id="fcat-ativo"' + (!c || c.ativo !== false ? ' checked' : '') + '> Ativa</label>', onConfirm: function (panel) { return fatorCategorySave(opId, { nome: panel.querySelector('#fcat-nome').value, ativo: panel.querySelector('#fcat-ativo').checked }, c ? c.id : null).then(function () { toast('Categoria salva', ''); render(); }); } });
+    }
+    var nb = document.getElementById('fcat-new'); if (nb) nb.onclick = function () { edit(null); };
+    document.querySelectorAll('[data-fcatedit]').forEach(function (b) { b.onclick = function () { edit(fatorCategories.find(function (c) { return c.id === b.dataset.fcatedit; })); }; });
+    document.querySelectorAll('[data-fcattoggle]').forEach(function (b) { b.onclick = function () { var c = fatorCategories.find(function (x) { return x.id === b.dataset.fcattoggle; }); if (!c) return; fatorCategorySave(opId, { nome: c.nome, ativo: c.ativo === false }, c.id).then(function () { render(); }); }; });
+    document.querySelectorAll('[data-fcatdel]').forEach(function (b) { b.onclick = function () { if (!confirm('Remover esta categoria? Se houver histórico, ela será apenas inativada.')) return; fatorCategoryRemove(b.dataset.fcatdel).then(function () { toast('Categoria removida', 'Referências históricas preservadas.'); render(); }); }; });
+  }
+
   // ---------- 4. Custos Fixos ----------
   function fatorFixosView(opId) {
     var list = fatorCustosFixos.filter(function (x) { return fatorOpMatch(x, opId); });
-    var rows = list.map(function (f) { var resumoRateio = f.rateioTipo === 'SETORES' ? (f.rateioSetores || []).map(function (r) { return fatorSetorNome(r.setorId) + ' ' + nn(r.pct) + '%'; }).join(', ') || '—' : 'Toda a fábrica (por capacidade)'; return '<tr><td>' + esc(f.nome) + (f.categoria ? ' <span class="footnote" style="margin:0">(' + esc(f.categoria) + ')</span>' : '') + '</td><td class="nowrap">' + brl(f.valorMensal) + '</td><td class="cell-text">' + esc(resumoRateio) + '</td><td>' + fatorStatusBadge(f.ativo) + '</td><td><button class="btn-sm" data-fxedit="' + f.id + '">Editar</button> <button class="btn-sm" data-fxdel="' + f.id + '">Remover</button></td></tr>'; }).join('');
+    var rows = list.map(function (f) { var resumoRateio = f.rateioTipo === 'SETORES' ? (f.rateioSetores || []).map(function (r) { return fatorSetorNome(r.setorId) + ' ' + nn(r.pct) + '%'; }).join(', ') || '—' : 'Toda a fábrica (por capacidade)'; var cat = fatorCategoryLabel(f.categoryId, f.categoria || ''); return '<tr><td>' + esc(f.nome) + (cat && cat !== '—' ? ' <span class="footnote" style="margin:0">(' + esc(cat) + ')</span>' : '') + '</td><td class="nowrap">' + brl(f.valorMensal) + '</td><td class="cell-text">' + esc(resumoRateio) + '</td><td>' + fatorStatusBadge(f.ativo) + '</td><td><button class="btn-sm" data-fxedit="' + f.id + '">Editar</button> <button class="btn-sm" data-fxdel="' + f.id + '">Remover</button></td></tr>'; }).join('');
     return '<div class="panel"><div class="ph"><h3>Custos fixos</h3><button class="btn-sm primary" id="fx-new">+ Novo custo fixo</button></div><div class="pb">' +
       '<div class="footnote" style="margin-bottom:10px">Exemplos: aluguel, energia, máquinas, depreciação, sistemas, manutenção, supervisão, administração.</div>' +
       (list.length ? '<div class="table-wrap"><table class="report"><thead><tr><th>Nome</th><th>Valor mensal</th><th>Rateio</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' : emptyBox('Nenhum custo fixo cadastrado — Custos Fixos Absorvidos fica R$ 0,00.')) +
@@ -16406,7 +16518,7 @@ buffer/index.js:
     var bodyHtml =
       '<label class="fld">Nome *</label><input class="input" id="fx-nome" style="width:100%" value="' + esc(f ? f.nome : '') + '" placeholder="Ex.: Aluguel">' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
-      '<div><label class="fld">Categoria</label><input class="input" id="fx-cat" value="' + esc(f && f.categoria || '') + '"></div>' +
+      '<div><label class="fld">Categoria</label><select class="select" id="fx-cat" style="width:100%">' + fatorCategoryOptions(opId, f && f.categoryId) + '</select></div>' +
       '<div><label class="fld">Valor mensal (R$)</label><input class="input" id="fx-valor" value="' + (f && f.valorMensal != null ? f.valorMensal : '') + '"></div>' +
       '</div>' +
       '<label class="fld">Rateio</label><div style="display:flex;gap:14px;margin-bottom:8px">' +
@@ -16431,7 +16543,7 @@ buffer/index.js:
         var tipo = panel.querySelector('input[name="fx-rateio"]:checked').value;
         var setorRows = [];
         if (tipo === 'SETORES') { panel.querySelectorAll('#fx-setores-box [data-rat-setor]').forEach(function (sel, i) { var pctInput = panel.querySelector('[data-rat-pct="' + i + '"]'); setorRows.push({ setorId: sel.value, pct: cpParseNum(pctInput ? pctInput.value : 0) || 0 }); }); }
-        var dto = { nome: nome, categoria: panel.querySelector('#fx-cat').value.trim(), valorMensal: panel.querySelector('#fx-valor').value, rateioTipo: tipo, rateioSetores: setorRows, ativo: panel.querySelector('#fx-ativo').checked };
+        var dto = { nome: nome, categoryId: panel.querySelector('#fx-cat').value || null, categoria: f && f.categoria || '', valorMensal: panel.querySelector('#fx-valor').value, rateioTipo: tipo, rateioSetores: setorRows, ativo: panel.querySelector('#fx-ativo').checked };
         return fatorCustoFixoSave(opId, dto, f ? f.id : null).then(function () { toast('Custo fixo salvo', nome); render(); });
       },
     });
@@ -16442,7 +16554,7 @@ buffer/index.js:
     var list = fatorCustosVariaveis.filter(function (x) { return fatorOpMatch(x, opId); });
     var UN_LABEL = { UNIDADE: 'por unidade produzida', MINUTO: 'por minuto' };
     var AP_LABEL = { TODOS: 'todos os produtos', PRODUTO: 'produto específico', FAMILIA: 'família específica', SETOR: 'setor específico' };
-    var rows = list.map(function (f) { return '<tr><td>' + esc(f.nome) + (f.categoria ? ' <span class="footnote" style="margin:0">(' + esc(f.categoria) + ')</span>' : '') + '</td><td class="nowrap">' + brl(f.valor) + '</td><td>' + (UN_LABEL[f.unidade] || f.unidade) + '</td><td>' + (AP_LABEL[f.aplicacaoTipo] || 'todos os produtos') + '</td><td>' + fatorStatusBadge(f.ativo) + '</td><td><button class="btn-sm" data-fvedit="' + f.id + '">Editar</button> <button class="btn-sm" data-fvdel="' + f.id + '">Remover</button></td></tr>'; }).join('');
+    var rows = list.map(function (f) { var cat = fatorCategoryLabel(f.categoryId, f.categoria || ''); return '<tr><td>' + esc(f.nome) + (cat && cat !== '—' ? ' <span class="footnote" style="margin:0">(' + esc(cat) + ')</span>' : '') + '</td><td class="nowrap">' + brl(f.valor) + '</td><td>' + (UN_LABEL[f.unidade] || f.unidade) + '</td><td>' + (AP_LABEL[f.aplicacaoTipo] || 'todos os produtos') + '</td><td>' + fatorStatusBadge(f.ativo) + '</td><td><button class="btn-sm" data-fvedit="' + f.id + '">Editar</button> <button class="btn-sm" data-fvdel="' + f.id + '">Remover</button></td></tr>'; }).join('');
     return '<div class="panel"><div class="ph"><h3>Custos variáveis industriais</h3><button class="btn-sm primary" id="fv-new">+ Novo custo variável</button></div><div class="pb">' +
       '<div class="footnote" style="margin-bottom:10px">Custos que aumentam conforme a produção. Exemplos: embalagem, fita, cola, etiqueta, insumos, desperdício.</div>' +
       (list.length ? '<div class="table-wrap"><table class="report"><thead><tr><th>Nome</th><th>Valor</th><th>Unidade</th><th>Aplicação</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' : emptyBox('Nenhum custo variável cadastrado — Custos Variáveis fica R$ 0,00.')) +
@@ -16466,7 +16578,7 @@ buffer/index.js:
     var bodyHtml =
       '<label class="fld">Nome *</label><input class="input" id="fv-nome" style="width:100%" value="' + esc(f ? f.nome : '') + '">' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
-      '<div><label class="fld">Categoria</label><input class="input" id="fv-cat" value="' + esc(f && f.categoria || '') + '"></div>' +
+      '<div><label class="fld">Categoria</label><select class="select" id="fv-cat" style="width:100%">' + fatorCategoryOptions(opId, f && f.categoryId) + '</select></div>' +
       '<div><label class="fld">Valor (R$)</label><input class="input" id="fv-valor" value="' + (f && f.valor != null ? f.valor : '') + '"></div>' +
       '</div>' +
       '<label class="fld">Unidade</label><select class="select" id="fv-unid" style="width:100%"><option value="UNIDADE"' + (!f || f.unidade === 'UNIDADE' ? ' selected' : '') + '>Por unidade produzida</option><option value="MINUTO"' + (f && f.unidade === 'MINUTO' ? ' selected' : '') + '>Por minuto</option></select>' +
@@ -16481,7 +16593,7 @@ buffer/index.js:
       onConfirm: function (panel) {
         var nome = panel.querySelector('#fv-nome').value.trim(); if (!nome) { toast('Informe o nome', '', true); return false; }
         var apl = panel.querySelector('#fv-apl').value;
-        var dto = { nome: nome, categoria: panel.querySelector('#fv-cat').value.trim(), valor: panel.querySelector('#fv-valor').value, unidade: panel.querySelector('#fv-unid').value, aplicacaoTipo: apl, aplicacaoId: apl === 'TODOS' ? null : (panel.querySelector('#fv-apl-id') ? panel.querySelector('#fv-apl-id').value : null), ativo: panel.querySelector('#fv-ativo').checked };
+        var dto = { nome: nome, categoryId: panel.querySelector('#fv-cat').value || null, categoria: f && f.categoria || '', valor: panel.querySelector('#fv-valor').value, unidade: panel.querySelector('#fv-unid').value, aplicacaoTipo: apl, aplicacaoId: apl === 'TODOS' ? null : (panel.querySelector('#fv-apl-id') ? panel.querySelector('#fv-apl-id').value : null), ativo: panel.querySelector('#fv-ativo').checked };
         return fatorCustoVariavelSave(opId, dto, f ? f.id : null).then(function () { toast('Custo variável salvo', nome); render(); });
       },
     });
@@ -16679,6 +16791,7 @@ buffer/index.js:
 
   var cpSub = 'lista'; // lista | categorias | planocontas | centroscusto | fornecedores | dre
   var cpSel = new Set(), cpPage = 1, cpPageSize = 30;
+  var cpCatSel = new Set(), cpCatF = { search: '', status: '' };
   var cpFiltrosAbertos = false; // toggle "+ Filtros" (filtros avançados só aparecem quando expandido)
   var cpF = { situacao: '', categoryId: '', paymentMethod: '', financialAccountId: '', costCenterId: '', accountingAccountId: '', supplierId: '', valorMin: null, valorMax: null, docNumber: '', search: '', dateBasis: 'vencimento', sort: 'vencimento', dir: 'asc' };
   var CP_SITUACOES = [['', 'Todas'], ['ABERTA', 'Em aberto'], ['ATRASADA', 'Atrasadas'], ['EMITIDA', 'Emitidas'], ['PAGA', 'Pagas'], ['PARCIAL', 'Parcialmente pagas'], ['CANCELADA', 'Canceladas']];
@@ -16698,6 +16811,7 @@ buffer/index.js:
   function cpAddDays(dateStr, n) { var d = new Date(dateStr + 'T00:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
   function cpAddMonths(dateStr, n) { var d = new Date(dateStr + 'T00:00:00'); var day = d.getDate(); d.setDate(1); d.setMonth(d.getMonth() + n); var last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(); d.setDate(Math.min(day, last)); return d.toISOString().slice(0, 10); }
   function cpAdjustBusinessDay(dateStr) { var d = new Date(dateStr + 'T00:00:00'); var wd = d.getDay(); if (wd === 0) return cpAddDays(dateStr, 1); if (wd === 6) return cpAddDays(dateStr, 2); return dateStr; }
+  function cpAlignWeekday(dateStr, weekDay) { var d = new Date(dateStr + 'T00:00:00'); var delta = ((Number(weekDay) || 0) - d.getDay() + 7) % 7; return cpAddDays(dateStr, delta); }
 
   // ---- lookups ----
   function cpSupplierLabel(id) { var s = cpSuppliers.find(function (x) { return x.id === id; }); return s ? (s.nomeFantasia || s.razaoSocial) : '—'; }
@@ -16713,7 +16827,7 @@ buffer/index.js:
   // Serviço, Taxa Acelera, débitos classificados da Carteira) saem de contas financeiras NOVAS
   // (Recebíveis Shopee / Carteira Shopee), não de um banco — faLabel() resolve as duas famílias sem
   // duplicar cadastro (financialAccounts + bankAccounts, mesma mescla de financialAccountsForSelector).
-  function cpFinAccountLabel(id) { if (!id) return '— sem conta financeira —'; return faLabel(id) || '—'; }
+  function cpFinAccountLabel(id) { if (!id) return '— sem conta bancária —'; return faLabel(id) || '—'; }
   // PROMPT "Correção da Base Financeira": todo lançamento automático de Contas a Pagar/Receber gerado
   // pelo fechamento do Caixa precisa nascer com Categoria financeira preenchida (nunca "—"), senão a
   // DRE por categoria fica incompleta e o operador precisa classificar manualmente item a item.
@@ -16798,7 +16912,8 @@ buffer/index.js:
   // ---- cadastros auxiliares (categorias / plano de contas / centro de custo / fornecedores) ----
   function cpSaveCategory(dto) {
     var id = dto.id || cpUid('CAT'); var now = new Date().toISOString();
-    var full = { id: id, name: dto.name, parentId: dto.parentId || null, type: 'DESPESA', accountingAccountId: dto.accountingAccountId || null, dreGroup: dto.dreGroup || null, costCenterId: dto.costCenterId || null, active: dto.active !== false, createdAt: dto.createdAt || now, updatedAt: now };
+    var existing = cpCategories.find(function (c) { return c.id === id; });
+    var full = { id: id, name: dto.name, parentId: dto.parentId !== undefined ? (dto.parentId || null) : (existing ? existing.parentId || null : null), type: 'DESPESA', accountingAccountId: dto.accountingAccountId !== undefined ? (dto.accountingAccountId || null) : (existing ? existing.accountingAccountId || null : null), dreGroup: dto.dreGroup !== undefined ? dto.dreGroup : (existing ? existing.dreGroup || null : null), costCenterId: dto.costCenterId || null, active: dto.active !== false, createdAt: dto.createdAt || (existing && existing.createdAt) || now, updatedAt: now };
     cpCategories = [full].concat(cpCategories.filter(function (c) { return c.id !== id; }));
     return putMany('cpcategories', [full]).then(function () { return full; });
   }
@@ -16924,12 +17039,15 @@ buffer/index.js:
       // item 22 — registro paralelo no servidor da ação local (criar/editar CP); nunca bloqueia a
       // mutação, que já está salva no IndexedDB acima independente do resultado desta chamada.
       auditLocal(isNew ? 'CP_CREATE' : 'CP_EDIT', 'contas-a-pagar', 'AccountsPayable', id, existing ? { valor: existing.valor, categoryId: existing.categoryId } : null, { valor: full.valor, categoryId: full.categoryId, descricao: full.descricao });
-      if (andBaixa) return cpRegistrarBaixa(id, { valorPago: cpSaldo(full), date: cpToday(), financialAccountId: full.financialAccountId, paymentMethod: full.paymentMethod, juros: 0, multa: 0, desconto: 0, observacao: 'Baixa automática — "Salvar e Dar Baixa".' }).then(function () { return full; });
       return full;
     });
   }
   function cpRegistrarBaixa(headerId, dto) {
     var h = contasPagar.find(function (x) { return x.id === headerId; }); if (!h) return Promise.reject(new Error('Conta não encontrada.'));
+    dto = dto || {};
+    if (!dto.financialAccountId || dto.financialAccountId === '__none') return Promise.reject(new Error('Selecione a Conta Bancária do pagamento.'));
+    if (!dto.date) return Promise.reject(new Error('Informe a data do pagamento.'));
+    if (dto.manual !== false && dto.date !== cpToday()) return Promise.reject(new Error('A data do pagamento manual deve ser a data de hoje.'));
     var id = cpUid('PAG'); var now = new Date().toISOString();
     var full = { id: id, accountsPayableId: headerId, date: dto.date || cpToday(), financialAccountId: dto.financialAccountId || null, paymentMethod: dto.paymentMethod || null, valorPago: r2(dto.valorPago || 0), juros: r2(dto.juros || 0), multa: r2(dto.multa || 0), desconto: r2(dto.desconto || 0), observacao: dto.observacao || null, estornado: false, createdAt: now };
     cpPayments = [full].concat(cpPayments);
@@ -17020,12 +17138,13 @@ buffer/index.js:
     if (!occ || occ.type === 'UNICA') return [baseDraft];
     var n = occ.type === 'PARCELADA' ? Math.max(1, parseInt(occ.installments, 10) || 1) : Math.max(1, parseInt(occ.installments, 10) || 1);
     var first = occ.firstDueDate || baseDraft.vencimento || cpToday();
+    if (occ.type === 'SEMANAL') first = cpAlignWeekday(first, occ.weekDay != null ? occ.weekDay : new Date(first + 'T00:00:00').getDay());
     var groupId = cpUid('CPGRP');
     var valorTotal = baseDraft.valor; var valorParcela = r2(valorTotal / n); var soma = 0;
     var out = [];
     for (var i = 0; i < n; i++) {
       var venc;
-      if (occ.type === 'PARCELADA') venc = cpAddDays(first, i * (parseInt(occ.intervalDays, 10) || 30));
+      if (occ.type === 'PARCELADA') venc = cpAddMonths(first, i);
       else if (occ.type === 'SEMANAL' || occ.type === 'QUINZENAL') venc = cpAddDays(first, i * cpOccIntervalDays(occ.type));
       else venc = cpAddMonths(first, i * cpOccIntervalMonths(occ.type));
       if (occ.onlyBusinessDays) venc = cpAdjustBusinessDay(venc);
@@ -17205,15 +17324,17 @@ buffer/index.js:
     // título salvo com essa escolha fazia o <select> renderizar sem nada marcado, o navegador cai
     // para a 1ª opção da lista ("") e o próximo collectDraftFromForm() lê essa string vazia e
     // sobrescreve silenciosamente draft.financialAccountId para null, corrompendo uma escolha válida.
-    return '<option value="">Todas as contas financeiras</option><option value="__none"' + (selectedId === '__none' ? ' selected' : '') + '>Sem conta financeira</option>' + accs.map(function (a) { return '<option value="' + a.id + '"' + (selectedId === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>'; }).join('');
+    return '<option value="">Todas as contas bancárias</option><option value="__none"' + (selectedId === '__none' ? ' selected' : '') + '>Sem conta bancária</option>' + accs.map(function (a) { return '<option value="' + a.id + '"' + (selectedId === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>'; }).join('');
   }
   function cpCategoryOptions(selectedId, includeNew) {
-    var roots = cpCategories.filter(function (c) { return !c.parentId; });
+    var visible = cpCategories.filter(function (c) { return c.active !== false || c.id === selectedId; });
+    var roots = visible.filter(function (c) { return !c.parentId; });
     var opts = '<option value="">Todas as categorias</option>';
     roots.forEach(function (r) {
       opts += '<option value="' + r.id + '"' + (selectedId === r.id ? ' selected' : '') + '>' + esc(r.name) + '</option>';
-      cpCategories.filter(function (c) { return c.parentId === r.id; }).forEach(function (c) { opts += '<option value="' + c.id + '"' + (selectedId === c.id ? ' selected' : '') + '>— ' + esc(c.name) + '</option>'; });
+      visible.filter(function (c) { return c.parentId === r.id; }).forEach(function (c) { opts += '<option value="' + c.id + '"' + (selectedId === c.id ? ' selected' : '') + '>— ' + esc(c.name) + (c.active === false ? ' (inativa)' : '') + '</option>'; });
     });
+    visible.filter(function (c) { return c.parentId && !visible.some(function (p) { return p.id === c.parentId; }); }).forEach(function (c) { opts += '<option value="' + c.id + '"' + (selectedId === c.id ? ' selected' : '') + '>' + esc(c.name) + (c.active === false ? ' (inativa)' : '') + '</option>'; });
     if (includeNew) opts += '<option value="__new">+ Criar categoria…</option>';
     return opts;
   }
@@ -17289,7 +17410,7 @@ buffer/index.js:
     var table = '<div class="panel" style="margin-top:14px">' +
       (cpSel.size ? cpBulkBar(all) : '') +
       '<div class="table-wrap"><table class="report"><thead><tr><th><input type="checkbox" id="cp-chk-all" title="Selecionar todos os resultados filtrados"></th>' +
-      ['fornecedor:Fornecedor/Origem', ':Histórico', ':Categoria', ':Pedido', ':Conta contábil', ':Forma de pagamento', ':Conta financeira', 'emissao:Emissão', 'competencia:Competência', 'vencimento:Vencimento', 'valor:Valor', ':Valor pago', ':Saldo', 'situacao:Situação', ':Ações'].map(function (c, i, arr) {
+      ['fornecedor:Fornecedor/Origem', ':Histórico', ':Categoria', ':Pedido', ':Conta contábil', ':Forma de pagamento', ':Conta Bancária', 'emissao:Emissão', 'competencia:Competência', 'vencimento:Vencimento', 'valor:Valor', ':Valor pago', ':Saldo', 'situacao:Situação', ':Ações'].map(function (c, i, arr) {
         var parts = c.split(':'); var key = parts[0], lbl = parts[1]; var isLast = i === arr.length - 1;
         return '<th' + (key ? ' class="rowlink" data-cpsort="' + key + '"' : (isLast ? ' class="col-actions-sticky"' : '')) + '>' + esc(lbl) + (key && cpF.sort === key ? (cpF.dir === 'asc' ? ' ▲' : ' ▼') : '') + '</th>';
       }).join('') + '</tr></thead><tbody>' + (rows || '<tr><td colspan="15"><div class="empty" style="border:none"><p>Nenhuma conta encontrada com estes filtros.</p></div></td></tr>') + '</tbody></table></div>' +
@@ -17313,7 +17434,7 @@ buffer/index.js:
       '<button class="btn-sm" id="cp-bx-cat">Alterar categoria</button>' +
       '<button class="btn-sm" id="cp-bx-cta">Alterar conta contábil</button>' +
       '<button class="btn-sm" id="cp-bx-cc">Alterar centro de custo</button>' +
-      '<button class="btn-sm" id="cp-bx-fin">Alterar conta financeira</button>' +
+      '<button class="btn-sm" id="cp-bx-fin">Alterar Conta Bancária</button>' +
       '<button class="btn-sm" id="cp-bx-export">Exportar</button>' +
       '<button class="btn-sm" id="cp-bx-print">Imprimir agrupado</button>' +
       '<button class="btn-sm" id="cp-bx-del" style="background:var(--err);border-color:var(--err);color:#fff">Excluir selecionados</button>' +
@@ -17472,8 +17593,8 @@ buffer/index.js:
   }
   function openCpBaixaEmMassa(ids) {
     var bodyHtml =
-      '<label class="fld">Data do pagamento</label><input class="input" type="date" id="cpm-data" value="' + cpToday() + '">' +
-      '<label class="fld">Conta financeira</label><select class="select" id="cpm-conta" style="width:100%">' + cpFinAccountOptions(null).replace('Todas as contas financeiras', 'Escolher…') + '</select>' +
+      '<label class="fld">Data do pagamento</label><input class="input" type="date" id="cpm-data" min="' + cpToday() + '" max="' + cpToday() + '" value="' + cpToday() + '">' +
+      '<label class="fld">Conta Bancária</label><select class="select" id="cpm-conta" style="width:100%">' + cpFinAccountOptions(null).replace('Todas as contas bancárias', 'Escolher…') + '</select>' +
       '<label class="fld">Forma de pagamento</label><select class="select" id="cpm-forma" style="width:100%"><option value="">—</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '">' + esc(f) + '</option>'; }).join('') + '</select>' +
       '<p class="footnote">Cada conta será baixada pelo seu saldo em aberto integral (valor original − pagamentos já feitos).</p>';
     openModal({
@@ -17516,7 +17637,7 @@ buffer/index.js:
     var existing = id ? contasPagar.find(function (h) { return h.id === id; }) : null;
     if (id && !existing) { toast('Conta não encontrada', '', true); return; }
     var locked = existing && cpPaymentsForHeader(existing.id).some(function (p) { return !p.estornado; }); // já tem baixa: trava valor/itens
-    var draft = existing ? Object.assign({}, existing) : { supplierId: null, valorManual: null, valorManualOverride: false, emissao: cpToday(), competencia: cpToday(), vencimento: cpToday(), historico: '', categoryId: null, accountingAccountId: null, costCenterId: null, paymentMethod: null, financialAccountId: null, documentNumber: '', jurosPercent: 0, multaPercent: 0, freteValor: 0, freteCategoryId: null, freteAccountingAccountId: null, outrasDespesasValor: 0, outrasDespesasCategoryId: null, outrasDespesasAccountingAccountId: null, occurrence: { type: 'UNICA', onlyBusinessDays: false, installments: 1, firstDueDate: cpToday(), intervalDays: 30 }, origin: 'MANUAL', nfe: null };
+    var draft = existing ? Object.assign({}, existing) : { supplierId: null, valorManual: null, valorManualOverride: false, emissao: cpToday(), competencia: cpToday(), vencimento: cpToday(), historico: '', categoryId: null, accountingAccountId: null, costCenterId: null, paymentMethod: null, financialAccountId: null, documentNumber: '', jurosPercent: 0, multaPercent: 0, freteValor: 0, freteCategoryId: null, freteAccountingAccountId: null, outrasDespesasValor: 0, outrasDespesasCategoryId: null, outrasDespesasAccountingAccountId: null, occurrence: { type: 'UNICA', onlyBusinessDays: false, installments: 1, firstDueDate: cpToday(), intervalDays: 30, weekDay: 1 }, origin: 'MANUAL', nfe: null };
     var items = existing ? cpItemsForHeader(existing.id).map(function (it) { return Object.assign({}, it); }) : [];
     var originalItemIds = items.map(function (it) { return it.id; });
     var atts = existing ? cpAttachmentsForHeader(existing.id).map(function (a) { return Object.assign({}, a); }) : [];
@@ -17639,32 +17760,28 @@ buffer/index.js:
       // Fase 9: Centro de Custos saiu daqui — deixou de ser um campo selecionável independente
       // (a UX antiga permitia escolher um Centro diferente do que a Categoria já implicava). Agora
       // "Avançado" só guarda Plano de Contas (metadado opcional, nunca exigido do operador).
-      var avancado = '<details style="margin-top:14px"><summary style="cursor:pointer;font-weight:700;padding:4px 0">Avançado — Plano de Contas</summary>' +
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">' +
-        '<div><label class="fld">Conta contábil</label><select class="select" id="cp-cta-pgto" style="width:100%">' + cpAccountingOptions(draft.accountingAccountId) + '</select></div>' +
-        '<div><label class="fld">Conta contábil do frete</label><select class="select" id="cp-cta-frete" style="width:100%"><option value="">(herda da conta)</option>' + cpAccountingOptions(draft.freteAccountingAccountId) + '</select></div>' +
-        '<div><label class="fld">Conta contábil de outras despesas</label><select class="select" id="cp-cta-outras" style="width:100%"><option value="">(herda da conta)</option>' + cpAccountingOptions(draft.outrasDespesasAccountingAccountId) + '</select></div>' +
-        '</div></details>';
       return '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">' +
         '<div><label class="fld">Forma de pagamento</label><select class="select" id="cp-forma-pgto" style="width:100%"><option value="">—</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '"' + (draft.paymentMethod === f ? ' selected' : '') + '>' + esc(f) + '</option>'; }).join('') + '</select></div>' +
-        '<div><label class="fld">Conta financeira</label><select class="select" id="cp-conta-fin" style="width:100%">' + cpFinAccountOptions(draft.financialAccountId).replace('Todas as contas financeiras', '— escolher —') + '</select></div>' +
+        '<div><label class="fld">Conta Bancária</label><select class="select" id="cp-conta-fin" style="width:100%">' + cpFinAccountOptions(draft.financialAccountId).replace('Todas as contas bancárias', '— escolher —') + '</select></div>' +
         '<div><label class="fld">Nº documento</label><input class="input" id="cp-docnum" value="' + esc(draft.documentNumber || '') + '"></div>' +
         '<div><label class="fld">Juros mensal (%)</label><input class="input" id="cp-juros" value="' + (draft.jurosPercent || 0) + '"></div>' +
         '<div><label class="fld">Multa (%)</label><input class="input" id="cp-multa" value="' + (draft.multaPercent || 0) + '"></div>' +
         '<div><label class="fld">Frete (R$)</label><input class="input" id="cp-frete" value="' + (draft.freteValor || 0) + '"></div>' +
         '<div><label class="fld">Outras despesas (R$)</label><input class="input" id="cp-outras" value="' + (draft.outrasDespesasValor || 0) + '"></div>' +
-        '</div>' + avancado +
+        '</div>' +
         '<div class="table-wrap" style="margin-top:14px"><table class="report"><thead><tr><th>Vencimento original</th><th>Valor original</th><th>Frete</th><th>Outras despesas</th><th>Juros</th><th>Multa</th><th>Valor total</th></tr></thead><tbody><tr><td>' + dbr(draft.vencimento) + '</td><td>' + brl(cpItemsTotal(items)) + '</td><td>' + brl(draft.freteValor || 0) + '</td><td>' + brl(draft.outrasDespesasValor || 0) + '</td><td>' + brl(0) + '</td><td>' + brl(0) + '</td><td>' + brl(cpValorOriginal(items, draft.freteValor, draft.outrasDespesasValor)) + '</td></tr></tbody></table></div>';
     }
     function cpTabOcorrencia() {
       var occ = draft.occurrence || { type: 'UNICA' };
+      var weekDays = [['1', 'Segunda-feira'], ['2', 'Terça-feira'], ['3', 'Quarta-feira'], ['4', 'Quinta-feira'], ['5', 'Sexta-feira']];
+      if (!occ.onlyBusinessDays) weekDays = weekDays.concat([['6', 'Sábado'], ['0', 'Domingo']]);
       return (existing && existing.recurrenceGroupId ? callout('', '', 'Esta conta faz parte de uma série recorrente/parcelada (parcela ' + (existing.installmentIndex || '?') + ' de ' + (existing.installmentsTotal || '?') + '). Alterar a ocorrência aqui não afeta as demais parcelas já geradas.') : '') +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><div><label class="fld">Ocorrência</label><select class="select" id="cp-occ-type" style="width:100%">' + CP_OCORRENCIAS.map(function (o) { return '<option value="' + o[0] + '"' + (occ.type === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
         '<div><label class="fld"><input type="checkbox" id="cp-occ-uteis"' + (occ.onlyBusinessDays ? ' checked' : '') + '> Considerar somente dias úteis</label></div></div>' +
         '<div id="cp-occ-extra" style="display:' + (occ.type === 'UNICA' ? 'none' : 'grid') + ';grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:10px">' +
         '<div><label class="fld">Quantidade de ocorrências</label><input class="input" id="cp-occ-n" value="' + (occ.installments || 1) + '"></div>' +
         '<div><label class="fld">Primeiro vencimento</label><input class="input" type="date" id="cp-occ-first" value="' + esc(occ.firstDueDate || draft.vencimento || cpToday()) + '"></div>' +
-        '<div id="cp-occ-interval-wrap" style="display:' + (occ.type === 'PARCELADA' ? 'block' : 'none') + '"><label class="fld">Intervalo (dias)</label><input class="input" id="cp-occ-interval" value="' + (occ.intervalDays || 30) + '"></div>' +
+        '<div id="cp-occ-week-wrap" style="display:' + (occ.type === 'SEMANAL' ? 'block' : 'none') + '"><label class="fld">Dia da semana</label><select class="select" id="cp-occ-week" style="width:100%">' + weekDays.map(function (w) { return '<option value="' + w[0] + '"' + (String(occ.weekDay == null ? 1 : occ.weekDay) === w[0] ? ' selected' : '') + '>' + w[1] + '</option>'; }).join('') + '</select></div>' +
         '</div>' + (existing ? '' : '<p class="footnote" style="margin-top:10px">Ao salvar, serão geradas todas as contas da série de uma vez — cada uma com seu próprio vencimento, valor e status, todas vinculadas à mesma origem.</p>');
     }
     function cpTabAnexos() {
@@ -17710,7 +17827,7 @@ buffer/index.js:
       var ou = fieldVal('cp-outras'); if (ou != null) draft.outrasDespesasValor = cpParseNum(ou) || 0;
       var ctaFrete = fieldVal('cp-cta-frete'); if (ctaFrete != null) draft.freteAccountingAccountId = ctaFrete || null;
       var ctaOutras = fieldVal('cp-cta-outras'); if (ctaOutras != null) draft.outrasDespesasAccountingAccountId = ctaOutras || null;
-      var occType = fieldVal('cp-occ-type'); if (occType != null) draft.occurrence = { type: occType, onlyBusinessDays: !!(panel.querySelector('#cp-occ-uteis') || {}).checked, installments: parseInt(fieldVal('cp-occ-n'), 10) || 1, firstDueDate: fieldVal('cp-occ-first') || draft.vencimento, intervalDays: parseInt(fieldVal('cp-occ-interval'), 10) || 30 };
+      var occType = fieldVal('cp-occ-type'); if (occType != null) draft.occurrence = { type: occType, onlyBusinessDays: !!(panel.querySelector('#cp-occ-uteis') || {}).checked, installments: parseInt(fieldVal('cp-occ-n'), 10) || 1, firstDueDate: fieldVal('cp-occ-first') || draft.vencimento, intervalDays: 30, weekDay: parseInt(fieldVal('cp-occ-week'), 10) || 1 };
       var valorInput = cpParseNum(fieldVal('cp-valor'));
       var calc = cpValorOriginal(items, draft.freteValor, draft.outrasDespesasValor);
       draft.valorManualOverride = valorInput != null && Math.abs(valorInput - calc) > 0.005;
@@ -17749,7 +17866,7 @@ buffer/index.js:
       // (openWalletTx). Valida DEPOIS de collectDraftFromForm() pra não descartar o que o usuário
       // digitou no select único de Categoria financeira (cp-categoria, topo do formulário — Fase 4).
       if (!draft.categoryId) { toast('Categoria financeira obrigatória', 'Selecione uma categoria antes de salvar — necessária para a DRE por categoria.', true); return; }
-      if (!draft.financialAccountId) { toast('Conta financeira obrigatória', 'Selecione a conta financeira de onde sai (ou sairá) o pagamento, na aba Pagamento.', true); return; }
+      if (!draft.financialAccountId) { toast('Conta Bancária obrigatória', 'Selecione a Conta Bancária de onde sai (ou sairá) o pagamento, na aba Pagamento.', true); return; }
       // PROMPT "Correção da Base Financeira" §3: salvar aqui é sempre um ato manual do operador — marca
       // Categoria/Conta como protegidas contra a próxima integração automática do fechamento (ver
       // cpAplicarUpsertProtegido), que só volta a preenchê-las se o operador algum dia limpar o campo.
@@ -17761,12 +17878,14 @@ buffer/index.js:
       var chain;
       if (isNewSeries) {
         var drafts = cpGenerateOccurrenceDrafts(Object.assign({}, draft, { valor: cpValorOriginal(items, draft.freteValor, draft.outrasDespesasValor) }), draft.occurrence);
-        chain = drafts.reduce(function (p, dft, i) { return p.then(function () { return cpSaveHeader(dft, i === 0 ? items : [], [], false, i === 0 ? atts : [], []); }); }, Promise.resolve());
+        var firstSaved = null;
+        chain = drafts.reduce(function (p, dft, i) { return p.then(function () { return cpSaveHeader(dft, i === 0 ? items : [], [], false, i === 0 ? atts : [], []).then(function (saved) { if (!firstSaved) firstSaved = saved; return saved; }); }); }, Promise.resolve()).then(function () { return firstSaved; });
       } else {
-        chain = cpSaveHeader(draft, items, originalItemIds, andBaixa, atts, originalAttIds);
+        chain = cpSaveHeader(draft, items, originalItemIds, false, atts, originalAttIds);
       }
       chain.then(function (saved) {
-        d.remove(); toast(isNewSeries ? 'Série criada' : (andBaixa ? 'Conta salva e baixada' : 'Conta salva'), isNewSeries ? (draft.occurrence.installments + ' título(s) gerado(s).') : ''); cpRenderBody();
+        d.remove(); toast(isNewSeries ? 'Série criada' : 'Conta salva', isNewSeries ? (draft.occurrence.installments + ' título(s) gerado(s).') : ''); cpRenderBody();
+        if (andBaixa && saved) openCpBaixaModal(saved.id, 'total');
         if (existing == null && !isNewSeries && saved && draft.nfe && draft.nfe.parcelas && draft.nfe.parcelas.length > 1) {
           // parcelas da NF-e (§30) já foram tratadas na importação do XML (ver cpApplyNFeToDraft) — nada extra aqui.
         }
@@ -17796,14 +17915,16 @@ buffer/index.js:
         updateSummaryDom();
       };
       var catTopo = panel.querySelector('#cp-categoria'); if (catTopo) catTopo.onchange = function () {
-        if (catTopo.value === '__new') { openCpCategoryQuickCreate(function (cat) { collectDraftFromForm(); draft.categoryId = cat.id; refresh(); }); return; }
-        collectDraftFromForm(); draft.categoryId = catTopo.value || null; refresh();
+        if (catTopo.value === '__new') { openCpCategoryQuickCreate(function (cat) { collectDraftFromForm(); draft.categoryId = cat.id; items.forEach(function (it) { if (!it.categoryId || it.categoryAutoFilled === true) { it.categoryId = cat.id; it.categoryAutoFilled = true; } }); refresh(); }); return; }
+        collectDraftFromForm(); draft.categoryId = catTopo.value || null;
+        items.forEach(function (it) { if (!it.categoryId || it.categoryAutoFilled === true) { it.categoryId = draft.categoryId; it.categoryAutoFilled = true; } });
+        refresh();
       };
       var occType = panel.querySelector('#cp-occ-type'); if (occType) occType.onchange = function () {
-        var extra = panel.querySelector('#cp-occ-extra'); var interval = panel.querySelector('#cp-occ-interval-wrap');
-        if (extra) extra.style.display = occType.value === 'UNICA' ? 'none' : 'grid';
-        if (interval) interval.style.display = occType.value === 'PARCELADA' ? 'block' : 'none';
+        collectDraftFromForm(); draft.occurrence.type = occType.value; refresh();
       };
+      var occUteis = panel.querySelector('#cp-occ-uteis'); if (occUteis) occUteis.onchange = function () { collectDraftFromForm(); draft.occurrence.onlyBusinessDays = occUteis.checked; if (occUteis.checked && (draft.occurrence.weekDay === 0 || draft.occurrence.weekDay === 6)) draft.occurrence.weekDay = 1; refresh(); };
+      var vencTopo = panel.querySelector('#cp-vencimento'); if (vencTopo) vencTopo.onchange = function () { var old = draft.vencimento; draft.vencimento = vencTopo.value; if (!draft.occurrence.firstDueDate || draft.occurrence.firstDueDate === old) draft.occurrence.firstDueDate = vencTopo.value; var firstEl = panel.querySelector('#cp-occ-first'); if (firstEl) firstEl.value = draft.occurrence.firstDueDate; };
       // ---- itens: edição SEM re-render (correção da raiz da perda de foco) — cada tecla atualiza
       // só `items[idx]` + o total da própria linha (célula) + o resumo da compra; o <input> em si
       // nunca é tocado, então o navegador preserva foco/cursor/seleção/TAB naturalmente. Navegação
@@ -17824,10 +17945,10 @@ buffer/index.js:
       panel.querySelectorAll('.cp-it-cat,.cp-it-cta').forEach(function (el) {
         el.onchange = function () {
           var idx = parseInt(el.dataset.idx, 10); var it = items[idx]; if (!it) return;
-          if (el.classList.contains('cp-it-cat')) it.categoryId = el.value || null; else it.accountingAccountId = el.value || null;
+          if (el.classList.contains('cp-it-cat')) { it.categoryId = el.value || null; it.categoryAutoFilled = false; } else it.accountingAccountId = el.value || null;
         };
       });
-      function addItemRow() { collectDraftFromForm(); items.push({ id: cpUid('CPI'), description: '', quantity: 1, unit: 'UN', unitPrice: 0, total: 0, categoryId: null, accountingAccountId: null }); refresh(); setTimeout(function () { var rows = panel.querySelectorAll('.cp-it-desc'); var last = rows[rows.length - 1]; if (last) last.focus(); }, 0); }
+      function addItemRow() { collectDraftFromForm(); items.push({ id: cpUid('CPI'), description: '', quantity: 1, unit: 'UN', unitPrice: 0, total: 0, categoryId: draft.categoryId || null, categoryAutoFilled: !!draft.categoryId, accountingAccountId: null }); refresh(); setTimeout(function () { var rows = panel.querySelectorAll('.cp-it-desc'); var last = rows[rows.length - 1]; if (last) last.focus(); }, 0); }
       var addBtn = panel.querySelector('#cp-item-add'); if (addBtn) addBtn.onclick = function () { addItemRow(); };
       panel.querySelectorAll('[data-itdel]').forEach(function (b) { b.onclick = function () { collectDraftFromForm(); items.splice(parseInt(b.dataset.itdel, 10), 1); refresh(); }; });
       panel.querySelectorAll('[data-itdup]').forEach(function (b) { b.onclick = function () { collectDraftFromForm(); var src = items[parseInt(b.dataset.itdup, 10)]; items.splice(parseInt(b.dataset.itdup, 10) + 1, 0, Object.assign({}, src, { id: cpUid('CPI') })); refresh(); }; });
@@ -17952,14 +18073,14 @@ buffer/index.js:
     var bodyHtml =
       '<label class="fld">Nome *</label><input class="input" id="cpc-nm" style="width:100%">' +
       '<label class="fld">Centro de Custos *</label><select class="select" id="cpc-cc" style="width:100%">' + cpCostCenterOptions(null) + '</select>' +
-      '<label class="fld">Categoria pai (opcional)</label><select class="select" id="cpc-parent" style="width:100%">' + cpCategoryOptions(null, false) + '</select>';
+      '<label class="fld">Conta Contábil</label><select class="select" id="cpc-cta" style="width:100%">' + cpAccountingOptions(null) + '</select>';
     openModal({
       title: 'Criar categoria', width: 420, bodyHtml: bodyHtml, confirmLabel: 'Criar',
       onConfirm: function (panel) {
         var nm = panel.querySelector('#cpc-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return false; }
         var ccId = panel.querySelector('#cpc-cc').value || null;
         if (!ccId) { toast('Centro de Custos obrigatório', 'Toda categoria precisa pertencer a um Centro de Custos.', true); return false; }
-        return cpSaveCategory({ name: nm, parentId: panel.querySelector('#cpc-parent').value || null, costCenterId: ccId }).then(function (cat) { toast('Categoria criada', nm); onSaved(cat); });
+        return cpSaveCategory({ name: nm, parentId: null, accountingAccountId: panel.querySelector('#cpc-cta').value || null, costCenterId: ccId }).then(function (cat) { toast('Categoria criada', nm); onSaved(cat); });
       },
     });
   }
@@ -17972,8 +18093,8 @@ buffer/index.js:
       '<div class="cx-kv"><span class="cxl">Fornecedor</span><span class="cxv">' + esc(cpSupplierLabel(h.supplierId)) + '</span></div>' +
       '<div class="cx-kv"><span class="cxl">Valor em aberto</span><span class="cxv">' + brl(saldo) + '</span></div>' +
       '<label class="fld">Valor pago</label><input class="input" id="cpb-valor" style="width:100%" value="' + (mode === 'total' ? saldo.toFixed(2).replace('.', ',') : '') + '"' + (mode === 'total' ? ' readonly' : '') + '>' +
-      '<label class="fld">Data do pagamento</label><input class="input" type="date" id="cpb-data" value="' + cpToday() + '">' +
-      '<label class="fld">Conta financeira</label><select class="select" id="cpb-conta" style="width:100%">' + cpFinAccountOptions(h.financialAccountId).replace('Todas as contas financeiras', '— escolher —') + '</select>' +
+      '<label class="fld">Data do pagamento</label><input class="input" type="date" id="cpb-data" min="' + cpToday() + '" max="' + cpToday() + '" value="' + cpToday() + '">' +
+      '<label class="fld">Conta Bancária</label><select class="select" id="cpb-conta" style="width:100%">' + cpFinAccountOptions(h.financialAccountId).replace('Todas as contas bancárias', '— escolher —') + '</select>' +
       '<label class="fld">Forma de pagamento</label><select class="select" id="cpb-forma" style="width:100%"><option value="">—</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '"' + (h.paymentMethod === f ? ' selected' : '') + '>' + esc(f) + '</option>'; }).join('') + '</select>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px"><div><label class="fld">Juros</label><input class="input" id="cpb-juros" value="0"></div><div><label class="fld">Multa</label><input class="input" id="cpb-multa" value="0"></div><div><label class="fld">Desconto</label><input class="input" id="cpb-desc" value="0"></div></div>' +
       '<label class="fld">Observação</label><input class="input" id="cpb-obs" style="width:100%">';
@@ -17996,33 +18117,57 @@ buffer/index.js:
   // cpCategories e cpAccounting, nunca lido por nenhuma agregação) sai da UI — o dado permanece no
   // registro (nada é apagado), só não é mais apresentado como um campo de classificação equivalente.
   var CP_DRE_GROUPS = ['Custos dos produtos', 'Despesas operacionais', 'Despesas administrativas', 'Despesas comerciais', 'Despesas com pessoal', 'Despesas financeiras', 'Impostos', 'Outras despesas'];
+  function cpFilteredCategories() {
+    var q = cpNorm(cpCatF.search || '');
+    return cpCategories.filter(function (c) {
+      if (cpCatF.status === 'active' && c.active === false) return false;
+      if (cpCatF.status === 'inactive' && c.active !== false) return false;
+      return !q || cpNorm(c.name).indexOf(q) >= 0 || cpNorm(cpCostCenterLabel(c.costCenterId)).indexOf(q) >= 0 || cpNorm(cpAccountingLabel(c.accountingAccountId)).indexOf(q) >= 0;
+    }).sort(function (a, b) { return cpCostCenterLabel(a.costCenterId).localeCompare(cpCostCenterLabel(b.costCenterId)) || a.name.localeCompare(b.name); });
+  }
+  function cpRemoveCategory(id) {
+    var c = cpCategories.find(function (x) { return x.id === id; }); if (!c) return Promise.resolve();
+    var used = contasPagar.some(function (h) { return h.categoryId === id || h.freteCategoryId === id || h.outrasDespesasCategoryId === id; }) || cpItemsAll.some(function (it) { return it.categoryId === id; }) || cpCategories.some(function (child) { return child.parentId === id; });
+    if (used) { c.active = false; c.updatedAt = new Date().toISOString(); return putMany('cpcategories', [c]); }
+    cpCategories = cpCategories.filter(function (x) { return x.id !== id; }); return delOne('cpcategories', id);
+  }
   function renderCpCategoriasTab() {
     var counts = {}; contasPagar.forEach(function (h) { if (h.categoryId) counts[h.categoryId] = (counts[h.categoryId] || 0) + 1; });
-    var rows = cpCategories.slice().sort(function (a, b) { return cpCostCenterLabel(a.costCenterId).localeCompare(cpCostCenterLabel(b.costCenterId)) || a.name.localeCompare(b.name); }).map(function (c) {
-      return '<tr><td><b>' + esc(c.name) + '</b></td><td>' + esc(cpCostCenterLabel(c.costCenterId)) + '</td><td>' + (counts[c.id] || 0) + '</td><td><span class="badge ' + (c.active ? 'b-ok' : 'b-neutral') + '">' + (c.active ? 'Ativa' : 'Inativa') + '</span></td><td><button class="btn-sm" data-cpcatedit="' + c.id + '">Editar</button></td></tr>';
+    var filtered = cpFilteredCategories();
+    var rows = filtered.map(function (c) {
+      return '<tr><td><input type="checkbox" class="cpcat-chk" data-id="' + c.id + '"' + (cpCatSel.has(c.id) ? ' checked' : '') + '></td><td><b>' + esc(c.name) + '</b></td><td>' + esc(cpCostCenterLabel(c.costCenterId)) + '</td><td>' + esc(cpAccountingLabel(c.accountingAccountId)) + '</td><td>' + (counts[c.id] || 0) + '</td><td><span class="badge ' + (c.active !== false ? 'b-ok' : 'b-neutral') + '">' + (c.active !== false ? 'Ativa' : 'Inativa') + '</span></td><td><button class="btn-sm" data-cpcatedit="' + c.id + '">Editar</button> <button class="btn-sm" data-cpcatremove="' + c.id + '">Remover</button></td></tr>';
     }).join('');
-    return '<div class="panel"><div class="ph"><h3>Categorias</h3><button class="btn-sm primary" id="cp-cat-new">+ Nova categoria</button></div><div class="table-wrap">' + (rows ? '<table><thead><tr><th>Categoria</th><th>Centro de Custos</th><th>Contas vinculadas</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="empty"><p>Nenhuma categoria cadastrada.</p></div>') + '</div></div>';
+    var bulk = cpCatSel.size ? '<div class="bulkbar" style="position:static;margin:0 12px 12px"><b>' + cpCatSel.size + ' selecionada(s)</b><div style="flex:1"></div><button class="btn-sm" id="cpcat-on">Ativar</button><button class="btn-sm" id="cpcat-off">Inativar</button><button class="btn-sm" id="cpcat-del">Remover</button><button class="btn-sm" id="cpcat-clear">Limpar seleção</button></div>' : '';
+    return '<div class="panel"><div class="ph"><h3>Categorias</h3><input class="input sm" id="cpcat-search" placeholder="Buscar categoria" value="' + esc(cpCatF.search) + '"><select class="select sm" id="cpcat-status"><option value="">Todos os status</option><option value="active"' + (cpCatF.status === 'active' ? ' selected' : '') + '>Ativas</option><option value="inactive"' + (cpCatF.status === 'inactive' ? ' selected' : '') + '>Inativas</option></select><button class="btn-sm primary" id="cp-cat-new">+ Nova categoria</button></div>' + bulk + '<div class="table-wrap">' + (rows ? '<table><thead><tr><th><input type="checkbox" id="cpcat-all" title="Selecionar resultados filtrados"></th><th>Nome</th><th>Centro de Custos</th><th>Conta Contábil</th><th>Contas vinculadas</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div class="empty"><p>Nenhuma categoria encontrada.</p></div>') + '</div></div>';
   }
   function bindCpCategoriasTab() {
     var n = document.getElementById('cp-cat-new'); if (n) n.onclick = function () { openCpCategoryEditor(null); };
     app.querySelectorAll('[data-cpcatedit]').forEach(function (b) { b.onclick = function () { openCpCategoryEditor(cpCategories.find(function (c) { return c.id === b.dataset.cpcatedit; })); }; });
+    app.querySelectorAll('[data-cpcatremove]').forEach(function (b) { b.onclick = function () { if (!confirm('Remover esta categoria? Categorias já usadas serão apenas inativadas para preservar o histórico.')) return; cpRemoveCategory(b.dataset.cpcatremove).then(function () { cpCatSel.delete(b.dataset.cpcatremove); cpRenderBody(); }); }; });
+    var search = document.getElementById('cpcat-search'); if (search) search.oninput = cpDebounce(function () { cpCatF.search = search.value; cpRenderBody(); }, 180);
+    var status = document.getElementById('cpcat-status'); if (status) status.onchange = function () { cpCatF.status = status.value; cpRenderBody(); };
+    app.querySelectorAll('.cpcat-chk').forEach(function (c) { c.onchange = function () { if (c.checked) cpCatSel.add(c.dataset.id); else cpCatSel.delete(c.dataset.id); cpRenderBody(); }; });
+    var all = document.getElementById('cpcat-all'); if (all) all.onchange = function () { var filtered = cpFilteredCategories(); if (all.checked) filtered.forEach(function (c) { cpCatSel.add(c.id); }); else filtered.forEach(function (c) { cpCatSel.delete(c.id); }); cpRenderBody(); };
+    function bulkStatus(active) { return Promise.all(Array.from(cpCatSel).map(function (id) { var c = cpCategories.find(function (x) { return x.id === id; }); if (!c) return Promise.resolve(); c.active = active; c.updatedAt = new Date().toISOString(); return putMany('cpcategories', [c]); })).then(function () { cpCatSel.clear(); cpRenderBody(); }); }
+    var on = document.getElementById('cpcat-on'); if (on) on.onclick = function () { bulkStatus(true); };
+    var off = document.getElementById('cpcat-off'); if (off) off.onclick = function () { bulkStatus(false); };
+    var del = document.getElementById('cpcat-del'); if (del) del.onclick = function () { if (!confirm('Remover as categorias selecionadas? As já usadas serão apenas inativadas.')) return; Promise.all(Array.from(cpCatSel).map(cpRemoveCategory)).then(function () { cpCatSel.clear(); cpRenderBody(); }); };
+    var clear = document.getElementById('cpcat-clear'); if (clear) clear.onclick = function () { cpCatSel.clear(); cpRenderBody(); };
   }
   function openCpCategoryEditor(cat) {
     var bodyHtml =
       '<label class="fld">Nome *</label><input class="input" id="cpce-nm" style="width:100%" value="' + esc(cat ? cat.name : '') + '">' +
       '<label class="fld">Centro de Custos *</label><select class="select" id="cpce-cc" style="width:100%">' + cpCostCenterOptions(cat ? cat.costCenterId : null) + '</select>' +
-      '<label class="fld"><input type="checkbox" id="cpce-ativa"' + (!cat || cat.active ? ' checked' : '') + '> Ativa</label>' +
-      '<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600;font-size:12.5px;color:var(--muted)">Configuração avançada</summary><div style="margin-top:8px">' +
-      '<label class="fld">Categoria pai</label><select class="select" id="cpce-parent" style="width:100%">' + cpCategoryOptions(cat ? cat.parentId : null, false) + '</select>' +
-      '<label class="fld">Código/Conta Contábil Externa</label><select class="select" id="cpce-cta" style="width:100%">' + cpAccountingOptions(cat ? cat.accountingAccountId : null) + '</select>' +
-      '</div></details>';
+      '<label class="fld">Conta Contábil</label><select class="select" id="cpce-cta" style="width:100%">' + cpAccountingOptions(cat ? cat.accountingAccountId : null) + '</select>' +
+      '<label class="fld"><input type="checkbox" id="cpce-ativa"' + (!cat || cat.active !== false ? ' checked' : '') + '> Ativa</label>' +
+      '';
     openModal({
       title: cat ? 'Editar categoria' : 'Nova categoria', width: 480, bodyHtml: bodyHtml,
       onConfirm: function (panel) {
         var nm = panel.querySelector('#cpce-nm').value.trim(); if (!nm) { toast('Informe o nome', '', true); return false; }
         var ccId = panel.querySelector('#cpce-cc').value || null;
         if (!ccId) { toast('Centro de Custos obrigatório', 'Toda categoria precisa pertencer a um Centro de Custos.', true); return false; }
-        return cpSaveCategory({ id: cat ? cat.id : null, name: nm, parentId: panel.querySelector('#cpce-parent').value || null, accountingAccountId: panel.querySelector('#cpce-cta').value || null, dreGroup: cat ? cat.dreGroup : null, costCenterId: ccId, active: panel.querySelector('#cpce-ativa').checked, createdAt: cat && cat.createdAt })
+        return cpSaveCategory({ id: cat ? cat.id : null, name: nm, accountingAccountId: panel.querySelector('#cpce-cta').value || null, dreGroup: cat ? cat.dreGroup : null, costCenterId: ccId, active: panel.querySelector('#cpce-ativa').checked, createdAt: cat && cat.createdAt })
           .then(function () { toast('Categoria salva', nm); cpRenderBody(); });
       },
     });
@@ -18172,7 +18317,7 @@ buffer/index.js:
   // ---- exportação / impressão (§8) ----
   function cpExportXlsx(list) {
     if (!list.length) { toast('Nada para exportar', 'Selecione ao menos uma conta.', true); return; }
-    var rows = [['Fornecedor/Origem', 'Histórico', 'Categoria', 'Pedido', 'Conta contábil', 'Forma de pagamento', 'Conta financeira', 'Emissão', 'Competência', 'Vencimento', 'Valor', 'Valor pago', 'Saldo', 'Situação']];
+    var rows = [['Fornecedor/Origem', 'Histórico', 'Categoria', 'Pedido', 'Conta contábil', 'Forma de pagamento', 'Conta Bancária', 'Emissão', 'Competência', 'Vencimento', 'Valor', 'Valor pago', 'Saldo', 'Situação']];
     list.forEach(function (h) { rows.push([h.supplierId ? cpSupplierLabel(h.supplierId) : (h.origin === 'FECHAMENTO_CAIXA' ? 'Shopee' : '—'), h.historico || '', cpCategoryPathLabel(h.categoryId), h.orderId || '', cpAccountingLabel(h.accountingAccountId), h.paymentMethod || '', cpFinAccountLabel(h.financialAccountId), h.emissao || '', h.competencia || '', h.vencimento || '', h.valor, cpValorPagoTotal(h), cpSaldo(h), CP_STATUS_LABEL[cpStatusDerivado(h)][0]]); });
     var ws = XLSX.utils.aoa_to_sheet(rows); var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Contas a Pagar');
     XLSX.writeFile(wb, 'contas-a-pagar-' + cpToday() + '.xlsx');
@@ -18222,9 +18367,9 @@ buffer/index.js:
   function crPushHistory(h, action, detail) { h.history = h.history || []; h.history.unshift({ at: new Date().toISOString(), user: 'Operador', action: action, detail: detail || null }); }
   function crReceiptsForHeader(id) { return crReceipts.filter(function (p) { return p.accountsReceivableId === id; }); }
   function crRecebidoTotal(h) { return r2(crReceiptsForHeader(h.id).filter(function (p) { return !p.estornado; }).reduce(function (s, p) { return s + (p.valorRecebido || 0); }, 0)); }
-  // O que efetivamente amortiza o título é o valor recebido MENOS o desconto concedido MAIS o
-  // acréscimo cobrado (mesma lógica de cpAmortizado, espelhada para o lado do recebimento).
-  function crAmortizado(p) { return r2((p.valorRecebido || 0) - (p.desconto || 0) + (p.acrescimo || 0)); }
+  // O principal amortizado recompõe o valor original: dinheiro recebido + desconto concedido,
+  // descontando juros/multa/outros acréscimos que não liquidam o principal do título.
+  function crAmortizado(p) { return r2((p.valorRecebido || 0) + (p.desconto || 0) - (p.juros || 0) - (p.multa || 0) - (p.acrescimo || 0)); }
   function crSaldo(h) { var pagos = crReceiptsForHeader(h.id).filter(function (p) { return !p.estornado; }); var amort = pagos.reduce(function (s, p) { return s + crAmortizado(p); }, 0); return r2(h.valor - amort); }
   // Status é sempre DERIVADO — nunca um campo editável manualmente (mesmo padrão de cpStatusDerivado).
   function crStatusDerivado(h) {
@@ -18237,11 +18382,11 @@ buffer/index.js:
     if (h.origin === 'CAIXA_TRANSFERENCIA') return 'PREVISTO';
     return 'EM_ABERTO';
   }
-  function crFinAccountLabel(id) { if (!id) return '— sem conta financeira —'; return faLabel(id) || '—'; }
+  function crFinAccountLabel(id) { if (!id) return '— sem conta bancária —'; return faLabel(id) || '—'; }
   function crFinAccountOptions(selectedId, opId) {
     var accs = financialAccountsForSelector(opId || opActiveOrNull());
     // Refatoração M3: mesma correção de cpFinAccountOptions() — "__none" precisa ganhar `selected`.
-    return '<option value="">Todas as contas financeiras</option><option value="__none"' + (selectedId === '__none' ? ' selected' : '') + '>Sem conta financeira</option>' + accs.map(function (a) { return '<option value="' + a.id + '"' + (selectedId === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>'; }).join('');
+    return '<option value="">Todas as contas bancárias</option><option value="__none"' + (selectedId === '__none' ? ' selected' : '') + '>Sem conta bancária</option>' + accs.map(function (a) { return '<option value="' + a.id + '"' + (selectedId === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>'; }).join('');
   }
   // ==================== FASE 9 — Classificação própria de Contas a Receber ====================
   // Antes desta fase, contasReceber.categoryId apontava DIRETO para cpCategories (mesmo cadastro de
@@ -18535,10 +18680,13 @@ buffer/index.js:
   }
   function crRegistrarBaixa(headerId, dto) {
     var h = contasReceber.find(function (x) { return x.id === headerId; }); if (!h) return Promise.reject(new Error('Conta a receber não encontrada.'));
+    dto = dto || {};
+    var receiptDate = dto.date || cpToday();
+    if (receiptDate > cpToday()) return Promise.reject(new Error('A data do recebimento não pode ser futura.'));
     var id = crUid('REC'); var now = new Date().toISOString();
-    var full = { id: id, accountsReceivableId: headerId, date: dto.date || cpToday(), financialAccountId: dto.financialAccountId || null, paymentMethod: dto.paymentMethod || null, valorRecebido: r2(dto.valorRecebido || 0), desconto: r2(dto.desconto || 0), acrescimo: r2(dto.acrescimo || 0), observacao: dto.observacao || null, estornado: false, auto: !!dto.auto, createdAt: now };
+    var full = { id: id, accountsReceivableId: headerId, date: receiptDate, financialAccountId: dto.financialAccountId || null, paymentMethod: dto.paymentMethod || null, valorOriginal: r2(h.valor || 0), valorRecebido: r2(dto.valorRecebido || 0), desconto: r2(dto.desconto || 0), juros: r2(dto.juros || 0), multa: r2(dto.multa || 0), acrescimo: r2(dto.acrescimo || 0), observacao: dto.observacao || null, estornado: false, auto: !!dto.auto, createdAt: now };
     crReceipts = [full].concat(crReceipts);
-    crPushHistory(h, 'RECEBIMENTO', 'Recebido ' + brl(full.valorRecebido) + (full.financialAccountId ? ' na conta ' + crFinAccountLabel(full.financialAccountId) : '') + '.');
+    crPushHistory(h, 'RECEBIMENTO', 'Original ' + brl(full.valorOriginal) + ' · recebido ' + brl(full.valorRecebido) + ' · desconto ' + brl(full.desconto) + ' · juros ' + brl(full.juros) + ' · multa ' + brl(full.multa) + ' · outros acréscimos ' + brl(full.acrescimo) + ' · principal amortizado ' + brl(crAmortizado(full)) + (full.financialAccountId ? ' · Conta Bancária ' + crFinAccountLabel(full.financialAccountId) : '') + '.');
     // §CAIXA_TRANSFERENCIA (Pix auto-detectado nasce sem conta escolhida — ver caixaMontarIntegracaoFinanceira):
     // a baixa manual é o momento em que o operador CONFIRMA em qual banco o dinheiro entrou — refletir
     // isso na conta do título (não só do recebimento) pra lista/coluna "Conta" nunca ficar mostrando
@@ -18918,11 +19066,11 @@ buffer/index.js:
         '<div style="flex:1"><label class="fld">Emissão <span class="footnote" style="margin:0">(opcional)</span></label><input type="date" class="input" id="cr-emissao" style="width:100%" value="' + (draft.emissao || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div></div>' +
         '<div style="display:flex;gap:8px"><div style="flex:1"><label class="fld">Competência</label><input type="date" class="input" id="cr-competencia" style="width:100%" value="' + (draft.competencia || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div>' +
         '<div style="flex:1"><label class="fld">Vencimento</label><input type="date" class="input" id="cr-vencimento" style="width:100%" value="' + (draft.vencimento || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '></div></div>' +
-        '<label class="fld">Conta prevista *</label><select class="select" id="cr-conta-fin" style="width:100%">' + crFinAccountOptions(draft.financialAccountId).replace('Todas as contas financeiras', '— escolher —') + '</select>' +
+        '<label class="fld">Conta Bancária prevista *</label><select class="select" id="cr-conta-fin" style="width:100%">' + crFinAccountOptions(draft.financialAccountId).replace('Todas as contas bancárias', '— escolher —') + '</select>' +
         '<label class="fld">Referência</label><input class="input" id="cr-referencia" style="width:100%" value="' + esc(draft.referencia || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '>' +
         '<label class="fld">Observação</label><input class="input" id="cr-obs" style="width:100%" value="' + esc(draft.observacao || '') + '">' +
         (!isNew ? ('<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)"><div class="prow"><span>Recebido</span><b>' + brl(crRecebidoTotal(h)) + '</b></div><div class="prow"><span>Saldo</span><b>' + brl(saldo) + '</b></div></div>') : '') +
-        (!isNew && recibos.length ? ('<div style="margin-top:10px"><b class="footnote">Recebimentos</b>' + recibos.map(function (p) { return '<div class="prow"><span>' + dbr(p.date) + ' — ' + esc(crFinAccountLabel(p.financialAccountId)) + (p.auto ? ' <span class="footnote" style="margin:0">(automático)</span>' : '') + '</span><span>' + brl(p.valorRecebido) + ' <button class="btn-sm" data-crestorno="' + p.id + '" style="margin-left:6px">Estornar</button></span></div>'; }).join('') + '</div>') : '') +
+        (!isNew && recibos.length ? ('<div style="margin-top:10px"><b class="footnote">Recebimentos</b><div class="table-wrap"><table class="report"><thead><tr><th>Data / Conta Bancária</th><th>Original</th><th>Recebido</th><th>Desconto</th><th>Juros</th><th>Multa</th><th>Outros acréscimos</th><th></th></tr></thead><tbody>' + recibos.map(function (p) { return '<tr><td>' + dbr(p.date) + ' — ' + esc(crFinAccountLabel(p.financialAccountId)) + (p.auto ? ' <span class="footnote" style="margin:0">(automático)</span>' : '') + '</td><td>' + brl(p.valorOriginal != null ? p.valorOriginal : h.valor) + '</td><td>' + brl(p.valorRecebido) + '</td><td>' + brl(p.desconto || 0) + '</td><td>' + brl(p.juros || 0) + '</td><td>' + brl(p.multa || 0) + '</td><td>' + brl(p.acrescimo || 0) + '</td><td><button class="btn-sm" data-crestorno="' + p.id + '">Estornar</button></td></tr>'; }).join('') + '</tbody></table></div></div>') : '') +
         '<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">' +
         '<button class="btn-sm primary" id="cr-salvar">Salvar</button>' +
         (!isNew && saldo > 0.005 && !h.canceledAt ? '<button class="btn-sm" id="cr-baixa">Registrar recebimento</button>' : '') +
@@ -18971,7 +19119,7 @@ buffer/index.js:
         // origin SHOPEE_PEDIDO/CAIXA_TRANSFERENCIA) nascem de propósito sem conta (o banco só é
         // confirmado depois, no Registrar recebimento — ver §CAIXA_TRANSFERENCIA/openCrBaixaModal),
         // e reabrir um título existente só pra editar Observação, por exemplo, nunca deve travar.
-        if (isNew && !readOnlyOrigin && !financialAccountId) { panel.querySelector('#cr-err').innerHTML = '<div class="form-err">Selecione a conta financeira prevista.</div>'; return; }
+        if (isNew && !readOnlyOrigin && !financialAccountId) { panel.querySelector('#cr-err').innerHTML = '<div class="form-err">Selecione a Conta Bancária prevista.</div>'; return; }
         // PROMPT "Correção da Base Financeira" §3: salvar aqui é sempre um ato manual do operador —
         // marca Categoria/Conta como protegidas contra a próxima integração automática (ver
         // cpAplicarUpsertProtegido em crUpsertBySourceKey).
@@ -18998,9 +19146,10 @@ buffer/index.js:
     var saldo = crSaldo(h);
     var bodyHtml =
       '<label class="fld">Valor recebido</label><input class="input" id="crb-valor" style="width:100%" value="' + saldo + '">' +
-      '<label class="fld">Data</label><input type="date" class="input" id="crb-data" style="width:100%" value="' + cpToday() + '">' +
-      '<label class="fld">Conta financeira *</label><select class="select" id="crb-conta" style="width:100%">' + crFinAccountOptions(h.financialAccountId).replace('Todas as contas financeiras', '— escolher —') + '</select>' +
+      '<label class="fld">Data do Recebimento</label><input type="date" class="input" id="crb-data" style="width:100%" max="' + cpToday() + '" value="' + cpToday() + '">' +
+      '<label class="fld">Conta Bancária *</label><select class="select" id="crb-conta" style="width:100%">' + crFinAccountOptions(h.financialAccountId).replace('Todas as contas bancárias', '— escolher —') + '</select>' +
       '<label class="fld">Forma de recebimento *</label><select class="select" id="crb-forma" style="width:100%"><option value="">— escolher —</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '">' + esc(f) + '</option>'; }).join('') + '</select>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label class="fld">Desconto</label><input class="input" id="crb-desconto" value="0"></div><div><label class="fld">Juros</label><input class="input" id="crb-juros" value="0"></div><div><label class="fld">Multa</label><input class="input" id="crb-multa" value="0"></div><div><label class="fld">Outros acréscimos</label><input class="input" id="crb-acrescimo" value="0"></div></div>' +
       '<label class="fld">Observação</label><input class="input" id="crb-obs" style="width:100%">' +
       '<div id="crb-err"></div>';
     openModal({
@@ -19011,6 +19160,7 @@ buffer/index.js:
         if (valorRecebido == null || valorRecebido <= 0) { errEl.innerHTML = '<div class="form-err">Informe um valor válido.</div>'; return false; }
         var dataBaixa = panel.querySelector('#crb-data').value;
         if (!dataBaixa) { errEl.innerHTML = '<div class="form-err">Informe a data do recebimento.</div>'; return false; }
+        if (dataBaixa > cpToday()) { errEl.innerHTML = '<div class="form-err">A data do recebimento não pode ser futura.</div>'; return false; }
         // FIX (achado real da Prioridade 8): "__none" é o sentinela de FILTRO (nunca um valor válido
         // de conta financeira) — normalizado aqui pra nunca ser persistido no recibo, mesmo achado do
         // editor de cabeçalho acima (30/151 recibos reais afetados, R$14.700,32).
@@ -19019,10 +19169,10 @@ buffer/index.js:
         // BUG CRÍTICO (auditoria noturna, "Contas a Receber sem Conta financeira"): sem Conta financeira
         // + Forma de recebimento obrigatórias na baixa, o recebimento era confirmado sem nunca impactar o
         // saldo bancário — o fluxo correto é CR → Baixa → Conta financeira → Saldo do banco.
-        if (!financialAccountId) { errEl.innerHTML = '<div class="form-err">Selecione a conta financeira que recebeu o valor.</div>'; return false; }
+        if (!financialAccountId) { errEl.innerHTML = '<div class="form-err">Selecione a Conta Bancária que recebeu o valor.</div>'; return false; }
         var paymentMethod = panel.querySelector('#crb-forma').value;
         if (!paymentMethod) { errEl.innerHTML = '<div class="form-err">Selecione a forma de recebimento.</div>'; return false; }
-        return crRegistrarBaixa(h.id, { valorRecebido: valorRecebido, date: dataBaixa, financialAccountId: financialAccountId, paymentMethod: paymentMethod, observacao: panel.querySelector('#crb-obs').value.trim() }).then(function () { toast('Recebimento registrado', brl(valorRecebido)); if (onDone) onDone(); });
+        return crRegistrarBaixa(h.id, { valorRecebido: valorRecebido, date: dataBaixa, financialAccountId: financialAccountId, paymentMethod: paymentMethod, desconto: cpParseNum(panel.querySelector('#crb-desconto').value) || 0, juros: cpParseNum(panel.querySelector('#crb-juros').value) || 0, multa: cpParseNum(panel.querySelector('#crb-multa').value) || 0, acrescimo: cpParseNum(panel.querySelector('#crb-acrescimo').value) || 0, observacao: panel.querySelector('#crb-obs').value.trim() }).then(function () { toast('Recebimento registrado', brl(valorRecebido)); if (onDone) onDone(); });
       },
     });
   }
@@ -19818,7 +19968,7 @@ buffer/index.js:
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('ATENÇÃO: limpar todos os dados compartilhados desta organização para todos os usuários? Esta ação não pode ser desfeita pela tela.')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; pricingOpConfig = []; pricingFamilyRules = []; pontoEquilibrioCfg = {}; metaLucroCfg = {}; financialAccounts = []; financialEvents = []; contasReceber = []; crReceipts = []; financialTransfers = []; fatorFuncionarios = []; fatorCustosFixos = []; fatorCustosVariaveis = []; fatorPedidoSnapshots = []; fatorConfig = {}; skuFamilyOverrides = {}; fatorConfigs = []; fatorSetores = []; fatorImpostos = []; fatorProcessos = []; fatorRoteiros = {}; fatorRoteiroSkuOverrides = {}; fatorSub = 'geral'; skuFamilyOverrideHistory = []; productIdentityMappings = {}; productIdentityMappingsAll = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados da organização limpos', 'Alteração sincronizada para todos os usuários.'); }).catch(function (e) { toast('Não foi possível limpar', e.message || 'Falha de sincronização.', true); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('ATENÇÃO: limpar todos os dados compartilhados desta organização para todos os usuários? Esta ação não pode ser desfeita pela tela.')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; pricingOpConfig = []; pricingFamilyRules = []; pontoEquilibrioCfg = {}; metaLucroCfg = {}; financialAccounts = []; financialEvents = []; contasReceber = []; crReceipts = []; financialTransfers = []; fatorFuncionarios = []; fatorCustosFixos = []; fatorCustosVariaveis = []; fatorPedidoSnapshots = []; fatorCategories = []; fatorConfig = {}; skuFamilyOverrides = {}; fatorConfigs = []; fatorSetores = []; fatorImpostos = []; fatorProcessos = []; fatorRoteiros = {}; fatorRoteiroSkuOverrides = {}; fatorSub = 'geral'; skuFamilyOverrideHistory = []; productIdentityMappings = {}; productIdentityMappingsAll = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados da organização limpos', 'Alteração sincronizada para todos os usuários.'); }).catch(function (e) { toast('Não foi possível limpar', e.message || 'Falha de sincronização.', true); }); };
   var opSelBtn = document.getElementById('op-selector'); if (opSelBtn) opSelBtn.onclick = function () { openOperationSelector(); };
 
   // Fase 10.2: todo o boot local (abrir IndexedDB, carregar os dados, primeiro render()) virou
@@ -19827,9 +19977,9 @@ buffer/index.js:
   function bootApp() {
   // Abre o banco; se falhar (corrompido/bloqueado/privado), ativa o modo em memória e SEGUE —
   // o sistema sempre carrega e Produtos sempre abre (só não salva). Nunca dead-end / tela branca.
-  openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
+  return openDB().catch(function (e) { activateMemoryMode(e && (e.message || '') || 'IndexedDB indisponível'); }).then(function () {
     Produtos = makeProdutos({ container: app, put: putMany, getAll: getAll, parse: S.produtos.parse, onChange: rebuildSkuCost });
-    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers'), getAll('bankaccounts'), getAll('companies'), getAll('operations'), getAll('cpheader'), getAll('cpitems'), getAll('cppayments'), getAll('cpattach'), getAll('cpcategories'), getAll('cpaccounting'), getAll('cpcostcenters'), getAll('cpsuppliers'), getAll('cpsupplylinks'), getAll('pricingopconfig'), getAll('pricingfamilyrules'), getAll('financialaccounts'), getAll('financialevents'), getAll('crheader'), getAll('crreceipts'), getAll('financialtransfers'), getAll('fatorfuncionarios'), getAll('fatorcustosfixos'), getAll('fatorcustosvariaveis'), getAll('fatorpedidosnapshots'), getAll('skufamilyoverrides'), getAll('fatorconfigs'), getAll('fatorsetores'), getAll('fatorimpostos'), getAll('fatorprocessos'), getAll('fatorroteiros'), getAll('fatorroteirosku'), getAll('skufamilyoverridehistory'), getAll('crcategories'), getAll('crcostcenters'), getAll('productidentitymappings')]);
+    return Promise.all([getAll('orders'), getAll('occ'), getAll('batches'), Produtos.load(), getAll('plans'), getAll('wallet'), getAll('walletcls'), getAll('settings'), getAll('acelera'), getAll('affconv'), getAll('affrpa'), getAll('affvb'), getAll('affmaster'), getAll('mrrenda'), getAll('mrship'), getAll('mradj'), getAll('mrsvc'), getAll('mrpdf'), getAll('shipbip'), getAll('walletclose'), getAll('expsessions'), getAll('caixafechamentos'), getAll('banktransfers'), getAll('bankaccounts'), getAll('companies'), getAll('operations'), getAll('cpheader'), getAll('cpitems'), getAll('cppayments'), getAll('cpattach'), getAll('cpcategories'), getAll('cpaccounting'), getAll('cpcostcenters'), getAll('cpsuppliers'), getAll('cpsupplylinks'), getAll('pricingopconfig'), getAll('pricingfamilyrules'), getAll('financialaccounts'), getAll('financialevents'), getAll('crheader'), getAll('crreceipts'), getAll('financialtransfers'), getAll('fatorfuncionarios'), getAll('fatorcustosfixos'), getAll('fatorcustosvariaveis'), getAll('fatorpedidosnapshots'), getAll('skufamilyoverrides'), getAll('fatorconfigs'), getAll('fatorsetores'), getAll('fatorimpostos'), getAll('fatorprocessos'), getAll('fatorroteiros'), getAll('fatorroteirosku'), getAll('skufamilyoverridehistory'), getAll('crcategories'), getAll('crcostcenters'), getAll('productidentitymappings'), getAll('fatorcategories')]);
   }).then(function (r) {
     // GATE 2 — decodifica a chave física (só existe quando havia colisão real de ID de negócio entre
     // operações, ver scopedStoreKey/scopedDecodeId acima) de volta para o ID de negócio puro. Não-op
@@ -19884,6 +20034,7 @@ buffer/index.js:
     financialAccounts = r[37] || []; financialEvents = r[38] || []; contasReceber = r[39] || []; crReceipts = r[40] || []; financialTransfers = r[41] || [];
     crCategories = r[54] || []; crCostCenters = r[55] || [];
     fatorFuncionarios = r[42] || []; fatorCustosFixos = r[43] || []; fatorCustosVariaveis = r[44] || [];
+    fatorCategories = r[57] || [];
     // GATE 2 — achado real (item 14 da certificação): fatorpedidosnapshots nunca tinha filtro por
     // operação nem chave física escopada — 2 operações com um pedido de mesmo orderId Shopee podiam ter
     // seus snapshots de custo colidindo (a gravação da 2ª sobrescrevia a da 1ª) e fatorSnapshotPedido()
@@ -20078,6 +20229,8 @@ buffer/index.js:
   var workspaceInFlight = {};
   var workspaceTimers = {};
   var workspacePollTimer = null;
+  var workspaceApplyingRemote = false;
+  var workspaceQueuedVersions = null;
 
   function workspaceReadMeta() {
     try {
@@ -20301,13 +20454,52 @@ buffer/index.js:
   }
   function workspaceStartPolling() {
     if (workspacePollTimer) clearInterval(workspacePollTimer);
-    workspacePollTimer = setInterval(function () {
-      if (!authSession.user || Object.keys(workspacePending).length || Object.keys(workspaceInFlight).length) return;
-      authFetchJson('/workspace/versions').then(function (result) {
-        var meta = workspaceReadMeta(); var changed = (result.stores || []).some(function (row) { return Number(meta.revisions[row.storeName] || 0) !== Number(row.revision || 0); });
-        if (changed) workspaceShowBanner('outro usuário atualizou a base compartilhada. Recarregue para trabalhar com a versão mais recente.', true);
-      }).catch(function () { });
-    }, 30000);
+    function hasActiveDraft() {
+      var active = document.activeElement;
+      if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName) && active !== document.body) return true;
+      if (active && active.isContentEditable) return true;
+      return Array.prototype.some.call(document.querySelectorAll('.overlay,.drawer'), function (el) {
+        return el.id !== 'auth-overlay' && el.offsetParent !== null;
+      });
+    }
+    function applyRemoteVersions(result) {
+      if (workspaceApplyingRemote || !result) return;
+      var meta = workspaceReadMeta();
+      var changed = (result.stores || []).filter(function (row) {
+        return Object.prototype.hasOwnProperty.call(STORES, row.storeName) && Number(meta.revisions[row.storeName] || 0) !== Number(row.revision || 0);
+      });
+      if (!changed.length) { workspaceQueuedVersions = null; workspaceClearBanner(); return; }
+      if (hasActiveDraft()) {
+        workspaceQueuedVersions = result;
+        workspaceShowBanner('há dados novos de outro usuário. A atualização automática será aplicada assim que você concluir o formulário aberto.', false);
+        return;
+      }
+      workspaceApplyingRemote = true; workspaceQueuedVersions = null; workspaceSyncSuppressed = true;
+      changed.reduce(function (chain, row) {
+        return chain.then(function () {
+          return authFetchJson('/workspace/' + encodeURIComponent(row.storeName)).then(function (fresh) {
+            meta.revisions[row.storeName] = Number(fresh.revision || row.revision || 0);
+            return workspaceReplaceLocal(row.storeName, fresh.payload);
+          });
+        });
+      }, Promise.resolve()).then(function () {
+        workspaceWriteMeta(meta); workspaceSyncSuppressed = false;
+        return bootApp();
+      }).then(function () {
+        workspaceApplyingRemote = false; workspaceClearBanner();
+        toast('Dados atualizados', 'As alterações de outro usuário já apareceram nesta tela.');
+      }).catch(function (e) {
+        workspaceSyncSuppressed = false; workspaceApplyingRemote = false;
+        workspaceShowBanner('não foi possível aplicar a atualização automática. Seus dados locais foram preservados. ' + (e.message || ''), false);
+      });
+    }
+    function poll() {
+      if (!authSession.user || workspaceApplyingRemote || Object.keys(workspacePending).length || Object.keys(workspaceInFlight).length) return;
+      if (workspaceQueuedVersions && !hasActiveDraft()) { applyRemoteVersions(workspaceQueuedVersions); return; }
+      authFetchJson('/workspace/versions').then(applyRemoteVersions).catch(function () { });
+    }
+    workspacePollTimer = setInterval(poll, 4000);
+    setTimeout(poll, 250);
   }
   /** item 22 — registra uma ação local no audit log do servidor. Best-effort/fire-and-forget
    * (item 23): uma falha de rede aqui NUNCA bloqueia nem desfaz a ação local que já aconteceu. */

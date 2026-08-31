@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PatchWorkspaceStoreDto } from './dto';
 
-/** Lista fechada das 60 stores existentes na V1 certificada. */
+/** Lista fechada das stores compartilhadas da aplicação. */
 export const WORKSPACE_STORE_NAMES = [
   'orders',
   'occ',
@@ -65,6 +65,7 @@ export const WORKSPACE_STORE_NAMES = [
   'fatorroteirosku',
   'skufamilyoverridehistory',
   'productidentitymappings',
+  'fatorcategories',
 ] as const;
 
 const WORKSPACE_STORE_SET = new Set<string>(WORKSPACE_STORE_NAMES);

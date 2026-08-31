@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { mergeWorkspaceItems, WORKSPACE_STORE_NAMES } from './workspace.service';
 
 describe('sincronização organizacional da V1', () => {
-  it('mantém a lista fechada das 60 stores certificadas', () => {
-    expect(WORKSPACE_STORE_NAMES).toHaveLength(60);
-    expect(new Set(WORKSPACE_STORE_NAMES).size).toBe(60);
+  it('mantém a lista fechada das 61 stores compartilhadas', () => {
+    expect(WORKSPACE_STORE_NAMES).toHaveLength(61);
+    expect(new Set(WORKSPACE_STORE_NAMES).size).toBe(61);
   });
 
   it('mescla alterações por id sem apagar registros de outro usuário', () => {
