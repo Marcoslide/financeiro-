@@ -1003,7 +1003,7 @@
   // "Taxa de serviço (aproximado — sem Income cruzado)" (ESTIMATED, nunca tem filhos reais) e faz o
   // primeiro match errado "roubar" os filhos de um dia que mistura os dois cenários.
   var SVC_REAL_LABELS = { 'Taxa de serviço líquida': 1, 'Taxa de serviço (componentes reais — total pendente de conciliação)': 1 };
-  var SVC_CHILD_LABEL = { svc_affiliate: 'Afiliados do Vendedor', svc_transaction: 'Taxa de Transação', svc_per_item: 'Taxa por item vendido' };
+  var SVC_CHILD_LABEL = { svc_affiliate: 'Afiliados do Vendedor', svc_transaction: 'Taxa de Transação', svc_per_item: 'Taxa por item vendido', svc_commercial_adjustment: 'Ajuste por participação em ação comercial — Taxa de Serviço' };
 
   // ---------- período ----------
   function periodRange() {
@@ -2198,26 +2198,38 @@
       { key: 'svc_transaction', label: 'Taxa de Transação', valor: svcT.transacao, source: 'SERVICE_FEE_DETAILS' },
       { key: 'svc_per_item', label: 'Taxa por item vendido', valor: svcT.porItem, source: 'SERVICE_FEE_DETAILS' },
     ] : [];
-    // PROMPT "Ajuste pontual da Ficha" §12/§15: testado contra os 1.519 pedidos reais com Service
-    // Fee Details do Income — Afiliados+Transação+Por item já fecham com Taxa de serviço líquida em
-    // 1.519/1.519 casos (0 centavo de diferença). "Ajuste por participação em ação comercial"
-    // (mrRow.ajusteAcaoComercial) NÃO faz parte desta soma — incluí-lo quebrava os 1.519 casos que
-    // hoje fecham exatos (confirmado empiricamente antes de decidir; nunca força o fechamento
-    // somando algo que não pertence à composição real). Continua disponível só na Auditoria Técnica.
+    // Auditoria Income 2026-08 (1.803/1.803 pedidos): os 3 campos de Service Fee Details fecham com
+    // a Taxa de serviço LÍQUIDA porque "Taxa por item vendido" já vem líquida do ajuste comercial.
+    // A Shopee, porém, abre visualmente o item BRUTO e o ajuste da parcela de serviço separados.
+    // `children` continua sendo a decomposição RAW/líquida usada pelos lançamentos contábeis já
+    // existentes; `displayChildren` só reabre a mesma soma para exibição, sem alterar o total pai.
+    var displayChildren = children;
+    if (svcResolve.found && svcT.porItem && mrRow && mrRow.servicoBruta != null && mrRow.servicoBruta !== 0) {
+      var serviceAdjustment = mrRow.servico - mrRow.servicoBruta;
+      if (serviceAdjustment) {
+        var grossItem = svcT.porItem - serviceAdjustment;
+        displayChildren = [
+          { key: 'svc_affiliate', label: 'Afiliados do Vendedor', valor: svcT.afiliadosVendedor, source: 'SERVICE_FEE_DETAILS' },
+          { key: 'svc_transaction', label: 'Taxa de Transação', valor: svcT.transacao, source: 'SERVICE_FEE_DETAILS' },
+          { key: 'svc_per_item', label: 'Taxa por item vendido', valor: grossItem, source: 'INCOME_DERIVED_GROSS' },
+          { key: 'svc_commercial_adjustment', label: 'Ajuste por participação em ação comercial — Taxa de Serviço', valor: serviceAdjustment, source: 'INCOME_GROSS_NET_BRIDGE' },
+        ];
+      }
+    }
     var childrenTotal = svcResolve.totalComponentes;
     if (mrRow) {
       var difference = svcResolve.found ? (mrRow.servico - childrenTotal) : null;
-      return { total: mrRow.servico, sourceTotal: 'INCOME_ORDER', children: children, childrenTotal: childrenTotal, difference: difference, reconciliationStatus: !svcResolve.found ? 'NO_DETAIL' : (Math.abs(difference) <= 2 ? 'MATCHED' : 'PARTIAL') };
+      return { total: mrRow.servico, sourceTotal: 'INCOME_ORDER', children: children, displayChildren: displayChildren, childrenTotal: childrenTotal, difference: difference, reconciliationStatus: !svcResolve.found ? 'NO_DETAIL' : (Math.abs(difference) <= 2 ? 'MATCHED' : 'PARTIAL') };
     }
     if (svcResolve.found) {
       // Cenário C: os componentes são dado REAL (Service Fee Details) — nunca viram estimativa só
       // porque o Order ainda não confirmou o total oficial. O total pai fica provisório = soma deles.
-      return { total: childrenTotal, sourceTotal: 'SERVICE_FEE_DETAILS_ONLY', children: children, childrenTotal: childrenTotal, difference: 0, reconciliationStatus: 'PENDING_ORDER_CONFIRMATION' };
+      return { total: childrenTotal, sourceTotal: 'SERVICE_FEE_DETAILS_ONLY', children: children, displayChildren: displayChildren, childrenTotal: childrenTotal, difference: 0, reconciliationStatus: 'PENDING_ORDER_CONFIRMATION' };
     }
     if (ord && ord.serviceFeeNet) {
-      return { total: -Math.round((ord.serviceFeeNet || 0) * 100), sourceTotal: 'ESTIMATED', children: [], childrenTotal: 0, difference: null, reconciliationStatus: 'NO_DATA' };
+      return { total: -Math.round((ord.serviceFeeNet || 0) * 100), sourceTotal: 'ESTIMATED', children: [], displayChildren: [], childrenTotal: 0, difference: null, reconciliationStatus: 'NO_DATA' };
     }
-    return { total: null, sourceTotal: 'NONE', children: [], childrenTotal: 0, difference: null, reconciliationStatus: 'NO_DATA' };
+    return { total: null, sourceTotal: 'NONE', children: [], displayChildren: [], childrenTotal: 0, difference: null, reconciliationStatus: 'NO_DATA' };
   }
   // Fórmula canônica do envio (PROMPT MESTRE Parte D, §27-39) — validada empiricamente contra os
   // 1.662 pedidos Order do Income real: soma dos 5 componentes com os sinais originais fecha
@@ -2268,7 +2280,7 @@
     // depender de `if(mrRow)`, senão o Cenário C — Service Fee Details real mas Order ainda pendente
     // — perde os filhos reais e cai numa estimativa que nem usa o dado real disponível).
     var serviceFee = buildServiceFeeComposition(mrRow, svcResolve, ord);
-    var svcExtra = { children: serviceFee.children, childrenTotal: serviceFee.childrenTotal, difference: serviceFee.difference, reconciliationStatus: serviceFee.reconciliationStatus, sourceTotal: serviceFee.sourceTotal };
+    var svcExtra = { children: serviceFee.displayChildren, rawChildren: serviceFee.children, childrenTotal: serviceFee.childrenTotal, difference: serviceFee.difference, reconciliationStatus: serviceFee.reconciliationStatus, sourceTotal: serviceFee.sourceTotal };
     // PROMPT "Ajuste pontual da Ficha" §10/§17/§29: Taxa de comissão líquida é uma taxa PAI
     // independente — precisa aparecer ANTES da Taxa de Serviço na Ficha (nunca depois, nunca como
     // filha). Por isso addTaxa('Taxa de comissão líquida', ...) roda primeiro; o resto do bloco
@@ -6796,12 +6808,24 @@
     });
     return out;
   }
+  // Reimportação corretiva: fatos do Income não são cadastros manuais — devem refletir a versão
+  // atual do mesmo arquivo/linha. O importador antigo preservava o registro existente sem mesclar os
+  // campos que passaram a ser reconhecidos depois (ex.: `afiliado`), deixando a base persistida para
+  // sempre incompleta mesmo após reimportar o XLSX. Compara somente as chaves parseadas e atualiza o
+  // mesmo `id`; nunca duplica pedido e nunca apaga metadados extras do registro existente.
+  function mrIncomeRowChanged(existing, parsed) {
+    return Object.keys(parsed).some(function (key) {
+      var before = existing[key], after = parsed[key];
+      if (before && typeof before === 'object') return JSON.stringify(before) !== JSON.stringify(after);
+      return before !== after;
+    });
+  }
   function importMinhaRenda(file) {
     var opId = opActiveOrNull(); if (!opId) return Promise.reject(new Error(OP_BLOCK_MSG));
     return file.arrayBuffer().then(function (ab) {
       var p = mrParseIncome(ab, file.name);
       if (p.notRecognized) throw new Error('Arquivo não reconhecido como relatório Income da Shopee (esperado abas Renda / Shipping Fee Discrepancy / Adjustment).');
-      var importedAt = new Date().toISOString(); var stats = { renda: 0, ship: 0, adj: 0, svc: 0 };
+      var importedAt = new Date().toISOString(); var stats = { renda: 0, rendaUpd: 0, ship: 0, adj: 0, svc: 0 };
       // Renda (idempotente) — achado real de auditoria (janelas de exportação sobrepostas, ex.:
       // 11/07-10/08 e 25/07-24/08, com 832 pedidos em comum): a chave antiga usava o índice bruto de
       // posição da linha DENTRO DESTA IMPORTAÇÃO (`i`), que muda de arquivo para arquivo mesmo para o
@@ -6827,7 +6851,9 @@
         var groupKey = opId + '|' + row.orderId + '|' + row.ver + '|' + (row.sku || '') + '|' + (row.refundId || '');
         var occ = occCount[groupKey] || 0; occCount[groupKey] = occ + 1;
         var id = groupKey + '|' + occ;
-        if (!byR[id]) { var rec = Object.assign({ id: id, operationId: opId, fileName: file.name, importedAt: importedAt }, row); byR[id] = rec; chR.push(rec); stats.renda++; }
+        var exR = byR[id];
+        if (!exR) { var rec = Object.assign({ id: id, operationId: opId, fileName: file.name, importedAt: importedAt }, row); byR[id] = rec; chR.push(rec); stats.renda++; }
+        else if (mrIncomeRowChanged(exR, row)) { Object.assign(exR, row, { fileName: file.name, importedAt: importedAt }); chR.push(exR); stats.rendaUpd++; }
       });
       mrRenda = Object.values(byR);
       // Shipping (preserva investigação manual §21)
@@ -6881,7 +6907,7 @@
       });
       mrSvc = Object.values(byV);
       mrSummary = { summary: p.summary, period: p.period, importedAt: importedAt, fileName: file.name, diag: p.diag };
-      var batch = { id: 'mr' + Date.now() + Math.round(performance.now()), operationId: opId, module: 'Minha Renda', filename: file.name, createdAt: importedAt, seen: p.renda.length, novo: stats.renda, upd: 0, unch: p.renda.length - stats.renda, itemsSeen: p.renda.length };
+      var batch = { id: 'mr' + Date.now() + Math.round(performance.now()), operationId: opId, module: 'Minha Renda', filename: file.name, createdAt: importedAt, seen: p.renda.length, novo: stats.renda, upd: stats.rendaUpd, unch: p.renda.length - stats.renda - stats.rendaUpd, itemsSeen: p.renda.length };
       batches.unshift(batch); lastImportStamp = importedAt;
       // persiste em segundo plano (não bloqueia a UI); a memória já está atualizada, então a tela reflete na hora
       putMany('mrrenda', chR); putMany('mrship', chS); putMany('mradj', chA); putMany('mrsvc', chV); putMany('settings', [{ id: settingsOpKey('mrSummary', opId), data: mrSummary }]); putMany('batches', [batch]);
@@ -9312,7 +9338,7 @@
     // §21/§26-27 do prompt "Taxa de Serviço até a raiz": os filhos da Taxa de Serviço são agregados
     // num mapa SEPARADO (mapSvcChildren) — BREAKDOWN_REFERENCE, nunca somado a mapTaxas (ECONOMIC_TOTAL)
     // — senão a DRE dobraria o valor (pai + filhos). mapSvcChildren só existe pra explicar/detalhar.
-    var mapSvcChildren = { svc_affiliate: 0, svc_transaction: 0, svc_per_item: 0 };
+    var mapSvcChildren = { svc_affiliate: 0, svc_transaction: 0, svc_per_item: 0, svc_commercial_adjustment: 0 };
     function soma(map, rows) { rows.forEach(function (r) { map[r.label] = (map[r.label] || 0) + r.valor; }); }
     // Precificação (§44-47 do prompt Precificação & Margem): margem PROJETADA (taxas configuradas no
     // preço realmente vendido, via pricingCompareOrder — nunca recalculada aqui) vs REALIZADA
@@ -9348,7 +9374,7 @@
       var sc = resolveSellerCharges(o.id);
       sc.items.forEach(function (it) { if (it.knownContribution) mapTaxasLoja[it.label] = (mapTaxasLoja[it.label] || 0) + it.knownContribution; });
       if (sc.totalStatus !== 'COMPLETO') taxasPendentesN++;
-      if (c.serviceFee && c.serviceFee.children.length) { comSvcDetailsN++; c.serviceFee.children.forEach(function (ch) { mapSvcChildren[ch.key] = (mapSvcChildren[ch.key] || 0) + ch.valor; }); }
+      if (c.serviceFee && c.serviceFee.children.length) { comSvcDetailsN++; (c.serviceFee.displayChildren || c.serviceFee.children).forEach(function (ch) { mapSvcChildren[ch.key] = (mapSvcChildren[ch.key] || 0) + ch.valor; }); }
       if (c.envio) envioTotal += c.envio.subtotalC;
       if (c.custoProdC != null) { custoTotal += c.custoProdC; custoConhecidoN++; }
       if (c.temIncome) comIncomeN++;
@@ -9441,7 +9467,7 @@
       var comp = pedidoComposicaoFinanceira(o.id);
       var opId = comp.operationId; if (!opId) return;
       if (childKey) {
-        var ch = comp.serviceFee && comp.serviceFee.children.find(function (c) { return c.key === childKey; });
+        var ch = comp.serviceFee && (comp.serviceFee.displayChildren || comp.serviceFee.children).find(function (c) { return c.key === childKey; });
         if (ch && ch.valor) rows.push({ orderId: o.id, valor: ch.valor, key: feKey(opId, 'SERVICE_FEE', childKey.toUpperCase(), o.id) });
       } else {
         var r = comp.taxaRows.find(function (x) { return x.label === label; });
