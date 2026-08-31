@@ -16148,6 +16148,27 @@
   function doLogout() {
     authFetch('/auth/logout', { method: 'POST', body: JSON.stringify({}) }).catch(function () { }).then(function () {
       authSession = { accessToken: null, user: null, permissions: [] };
+      // O dado operacional é local: esvazia os stores e remove a base antes de entregar o
+      // navegador ao próximo usuário, mesmo quando a chamada de logout ao servidor falha.
+      return clearAll().catch(function () { }).then(function () {
+        try { if (DB) DB.close(); } catch (e) { }
+        DB = null;
+        dbOpening = null;
+        if (DB_MEM) Object.keys(STORES).forEach(function (s) { DB_MEM[s] = {}; });
+        return new Promise(function (resolve) {
+          var finished = false;
+          function finish() { if (finished) return; finished = true; resolve(); }
+          try {
+            var request = indexedDB.deleteDatabase(DB_NAME);
+            request.onsuccess = finish;
+            request.onerror = finish;
+            // Outra aba pode manter a exclusão bloqueada; os stores já foram esvaziados acima.
+            request.onblocked = function () { setTimeout(finish, 300); };
+            setTimeout(finish, 1200);
+          } catch (e) { finish(); }
+        });
+      });
+    }).then(function () {
       location.reload(); // reboot limpo — evita qualquer estado de tela anterior vazar pro próximo login
     });
   }
