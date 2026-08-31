@@ -588,6 +588,11 @@
     // Este é o único ponto do sistema que reconstrói esses três índices — zerar aqui garante que
     // nenhuma resolução de custo antiga escape para depois de uma edição de Produto/Família/Custo.
     skuCostMapCache.clear();
+    // Hotfix v1.0.3: pedidoComposicaoFinanceira() também memoriza o custo já resolvido durante a
+    // renderização atual. Editar uma família/custo precisa invalidar esse segundo nível no mesmo
+    // instante; caso contrário a tela podia continuar mostrando "custo pendente" até uma troca
+    // completa de rota, embora o índice SKU→família já estivesse correto.
+    compByOrderIdCache.clear();
     skuCost = {}; skuAliasIndex = {}; skuConflicts = {}; skuVarById = {}; skuFamById = {}; skuProdById = {};
     if (!Produtos) return;
     var data = Produtos.getData();
@@ -635,21 +640,24 @@
   //     hoje nenhum parser de Order.all da Shopee testado traz esse campo (só "Número de referência
   //     SKU"), então esta camada normalmente não participa; a arquitetura já fica pronta para recebê-
   //     la sem precisar de outro resolver, sem exigir alterar o parser agora sem prova de que falta.
-  //  2. productIdentityMappings — resolução manual persistida POR IDENTIDADE (SKU + nome do produto +
+  //  2. skuFamilyOverrides — escolha manual explícita do usuário para o texto do SKU. É global dentro
+  //     da operação e vence as candidatas automáticas, exatamente como promete a ação "Aplicar" da
+  //     auditoria de Pedidos.
+  //  3. productIdentityMappings — resolução manual persistida POR IDENTIDADE (SKU + nome do produto +
   //     nome da variação exatamente como vieram no pedido), nunca por SKU isoladamente. Vence mesmo
   //     havendo conflito, porque aponta pra UMA variação real específica, não pra uma família cega.
-  //  3. v.sku exato + anúncio ATIVO, único → resolve.
-  //  4. v.referenceSku exato + anúncio ATIVO, único → resolve (SKU exato sempre vence referenceSku).
-  //  5. v.sku exato + só candidatas INATIVAS, única → HISTORICAL_INACTIVE_MATCH (pedido antigo de
+  //  4. v.sku exato + anúncio ATIVO, único → resolve.
+  //  5. v.referenceSku exato + anúncio ATIVO, único → resolve (SKU exato sempre vence referenceSku).
+  //  6. v.sku exato + só candidatas INATIVAS, única → HISTORICAL_INACTIVE_MATCH (pedido antigo de
   //     anúncio já inativado/relistado — não é motivo pra nunca mais calcular o custo desse pedido).
-  //  6. v.referenceSku exato + só candidatas INATIVAS, única → idem, via referenceSku.
-  //  7. mais de uma candidata no mesmo nível com famílias divergentes → tenta desambiguar por nome do
+  //  7. v.referenceSku exato + só candidatas INATIVAS, única → idem, via referenceSku.
+  //  8. várias candidatas mas somente UMA família efetivamente escolhida → resolve por essa família;
+  //     cópias do mesmo SKU ainda sem família não anulam a classificação já feita pelo usuário.
+  //  9. mais de uma candidata no mesmo nível com famílias divergentes → tenta desambiguar por nome do
   //     produto/variação do PRÓPRIO item do pedido (disambiguateByName — SKU+nome combinados, nunca
   //     nome isolado); só resolve se exatamente 1 candidata bater nos dois campos.
-  //  8. ainda ambíguo → SKU_CONFLITANTE / SKU_CONFLITANTE_HISTORICAL. Nunca escolhe uma arbitrariamente
-  //     — o antigo "override cego por texto de SKU" (skuFamilyOverrides) NÃO participa mais aqui; ele
-  //     só se aplica quando não existe NENHUM candidato real (ver abaixo), onde não há risco de
-  //     confundir dois produtos diferentes.
+  // 10. ainda ambíguo → SKU_CONFLITANTE / SKU_CONFLITANTE_HISTORICAL. Nunca escolhe uma família entre
+  //     duas famílias diferentes sem evidência do produto/variação do próprio pedido.
   // §finalStatus: mapa opaco motivo→status canônico exigido pelo diagnóstico (SKU_NOT_FOUND/
   // SKU_CONFLICT/FAMILY_NOT_ASSIGNED/FAMILY_NOT_FOUND/COST_NOT_DEFINED/COST_RESOLVED) — nunca troca
   // os valores internos de "motivo" (usados como chave em SKU_MOTIVO_LABEL e no regex de conflito),
@@ -705,14 +713,27 @@
       var strong = (candidates || []).filter(function (c) { return c.variationId === itemHint.variationId; })[0];
       if (strong) return finalize(strong, 'STRONG_VARIATION_ID');
     }
+    // A tela de auditoria permite escolher uma família manualmente para qualquer texto de SKU e
+    // afirma que a escolha vale para todos os pedidos. Antes deste hotfix, o registro era salvo mas
+    // ignorado justamente quando o catálogo continha candidatas — o cenário em que o botão é mais
+    // necessário. A escolha agora é aplicada antes dos tiers automáticos, sem alterar o cadastro das
+    // variações nem criar custo paralelo: continua lendo o custo exclusivamente da família escolhida.
+    var manualOverride = skuFamilyOverrideGet(key);
+    if (manualOverride) {
+      var manualFamily = skuFamById[manualOverride.familyId];
+      if (manualFamily) {
+        if (manualFamily.currentCostAmount == null) return { found: false, requestedSku: requestedSku, familyId: manualFamily.id, familyName: manualFamily.name, motivo: 'FAMILIA_SEM_CUSTO', regra: 'MANUAL_OVERRIDE', overridden: true };
+        return { found: true, requestedSku: requestedSku, canonicalSku: requestedSku, familyId: manualFamily.id, familyName: manualFamily.name, cost: Number(manualFamily.currentCostAmount), regra: 'MANUAL_OVERRIDE', overridden: true };
+      }
+    }
     // Identidade manual persistida por item (SKU+produto+variação) — hierarquia de prioridade §6 da
     // correção pós-auditoria: (1) empresa/loja e (2) marketplace já isolam o índice antes de chegar
     // aqui; (3-4) ID nativo do pedido/variação vêm acima; (5) SKU exato/referência (com desambiguação
     // por nome combinado) SEMPRE tenta primeiro — nome/mapeamento manual nunca supera um ID nativo ou
     // um SKU exato sem ambiguidade real. Só quando a resolução automática (tiers abaixo) não consegue
-    // decidir sozinha (SKU_CONFLITANTE) é que o mapeamento manual entra, como prioridade 7 — ÚLTIMO
-    // recurso, nunca atalho — porque aponta pra uma variação específica, não pra uma família cega
-    // aplicada a todo o texto de SKU.
+    // decidir sozinha (SKU_CONFLITANTE) é que o mapeamento manual POR IDENTIDADE entra como último
+    // recurso, pois ele aponta para uma variação específica. A classificação manual POR SKU já foi
+    // tratada acima e vence globalmente, conforme a escolha explícita do usuário na auditoria.
     function manualIdentityFallback(notFoundResult) {
       if (itemHint && (itemHint.productName || itemHint.variationName)) {
         var idKey = productIdentityMappingKey(key, itemHint.productName, itemHint.variationName);
@@ -725,56 +746,43 @@
       return notFoundResult;
     }
     if (!candidates || !candidates.length) {
-      // Nenhum anúncio no catálogo reivindica este texto de SKU — não há candidato real com o qual
-      // confundir. Ainda assim, um mapeamento manual específico (se existir) vence o override cego
-      // histórico, porque aponta pra uma variação real; o override cego (classificação manual de SKU
-      // sem NENHUM vínculo em Produtos) continua seguro como último recurso, aplicado só aqui — NUNCA
-      // quando existem candidatas reais (ver os tiers abaixo).
-      var overrideNone = skuFamilyOverrideGet(key);
+      // Nenhum anúncio no catálogo reivindica este texto de SKU. A classificação manual por SKU já
+      // foi aplicada acima; resta apenas tentar um vínculo manual de identidade ainda válido.
       var fallbackNone = manualIdentityFallback(null);
       if (fallbackNone) return fallbackNone;
-      if (overrideNone) {
-        var fNone = skuFamById[overrideNone.familyId];
-        if (fNone) {
-          if (fNone.currentCostAmount == null) return { found: false, requestedSku: requestedSku, familyId: fNone.id, familyName: fNone.name, motivo: 'FAMILIA_SEM_CUSTO', regra: 'MANUAL_OVERRIDE', overridden: true };
-          return { found: true, requestedSku: requestedSku, canonicalSku: requestedSku, familyId: fNone.id, familyName: fNone.name, cost: Number(fNone.currentCostAmount), regra: 'MANUAL_OVERRIDE', overridden: true };
-        }
-      }
       return { found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' };
     }
     function tier(matchedBy, activeOnly) { return candidates.filter(function (c) { return c.matchedBy === matchedBy && (activeOnly ? c.status !== 'INACTIVE' : c.status === 'INACTIVE'); }); }
     // PROMPT "Correção cadastro de Famílias e Custos": "SKU não deve ser tratado como chave única
     // absoluta... a Shopee pode possuir mesmo SKU em múltiplos anúncios... não bloquear a criação por
     // conflito de SKU." Duas+ variações ATIVAS reivindicando o mesmo texto de SKU só são um conflito
-    // REAL quando apontam pra famílias (logo custos) diferentes — se todas já foram vinculadas à MESMA
-    // família, o custo é o mesmo não importa qual delas vendeu, então não há ambiguidade nenhuma pra
-    // resolver: finaliza normalmente (nunca escolhe arbitrariamente QUAL variação, só reconhece que a
-    // resposta — o custo — é idêntica em qualquer uma). Só quando as famílias divergem (ou alguma
-    // ainda não tem família) é que sobra um SKU_CONFLITANTE de verdade — nesse caso o pedido não é
-    // bloqueado em lugar nenhum (cadastro/vínculo de família continuam livres), só o custo deste SKU
-    // específico fica "não resolvido" até o operador desambiguar, com o motivo already exibido de
-    // forma informativa (SKU_MOTIVO_LABEL) em vez de travar qualquer ação.
-    function sameFamilyAll(cands) {
+    // REAL quando as candidatas JÁ CLASSIFICADAS apontam para famílias (logo custos) diferentes. Uma
+    // cópia do SKU ainda sem família não invalida a família que o usuário já escolheu em outra cópia.
+    // Se duas famílias distintas forem escolhidas para o mesmo texto, o pedido continua pendente até
+    // a desambiguação; o cadastro e o vínculo de famílias permanecem livres em todos os casos.
+    function singleAssignedFamilyCandidate(cands) {
       var famId = null;
+      var selected = null;
       for (var i = 0; i < cands.length; i++) {
         var v = skuVarById[cands[i].variationId];
-        if (!v || !v.familyId) return null;
-        if (famId == null) famId = v.familyId; else if (famId !== v.familyId) return null;
+        if (!v || !v.familyId) continue;
+        if (famId == null) { famId = v.familyId; selected = cands[i]; }
+        else if (famId !== v.familyId) return null;
       }
-      return famId;
+      return selected;
     }
     var activeSku = tier('SKU', true);
     if (activeSku.length === 1) return finalize(activeSku[0], 'ACTIVE_EXACT_SKU');
-    if (activeSku.length > 1) { if (sameFamilyAll(activeSku)) return finalize(activeSku[0], 'MULTIPLE_LISTINGS_SAME_FAMILY'); var dis1 = disambiguateByName(activeSku, itemHint); if (dis1) return finalize(dis1, 'SKU_PRODUCT_NAME_MATCH'); return manualIdentityFallback({ found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE', candidatos: activeSku }); }
+    if (activeSku.length > 1) { var fam1 = singleAssignedFamilyCandidate(activeSku); if (fam1) return finalize(fam1, 'MULTIPLE_LISTINGS_SAME_FAMILY'); var dis1 = disambiguateByName(activeSku, itemHint); if (dis1) return finalize(dis1, 'SKU_PRODUCT_NAME_MATCH'); return manualIdentityFallback({ found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE', candidatos: activeSku }); }
     var activeRef = tier('REFERENCE_SKU', true);
     if (activeRef.length === 1) return finalize(activeRef[0], 'ACTIVE_REFERENCE_SKU');
-    if (activeRef.length > 1) { if (sameFamilyAll(activeRef)) return finalize(activeRef[0], 'MULTIPLE_LISTINGS_SAME_FAMILY'); var dis2 = disambiguateByName(activeRef, itemHint); if (dis2) return finalize(dis2, 'SKU_PRODUCT_NAME_MATCH'); return manualIdentityFallback({ found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE', candidatos: activeRef }); }
+    if (activeRef.length > 1) { var fam2 = singleAssignedFamilyCandidate(activeRef); if (fam2) return finalize(fam2, 'MULTIPLE_LISTINGS_SAME_FAMILY'); var dis2 = disambiguateByName(activeRef, itemHint); if (dis2) return finalize(dis2, 'SKU_PRODUCT_NAME_MATCH'); return manualIdentityFallback({ found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE', candidatos: activeRef }); }
     var inactiveSku = tier('SKU', false);
     if (inactiveSku.length === 1) return finalize(inactiveSku[0], 'HISTORICAL_INACTIVE_MATCH');
-    if (inactiveSku.length > 1) { if (sameFamilyAll(inactiveSku)) return finalize(inactiveSku[0], 'MULTIPLE_LISTINGS_SAME_FAMILY'); var dis3 = disambiguateByName(inactiveSku, itemHint); if (dis3) return finalize(dis3, 'SKU_PRODUCT_NAME_MATCH'); return manualIdentityFallback({ found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE_HISTORICAL', candidatos: inactiveSku }); }
+    if (inactiveSku.length > 1) { var fam3 = singleAssignedFamilyCandidate(inactiveSku); if (fam3) return finalize(fam3, 'MULTIPLE_LISTINGS_SAME_FAMILY'); var dis3 = disambiguateByName(inactiveSku, itemHint); if (dis3) return finalize(dis3, 'SKU_PRODUCT_NAME_MATCH'); return manualIdentityFallback({ found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE_HISTORICAL', candidatos: inactiveSku }); }
     var inactiveRef = tier('REFERENCE_SKU', false);
     if (inactiveRef.length === 1) return finalize(inactiveRef[0], 'HISTORICAL_INACTIVE_MATCH');
-    if (inactiveRef.length > 1) { if (sameFamilyAll(inactiveRef)) return finalize(inactiveRef[0], 'MULTIPLE_LISTINGS_SAME_FAMILY'); var dis4 = disambiguateByName(inactiveRef, itemHint); if (dis4) return finalize(dis4, 'SKU_PRODUCT_NAME_MATCH'); return manualIdentityFallback({ found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE_HISTORICAL', candidatos: inactiveRef }); }
+    if (inactiveRef.length > 1) { var fam4 = singleAssignedFamilyCandidate(inactiveRef); if (fam4) return finalize(fam4, 'MULTIPLE_LISTINGS_SAME_FAMILY'); var dis4 = disambiguateByName(inactiveRef, itemHint); if (dis4) return finalize(dis4, 'SKU_PRODUCT_NAME_MATCH'); return manualIdentityFallback({ found: false, requestedSku: requestedSku, motivo: 'SKU_CONFLITANTE_HISTORICAL', candidatos: inactiveRef }); }
     return manualIdentityFallback({ found: false, requestedSku: requestedSku, motivo: 'SKU_NAO_LOCALIZADO' });
   }
   function resolveSkuCost(sku, itemHint) {
@@ -945,7 +953,7 @@
   // operador escolher qual família deve prevalecer (o pedido, o cadastro e a classificação de família
   // nunca são bloqueados por isso).
   var SKU_MOTIVO_LABEL = { SKU_NAO_LOCALIZADO: 'SKU não localizado em Produtos', SEM_FAMILIA: 'Família não atribuída', FAMILIA_NAO_ENCONTRADA: 'Família referenciada não existe mais em Produtos', FAMILIA_SEM_CUSTO: 'Custo da família não informado', SKU_CONFLITANTE: 'Este SKU possui mais de uma família cadastrada. Escolha qual deve prevalecer.', SKU_CONFLITANTE_HISTORICAL: 'Este SKU possui mais de uma família cadastrada. Escolha qual deve prevalecer.' };
-  var SKU_REGRA_LABEL = { STRONG_VARIATION_ID: 'Identificador de variação do pedido', ACTIVE_EXACT_SKU: 'SKU exato · anúncio ativo', ACTIVE_REFERENCE_SKU: 'SKU de referência · anúncio ativo', HISTORICAL_INACTIVE_MATCH: 'Correspondência histórica · anúncio inativo', MANUAL_OVERRIDE: '🔒 Família escolhida manualmente pelo usuário (SKU sem nenhum anúncio correspondente)', MULTIPLE_LISTINGS_SAME_FAMILY: 'Múltiplos anúncios · mesma família', SKU_PRODUCT_NAME_MATCH: 'SKU + nome do produto/variação do pedido (desambiguado automaticamente)', MANUAL_IDENTITY: '🔒 Identidade vinculada manualmente pelo usuário (SKU + produto + variação)' };
+  var SKU_REGRA_LABEL = { STRONG_VARIATION_ID: 'Identificador de variação do pedido', ACTIVE_EXACT_SKU: 'SKU exato · anúncio ativo', ACTIVE_REFERENCE_SKU: 'SKU de referência · anúncio ativo', HISTORICAL_INACTIVE_MATCH: 'Correspondência histórica · anúncio inativo', MANUAL_OVERRIDE: '🔒 Família escolhida manualmente pelo usuário para este SKU', MULTIPLE_LISTINGS_SAME_FAMILY: 'Múltiplos anúncios · uma única família escolhida', SKU_PRODUCT_NAME_MATCH: 'SKU + nome do produto/variação do pedido (desambiguado automaticamente)', MANUAL_IDENTITY: '🔒 Identidade vinculada manualmente pelo usuário (SKU + produto + variação)' };
   // §44/§59 do prompt "Correção Financeira": rótulos únicos para incomeResolve.status/statusFinanceiro,
   // usados na Ficha do Pedido — declarados no escopo do módulo (não dentro de openPedidoFicha360) para
   // ficarem disponíveis independente da ordem de montagem dos blocos dentro da função.
@@ -957,7 +965,7 @@
   // pra nunca duplicar a tradução regra→rótulo em dois lugares. Sempre derivado do que
   // resolveSkuCostByKeyRaw() já retorna (regra/motivo) — nunca um motor de resolução novo. Nunca
   // rotula como "ID nativo" quando a fonte real não traz esse dado (achado F001).
-  var RESOLUCAO_METODO_LABEL = { STRONG_VARIATION_ID: 'ID nativo Shopee', ACTIVE_EXACT_SKU: 'SKU único na operação', ACTIVE_REFERENCE_SKU: 'SKU único na operação (via referência)', HISTORICAL_INACTIVE_MATCH: 'SKU único na operação (anúncio inativo)', MULTIPLE_LISTINGS_SAME_FAMILY: 'SKU único na operação (múltiplos anúncios, mesma família)', SKU_PRODUCT_NAME_MATCH: 'SKU + produto + variação', MANUAL_IDENTITY: 'Mapeamento manual', MANUAL_OVERRIDE: 'Mapeamento manual (classificação por SKU)' };
+  var RESOLUCAO_METODO_LABEL = { STRONG_VARIATION_ID: 'ID nativo Shopee', ACTIVE_EXACT_SKU: 'SKU único na operação', ACTIVE_REFERENCE_SKU: 'SKU único na operação (via referência)', HISTORICAL_INACTIVE_MATCH: 'SKU único na operação (anúncio inativo)', MULTIPLE_LISTINGS_SAME_FAMILY: 'SKU com uma única família escolhida entre os anúncios', SKU_PRODUCT_NAME_MATCH: 'SKU + produto + variação', MANUAL_IDENTITY: 'Mapeamento manual', MANUAL_OVERRIDE: 'Mapeamento manual (classificação por SKU)' };
   function resolucaoMetodo(r) {
     if (r.regra && RESOLUCAO_METODO_LABEL[r.regra]) return RESOLUCAO_METODO_LABEL[r.regra];
     if (r.motivo === 'SKU_CONFLITANTE' || r.motivo === 'SKU_CONFLITANTE_HISTORICAL') return 'Ambíguo';
@@ -11826,6 +11834,15 @@
     candidatas.sort(function (a, b) { return b.dataInicio.localeCompare(a.dataInicio); });
     return candidatas[0];
   }
+  // Ao criar a PRIMEIRA configuração, o formulário deve cobrir por padrão a base que o usuário já
+  // importou. Usar "hoje" deixava silenciosamente todos os pedidos anteriores fora da vigência — o
+  // cadastro parecia correto, mas nenhum custo industrial chegava ao histórico. A data continua
+  // totalmente editável; esta função só escolhe um padrão seguro e visível, sem mudar configuração
+  // já salva nem snapshots de dias fechados.
+  function fatorConfigDataInicioPadrao(opId) {
+    var datas = orders.filter(function (o) { return fatorOpMatch(o, opId); }).map(function (o) { return o.paidAt || o.createdAt; }).filter(Boolean).map(function (iso) { return String(iso).slice(0, 10); }).sort();
+    return datas.length ? datas[0] : new Date().toISOString().slice(0, 10);
+  }
   function fatorConfigSalvar(opId, dto, id) {
     var rec = id ? fatorConfigs.find(function (c) { return c.id === id; }) : null;
     if (!rec) { rec = { id: fatorUid(), operationId: opId, createdAt: new Date().toISOString() }; fatorConfigs.push(rec); }
@@ -12213,10 +12230,11 @@
   // ids/validações/chamadas de save/mensagens de toast de antes — só a moldura (overlay/modal/mh/mbd/
   // mf, fechar X/cancelar/clique fora/ESC, z-index de empilhamento) passa a vir de openModal().
   function openFatorConfigEditor(opId, c) {
+    var defaultStart = fatorConfigDataInicioPadrao(opId);
     var bodyHtml =
       '<label class="fld">Nome da configuração *</label><input class="input" id="fg-nome" style="width:100%" value="' + esc(c ? c.nome : '') + '" placeholder="Ex.: Fábrica Líder 2026">' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
-      '<div><label class="fld">Data de início da validade</label><input class="input" type="date" id="fg-data" value="' + (c ? c.dataInicio : new Date().toISOString().slice(0, 10)) + '"></div>' +
+      '<div><label class="fld">Data de início da validade</label><input class="input" type="date" id="fg-data" value="' + (c ? c.dataInicio : defaultStart) + '"><div class="footnote" style="margin-top:4px">Na primeira configuração, sugerimos o pedido mais antigo da operação para o fator alcançar a base já importada.</div></div>' +
       '<div><label class="fld">Status</label><select class="select" id="fg-status"><option value="ATIVO"' + (!c || c.status === 'ATIVO' ? ' selected' : '') + '>Ativo</option><option value="INATIVO"' + (c && c.status === 'INATIVO' ? ' selected' : '') + '>Inativo</option></select></div>' +
       '</div>' +
       '<label class="fld">Método de cálculo</label><select class="select" id="fg-metodo" style="width:100%">' +
