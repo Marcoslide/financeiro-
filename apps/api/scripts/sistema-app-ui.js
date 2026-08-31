@@ -1490,6 +1490,47 @@
   // §9-11 do prompt "Alterações — Sistema Marketplace Líder": a etiqueta bipada traz o BR
   // (rastreamento), não o ID do pedido — a resolução precisa ser segura: 1 pedido encontrado
   // associa automaticamente; 0 ou mais de 1 NUNCA associa silenciosamente.
+  var collectionLocations = null;
+  var collectionLocationsLoading = false;
+  var collectionLocationsError = null;
+  function collectionStorageKey(kind) { return 'financeiro_collection_' + kind + '_' + ((authSession.user && authSession.user.organizationId) || 'anon'); }
+  function collectionLoadLocations() {
+    if (collectionLocationsLoading) return Promise.resolve(collectionLocations || []);
+    collectionLocationsLoading = true; collectionLocationsError = null;
+    return authFetchJson('/collection/locations').then(function (rows) {
+      collectionLocations = rows || []; collectionLocationsLoading = false; return collectionLocations;
+    }).catch(function (e) {
+      collectionLocationsLoading = false; collectionLocationsError = e.message || 'Não foi possível carregar locais e estações.'; throw e;
+    });
+  }
+  function collectionContext() {
+    var locations = (collectionLocations || []).filter(function (l) { return l.status === 'ACTIVE'; });
+    if (!locations.length) return null;
+    var wantedLocation = localStorage.getItem(collectionStorageKey('location'));
+    var location = locations.find(function (l) { return l.id === wantedLocation; }) || locations[0];
+    var stations = (location.stations || []).filter(function (s) { return s.status === 'ACTIVE'; });
+    if (!stations.length) return { location: location, station: null };
+    var wantedStation = localStorage.getItem(collectionStorageKey('station'));
+    var station = stations.find(function (s) { return s.id === wantedStation; }) || stations[0];
+    return { location: location, station: station };
+  }
+  function collectionContextHtml() {
+    if (collectionLocationsLoading || collectionLocations === null) return '<span class="footnote">Carregando local de coleta…</span>';
+    if (collectionLocationsError) return '<span class="tag err">' + esc(collectionLocationsError) + '</span>';
+    var ctx = collectionContext();
+    if (!ctx || !ctx.station) return '<span class="tag err">Nenhum local/estação ativo. Solicite a configuração ao administrador.</span>';
+    var locations = collectionLocations.filter(function (l) { return l.status === 'ACTIVE'; });
+    var locOptions = locations.map(function (l) { return '<option value="' + esc(l.id) + '"' + (l.id === ctx.location.id ? ' selected' : '') + '>' + esc(l.name) + '</option>'; }).join('');
+    var stationOptions = (ctx.location.stations || []).filter(function (s) { return s.status === 'ACTIVE'; }).map(function (s) { return '<option value="' + esc(s.id) + '"' + (s.id === ctx.station.id ? ' selected' : '') + '>' + esc(s.name) + '</option>'; }).join('');
+    return '<label class="footnote" style="margin:0">Local <select class="select sm" id="collection-location">' + locOptions + '</select></label>' +
+      '<label class="footnote" style="margin:0">Estação <select class="select sm" id="collection-station">' + stationOptions + '</select></label>' +
+      '<span class="footnote" style="margin:0">Operador: <b>' + esc((authSession.user && authSession.user.name) || '—') + '</b></span>' +
+      '<button class="btn-sm" id="collection-export-today">Baixar coleta do dia</button>';
+  }
+  function collectionUuid() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) { var r = Math.random() * 16 | 0; var v = c === 'x' ? r : (r & 3 | 8); return v.toString(16); });
+  }
   function findOrdersByBR(br) {
     var q = (br || '').trim().toUpperCase(); if (!q) return [];
     return orders.filter(function (o) { return (o.tracking || '').trim().toUpperCase() === q; });
@@ -1503,13 +1544,15 @@
     if (byBR.length > 1) return { ok: false, reason: 'AMBIGUO', message: 'Rastreamento associado a mais de um pedido — revisar.', matches: byBR };
     return { ok: false, reason: 'NAO_LOCALIZADO', message: 'BR não localizado nos pedidos importados.' };
   }
-  function bipRegister(rawInput, note) {
+  function bipRegisterLocal(rawInput, note, serverRecord) {
     var res = resolveBipeInput(rawInput);
     if (!res.ok) return Promise.reject(new Error(res.message));
     var orderId = res.order.id;
-    var now = new Date().toISOString(); var ex = shipBip[orderId];
+    var now = (serverRecord && serverRecord.serverTimestamp) || new Date().toISOString(); var ex = shipBip[orderId];
+    var ctx = collectionContext(); var operatorName = (authSession.user && authSession.user.name) || 'Operador';
     if (ex) {
-      ex.history = ex.history || []; ex.history.unshift({ at: now, note: note || '' }); ex.lastScanAt = now; if (note) ex.note = note;
+      ex.history = ex.history || []; ex.history.unshift({ at: now, note: note || '', user: operatorName, serverEventId: serverRecord && serverRecord.id, result: serverRecord && serverRecord.result }); ex.lastScanAt = now; if (note) ex.note = note;
+      ex.bipedBy = ex.bipedBy || operatorName; ex.lastScannedBy = operatorName; ex.lastServerEventId = serverRecord && serverRecord.id;
       var toWriteEx = Object.assign({}, ex, { id: ex._diskId || ex.id }); delete toWriteEx._diskId;
       return putMany('shipbip', [toWriteEx]).then(function () { return ex; });
     }
@@ -1529,9 +1572,40 @@
       var claimedByOtherOp = {};
       (allOnDisk || []).forEach(function (b) { if (b.operationId && b.operationId !== opId) claimedByOtherOp[b.orderId] = true; });
       var diskId = claimedByOtherOp[orderId] ? scopedNewKey(orderId, opId, true) : orderId;
-      ex = shipBip[orderId] = { id: orderId, _diskId: diskId, orderId: orderId, operationId: opId, bipedAt: now, lastScanAt: now, bipedBy: 'Operador', note: note || '', scannedVia: res.via, scannedValue: rawInput, history: [] };
+      ex = shipBip[orderId] = { id: orderId, _diskId: diskId, orderId: orderId, operationId: opId, bipedAt: now, lastScanAt: now, bipedBy: operatorName, note: note || '', scannedVia: res.via, scannedValue: rawInput, history: [], serverEventId: serverRecord && serverRecord.id, locationId: ctx && ctx.location.id, locationName: ctx && ctx.location.name, stationId: ctx && ctx.station.id, stationName: ctx && ctx.station.name };
       var toWrite = Object.assign({}, ex, { id: diskId }); delete toWrite._diskId;
       return putMany('shipbip', [toWrite]).then(function () { return ex; });
+    });
+  }
+  function bipRegister(rawInput, note) {
+    var opId = opActiveOrNull();
+    if (!opId) return Promise.reject(new Error('Selecione uma operação específica antes de bipar.'));
+    var ctx = collectionContext();
+    if (!ctx || !ctx.station) return Promise.reject(new Error('Nenhum local/estação ativo para esta coleta.'));
+    var payload = {
+      code: rawInput,
+      workspaceOperationId: opId,
+      locationId: ctx.location.id,
+      stationId: ctx.station.id,
+      idempotencyKey: collectionUuid(),
+      captureMethod: 'SCANNER_HID',
+      clientTimestamp: new Date().toISOString(),
+      note: note || undefined,
+    };
+    return authFetchJson('/collection/scans', { method: 'POST', body: JSON.stringify(payload) }).then(function (rec) {
+      if (rec.result !== 'MATCHED' && rec.result !== 'DUPLICATE') throw new Error(rec.message || 'Leitura salva como pendente para revisão.');
+      return bipRegisterLocal(rawInput, note, rec).then(function (legacy) { legacy.collectionResult = rec.result; legacy.collectionMessage = rec.message; return legacy; });
+    });
+  }
+  function collectionExportToday() {
+    var start = new Date(); start.setHours(0, 0, 0, 0); var end = new Date(); end.setHours(23, 59, 59, 999);
+    var qs = '?from=' + encodeURIComponent(start.toISOString()) + '&to=' + encodeURIComponent(end.toISOString());
+    return authFetch('/collection/export.xlsx' + qs).then(function (res) {
+      if (!res.ok) throw new Error('Não foi possível gerar a planilha da coleta.');
+      return res.blob();
+    }).then(function (blob) {
+      var url = URL.createObjectURL(blob); var a = document.createElement('a');
+      a.href = url; a.download = 'coleta-rastro-' + new Date().toISOString().slice(0, 10) + '.xlsx'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
     });
   }
   // Full/FBS não é despachado por bipe interno — a Shopee expede pelo próprio centro de
@@ -1799,7 +1873,7 @@
       MetricCard({ label: 'Pendências', value: nn(pendTotal), cls: pendTotal ? 'red' : 'green' }),
     ]);
     // §60: campo de bipe GRANDE no topo — primeiro elemento da tela, sempre.
-    var bipe = '<div class="panel" style="border:2px solid var(--accent,#2b4bd6)"><div class="ph"><h3>BIPAR PEDIDO</h3><span class="footnote" style="margin:0">leitor USB/Bluetooth (emite como teclado) ou digite e pressione Enter</span></div><div class="pb"><div style="display:flex;gap:10px"><input class="input" id="bipinput" placeholder="Digite ou escaneie o ID do pedido (ou o BR)" autofocus style="flex:1;font-size:20px;padding:14px 16px;height:auto"><button class="btn-sm primary" id="bipbtn" style="font-size:16px;padding:0 24px">BIPAR</button></div><div class="footnote" style="margin-top:8px">Aceita o BR da etiqueta (resolvido pelo rastreamento) ou o ID do pedido. Se o BR não for encontrado, ou aparecer em mais de um pedido, nada é registrado automaticamente. Duplicidade (pedido já bipado) é avisada, não bloqueada silenciosamente.</div></div></div>';
+    var bipe = '<div class="panel" style="border:2px solid var(--accent,#2b4bd6)"><div class="ph"><h3>BIPAR PEDIDO</h3><span class="footnote" style="margin:0">leitor USB/Bluetooth (emite como teclado) ou digite e pressione Enter</span></div><div class="pb"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">' + collectionContextHtml() + '</div><div style="display:flex;gap:10px"><input class="input" id="bipinput" placeholder="Digite ou escaneie o ID do pedido (ou o BR)" autofocus style="flex:1;font-size:20px;padding:14px 16px;height:auto"><button class="btn-sm primary" id="bipbtn" style="font-size:16px;padding:0 24px">BIPAR</button></div><div class="footnote" style="margin-top:8px">Cada leitura é auditada no servidor com usuário, local, estação e horário oficial. Aceita BR ou ID do pedido; códigos não localizados/ambíguos ficam pendentes e não confirmam a saída.</div></div></div>';
     // §65/§67: filtros de prazo/modalidade/busca/ordenação por timestamp canônico — nunca texto.
     var filtros = '<div class="toolbar2" style="margin-top:8px;flex-wrap:wrap">' +
       '<select class="select sm" id="expprazo"><option value=""' + (!pedExpF.prazo ? ' selected' : '') + '>Prazo: Todos</option><option value="vencidos"' + (pedExpF.prazo === 'vencidos' ? ' selected' : '') + '>Vencidos</option><option value="hoje"' + (pedExpF.prazo === 'hoje' ? ' selected' : '') + '>Hoje</option><option value="amanha"' + (pedExpF.prazo === 'amanha' ? ' selected' : '') + '>Amanhã</option><option value="proximos"' + (pedExpF.prazo === 'proximos' ? ' selected' : '') + '>Próximos</option></select>' +
@@ -1847,9 +1921,13 @@
     return head + bipe + strip + tabsHtml + filtros + '<div class="count-line" style="margin-top:8px"><b>' + nn(list.length) + '</b> pedidos</div>' + table + expSessaoBlock() + pendenciasConferenciaBlock() + anomaliaBox;
   }
   function bindPedidosExpedicao() {
-    var bi = document.getElementById('bipinput'); var doRegister = function () { var v = bi.value; bipRegister(v).then(function (rec) { bi.value = ''; render(); var el = document.getElementById('bipinput'); if (el) el.focus(); toast('Expedição registrada', rec.orderId); }).catch(function (e) { toast('Falha', e.message, true); }); };
+    if (collectionLocations === null && !collectionLocationsLoading) collectionLoadLocations().then(function () { render(); }).catch(function () { render(); });
+    var bi = document.getElementById('bipinput'); var doRegister = function () { var v = bi.value; if (!v.trim()) return; bi.disabled = true; bipRegister(v).then(function (rec) { bi.value = ''; render(); var el = document.getElementById('bipinput'); if (el) el.focus(); toast(rec.collectionResult === 'DUPLICATE' ? 'Leitura duplicada auditada' : 'Expedição registrada', rec.orderId); }).catch(function (e) { bi.disabled = false; bi.focus(); toast('Falha', e.message, true); }); };
     if (bi) bi.onkeydown = function (e) { if (e.key === 'Enter') doRegister(); };
     var bb = document.getElementById('bipbtn'); if (bb) bb.onclick = doRegister;
+    var cl = document.getElementById('collection-location'); if (cl) cl.onchange = function () { localStorage.setItem(collectionStorageKey('location'), cl.value); localStorage.removeItem(collectionStorageKey('station')); render(); };
+    var cs = document.getElementById('collection-station'); if (cs) cs.onchange = function () { localStorage.setItem(collectionStorageKey('station'), cs.value); };
+    var ce = document.getElementById('collection-export-today'); if (ce) ce.onclick = function () { ce.disabled = true; collectionExportToday().then(function () { toast('Planilha gerada', 'Coleta do dia baixada.'); }).catch(function (e) { toast('Falha', e.message, true); }).finally(function () { ce.disabled = false; }); };
     app.querySelectorAll('[data-expst]').forEach(function (c) { c.onclick = function () { pedExpF.status = c.dataset.expst; render(); }; });
     var pz = document.getElementById('expprazo'); if (pz) pz.onchange = function () { pedExpF.prazo = pz.value; render(); };
     var md = document.getElementById('expmod'); if (md) md.onchange = function () { pedExpF.modalidade = md.value; render(); };

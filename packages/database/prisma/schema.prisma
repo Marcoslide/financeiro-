@@ -33,6 +33,25 @@ enum EntityStatus {
   INACTIVE
 }
 
+enum ScanCaptureMethod {
+  SCANNER_HID
+  MANUAL
+  QR_CODE
+}
+
+enum ScanCodeType {
+  BR
+  ORDER_ID
+  UNKNOWN
+}
+
+enum ScanResolutionResult {
+  MATCHED
+  NOT_FOUND
+  AMBIGUOUS
+  DUPLICATE
+}
+
 enum IngestionSource {
   MANUAL_UPLOAD
   INTERNAL_SHOPEE_API
@@ -116,6 +135,10 @@ model Organization {
   actionPlans           ActionPlan[]
   salesImportBatches    SalesImportBatch[]
   workspaceStores       OrganizationWorkspaceStore[]
+  operationalLocations  OperationalLocation[]
+  scanStations          ScanStation[]
+  shipmentScanEvents    ShipmentScanEvent[]
+  shipmentConfirmations ShipmentConfirmation[]
 
   @@map("organizations")
 }
@@ -149,6 +172,8 @@ model MarketplaceAccount {
   aiAnalyses            AiAnalysis[]
   actionPlans           ActionPlan[]
   salesImportBatches    SalesImportBatch[]
+  shipmentScanEvents    ShipmentScanEvent[]
+  shipmentConfirmations ShipmentConfirmation[]
 
   @@unique([organizationId, marketplace, displayName])
   @@index([organizationId])
@@ -216,6 +241,8 @@ model User {
   productImportBatches     ProductImportBatch[]
   postSaleImportBatches    PostSaleImportBatch[]
   salesImportBatches       SalesImportBatch[]
+  shipmentScanEvents       ShipmentScanEvent[]
+  shipmentConfirmations    ShipmentConfirmation[]
 
   @@index([organizationId])
   @@index([appRoleId])
@@ -272,6 +299,120 @@ model OrganizationWorkspaceStore {
   @@id([organizationId, storeName])
   @@index([organizationId, updatedAt])
   @@map("organization_workspace_stores")
+}
+
+/// Unidade, galpão ou setor físico onde ocorre uma leitura operacional.
+model OperationalLocation {
+  id             String       @id @default(cuid())
+  organizationId String
+  code           String
+  name           String
+  timezone       String       @default("America/Sao_Paulo")
+  status         EntityStatus @default(ACTIVE)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  stations              ScanStation[]
+  shipmentScanEvents    ShipmentScanEvent[]
+  shipmentConfirmations ShipmentConfirmation[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, status])
+  @@map("operational_locations")
+}
+
+/// Posto/dispositivo autorizado a enviar bipagens dentro de um local.
+model ScanStation {
+  id               String       @id @default(cuid())
+  organizationId   String
+  locationId       String
+  code             String
+  name             String
+  deviceIdentifier String?
+  status           EntityStatus @default(ACTIVE)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  organization          Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  location              OperationalLocation    @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  shipmentScanEvents    ShipmentScanEvent[]
+  shipmentConfirmations ShipmentConfirmation[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, locationId, status])
+  @@map("scan_stations")
+}
+
+/// Uma linha imutável para cada tentativa física de leitura.
+model ShipmentScanEvent {
+  id                      String               @id @default(cuid())
+  organizationId          String
+  marketplaceAccountId    String?
+  orderId                 String?
+  userId                  String
+  locationId              String
+  stationId               String
+  idempotencyKey          String
+  rawCode                 String
+  normalizedCode          String
+  codeType                ScanCodeType
+  result                  ScanResolutionResult
+  captureMethod           ScanCaptureMethod    @default(SCANNER_HID)
+  resolvedExternalOrderId String?
+  trackingNumberSnapshot  String?
+  workspaceOperationId    String?
+  orderSource             String?
+  clientTimestamp         DateTime?
+  serverTimestamp         DateTime             @default(now())
+  note                    String?
+  metadata                Json?
+  createdAt               DateTime             @default(now())
+
+  organization       Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplaceAccount MarketplaceAccount?   @relation(fields: [marketplaceAccountId], references: [id], onDelete: SetNull)
+  order              MarketplaceOrder?     @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  operator           User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  location           OperationalLocation   @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  station            ScanStation           @relation(fields: [stationId], references: [id], onDelete: Restrict)
+  confirmation       ShipmentConfirmation?
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, serverTimestamp])
+  @@index([organizationId, normalizedCode])
+  @@index([organizationId, result, serverTimestamp])
+  @@index([orderId, serverTimestamp])
+  @@index([stationId, serverTimestamp])
+  @@map("shipment_scan_events")
+}
+
+/// Primeira confirmação válida de saída; releituras nunca a sobrescrevem.
+model ShipmentConfirmation {
+  id                   String   @id @default(cuid())
+  organizationId       String
+  marketplaceAccountId String?
+  orderId              String?  @unique
+  workspaceOperationId String?
+  externalOrderId      String
+  confirmationKey      String   @unique
+  firstScanEventId     String   @unique
+  userId               String
+  locationId           String
+  stationId            String
+  confirmedAt          DateTime
+  createdAt            DateTime @default(now())
+
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplaceAccount MarketplaceAccount? @relation(fields: [marketplaceAccountId], references: [id], onDelete: Restrict)
+  order              MarketplaceOrder?   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  firstScanEvent     ShipmentScanEvent   @relation(fields: [firstScanEventId], references: [id], onDelete: Restrict)
+  operator           User                @relation(fields: [userId], references: [id], onDelete: Restrict)
+  location           OperationalLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  station            ScanStation         @relation(fields: [stationId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, confirmedAt])
+  @@index([marketplaceAccountId, confirmedAt])
+  @@map("shipment_confirmations")
 }
 
 /// Trilha de auditoria (quem, o quê, antes/depois). Camada paralela de
@@ -822,11 +963,13 @@ model MarketplaceOrder {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  organization       Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  marketplaceAccount MarketplaceAccount     @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
-  occurrences        PostSaleOccurrence[]
-  items              MarketplaceOrderItem[]
-  statusHistory      OrderStatusHistory[]
+  organization         Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplaceAccount   MarketplaceAccount     @relation(fields: [marketplaceAccountId], references: [id], onDelete: Cascade)
+  occurrences          PostSaleOccurrence[]
+  items                MarketplaceOrderItem[]
+  statusHistory        OrderStatusHistory[]
+  shipmentScanEvents   ShipmentScanEvent[]
+  shipmentConfirmation ShipmentConfirmation?
 
   @@unique([marketplaceAccountId, externalOrderId])
   @@index([organizationId])

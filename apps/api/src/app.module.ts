@@ -19,6 +19,7 @@ import { TenantGuard } from './common/tenant.guard';
 import { PermissionGuard } from './common/permission.guard';
 import { HealthController } from './health.controller';
 import { WorkspaceModule } from './workspace/workspace.module';
+import { CollectionModule } from './collection/collection.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { WorkspaceModule } from './workspace/workspace.module';
     AiModule,
     OrdersModule,
     WorkspaceModule,
+    CollectionModule,
   ],
   controllers: [HealthController],
   providers: [
