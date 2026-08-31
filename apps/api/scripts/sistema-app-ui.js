@@ -2815,7 +2815,7 @@
       var subHtml = '';
       if (it.key === 'servico') {
         var sf = sellerCharges.serviceFee;
-        var childRows = (sf.children || []).map(function (c) {
+        var childRows = (sf.displayChildren || sf.children || []).map(function (c) {
           return '<div class="fin-line" style="padding-left:18px;font-size:13px;border-left:2px solid var(--line);margin-left:4px"><span>↳ ' + esc(c.label) + '</span><span class="' + (c.valor < 0 ? 'neg' : 'pos') + '">' + brlC(c.valor) + '</span></div>';
         }).join('');
         var diffRow = '';
@@ -2909,6 +2909,7 @@
     // no próprio pedido, se a base Income persistida (mrRenda/mrSvc) realmente tem ou não esse ID —
     // sem depender de eu ter acesso ao arquivo Income que ele importou ao vivo.
     var svcR = comp.svcResolve;
+    var svcDiagChildren = comp.serviceFee ? (comp.serviceFee.displayChildren || comp.serviceFee.children || []) : [];
     var diagIncomeBlock = '<details style="margin-top:' + (auditoriaFonte.length || shipRow ? '10px' : '0') + '"><summary style="cursor:pointer;font-weight:600">Diagnóstico de cruzamento com o Income</summary><div style="margin-top:6px">' +
       '<div class="fin-line"><span>Operação usada no cruzamento</span><span class="mono">' + esc(comp.operationId || '(nenhuma operação ativa)') + '</span></div>' +
       '<div class="fin-line"><span>ID do pedido normalizado</span><span class="mono">' + esc(normalizeOrderId(orderId) || '—') + '</span></div>' +
@@ -2916,9 +2917,7 @@
       '<div class="fin-line"><span>Income / Service Fee Details</span><span class="tag ' + (svcR.found ? 'ok' : 'warn') + '">' + (svcR.found ? 'FOUND · ' + nn(svcR.rows.length) + ' linha(s)' : 'NOT_FOUND') + '</span></div>' +
       (mrRow ? '<div class="fin-line"><span>Taxa de comissão líquida (Income/Order)</span><b>' + brlC(mrRow.comissao) + '</b></div>' : '') +
       (mrRow ? '<div class="fin-line"><span>Taxa de serviço líquida — pai (Income/Order)</span><b>' + brlC(mrRow.servico) + '</b></div>' : '') +
-      (svcR.found ? '<div class="fin-line" style="padding-left:14px"><span>↳ Afiliados do Vendedor (Service Fee Details)</span><span>' + brlC(svcR.totals.afiliadosVendedor) + '</span></div>' : '') +
-      (svcR.found ? '<div class="fin-line" style="padding-left:14px"><span>↳ Taxa de Transação (Service Fee Details)</span><span>' + brlC(svcR.totals.transacao) + '</span></div>' : '') +
-      (svcR.found ? '<div class="fin-line" style="padding-left:14px"><span>↳ Taxa por item vendido (Service Fee Details)</span><span>' + brlC(svcR.totals.porItem) + '</span></div>' : '') +
+      (svcR.found ? svcDiagChildren.map(function (ch) { return '<div class="fin-line" style="padding-left:14px"><span>↳ ' + esc(ch.label) + '</span><span class="' + (ch.valor < 0 ? 'neg' : 'pos') + '">' + brlC(ch.valor) + '</span></div>'; }).join('') : '') +
       '<div class="footnote" style="margin-top:6px">Lê direto de mrRenda/mrSvc (persistidos no boot, independentes de filtro/aba de Minha Renda) — se aparecer NOT_FOUND aqui, esse pedido realmente não está no arquivo Income importado; procure o mesmo ID direto na planilha (aba Renda, coluna ID do pedido) para confirmar.</div>' +
       '</div></details>';
     // Auditoria da Composição Financeira (motor canônico) — pedido a pedido, Venda Bruta/Ajustes/

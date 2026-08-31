@@ -133,6 +133,8 @@ describe('pacote operacional v1.1.1 — invariantes da interface única', () => 
     expect(ui).toContain('svcResolve.found && svcT.porItem && mrRow');
     expect(ui).toContain("key: 'svc_commercial_adjustment'");
     expect(ui).toContain('displayChildren: displayChildren');
+    expect(ui).toContain('(sf.displayChildren || sf.children || []).map');
+    expect(ui).toContain('var svcDiagChildren = comp.serviceFee ? (comp.serviceFee.displayChildren || comp.serviceFee.children || []) : [];');
     const build = functionFromUi('buildServiceFeeComposition');
     const result = build(
       { servico: -2502, servicoBruta: -3061 },
