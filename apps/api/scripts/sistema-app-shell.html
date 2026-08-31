@@ -62,6 +62,20 @@
      total do monitor. 1320px sobrava ~350-570px de branco em 1440/1920 exatamente nas telas
      operacionais (CP/CR) que mais precisam de colunas visíveis sem scroll horizontal. */
   .content{padding:24px 26px;max-width:1880px;width:100%}
+  @media(max-width:768px){
+    .shell,.shell.nav-collapsed{grid-template-columns:68px minmax(0,1fr)}
+    .sidebar,.shell.nav-collapsed .sidebar{padding:12px 8px}
+    .brand,.shell.nav-collapsed .brand{justify-content:center;padding:6px 0 14px}
+    .brand-text,.nav-toggle,.shell.nav-collapsed .brand-text,.shell.nav-collapsed .nav-toggle{display:none}
+    .nav-group,.shell.nav-collapsed .nav-group{height:1px;margin:12px 0;padding:0;overflow:hidden;text-indent:-9999px;border-top:1px solid rgba(255,255,255,.08)}
+    .nav a,.shell.nav-collapsed .nav a{justify-content:center;padding:9px 0}
+    .nav a .lbl,.shell.nav-collapsed .nav a .lbl{display:none}
+    .nav-expand,.shell.nav-collapsed .nav-expand,#sidebar-footer{display:none}
+    .topbar{padding:8px 10px;gap:8px;flex-wrap:wrap}
+    .topbar .crumbs{display:none}
+    .top-store{min-width:0;max-width:100%}
+    .content{padding:12px 10px}
+  }
   /* UX urgente (teste operacional): densidade maior em toda a área de conteúdo — telas operacionais
      (CP/CR/Caixa/Carteira/Pedidos/Produtos/DRE) ganham mais linhas de tabela visíveis sem rolar, sem
      mexer em nenhum cálculo/dado. Reduz só espaçamento (margens/paddings), nunca remove informação. */
