@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const ui = readFileSync(resolve(__dirname, '../../scripts/sistema-app-ui.js'), 'utf8');
+const shell = readFileSync(resolve(__dirname, '../../scripts/sistema-app-shell.html'), 'utf8');
 
 function functionFromUi(name: string): (...args: any[]) => any {
   const start = ui.indexOf(`function ${name}(`);
@@ -33,8 +34,44 @@ describe('pacote operacional v1.1.1 — invariantes da interface única', () => 
   });
 
   it('persiste rota e subaba no hash', () => {
-    expect(ui).toContain("var next = '#/' + route + (tab ? '?tab='");
+    expect(ui).toContain("var next = '#/' + route + (params.toString() ? '?' + params.toString() : '');");
     expect(ui).toContain('restoreRouteUiState(); persistRouteUiState();');
+    expect(ui).toContain("if (route === 'configuracoes') return configSub;");
+    expect(ui).toContain("if (route === 'produtos' && Produtos && Produtos.getTab) return Produtos.getTab();");
+  });
+
+  it('centraliza configurações sem criar stores ou cadastros paralelos', () => {
+    expect(shell).toContain('data-route="configuracoes"');
+    expect(ui).toContain('function renderConfiguracoes()');
+    expect(ui).toContain("cpSub = tab;");
+    expect(ui).toContain("crSub = 'classificacoes';");
+    expect(ui).toContain('fatorSubView(tab, opId)');
+    expect(ui).toContain("precSub = 'regras';");
+    expect(ui).toContain('openGerenciarBancos(function () { render(); });');
+    expect(ui).toContain('openGerenciarOperacoes;');
+    expect(ui).not.toContain("openDB('configuracoes");
+  });
+
+  it('reduz abas operacionais e mantém atalhos para a fonte oficial', () => {
+    const cpTabs = ui.slice(ui.indexOf('function cpTabsHtml'), ui.indexOf('function renderContasPagar'));
+    expect(cpTabs).toContain("['lista', 'Contas a pagar'], ['dre', 'DRE de Despesas']");
+    expect(cpTabs).toContain('data-cp-config');
+    expect(cpTabs).not.toContain("['categorias', 'Categorias']");
+    const crScreen = ui.slice(ui.indexOf('function renderContasReceber'), ui.indexOf('function crRenderBody'));
+    expect(crScreen).toContain('data-cr-config');
+    expect(crScreen).not.toContain("['classificacoes', 'Classificações']");
+  });
+
+  it('ordena Pedidos exatamente como Dashboard, Pedidos, Expedição e Importações', () => {
+    const screen = ui.slice(ui.indexOf('function renderPedidos'), ui.indexOf('function bindPedidosDashboard'));
+    const dashboard = screen.indexOf("subtab('pedidos', 'dashboard', 'Dashboard')");
+    const pedidos = screen.indexOf("subtab('pedidos', 'pedidos', 'Pedidos')");
+    const expedicao = screen.indexOf("subtab('pedidos', 'expedicao', 'Expedição')");
+    const imports = screen.indexOf("subtab('pedidos', 'import', 'Importações')");
+    expect(dashboard).toBeGreaterThanOrEqual(0);
+    expect(dashboard).toBeLessThan(pedidos);
+    expect(pedidos).toBeLessThan(expedicao);
+    expect(expedicao).toBeLessThan(imports);
   });
 
   it('gera parcelamento em meses e preserva fechamento de mês', () => {

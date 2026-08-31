@@ -85,6 +85,12 @@
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;margin-bottom:12px}
   .panel .ph{padding:11px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}
   .panel .ph h3{margin:0;font-size:14.5px}.pb{padding:12px}
+  .config-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-bottom:16px}
+  .config-card{appearance:none;width:100%;min-height:128px;text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px;cursor:pointer;color:var(--ink);display:flex;flex-direction:column;gap:7px;transition:border-color .12s ease,transform .12s ease,box-shadow .12s ease}
+  .config-card:hover{border-color:#9eb4ef;transform:translateY(-1px);box-shadow:0 8px 24px rgba(31,58,138,.10)}
+  .config-card .config-icon{width:34px;height:34px;border-radius:9px;background:var(--info-bg);color:var(--brand-2);display:flex;align-items:center;justify-content:center;font-size:17px}
+  .config-card b{font-size:14px}.config-card span{font-size:12.5px;color:var(--muted);line-height:1.4}
+  .config-context{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:#fbfcfe}
   .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:10px}
   .tab{padding:8px 14px;font-size:13px;font-weight:600;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;cursor:pointer}
   .tab:hover{color:var(--ink)}.tab.active{color:var(--brand-2);border-bottom-color:var(--brand-2)}
@@ -362,6 +368,8 @@
       <a href="#/fator" data-route="fator" title="Fator de Custo"><span class="ic">🏭</span><span class="lbl">Fator de Custo</span></a>
       <div class="nav-group">Inteligência</div>
       <a href="#/ia" data-route="ia" title="Inteligência"><span class="ic">✦</span><span class="lbl">Inteligência</span></a>
+      <div class="nav-group">Configurações</div>
+      <a href="#/configuracoes" data-route="configuracoes" title="Configurações"><span class="ic">⚙</span><span class="lbl">Configurações</span></a>
       <button class="nav-expand" id="nav-expand" title="Expandir menu">»</button>
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">

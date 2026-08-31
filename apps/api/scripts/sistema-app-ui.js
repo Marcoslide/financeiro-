@@ -19,12 +19,14 @@
 
   function initialRouteFromHash() {
     var raw = (location.hash || '').replace(/^#\/?/, '').split('?')[0];
-    var valid = ['dashboard', 'produtos', 'pedidos', 'posvenda', 'carteira', 'acelera', 'afiliados', 'minharenda', 'caixa', 'contaspagar', 'contasreceber', 'precificacao', 'ia', 'fator', 'admin-usuarios'];
+    var valid = ['dashboard', 'produtos', 'pedidos', 'posvenda', 'carteira', 'acelera', 'afiliados', 'minharenda', 'caixa', 'contaspagar', 'contasreceber', 'precificacao', 'ia', 'fator', 'configuracoes', 'admin-usuarios'];
     return valid.indexOf(raw) >= 0 ? raw : 'dashboard';
   }
 
   // ---------- estado compartilhado ----------
   var route = initialRouteFromHash(), DB = null;
+  var configSub = 'hub';
+  var routeContext = null;
   var orders = [], occ = [], batches = [], plans = [];
   // Refatoração N5 (Fase 5 — Performance): caches por-renderização, estritamente aditivos — nunca
   // alteram nenhum valor retornado, só evitam recalcular o mesmo resultado puro para a mesma chave
@@ -189,7 +191,7 @@
   function pendResGet(id) { var op = opActiveOrNull(); if (op) { var scoped = pendResolucoes[op + '|' + id]; if (scoped) return scoped; } return pendResolucoes[id]; }
   var walletF = { search: '', cat: '', flow: '' }; // filtros da tabela de movimentações
   var Produtos = null;
-  var sub = { pedidos: 'pedidos', posvenda: 'visao' };
+  var sub = { pedidos: 'dashboard', posvenda: 'visao' };
   var pedTab = 'ALL';
   // PROMPT "OTIMIZAÇÃO COMPLETA DE UX/UI DESKTOP" — achado da auditoria de filtros/navegação: a busca
   // de Pedidos era lida direto do DOM (document.getElementById('ped-q').value) a cada render, então
@@ -1262,16 +1264,53 @@
   function fileInput(cb) { var inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.xlsx,.xls,.csv'; inp.onchange = function () { if (inp.files[0]) cb(inp.files[0]); }; inp.click(); }
 
   // ============================================================ RENDER (roteamento)
-  function setActive() { document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === route); }); crumb.textContent = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', minharenda: 'Minha Renda', caixa: 'Caixa', contaspagar: 'Contas a Pagar', contasreceber: 'Contas a Receber', precificacao: 'Precificação', ia: 'Inteligência', fator: 'Fator de Custo', 'admin-usuarios': 'Usuários e Acessos' }[route] || ''; }
+  var CONFIG_CRUMBS = {
+    hub: ['Configurações'],
+    'empresa-operacao': ['Configurações', 'Empresa e Operação'],
+    'contas-bancarias': ['Configurações', 'Financeiro', 'Contas Bancárias'],
+    'cp': ['Configurações', 'Contas a Pagar'],
+    'cp-categorias': ['Configurações', 'Contas a Pagar', 'Categorias'],
+    'cp-planocontas': ['Configurações', 'Contas a Pagar', 'Plano de Contas'],
+    'cp-centroscusto': ['Configurações', 'Contas a Pagar', 'Centros de Custo'],
+    'cp-fornecedores': ['Configurações', 'Contas a Pagar', 'Fornecedores'],
+    'cr': ['Configurações', 'Contas a Receber'],
+    'cr-classificacoes': ['Configurações', 'Contas a Receber', 'Classificações'],
+    financeiro: ['Configurações', 'Financeiro'],
+    producao: ['Configurações', 'Produção e Custos'],
+    'fator-geral': ['Configurações', 'Produção e Custos', 'Configuração Geral'],
+    'fator-setores': ['Configurações', 'Produção e Custos', 'Setores Produtivos'],
+    'fator-funcionarios': ['Configurações', 'Produção e Custos', 'Funcionários'],
+    'fator-categorias': ['Configurações', 'Produção e Custos', 'Categorias do Fator'],
+    'fator-fixos': ['Configurações', 'Produção e Custos', 'Custos Fixos'],
+    'fator-variaveis': ['Configurações', 'Produção e Custos', 'Custos Variáveis'],
+    'fator-impostos': ['Configurações', 'Produção e Custos', 'Impostos'],
+    'fator-processos': ['Configurações', 'Produção e Custos', 'Processos Produtivos'],
+    'fator-roteiro': ['Configurações', 'Produção e Custos', 'Roteiro por Família'],
+    marketplaces: ['Configurações', 'Marketplaces'],
+    'marketplace-taxas': ['Configurações', 'Marketplaces', 'Taxas e Custos Configuráveis'],
+  };
+  function setActive() {
+    var activeRoute = (route === 'admin-usuarios' || (route === 'produtos' && routeContext === 'config-familias')) ? 'configuracoes' : route;
+    document.querySelectorAll('#nav a').forEach(function (a) { a.classList.toggle('active', a.dataset.route === activeRoute); });
+    var label = { dashboard: 'Dashboard', produtos: 'Produtos', pedidos: 'Pedidos', posvenda: 'Devolução', carteira: 'Saldo da Carteira', acelera: 'Shopee Acelera', afiliados: 'Afiliados', minharenda: 'Minha Renda', caixa: 'Caixa', contaspagar: 'Contas a Pagar', contasreceber: 'Contas a Receber', precificacao: 'Precificação', ia: 'Inteligência', fator: 'Fator de Custo', configuracoes: 'Configurações', 'admin-usuarios': 'Configurações › Usuários e Acessos' }[route] || '';
+    if (route === 'configuracoes') label = (CONFIG_CRUMBS[configSub] || CONFIG_CRUMBS.hub).join(' › ');
+    if (route === 'produtos' && routeContext === 'config-familias') label = 'Configurações › Produção e Custos › Famílias';
+    crumb.textContent = label;
+  }
   var routeStateRestored = false;
   function routeTabValue() {
+    if (route === 'produtos' && Produtos && Produtos.getTab) return Produtos.getTab();
+    if (route === 'configuracoes') return configSub;
+    if (route === 'admin-usuarios') return adminS.tab;
     return { pedidos: sub.pedidos, posvenda: sub.posvenda, carteira: walletSub, acelera: aceleraSub, afiliados: affSub, caixa: caixaSub, contaspagar: cpSub, contasreceber: crSub, precificacao: precSub, fator: fatorSub }[route] || null;
   }
   function restoreRouteUiState() {
     if (routeStateRestored) return; routeStateRestored = true;
-    var query = (location.hash || '').split('?')[1] || ''; var tab = new URLSearchParams(query).get('tab');
+    var query = (location.hash || '').split('?')[1] || ''; var params = new URLSearchParams(query); var tab = params.get('tab');
+    routeContext = params.get('from') || null;
     if (!tab) return;
-    if (route === 'pedidos') sub.pedidos = tab;
+    if (route === 'produtos' && Produtos && Produtos.setTab) Produtos.setTab(tab);
+    else if (route === 'pedidos') sub.pedidos = tab;
     else if (route === 'posvenda') sub.posvenda = tab;
     else if (route === 'carteira') walletSub = tab;
     else if (route === 'acelera') aceleraSub = tab;
@@ -1281,9 +1320,14 @@
     else if (route === 'contasreceber') crSub = tab;
     else if (route === 'precificacao') precSub = tab;
     else if (route === 'fator') fatorSub = tab;
+    else if (route === 'configuracoes') configSub = tab;
+    else if (route === 'admin-usuarios') adminS.tab = tab;
   }
   function persistRouteUiState() {
-    var tab = routeTabValue(); var next = '#/' + route + (tab ? '?tab=' + encodeURIComponent(tab) : '');
+    var tab = routeTabValue(); var params = new URLSearchParams();
+    if (tab) params.set('tab', tab);
+    if (routeContext && route === 'produtos') params.set('from', routeContext);
+    var next = '#/' + route + (params.toString() ? '?' + params.toString() : '');
     if (location.hash !== next) history.replaceState(null, '', next);
   }
   function render() {
@@ -1315,10 +1359,136 @@
       if (route === 'precificacao') return renderPrecificacao();
       if (route === 'fator') return renderFatorCusto();
       if (route === 'ia') return renderIA();
+      if (route === 'configuracoes') return renderConfiguracoes();
       if (route === 'admin-usuarios') return renderAdminUsuarios();
     } catch (e) { app.innerHTML = renderErrBox('Erro ao abrir esta tela: ' + esc(e && (e.message || e)) + '. Os dados estão salvos — recarregue a página.'); }
   }
   function renderErrBox(msg) { return '<div class="form-err" style="max-width:640px;margin:24px auto"><b>Ops.</b><br>' + msg + '<div style="margin-top:12px"><button class="btn-sm primary" onclick="location.reload()">Recarregar</button></div></div>'; }
+
+  // ============================================================ CENTRAL DE CONFIGURAÇÕES
+  // Camada exclusivamente de navegação/organização. Cada detalhe abaixo chama a MESMA view e o
+  // MESMO binder já usados pelo módulo de origem (CP, CR, Fator, Precificação, bancos, operações e
+  // usuários). Nenhum store, regra, ID, cálculo ou cadastro paralelo é criado aqui.
+  function configCard(key, icon, title, description) {
+    if (!configCanOpen(key)) return '';
+    return '<button type="button" class="config-card" data-config-open="' + key + '"><span class="config-icon">' + icon + '</span><b>' + esc(title) + '</b><span>' + esc(description) + '</span></button>';
+  }
+  function configCanOpen(key) {
+    if (key === 'admin-usuarios') return canAccessRoute('admin-usuarios');
+    if (key === 'cp' || key.indexOf('cp-') === 0) return canAccessRoute('contaspagar');
+    if (key === 'cr' || key.indexOf('cr-') === 0) return canAccessRoute('contasreceber');
+    if (key === 'prod-familias') return canAccessRoute('produtos');
+    if (key === 'producao' || key.indexOf('fator-') === 0) return canAccessRoute('fator');
+    if (key === 'marketplace-taxas') return canAccessRoute('precificacao');
+    if (key === 'financeiro') return canAccessRoute('caixa') || canAccessRoute('contaspagar') || canAccessRoute('contasreceber') || canAccessRoute('precificacao');
+    if (key === 'contas-bancarias') return canAccessRoute('caixa') || canAccessRoute('contaspagar') || canAccessRoute('contasreceber');
+    return true;
+  }
+  function configHeader(title, description, parentKey) {
+    var actions = parentKey ? ['<button class="btn-sm" data-config-parent="' + parentKey + '">← Voltar</button>'] : [];
+    return PageHeader({ variant: 'eyebrow', eyebrow: 'CONFIGURAÇÕES', title: title, description: description, actions: actions });
+  }
+  function configContextHtml(parentKey) {
+    return '<div class="config-context"><button class="btn-sm" data-config-parent="' + parentKey + '">← Voltar às Configurações</button><span class="footnote" style="margin:0">Esta é a tela oficial do cadastro; os módulos operacionais usam a mesma fonte de dados.</span></div>';
+  }
+  function bindConfigNavigation() {
+    app.querySelectorAll('[data-config-open]').forEach(function (b) { b.onclick = function () { configNavigate(b.dataset.configOpen); }; });
+    app.querySelectorAll('[data-config-parent]').forEach(function (b) { b.onclick = function () { route = 'configuracoes'; configSub = b.dataset.configParent || 'hub'; routeContext = null; render(); }; });
+  }
+  function configNavigate(key) {
+    if (!configCanOpen(key)) { toast('Acesso não permitido', 'Seu perfil não possui acesso a esta área.', true); return; }
+    routeContext = null;
+    if (key === 'admin-usuarios') { route = 'admin-usuarios'; adminS.tab = 'usuarios'; render(); return; }
+    if (key === 'prod-familias') { route = 'produtos'; routeContext = 'config-familias'; if (Produtos && Produtos.setTab) Produtos.setTab('familias'); render(); return; }
+    route = 'configuracoes'; configSub = key; render();
+  }
+  function configHubHtml() {
+    return configHeader('Configurações', 'Cadastros, parâmetros e estruturas permanentes em um único lugar. Os módulos operacionais continuam focados no trabalho do dia a dia.', null) +
+      '<div class="config-grid">' +
+      configCard('empresa-operacao', '🏢', 'Empresa e Operação', 'Empresas, CNPJs, operações, lojas e vínculos por marketplace.') +
+      configCard('contas-bancarias', '🏦', 'Contas Bancárias', 'Cadastro oficial compartilhado por Caixa, Contas a Pagar, Contas a Receber e Conciliação.') +
+      configCard('admin-usuarios', '👥', 'Usuários e Acessos', 'Usuários, perfis, permissões e auditoria já existentes.') +
+      configCard('cp', '📄', 'Contas a Pagar', 'Categorias, plano de contas, centros de custo e fornecedores.') +
+      configCard('cr', '💵', 'Contas a Receber', 'Centros de recebimentos e categorias próprias do módulo.') +
+      configCard('financeiro', '▥', 'Financeiro', 'Atalhos para estruturas financeiras compartilhadas e regras configuráveis existentes.') +
+      configCard('producao', '🏭', 'Produção e Custos', 'Fator de Custo, setores, funcionários, famílias e estruturas produtivas.') +
+      configCard('marketplaces', '🛍', 'Marketplaces', 'Operações, lojas e taxas configuráveis já existentes por operação.') +
+      '</div>';
+  }
+  function configGroupHtml(title, description, parentKey, cards) {
+    return configHeader(title, description, parentKey || 'hub') + '<div class="config-grid">' + cards.join('') + '</div>';
+  }
+  function configEmpresaOperacaoHtml() {
+    var companyRows = companies.slice().sort(function (a, b) { return (a.nomeFantasia || a.razaoSocial).localeCompare(b.nomeFantasia || b.razaoSocial); }).map(function (c) {
+      var n = operations.filter(function (o) { return o.companyId === c.id; }).length;
+      return '<tr><td><b>' + esc(c.nomeFantasia || c.razaoSocial) + '</b><div class="footnote" style="margin:2px 0 0">' + esc(c.razaoSocial || '') + '</div></td><td class="mono">' + esc(c.cnpj || '—') + '</td><td class="mono">' + esc(c.inscricaoEstadual || '—') + '</td><td>' + n + '</td><td>' + (c.ativa !== false ? '<span class="tag ok">ativa</span>' : '<span class="tag neutral">inativa</span>') + '</td></tr>';
+    }).join('');
+    var operationRows = operations.slice().sort(function (a, b) { return opLabel(a).localeCompare(opLabel(b)); }).map(function (o) {
+      var c = opCompany(o);
+      return '<tr><td>' + esc(c ? (c.nomeFantasia || c.razaoSocial) : '—') + '</td><td><b>' + esc(o.storeName || o.nome) + '</b></td><td>' + esc(o.marketplace || '—') + '</td><td class="mono">' + esc(o.sellerId || '—') + '</td><td>' + (o.ativa !== false ? '<span class="tag ok">ativa</span>' : '<span class="tag neutral">inativa</span>') + '</td></tr>';
+    }).join('');
+    return configHeader('Empresa e Operação', 'Estrutura multiempresa já existente: empresa/CNPJ → operação/loja/marketplace.', 'hub') +
+      '<div class="toolbar2"><button class="btn-sm primary" id="cfg-new-operation">+ Nova operação</button><button class="btn-sm" id="cfg-manage-operations">Gerenciar operações</button></div>' +
+      '<div class="panel"><div class="ph"><h3>Empresas / CNPJs</h3><span class="footnote" style="margin:0">' + companies.length + ' cadastrada(s)</span></div><div class="table-wrap"><table><thead><tr><th>Empresa</th><th>CNPJ</th><th>Inscrição estadual</th><th>Operações</th><th>Status</th></tr></thead><tbody>' + (companyRows || '<tr><td colspan="5" class="empty">Nenhuma empresa cadastrada.</td></tr>') + '</tbody></table></div></div>' +
+      '<div class="panel"><div class="ph"><h3>Operações / Lojas / Marketplaces</h3><span class="footnote" style="margin:0">' + operations.length + ' cadastrada(s)</span></div><div class="table-wrap"><table><thead><tr><th>Empresa</th><th>Loja</th><th>Marketplace</th><th>Seller ID</th><th>Status</th></tr></thead><tbody>' + (operationRows || '<tr><td colspan="5" class="empty">Nenhuma operação cadastrada.</td></tr>') + '</tbody></table></div></div>';
+  }
+  function bindConfigEmpresaOperacao() {
+    bindConfigNavigation();
+    var n = document.getElementById('cfg-new-operation'); if (n) n.onclick = openNovaOperacaoModal;
+    var g = document.getElementById('cfg-manage-operations'); if (g) g.onclick = openGerenciarOperacoes;
+  }
+  function configContasBancariasHtml() {
+    var visible = bankAccountsForActiveCompany();
+    var rows = visible.map(function (b) { var s = bankAccountSaldoAtual(b.id); var c = companies.find(function (x) { return x.id === b.companyId; }); return '<tr><td><b>' + esc(b.nome) + '</b></td><td>' + esc(b.banco || '—') + '</td><td class="mono">' + esc(b.agencia || '—') + '</td><td class="mono">' + esc(b.conta || '—') + '</td><td>' + esc(b.tipo || '—') + '</td><td>' + esc(c ? (c.nomeFantasia || c.razaoSocial) : 'Legado / empresa atual') + '</td><td>' + brl(s.saldoAtual) + '</td><td>' + (b.ativa !== false ? '<span class="tag ok">ativa</span>' : '<span class="tag neutral">inativa</span>') + '</td></tr>'; }).join('');
+    return configHeader('Contas Bancárias', 'Cadastro oficial único usado por Caixa, Contas a Pagar, Contas a Receber e Conciliação.', 'hub') +
+      '<div class="toolbar2"><button class="btn-sm primary" id="cfg-manage-banks">Gerenciar contas bancárias</button></div>' +
+      '<div class="panel"><div class="ph"><h3>Contas da empresa/operação atual</h3><span class="footnote" style="margin:0">' + visible.length + ' conta(s)</span></div><div class="table-wrap"><table class="report"><thead><tr><th>Nome</th><th>Banco</th><th>Agência</th><th>Conta</th><th>Tipo</th><th>Empresa</th><th>Saldo atual</th><th>Status</th></tr></thead><tbody>' + (rows || '<tr><td colspan="8" class="empty">Nenhuma conta bancária cadastrada para a empresa/operação atual.</td></tr>') + '</tbody></table></div></div>';
+  }
+  function bindConfigContasBancarias() {
+    bindConfigNavigation();
+    var b = document.getElementById('cfg-manage-banks'); if (b) b.onclick = function () { openGerenciarBancos(function () { render(); }); };
+  }
+  function renderConfigCpDetail(tab, title) {
+    cpSub = tab;
+    app.innerHTML = configHeader(title, 'Mesma tela e mesma fonte oficial já utilizadas pelo Contas a Pagar.', 'cp') + '<div id="cpbody"></div>';
+    cpRenderBody(); bindConfigNavigation();
+  }
+  function renderConfigCrDetail() {
+    crSub = 'classificacoes';
+    app.innerHTML = configHeader('Classificações de Contas a Receber', 'Centros de recebimentos e categorias próprias de Contas a Receber, sem compartilhar IDs com Contas a Pagar.', 'cr') + '<div id="crbody"></div>';
+    crRenderBody(); bindConfigNavigation();
+  }
+  function renderConfigFatorDetail(tab, title) {
+    fatorSub = tab; var opId = opActiveOrNull();
+    app.innerHTML = configHeader(title, 'Mesma configuração oficial do Fator de Custo Industrial; fórmulas e cálculos permanecem inalterados.', 'producao') + '<div id="fatorbody">' + fatorSubView(tab, opId) + '</div>';
+    bindFatorSubView(tab, opId); bindConfigNavigation();
+  }
+  function renderConfigMarketplaceTaxas() {
+    precSub = 'regras';
+    app.innerHTML = configHeader('Taxas e Custos Configuráveis', 'Regras já existentes por operação/marketplace. Nenhuma taxa nova e nenhum recálculo foram criados.', 'marketplaces') + '<div id="precbody"></div>';
+    precRenderBody(); bindConfigNavigation();
+  }
+  function renderConfiguracoes() {
+    if (!CONFIG_CRUMBS[configSub]) configSub = 'hub';
+    if (!configCanOpen(configSub)) { app.innerHTML = configHeader('Acesso não permitido', 'Seu perfil não possui acesso a esta área.', 'hub') + renderErrBox('Você não tem permissão para acessar esta configuração.'); bindConfigNavigation(); return; }
+    if (configSub === 'hub') { app.innerHTML = configHubHtml(); bindConfigNavigation(); return; }
+    if (configSub === 'empresa-operacao') { app.innerHTML = configEmpresaOperacaoHtml(); bindConfigEmpresaOperacao(); return; }
+    if (configSub === 'contas-bancarias') { app.innerHTML = configContasBancariasHtml(); bindConfigContasBancarias(); return; }
+    if (configSub === 'cp') { app.innerHTML = configGroupHtml('Contas a Pagar', 'Cadastros permanentes do módulo. Lançamento, baixa e DRE continuam na área operacional.', 'hub', [configCard('cp-categorias', '▤', 'Categorias', 'Categorias, vínculos com centro de custo e conta contábil.'), configCard('cp-planocontas', '▥', 'Plano de Contas', 'Estrutura contábil oficial já usada nos lançamentos.'), configCard('cp-centroscusto', '◎', 'Centros de Custo', 'Centros de custo usados por categorias e despesas.'), configCard('cp-fornecedores', '◫', 'Fornecedores', 'Cadastro auxiliar oficial de fornecedores.')]); bindConfigNavigation(); return; }
+    if (configSub === 'cr') { app.innerHTML = configGroupHtml('Contas a Receber', 'Configurações permanentes próprias do módulo. Lançamentos e recebimentos continuam na área operacional.', 'hub', [configCard('cr-classificacoes', '▤', 'Classificações', 'Centros de recebimentos e categorias de receitas.')]); bindConfigNavigation(); return; }
+    if (configSub === 'financeiro') { app.innerHTML = configGroupHtml('Financeiro', 'Estruturas compartilhadas e parâmetros financeiros já existentes, sem duplicação de cadastro.', 'hub', [configCard('contas-bancarias', '🏦', 'Contas Bancárias', 'Cadastro único compartilhado pelos módulos financeiros.'), configCard('cp-centroscusto', '◎', 'Centros de Custo', 'Fonte oficial atualmente usada pelo Contas a Pagar.'), configCard('cp-planocontas', '▥', 'Contas Contábeis', 'Plano de contas oficial atualmente usado pelo Contas a Pagar.'), configCard('marketplace-taxas', '%', 'Regras e Custos por Operação', 'Taxas configuráveis já existentes na Precificação.')]); bindConfigNavigation(); return; }
+    if (configSub === 'producao') { app.innerHTML = configGroupHtml('Produção e Custos', 'Estruturas permanentes do Fator de Custo e do catálogo, sem alterar o motor industrial.', 'hub', [configCard('fator-geral', '⚙', 'Configuração Geral', 'Vigência e método do Fator de Custo.'), configCard('fator-setores', '▦', 'Setores Produtivos', 'Setores, capacidade e jornada.'), configCard('fator-funcionarios', '👷', 'Funcionários', 'Funcionários produtivos e alocação por setor.'), configCard('fator-categorias', '▤', 'Categorias do Fator', 'Categorias permanentes de custo.'), configCard('fator-fixos', '▥', 'Custos Fixos', 'Estrutura de custos fixos industriais.'), configCard('fator-variaveis', '↗', 'Custos Variáveis', 'Estrutura de custos variáveis industriais.'), configCard('fator-impostos', '%', 'Impostos', 'Parâmetros tributários já existentes.'), configCard('fator-processos', '⌘', 'Processos Produtivos', 'Cadastro de processos da produção.'), configCard('fator-roteiro', '⇢', 'Roteiro por Família', 'Roteiros produtivos por família/SKU.'), configCard('prod-familias', '◫', 'Famílias', 'Famílias e custos oficiais do catálogo de Produtos.')]); bindConfigNavigation(); return; }
+    if (configSub === 'marketplaces') { app.innerHTML = configGroupHtml('Marketplaces', 'Configurações já existentes de lojas, operações e taxas por marketplace.', 'hub', [configCard('empresa-operacao', '🛍', 'Operações e Lojas', 'Vínculos de loja/marketplace por empresa.'), configCard('marketplace-taxas', '%', 'Taxas Configuráveis', 'Regras e custos já existentes por operação.')]); bindConfigNavigation(); return; }
+    if (configSub === 'cp-categorias') return renderConfigCpDetail('categorias', 'Categorias de Contas a Pagar');
+    if (configSub === 'cp-planocontas') return renderConfigCpDetail('planocontas', 'Plano de Contas');
+    if (configSub === 'cp-centroscusto') return renderConfigCpDetail('centroscusto', 'Centros de Custo');
+    if (configSub === 'cp-fornecedores') return renderConfigCpDetail('fornecedores', 'Fornecedores');
+    if (configSub === 'cr-classificacoes') return renderConfigCrDetail();
+    if (configSub === 'marketplace-taxas') return renderConfigMarketplaceTaxas();
+    var fatorMap = { 'fator-geral': ['geral', 'Configuração Geral'], 'fator-setores': ['setores', 'Setores Produtivos'], 'fator-funcionarios': ['funcionarios', 'Funcionários'], 'fator-categorias': ['categorias', 'Categorias do Fator'], 'fator-fixos': ['fixos', 'Custos Fixos'], 'fator-variaveis': ['variaveis', 'Custos Variáveis'], 'fator-impostos': ['impostos', 'Impostos'], 'fator-processos': ['processos', 'Processos Produtivos'], 'fator-roteiro': ['roteiro', 'Roteiro por Família'] };
+    if (fatorMap[configSub]) return renderConfigFatorDetail(fatorMap[configSub][0], fatorMap[configSub][1]);
+    configSub = 'hub'; app.innerHTML = configHubHtml(); bindConfigNavigation();
+  }
 
   // ---------- DASHBOARD global ----------
   // PROMPT "Unificação do motor financeiro canônico": usa dashboardOrderResult() (Income confirmado
@@ -1482,7 +1652,7 @@
       PageHeader({ variant: 'financial', title: 'Pedidos', summary: 'Núcleo transacional. Importação idempotente (upsert), sem duplicar vendas.', actions: ['<button class="btn-sm primary" id="imp-ped">Importar planilha de pedidos</button>'] }) +
       dadosAtualizadosAteBadge() +
       devPeriodBar() +
-      '<div class="subtabs">' + subtab('pedidos', 'pedidos', 'Pedidos') + subtab('pedidos', 'expedicao', 'Expedição') + subtab('pedidos', 'dashboard', 'Dashboard') + subtab('pedidos', 'import', 'Importações') + '</div>' +
+      '<div class="subtabs">' + subtab('pedidos', 'dashboard', 'Dashboard') + subtab('pedidos', 'pedidos', 'Pedidos') + subtab('pedidos', 'expedicao', 'Expedição') + subtab('pedidos', 'import', 'Importações') + '</div>' +
       (sub.pedidos === 'dashboard' ? pedidosDashboard() : sub.pedidos === 'import' ? importsFor('Pedidos') + pedidosSkuDiag() : (sub.pedidos === 'expedicao' || sub.pedidos === 'tempoenvio') ? pedidosExpedicao() : pedidosList());
     document.getElementById('imp-ped').onclick = function () { fileInput(function (f) { importPedidos(f).then(function (b) { render(); toast('Pedidos importados', b.novo + ' novos · ' + b.upd + ' atualizados · ' + b.statusChanged + ' status alterados · ' + b.brFilled + ' BR/rastreamentos preenchidos · ' + b.unch + ' sem alteração'); }).catch(function (e) { toast('Falha', e.message, true); }); }); };
     bindSubtabs('pedidos');
@@ -8465,10 +8635,13 @@
 
     function pruneSelection(ids) { var set = {}; ids.forEach(function (id) { set[id] = 1; }); Array.from(S2.selected).forEach(function (id) { if (!set[id]) S2.selected.delete(id); }); }
 
-    function render() { if (S2.tab === 'produtos') renderProdutos(); else if (S2.tab === 'familias') renderFamilias(); else if (S2.tab === 'auditoria') renderAuditoria(); else renderImportacoes(); }
+    function render() { if (route === 'produtos') persistRouteUiState(); if (S2.tab === 'produtos') renderProdutos(); else if (S2.tab === 'familias') renderFamilias(); else if (S2.tab === 'auditoria') renderAuditoria(); else renderImportacoes(); }
     function tabsHtml(a) { return '<div class="tabs">' + [['produtos', 'Produtos'], ['familias', 'Famílias'], ['auditoria', 'Auditoria'], ['importacoes', 'Importações']].map(function (t) { return '<div class="tab ' + (a === t[0] ? 'active' : '') + '" data-ptab2="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>'; }
-    function head(subt, actions) { return PageHeader({ variant: 'simple', title: 'Produtos', description: subt, actions: actions }); }
-    function wireTabs() { appEl.querySelectorAll('[data-ptab2]').forEach(function (t) { t.onclick = function () { S2.tab = t.dataset.ptab2; render(); }; }); }
+    function head(subt, actions) { return (routeContext === 'config-familias' ? configContextHtml('producao') : '') + PageHeader({ variant: 'simple', title: 'Produtos', description: subt, actions: actions }); }
+    function wireTabs() {
+      appEl.querySelectorAll('[data-ptab2]').forEach(function (t) { t.onclick = function () { S2.tab = t.dataset.ptab2; render(); }; });
+      appEl.querySelectorAll('[data-config-parent]').forEach(function (b) { b.onclick = function () { route = 'configuracoes'; configSub = b.dataset.configParent || 'hub'; routeContext = null; render(); }; });
+    }
 
     function renderProdutos() {
       var s = stats(), last = S2.imports[0], nConflicts = auditSkuConflicts().length;
@@ -9119,6 +9292,8 @@
 
     return {
       render: render,
+      getTab: function () { return S2.tab; },
+      setTab: function (tab) { if (['produtos', 'familias', 'auditoria', 'importacoes'].indexOf(tab) >= 0) S2.tab = tab; },
       getData: function () { return { products: S2.products, variations: S2.variations, families: S2.families }; },
       // BUG REAL (regressão multiop desta auditoria, achado #1) — `products`/`variations` nunca
       // passavam pelo padrão de identidade escopada do Gate 2: 2 operações com o mesmo `ID do
@@ -11981,7 +12156,7 @@
   var fatorProcessos = [];            // {id, operationId, nome, setorId, tempoPadraoMin, funcionarioMedioQtd, maquina, custoAdicional, ativo}
   var fatorRoteiros = {};             // familyId -> {id, familyId, operationId, processos:[{processoId, tempoMin, ordem}], updatedAt}
   var fatorRoteiroSkuOverrides = {};  // skuKey -> {id, skuKey, skuOriginal, familyId, processos:[{processoId, tempoMin, ordem}], updatedAt}
-  var fatorSub = 'geral'; // subaba ativa da tela Financeiro > Fator de Custo
+  var fatorSub = 'visao'; // subaba operacional ativa; configurações permanentes vivem na Central
 
   function fatorConfigForOp(opId) { return fatorConfig[opId] || { capacidadeProdutivaMin: 0, impostoPct: 0 }; } // compat legado (auditoria/migração só)
   function fatorUid() { return 'FATOR-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8); }
@@ -12325,17 +12500,21 @@
   var fatorRoteiroSkuSel = '', fatorRoteiroSkuDraft = null;  // {sku, rows:[{processoId,tempoMin}]}
   var fatorAuditPedidoId = '';
   var FATOR_TABS = [['visao', 'Visão Geral'], ['geral', 'Configuração Geral'], ['setores', 'Setores Produtivos'], ['funcionarios', 'Funcionários'], ['categorias', 'Categorias'], ['fixos', 'Custos Fixos'], ['variaveis', 'Custos Variáveis'], ['impostos', 'Impostos'], ['processos', 'Processos Produtivos'], ['roteiro', 'Roteiro por Família'], ['capacidade', 'Capacidade Produtiva'], ['auditoria', 'Auditoria de Custos']];
+  var FATOR_CONFIG_CENTRAL = { geral: 'fator-geral', setores: 'fator-setores', funcionarios: 'fator-funcionarios', categorias: 'fator-categorias', fixos: 'fator-fixos', variaveis: 'fator-variaveis', impostos: 'fator-impostos', processos: 'fator-processos', roteiro: 'fator-roteiro' };
   var FATOR_MOTIVOS_PERDA = ['Pausa', 'Setup', 'Manutenção', 'Retrabalho', 'Organização'];
   function fatorFamilias() { return Produtos && typeof Produtos.getData === 'function' ? (Produtos.getData().families || []) : []; }
   function fatorSetorNome(id) { var s = fatorSetores.find(function (x) { return x.id === id; }); return s ? s.nome : '—'; }
   function fatorStatusBadge(ativo) { return '<span class="badge ' + (ativo ? 'b-ok' : 'b-neutral') + '">' + (ativo ? 'Ativo' : 'Inativo') + '</span>'; }
 
   function renderFatorCusto() {
+    if (FATOR_CONFIG_CENTRAL[fatorSub]) { route = 'configuracoes'; configSub = FATOR_CONFIG_CENTRAL[fatorSub]; return render(); }
     var opId = opActiveOrNull();
+    var operationalTabs = FATOR_TABS.filter(function (t) { return ['visao', 'capacidade', 'auditoria'].indexOf(t[0]) >= 0; });
     app.innerHTML = '<div class="page-head"><div><h2>Fator de Custo Industrial</h2><p>Gestão completa de custo industrial — setores, funcionários, custos fixos/variáveis, impostos, processos produtivos e roteiro por família. Camada aditiva de análise: não altera nenhuma importação, taxa Shopee, conciliação ou regra financeira já existente — sempre complementa pedidoComposicaoFinanceira().</p></div></div>' +
-      '<div class="subtabs" style="flex-wrap:wrap">' + FATOR_TABS.map(function (t) { return '<div class="subtab' + (fatorSub === t[0] ? ' active' : '') + '" data-fatorsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>' +
+      '<div class="subtabs" style="flex-wrap:wrap">' + operationalTabs.map(function (t) { return '<div class="subtab' + (fatorSub === t[0] ? ' active' : '') + '" data-fatorsub="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '<div class="subtab" data-fator-config="1">Configurações</div></div>' +
       '<div id="fatorbody" style="margin-top:14px">' + fatorSubView(fatorSub, opId) + '</div>';
     app.querySelectorAll('[data-fatorsub]').forEach(function (t) { t.onclick = function () { fatorSub = t.dataset.fatorsub; fatorRoteiroDraft = null; fatorRoteiroSkuDraft = null; render(); }; });
+    var cfg = app.querySelector('[data-fator-config]'); if (cfg) cfg.onclick = function () { configNavigate('producao'); };
     bindFatorSubView(fatorSub, opId);
   }
   function fatorSubView(sub, opId) {
@@ -13348,12 +13527,15 @@
 
   // ---- UI: raiz do módulo ----
   function cpTabsHtml() {
-    return '<div class="tabs">' + [['lista', 'Contas a pagar'], ['dre', 'DRE de Despesas'], ['categorias', 'Categorias'], ['planocontas', 'Plano de contas'], ['centroscusto', 'Centros de custo'], ['fornecedores', 'Fornecedores']].map(function (t) { return '<div class="tab' + (cpSub === t[0] ? ' active' : '') + '" data-cptab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>';
+    return '<div class="tabs">' + [['lista', 'Contas a pagar'], ['dre', 'DRE de Despesas']].map(function (t) { return '<div class="tab' + (cpSub === t[0] ? ' active' : '') + '" data-cptab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '<div class="tab" data-cp-config="1">Configurações</div></div>';
   }
   function renderContasPagar() {
+    var moved = { categorias: 'cp-categorias', planocontas: 'cp-planocontas', centroscusto: 'cp-centroscusto', fornecedores: 'cp-fornecedores' };
+    if (moved[cpSub]) { route = 'configuracoes'; configSub = moved[cpSub]; return render(); }
     app.innerHTML = cpHead() + cpTabsHtml() + '<div id="cpbody" style="margin-top:14px"></div>';
     cpRenderBody();
     app.querySelectorAll('[data-cptab]').forEach(function (t) { t.onclick = function () { cpSub = t.dataset.cptab; cpPage = 1; render(); }; });
+    var cfg = app.querySelector('[data-cp-config]'); if (cfg) cfg.onclick = function () { configNavigate('cp'); };
   }
   function cpHead() { return PageHeader({ variant: 'eyebrow', eyebrow: 'FINANCEIRO', title: 'Contas a Pagar', compact: true }); }
   function cpRenderBody() {
@@ -13546,10 +13728,10 @@
     var top = Math.min(rect.bottom + 4, window.innerHeight - menuH - 8); if (top < 8) top = 8;
     var left = Math.min(rect.right - menuW, window.innerWidth - menuW - 8); if (left < 8) left = 8;
     var d = document.createElement('div'); d.className = 'cp-dropdown'; d.style.cssText = 'position:fixed;z-index:400;top:' + top + 'px;left:' + left + 'px;width:' + menuW + 'px;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:6px;';
-    var opts = [['Gerenciar categorias', 'categorias'], ['Plano de contas', 'planocontas'], ['Centros de custo', 'centroscusto'], ['Gerenciar fornecedores', 'fornecedores']];
+    var opts = [['Gerenciar categorias', 'cp-categorias'], ['Plano de contas', 'cp-planocontas'], ['Centros de custo', 'cp-centroscusto'], ['Gerenciar fornecedores', 'cp-fornecedores']];
     d.innerHTML = opts.map(function (o) { return '<div class="cp-mi" data-cfgtab="' + o[1] + '" style="padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px">' + o[0] + '</div>'; }).join('');
     document.body.appendChild(d);
-    d.querySelectorAll('.cp-mi').forEach(function (mi) { mi.onmouseenter = function () { mi.style.background = 'var(--bg2,#f2f4f8)'; }; mi.onmouseleave = function () { mi.style.background = ''; }; mi.onclick = function () { d.remove(); cpSub = mi.dataset.cfgtab; cpPage = 1; render(); }; });
+    d.querySelectorAll('.cp-mi').forEach(function (mi) { mi.onmouseenter = function () { mi.style.background = 'var(--bg2,#f2f4f8)'; }; mi.onmouseleave = function () { mi.style.background = ''; }; mi.onclick = function () { d.remove(); cpPage = 1; configNavigate(mi.dataset.cfgtab); }; });
     setTimeout(function () { document.addEventListener('click', closeIt); }, 0);
     function closeIt(e) { if (!d.contains(e.target)) { d.remove(); document.removeEventListener('click', closeIt); } }
   }
@@ -14781,11 +14963,13 @@
     return list;
   }
   function renderContasReceber() {
+    if (crSub === 'classificacoes') { route = 'configuracoes'; configSub = 'cr-classificacoes'; return render(); }
     app.innerHTML = PageHeader({ variant: 'eyebrow', eyebrow: 'FINANCEIRO', title: 'Contas a Receber', compact: true }) +
-      '<div class="subtabs">' + [['visaogeral', 'Visão Geral'], ['lista', 'Lista'], ['shopee', 'Pedidos (auditoria)'], ['projecao', 'Projeção de Recebimentos'], ['classificacoes', 'Classificações']].map(function (t) { return '<div class="subtab' + (crSub === t[0] ? ' active' : '') + '" data-crtab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>' +
+      '<div class="subtabs">' + [['visaogeral', 'Visão Geral'], ['lista', 'Lista'], ['shopee', 'Pedidos (auditoria)'], ['projecao', 'Projeção de Recebimentos']].map(function (t) { return '<div class="subtab' + (crSub === t[0] ? ' active' : '') + '" data-crtab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '<div class="subtab" data-cr-config="1">Configurações</div></div>' +
       '<div id="crbody" style="margin-top:14px"></div>';
     crRenderBody();
     app.querySelectorAll('[data-crtab]').forEach(function (t) { t.onclick = function () { crSub = t.dataset.crtab; crPage = 1; render(); }; });
+    var cfg = app.querySelector('[data-cr-config]'); if (cfg) cfg.onclick = function () { configNavigate('cr'); };
   }
   function crRenderBody() {
     var body = document.getElementById('crbody');
@@ -15452,13 +15636,15 @@
   var precSub = 'simulador'; // visaogeral | simulador | familias | regras | auditoria
   var precSim = null; // estado do Simulador — inicializado no primeiro render, nunca persistido sozinho (só via "Salvar como regra")
   function precTabsHtml() {
-    return '<div class="tabs">' + [['simulador', 'Simulador'], ['familias', 'Famílias & Preços'], ['regras', 'Regras & Custos'], ['equilibrio', 'Ponto de Equilíbrio'], ['meta', 'Meta de Lucro'], ['visaogeral', 'Visão Geral'], ['auditoria', 'Auditoria']].map(function (t) { return '<div class="tab' + (precSub === t[0] ? ' active' : '') + '" data-prectab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '</div>';
+    return '<div class="tabs">' + [['simulador', 'Simulador'], ['familias', 'Famílias & Preços'], ['equilibrio', 'Ponto de Equilíbrio'], ['meta', 'Meta de Lucro'], ['visaogeral', 'Visão Geral'], ['auditoria', 'Auditoria']].map(function (t) { return '<div class="tab' + (precSub === t[0] ? ' active' : '') + '" data-prectab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '<div class="tab" data-prec-config="1">Configurações</div></div>';
   }
   function precHead() { return PageHeader({ variant: 'eyebrow', eyebrow: 'PRECIFICAÇÃO', title: 'Precificação & Margem', description: 'Markup, fator, margem e o caminho inverso: para onde vai o seu fator? Simule antes de vender e compare com o resultado realizado.' }); }
   function renderPrecificacao() {
+    if (precSub === 'regras') { route = 'configuracoes'; configSub = 'marketplace-taxas'; return render(); }
     app.innerHTML = precHead() + precTabsHtml() + '<div id="precbody" style="margin-top:14px"></div>';
     precRenderBody();
     app.querySelectorAll('[data-prectab]').forEach(function (t) { t.onclick = function () { precSub = t.dataset.prectab; render(); }; });
+    var cfg = app.querySelector('[data-prec-config]'); if (cfg) cfg.onclick = function () { configNavigate('marketplace-taxas'); };
   }
   function precRenderBody() {
     var body = document.getElementById('precbody');
@@ -15983,7 +16169,16 @@
   }
 
   // ---------- boot ----------
-  document.querySelectorAll('#nav a').forEach(function (a) { a.onclick = function () { if (!canAccessRoute(a.dataset.route)) return; route = a.dataset.route; render(); }; });
+  document.querySelectorAll('#nav a').forEach(function (a) { a.onclick = function () {
+    if (!canAccessRoute(a.dataset.route)) return;
+    routeContext = null; route = a.dataset.route;
+    if (route === 'configuracoes') configSub = 'hub';
+    if (route === 'contaspagar' && ['categorias', 'planocontas', 'centroscusto', 'fornecedores'].indexOf(cpSub) >= 0) cpSub = 'lista';
+    if (route === 'contasreceber' && crSub === 'classificacoes') crSub = 'lista';
+    if (route === 'fator' && FATOR_CONFIG_CENTRAL[fatorSub]) fatorSub = 'visao';
+    if (route === 'precificacao' && precSub === 'regras') precSub = 'simulador';
+    render();
+  }; });
   // PROMPT "OTIMIZAÇÃO COMPLETA DE UX/UI DESKTOP" §3: sidebar recolhível — só alterna uma classe no
   // shell (CSS cuida do resto); preferência fica em memória, igual a todo outro estado de UI do app
   // (nenhuma tela salva preferência em localStorage neste sistema).
@@ -16017,7 +16212,7 @@
     var f = document.getElementById('dfrom'), t = document.getElementById('dto'), ap = document.getElementById('dapply');
     if (ap) ap.onclick = function () { customRange.from = (f && f.value) || null; customRange.to = (t && t.value) || null; render(); };
   })();
-  document.getElementById('btn-demo').onclick = function () { if (confirm('ATENÇÃO: limpar todos os dados compartilhados desta organização para todos os usuários? Esta ação não pode ser desfeita pela tela.')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; pricingOpConfig = []; pricingFamilyRules = []; pontoEquilibrioCfg = {}; metaLucroCfg = {}; financialAccounts = []; financialEvents = []; contasReceber = []; crReceipts = []; financialTransfers = []; fatorFuncionarios = []; fatorCustosFixos = []; fatorCustosVariaveis = []; fatorPedidoSnapshots = []; fatorCategories = []; fatorConfig = {}; skuFamilyOverrides = {}; fatorConfigs = []; fatorSetores = []; fatorImpostos = []; fatorProcessos = []; fatorRoteiros = {}; fatorRoteiroSkuOverrides = {}; fatorSub = 'geral'; skuFamilyOverrideHistory = []; productIdentityMappings = {}; productIdentityMappingsAll = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados da organização limpos', 'Alteração sincronizada para todos os usuários.'); }).catch(function (e) { toast('Não foi possível limpar', e.message || 'Falha de sincronização.', true); }); };
+  document.getElementById('btn-demo').onclick = function () { if (confirm('ATENÇÃO: limpar todos os dados compartilhados desta organização para todos os usuários? Esta ação não pode ser desfeita pela tela.')) clearAll().then(function () { orders = []; occ = []; batches = []; plans = []; wallet = []; walletCls = {}; walletClose = {}; devSel = {}; devCustomStatus = []; acelera = []; aceleraSummary = null; affConv = []; affRpa = []; affVb = []; affMaster = {}; mrRenda = []; mrShip = []; mrAdj = []; mrSvc = []; mrPdf = []; mrSummary = null; mrMetaCfg = { lucroAlvo: 0, periodMode: 'mes_atual', customFrom: null, customTo: null }; shipBip = {}; expSessions = []; pendResolucoes = {}; caixaClose = {}; companies = []; operations = []; activeOperationId = null; contasPagar = []; cpItemsAll = []; cpPayments = []; cpAttachments = []; cpCategories = []; cpAccounting = []; cpCostCenters = []; cpSuppliers = []; cpSupplyLinks = []; pricingOpConfig = []; pricingFamilyRules = []; pontoEquilibrioCfg = {}; metaLucroCfg = {}; financialAccounts = []; financialEvents = []; contasReceber = []; crReceipts = []; financialTransfers = []; fatorFuncionarios = []; fatorCustosFixos = []; fatorCustosVariaveis = []; fatorPedidoSnapshots = []; fatorCategories = []; fatorConfig = {}; skuFamilyOverrides = {}; fatorConfigs = []; fatorSetores = []; fatorImpostos = []; fatorProcessos = []; fatorRoteiros = {}; fatorRoteiroSkuOverrides = {}; fatorSub = 'visao'; skuFamilyOverrideHistory = []; productIdentityMappings = {}; productIdentityMappingsAll = {}; Produtos.reset(); rebuildSkuCost(); render(); toast('Dados da organização limpos', 'Alteração sincronizada para todos os usuários.'); }).catch(function (e) { toast('Não foi possível limpar', e.message || 'Falha de sincronização.', true); }); };
   var opSelBtn = document.getElementById('op-selector'); if (opSelBtn) opSelBtn.onclick = function () { openOperationSelector(); };
 
   // Fase 10.2: todo o boot local (abrir IndexedDB, carregar os dados, primeiro render()) virou
@@ -16798,7 +16993,7 @@
     var tabsDef = [{ k: 'usuarios', label: 'Usuários' }, { k: 'perfis', label: 'Perfis' }];
     if (hasPermission('audit.view')) tabsDef.push({ k: 'auditoria', label: 'Auditoria' });
     var tabsHtml = '<div class="tabs">' + tabsDef.map(function (t) { return '<div class="tab ' + (adminS.tab === t.k ? 'active' : '') + '" data-admintab="' + t.k + '">' + t.label + '</div>'; }).join('') + '</div>';
-    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'Configurações', title: 'Usuários e Acessos', description: 'Login, perfis de acesso e trilha de auditoria no servidor. As subcontas usam a mesma base operacional compartilhada da organização.' });
+    var head = PageHeader({ variant: 'eyebrow', eyebrow: 'Configurações', title: 'Usuários e Acessos', description: 'Login, perfis de acesso e trilha de auditoria no servidor. As subcontas usam a mesma base operacional compartilhada da organização.', actions: ['<button class="btn-sm" data-config-parent="hub">← Voltar às Configurações</button>'] });
     var tab = adminS.tab;
     var needData = (tab === 'usuarios' && !adminS.users) || (tab === 'perfis' && !adminS.roles) || (tab === 'auditoria' && !adminS.audit);
     if (needData) {
@@ -16815,6 +17010,7 @@
   }
   function bindAdminTabs() {
     app.querySelectorAll('[data-admintab]').forEach(function (b) { b.onclick = function () { adminS.tab = b.dataset.admintab; render(); }; });
+    bindConfigNavigation();
   }
   function adminLoadTab(tab) {
     if (adminS.loadingTab === tab) return;
