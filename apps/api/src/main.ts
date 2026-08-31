@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import { join } from 'path';
 import { AppModule } from './app.module';
@@ -12,6 +13,7 @@ async function bootstrap(): Promise<void> {
   const config = app.get(ConfigService);
 
   app.use(cookieParser());
+  app.use(compression());
 
   // Fase 10.2 (login/usuários/perfis): serve docs/ (o "Sistema Marketplace —
   // Líder" estático) no MESMO servidor/porta da API. Evita todo o problema de
@@ -19,7 +21,7 @@ async function bootstrap(): Promise<void> {
   // de verdade, sem precisar de SameSite=None+Secure (que exige HTTPS).
   // app.setGlobalPrefix('api') só afeta as rotas do Nest; os arquivos
   // estáticos continuam servidos na raiz, ex.: http://<ip>:3001/sistema-marketplace.html
-  app.useStaticAssets(join(__dirname, '..', '..', '..', 'docs'));
+  app.useStaticAssets(join(__dirname, '..', '..', '..', 'docs'), { maxAge: '1h', etag: true });
 
   app.setGlobalPrefix('api');
   app.useGlobalPipes(
