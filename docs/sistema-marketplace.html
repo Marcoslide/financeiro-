@@ -7,8 +7,8 @@
      apps/api/scripts/build-sistema-app-html.cjs com o commit real (git rev-parse HEAD) no
      momento do build. Nunca contém segredo; só existe para provar depois qual commit está
      de fato publicado em produção (ver DEPLOY_ARCHITECTURE.md / verify-production.sh). -->
-<meta name="app-version" content="build-ffdfc06">
-<meta name="git-commit" content="ffdfc06c74a78f02eecdf4b1aa7d0333b710bfbd">
+<meta name="app-version" content="build-91a3dbb">
+<meta name="git-commit" content="91a3dbb0ecf7708464a626b14a52cb493caed6cf">
 <title>Sistema Marketplace — Líder</title>
 <style>
   :root{
@@ -342,28 +342,28 @@
     <div class="brand"><div class="logo-badge">LM</div><div class="brand-text"><b>Marketplace · Líder</b><small>Sistema unificado</small></div><button class="nav-toggle" id="nav-toggle" title="Recolher menu">«</button></div>
     <nav class="nav" id="nav">
       <div class="nav-group">Operação</div>
-      <a data-route="dashboard" title="Dashboard"><span class="ic">▦</span><span class="lbl">Dashboard</span></a>
+      <a href="#/dashboard" data-route="dashboard" title="Dashboard"><span class="ic">▦</span><span class="lbl">Dashboard</span></a>
       <div class="nav-group">Dados</div>
-      <a data-route="produtos" title="Produtos"><span class="ic">◫</span><span class="lbl">Produtos</span></a>
-      <a data-route="pedidos" title="Pedidos"><span class="ic">▤</span><span class="lbl">Pedidos</span></a>
-      <a data-route="posvenda" title="Devolução"><span class="ic">↩</span><span class="lbl">Devolução</span></a>
-      <a data-route="carteira" title="Saldo da Carteira"><span class="ic">▧</span><span class="lbl">Saldo da Carteira</span></a>
-      <a data-route="acelera" title="Shopee Acelera"><span class="ic">⚡</span><span class="lbl">Shopee Acelera</span></a>
-      <a data-route="afiliados" title="Afiliados"><span class="ic">🤝</span><span class="lbl">Afiliados</span></a>
-      <a data-route="minharenda" title="Minha Renda"><span class="ic">💰</span><span class="lbl">Minha Renda</span></a>
+      <a href="#/produtos" data-route="produtos" title="Produtos"><span class="ic">◫</span><span class="lbl">Produtos</span></a>
+      <a href="#/pedidos" data-route="pedidos" title="Pedidos"><span class="ic">▤</span><span class="lbl">Pedidos</span></a>
+      <a href="#/posvenda" data-route="posvenda" title="Devolução"><span class="ic">↩</span><span class="lbl">Devolução</span></a>
+      <a href="#/carteira" data-route="carteira" title="Saldo da Carteira"><span class="ic">▧</span><span class="lbl">Saldo da Carteira</span></a>
+      <a href="#/acelera" data-route="acelera" title="Shopee Acelera"><span class="ic">⚡</span><span class="lbl">Shopee Acelera</span></a>
+      <a href="#/afiliados" data-route="afiliados" title="Afiliados"><span class="ic">🤝</span><span class="lbl">Afiliados</span></a>
+      <a href="#/minharenda" data-route="minharenda" title="Minha Renda"><span class="ic">💰</span><span class="lbl">Minha Renda</span></a>
       <div class="nav-group">Financeiro</div>
-      <a data-route="caixa" title="Caixa"><span class="ic">🧾</span><span class="lbl">Caixa</span></a>
-      <a data-route="contaspagar" title="Contas a Pagar"><span class="ic">📄</span><span class="lbl">Contas a Pagar</span></a>
-      <a data-route="contasreceber" title="Contas a Receber"><span class="ic">💵</span><span class="lbl">Contas a Receber</span></a>
-      <a data-route="precificacao" title="Precificação"><span class="ic">📈</span><span class="lbl">Precificação</span></a>
-      <a data-route="fator" title="Fator de Custo"><span class="ic">🏭</span><span class="lbl">Fator de Custo</span></a>
+      <a href="#/caixa" data-route="caixa" title="Caixa"><span class="ic">🧾</span><span class="lbl">Caixa</span></a>
+      <a href="#/contaspagar" data-route="contaspagar" title="Contas a Pagar"><span class="ic">📄</span><span class="lbl">Contas a Pagar</span></a>
+      <a href="#/contasreceber" data-route="contasreceber" title="Contas a Receber"><span class="ic">💵</span><span class="lbl">Contas a Receber</span></a>
+      <a href="#/precificacao" data-route="precificacao" title="Precificação"><span class="ic">📈</span><span class="lbl">Precificação</span></a>
+      <a href="#/fator" data-route="fator" title="Fator de Custo"><span class="ic">🏭</span><span class="lbl">Fator de Custo</span></a>
       <div class="nav-group">Inteligência</div>
-      <a data-route="ia" title="Inteligência"><span class="ic">✦</span><span class="lbl">Inteligência</span></a>
+      <a href="#/ia" data-route="ia" title="Inteligência"><span class="ic">✦</span><span class="lbl">Inteligência</span></a>
       <button class="nav-expand" id="nav-expand" title="Expandir menu">»</button>
     </nav>
     <div id="sidebar-footer" style="margin-top:18px;padding:10px;border-top:1px solid rgba(255,255,255,.08)">
       <button class="btn-sm" id="btn-demo" style="width:100%;background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Limpar dados locais</button>
-      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build ffdfc06 · 2026-08-31 13:39 UTC</div>
+      <div id="build-info" style="margin-top:8px;text-align:center;font-size:10px;color:rgba(255,255,255,.35);user-select:text">build 91a3dbb · 2026-08-31 13:39 UTC</div>
     </div>
   </aside>
   <div class="main">
