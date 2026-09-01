@@ -79,9 +79,20 @@ describe('pacote operacional v1.1.1 — invariantes da interface única', () => 
     expect(ui).toContain('Math.min(day, last)');
   });
 
-  it('alinha recorrência semanal ao dia escolhido', () => {
-    expect(ui).toContain("if (occ.type === 'SEMANAL') first = cpAlignWeekday");
-    expect(ui).toContain('id="cp-occ-week"');
+  it('usa o primeiro vencimento como fonte do dia semanal sem deslocamento silencioso', () => {
+    expect(ui).toContain("if (occ.type === 'SEMANAL') occ.weekDay = cpWeekdayFromDate(first)");
+    expect(ui).toContain('id="cp-occ-week-info"');
+    expect(ui).toContain('function cpWeeklyPhrase');
+    expect(ui).toContain("return 'Repete ' + article");
+    expect(ui).not.toContain('id="cp-occ-week"');
+    const generator = ui.slice(ui.indexOf('function cpGenerateOccurrenceDrafts'), ui.indexOf('// ---- importação de XML'));
+    expect(generator).not.toContain('cpAlignWeekday');
+  });
+
+  it('pede confirmação visual antes de ajustar fim de semana para dia útil', () => {
+    expect(ui).toContain('Primeiro vencimento em fim de semana');
+    expect(ui).toContain('Ajustar para o próximo dia útil');
+    expect(ui).toContain('draft.occurrence.onlyBusinessDays = false; occUteis.checked = false;');
   });
 
   it('baixa manual de CP exige hoje e Conta Bancária', () => {
@@ -97,6 +108,15 @@ describe('pacote operacional v1.1.1 — invariantes da interface única', () => 
     expect(ui).toContain('cpCorrigirDataPagamentoConciliacao');
     expect(ui).toContain("origin: 'Conciliação Bancária'");
     expect(ui).toContain('oldDate: oldDate, newDate: newDate, movementRef:');
+  });
+
+  it('conciliação retroativa reutiliza os motores oficiais e bloqueia duplicidade/futuro', () => {
+    expect(ui).toContain('function openBankReconciliationModal');
+    expect(ui).toContain('reconciliationRefExists(ref)');
+    expect(ui).toContain('return crRegistrarBaixa(titleId');
+    expect(ui).toContain('return cpRegistrarBaixa(titleId');
+    expect(ui).toContain('A data do movimento não pode ser futura.');
+    expect(ui).toContain("origin: dto.reconciliation ? 'Conciliação Bancária'");
   });
 
   it('recebimento bloqueia futuro com a mensagem aprovada', () => {
@@ -123,6 +143,29 @@ describe('pacote operacional v1.1.1 — invariantes da interface única', () => 
 
   it('remoção de categoria usada é lógica e preserva histórico', () => {
     expect(ui).toContain("if (used) { c.active = false;");
+    expect(ui).toContain('function cpCategoryLinks');
+    expect(ui).toContain('function crCategoryLinks');
+    expect(ui).toContain('function fatorFuncionarioLinks');
+  });
+
+  it('modais destrutivos têm foco seguro, Esc e bloqueio de clique duplo', () => {
+    expect(ui).toContain('setTimeout(function () { if (!closed && cancelBtn) cancelBtn.focus(); }, 0);');
+    expect(ui).toContain("if (e.key !== 'Escape') return;");
+    expect(ui).toContain('if (loading) return; // bloqueio de duplo clique');
+    expect(shell).toContain('.btn-sm.danger');
+  });
+
+  it('valida campos financeiros obrigatórios em um resumo único', () => {
+    expect(ui).toContain('function showFormErrors');
+    expect(ui).toContain('id="cp-form-errors"');
+    expect(ui).toContain('id="crb-err"');
+    expect(shell).toContain('.field-invalid');
+  });
+
+  it('sugere recebimento em tempo real sem alterar a fórmula oficial', () => {
+    expect(ui).toContain('var suggested = r2(saldo - discount + interest + fine + addition);');
+    expect(ui).toContain('if (fromModifier && !manualValue)');
+    expect(ui).toContain('Principal amortizado');
   });
 
   it('categoria usa somente Nome, Centro e Conta Contábil no editor', () => {

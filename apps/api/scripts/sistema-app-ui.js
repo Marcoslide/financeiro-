@@ -8413,27 +8413,37 @@
     o.innerHTML = '<div class="modal" style="width:' + width + 'px">' +
       '<div class="mh"><h3>' + esc(opts.title || '') + '</h3><button class="x">&times;</button></div>' +
       '<div class="mbd"><div class="form-err" id="' + errId + '" style="display:none"></div>' + (opts.bodyHtml || '') + '</div>' +
-      '<div class="mf"><button class="btn-sm" id="mdl-cancel">' + esc(opts.cancelLabel || 'Cancelar') + '</button><button class="btn-sm primary" id="mdl-confirm">' + esc(opts.confirmLabel || 'Salvar') + '</button></div>' +
+      '<div class="mf"><button class="btn-sm" id="mdl-cancel">' + esc(opts.cancelLabel || 'Cancelar') + '</button><button class="btn-sm ' + (opts.destructive ? 'danger' : 'primary') + '" id="mdl-confirm">' + esc(opts.confirmLabel || 'Salvar') + '</button></div>' +
       '</div>';
     document.body.appendChild(o);
     var panel = o.querySelector('.modal');
     var errBox = o.querySelector('#' + errId);
     var loading = false;
-    function close() { if (loading) return; o.remove(); }
+    var closed = false;
+    function close() { if (loading || closed) return; closed = true; document.removeEventListener('keydown', onKeyDown, true); o.remove(); }
+    function cancel() { if (loading || closed) return; if (opts.onCancel) opts.onCancel(); close(); }
+    function onKeyDown(e) { if (e.key !== 'Escape') return; e.preventDefault(); e.stopPropagation(); cancel(); }
+    document.addEventListener('keydown', onKeyDown, true);
     o.onclick = function (e) { if (e.target === o) close(); };
     o.querySelector('.x').onclick = close;
-    var cancelBtn = o.querySelector('#mdl-cancel'); cancelBtn.onclick = function () { if (loading) return; if (opts.onCancel) opts.onCancel(); close(); };
+    var cancelBtn = o.querySelector('#mdl-cancel'); cancelBtn.onclick = cancel;
     var confirmBtn = o.querySelector('#mdl-confirm');
     confirmBtn.onclick = function () {
       if (loading) return; // bloqueio de duplo clique
       if (errBox) { errBox.style.display = 'none'; errBox.textContent = ''; }
-      var result = opts.onConfirm ? opts.onConfirm(panel) : null;
+      var result;
+      try { result = opts.onConfirm ? opts.onConfirm(panel) : null; }
+      catch (e) {
+        var syncMsg = (e && (e.message || e)) || 'Não foi possível concluir.';
+        if (errBox) { errBox.textContent = syncMsg; errBox.style.display = 'block'; } else { toast('Erro', syncMsg, true); }
+        return;
+      }
       if (result === false) return; // validação síncrona falhou — onConfirm já avisou (toast)
       if (result && typeof result.then === 'function') {
         loading = true; confirmBtn.disabled = true; cancelBtn.disabled = true;
         var originalLabel = confirmBtn.textContent; confirmBtn.textContent = opts.loadingLabel || 'Salvando…';
         result.then(function () {
-          loading = false; o.remove();
+          loading = false; closed = true; document.removeEventListener('keydown', onKeyDown, true); o.remove();
         }).catch(function (e) {
           loading = false; confirmBtn.disabled = false; cancelBtn.disabled = false; confirmBtn.textContent = originalLabel;
           var msg = (e && (e.message || e)) || 'Não foi possível salvar.';
@@ -8442,7 +8452,21 @@
       }
     };
     if (opts.onMount) opts.onMount(panel);
+    setTimeout(function () { if (!closed && cancelBtn) cancelBtn.focus(); }, 0);
     return { close: close, panel: panel };
+  }
+  function showFormErrors(panel, errors, summarySelector) {
+    if (!panel) return false;
+    panel.querySelectorAll('.field-invalid').forEach(function (el) { el.classList.remove('field-invalid'); el.removeAttribute('aria-invalid'); });
+    var box = panel.querySelector(summarySelector || '.validation-summary');
+    if (!errors || !errors.length) { if (box) { box.innerHTML = ''; box.style.display = 'none'; } return false; }
+    errors.forEach(function (item) {
+      var el = panel.querySelector(item.selector); if (!el) return;
+      el.classList.add('field-invalid'); el.setAttribute('aria-invalid', 'true');
+    });
+    if (box) { box.innerHTML = '<b>Revise os campos abaixo:</b><ul>' + errors.map(function (item) { return '<li>' + esc(item.message) + '</li>'; }).join('') + '</ul>'; box.style.display = 'block'; }
+    var first = panel.querySelector(errors[0].selector); if (first) first.focus();
+    return true;
   }
   // openDrawer() — infraestrutura única do padrão .drawer/.drawer-panel/.dh/.dbd já usado em ~50
   // pontos do sistema (openPedidoFicha360, openFicha, openWalletTx, etc). Fase 6.1: só a fundação —
@@ -9923,7 +9947,7 @@
     var id = rec.id || ('BANK-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
     var op = opActive(); var comp = op ? opCompany(op) : null;
     var existing = bankAccounts.find(function (b) { return b.id === id; });
-    var full = { id: id, companyId: rec.companyId !== undefined ? rec.companyId : (comp ? comp.id : null), operationId: rec.operationId !== undefined ? rec.operationId : null, nome: rec.nome, banco: rec.banco || '', agencia: rec.agencia || '', conta: rec.conta || '', tipo: rec.tipo || '', titular: rec.titular || '', documento: rec.documento || '', observacao: rec.observacao || '', saldoInicial: rec.saldoInicial !== undefined ? r2(rec.saldoInicial || 0) : (existing ? existing.saldoInicial : 0), dataInicial: rec.dataInicial !== undefined ? (rec.dataInicial || null) : (existing ? existing.dataInicial : null), ativa: rec.ativa !== false, createdAt: rec.createdAt || (existing && existing.createdAt) || new Date().toISOString() };
+    var full = { id: id, companyId: rec.companyId !== undefined ? rec.companyId : (comp ? comp.id : null), operationId: rec.operationId !== undefined ? rec.operationId : (existing ? existing.operationId : opActiveOrNull()), nome: rec.nome, banco: rec.banco || '', agencia: rec.agencia || '', conta: rec.conta || '', tipo: rec.tipo || '', titular: rec.titular || '', documento: rec.documento || '', observacao: rec.observacao || '', saldoInicial: rec.saldoInicial !== undefined ? r2(rec.saldoInicial || 0) : (existing ? existing.saldoInicial : 0), dataInicial: rec.dataInicial !== undefined ? (rec.dataInicial || null) : (existing ? existing.dataInicial : null), ativa: rec.ativa !== false, createdAt: rec.createdAt || (existing && existing.createdAt) || new Date().toISOString() };
     bankAccounts = [full].concat(bankAccounts.filter(function (b) { return b.id !== id; }));
     return putMany('bankaccounts', [full]).then(function () { return full; });
   }
@@ -10182,7 +10206,9 @@
       '<div><label class="fld">Conta</label><input class="input" id="bke-conta" style="width:100%" value="' + esc(acc.conta || '') + '"></div>' +
       '<div><label class="fld">Saldo inicial (R$)</label><input class="input" id="bke-saldo" style="width:100%" value="' + esc(String(acc.saldoInicial || 0)) + '"></div>' +
       '<div><label class="fld">Data inicial</label><input type="date" class="input" id="bke-data" style="width:100%" value="' + esc(acc.dataInicial || cpToday()) + '"></div>' +
-      '</div>';
+      '<div><label class="fld">Titular</label><input class="input" id="bke-titular" style="width:100%" value="' + esc(acc.titular || '') + '"></div>' +
+      '<div><label class="fld">CPF/CNPJ</label><input class="input" id="bke-documento" style="width:100%" value="' + esc(acc.documento || '') + '"></div>' +
+      '</div><label class="fld">Observação</label><input class="input" id="bke-observacao" style="width:100%" value="' + esc(acc.observacao || '') + '">';
     openModal({
       title: 'Editar conta bancária', bodyHtml: bodyHtml,
       onConfirm: function (panel) {
@@ -10190,10 +10216,32 @@
         if (!nome) { toast('Informe o nome da conta', '', true); return false; }
         return bankAccountSave(Object.assign({}, acc, {
           nome: nome, banco: panel.querySelector('#bke-banco').value.trim(), agencia: panel.querySelector('#bke-agencia').value.trim(), conta: panel.querySelector('#bke-conta').value.trim(), tipo: panel.querySelector('#bke-tipo').value,
-          saldoInicial: cpParseNum(panel.querySelector('#bke-saldo').value) || 0, dataInicial: panel.querySelector('#bke-data').value || null,
+          saldoInicial: cpParseNum(panel.querySelector('#bke-saldo').value) || 0, dataInicial: panel.querySelector('#bke-data').value || null, titular: panel.querySelector('#bke-titular').value.trim(), documento: panel.querySelector('#bke-documento').value.trim(), observacao: panel.querySelector('#bke-observacao').value.trim(),
         })).then(function () { toast('Conta atualizada', nome); if (onSaved) onSaved(); });
       },
     });
+  }
+  function bankAccountLinks(id) {
+    var cpHeaders = contasPagar.filter(function (h) { return h.financialAccountId === id; }).length;
+    var crHeaders = contasReceber.filter(function (h) { return h.financialAccountId === id; }).length;
+    var payments = cpPayments.filter(function (p) { return p.financialAccountId === id; }).length;
+    var receipts = crReceipts.filter(function (p) { return p.financialAccountId === id; }).length;
+    var transfers = bankTransfers.filter(function (t) { return t.contaId === id; }).length + financialTransfers.filter(function (t) { return t.fromAccountId === id || t.toAccountId === id; }).length;
+    return { cpHeaders: cpHeaders, crHeaders: crHeaders, payments: payments, receipts: receipts, transfers: transfers, total: cpHeaders + crHeaders + payments + receipts + transfers };
+  }
+  function bankAccountDelete(id) {
+    var links = bankAccountLinks(id); var acc = bankAccounts.find(function (b) { return b.id === id; }); if (!acc) return Promise.resolve();
+    if (links.total) { acc.ativa = false; return bankAccountSave(acc); }
+    bankAccounts = bankAccounts.filter(function (b) { return b.id !== id; }); return delOne('bankaccounts', id);
+  }
+  function openBankAccountMovements(acc) {
+    var rows = [];
+    crReceipts.filter(function (p) { return !p.estornado && p.financialAccountId === acc.id; }).forEach(function (p) { rows.push({ date: p.date, type: 'Entrada', value: crAmortizado(p), ref: p.accountsReceivableId }); });
+    cpPayments.filter(function (p) { return !p.estornado && p.financialAccountId === acc.id; }).forEach(function (p) { rows.push({ date: p.date, type: 'Saída', value: -cpAmortizado(p), ref: p.accountsPayableId }); });
+    bankTransfers.filter(function (t) { return t.contaId === acc.id; }).forEach(function (t) { rows.push({ date: t.quando ? t.quando.slice(0, 10) : null, type: 'Transferência recebida', value: r2(t.valor || 0), ref: t.id }); });
+    financialTransfers.filter(function (t) { return t.fromAccountId === acc.id || t.toAccountId === acc.id; }).forEach(function (t) { rows.push({ date: t.date, type: t.toAccountId === acc.id ? 'Transferência recebida' : 'Transferência enviada', value: (t.toAccountId === acc.id ? 1 : -1) * r2(t.valor || 0), ref: t.id }); });
+    rows.sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); });
+    openModal({ title: 'Movimentações — ' + acc.nome, width: 680, confirmLabel: 'Fechar', cancelLabel: 'Voltar', bodyHtml: '<div class="table-wrap"><table class="report"><thead><tr><th>Data</th><th>Tipo</th><th>Referência</th><th>Valor</th></tr></thead><tbody>' + (rows.length ? rows.slice(0, 100).map(function (r) { return '<tr><td>' + dbr(r.date) + '</td><td>' + r.type + '</td><td class="mono">' + esc(r.ref || '—') + '</td><td>' + brl(r.value) + '</td></tr>'; }).join('') : '<tr><td colspan="4" class="empty">Sem movimentações.</td></tr>') + '</tbody></table></div>', onConfirm: function () { return Promise.resolve(); } });
   }
   function cpCorrigirDataPagamentoConciliacao(paymentId, newDate, movementRef) {
     var p = cpPayments.find(function (x) { return x.id === paymentId; }); if (!p || p.estornado) return Promise.reject(new Error('Pagamento ativo não encontrado.'));
@@ -10215,10 +10263,88 @@
     var bodyHtml = '<p class="footnote" style="margin-top:0">Use somente para reproduzir a data efetiva identificada no extrato bancário. A data anterior permanecerá no histórico.</p><label class="fld">Data efetiva no extrato</label><input type="date" class="input" id="cprec-date" max="' + cpToday() + '" value="' + esc(p.date || cpToday()) + '" style="width:100%"><label class="fld">Referência do movimento no extrato *</label><input class="input" id="cprec-ref" style="width:100%" placeholder="Ex.: ID/linha/descrição do extrato">';
     openModal({ title: 'Corrigir data — Conciliação Bancária', width: 460, bodyHtml: bodyHtml, confirmLabel: 'Registrar correção', onConfirm: function (panel) { return cpCorrigirDataPagamentoConciliacao(paymentId, panel.querySelector('#cprec-date').value, panel.querySelector('#cprec-ref').value).then(function () { toast('Data corrigida', 'A alteração foi registrada com auditoria completa.'); if (onDone) onDone(); }); } });
   }
+  function reconciliationRefExists(ref) {
+    var key = cpNorm(ref || ''); if (!key) return false;
+    return cpPayments.concat(crReceipts).some(function (p) { return !p.estornado && p.reconciliation && cpNorm(p.reconciliation.movementRef || '') === key && (!p.reconciliation.operationId || p.reconciliation.operationId === opActiveOrNull()); });
+  }
+  function reconciliationAttachment(file) {
+    if (!file) return Promise.resolve(null);
+    if (file.size > 5 * 1024 * 1024) return Promise.reject(new Error('O comprovante deve ter no máximo 5 MB.'));
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () { resolve({ name: file.name, type: file.type || 'application/octet-stream', size: file.size, dataUrl: reader.result }); };
+      reader.onerror = function () { reject(new Error('Não foi possível ler o comprovante.')); };
+      reader.readAsDataURL(file);
+    });
+  }
+  function reconciliationTitles(type) {
+    var opId = opActiveOrNull();
+    if (type === 'CR') return contasReceber.filter(function (h) { return !h.canceledAt && crSaldo(h) > 0.005 && (!h.operationId || h.operationId === opId); });
+    return contasPagar.filter(function (h) { return !h.canceledAt && cpSaldo(h) > 0.005 && (!h.operationId || h.operationId === opId); });
+  }
+  function reconciliationTitleOptions(type) {
+    var list = reconciliationTitles(type);
+    return '<option value="">— escolher título em aberto —</option>' + list.map(function (h) {
+      var label = type === 'CR' ? (h.descricao || h.pagador || h.id) : (h.historico || cpSupplierLabel(h.supplierId) || h.id);
+      var saldo = type === 'CR' ? crSaldo(h) : cpSaldo(h);
+      return '<option value="' + esc(h.id) + '">' + esc(label) + ' · venc. ' + dbr(h.vencimento) + ' · saldo ' + brl(saldo) + '</option>';
+    }).join('');
+  }
+  function openBankReconciliationModal(onDone) {
+    var canCP = canAccessRoute('contaspagar'), canCR = canAccessRoute('contasreceber');
+    if (!canCP && !canCR) { toast('Acesso não permitido', 'É necessária permissão financeira para Contas a Pagar ou Contas a Receber.', true); return; }
+    var defaultType = canCP ? 'CP' : 'CR';
+    var op = opActive(), comp = op ? opCompany(op) : null;
+    var banks = bankAccountsForActiveCompany().filter(function (b) { return b.ativa !== false && b.operationId === opActiveOrNull(); });
+    var who = authSession.user && (authSession.user.name || authSession.user.email || authSession.user.id) || 'Operador';
+    var bodyHtml = '<div class="validation-summary" id="br-errors" style="display:none"></div>' +
+      '<div class="info-banner">Registro retroativo na empresa <b>' + esc((comp && (comp.nomeFantasia || comp.razaoSocial)) || '—') + '</b>, operação <b>' + esc((op && op.nome) || '—') + '</b>. A baixa usa os mesmos motores oficiais de Contas a Pagar/Receber.</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label class="fld">Natureza *</label><select class="select" id="br-type" style="width:100%">' + (canCP ? '<option value="CP">Saída — Conta a Pagar</option>' : '') + (canCR ? '<option value="CR">Entrada — Conta a Receber</option>' : '') + '</select></div><div><label class="fld">Responsável</label><input class="input" value="' + esc(who) + '" disabled></div></div>' +
+      '<label class="fld">Título em aberto *</label><select class="select" id="br-title" style="width:100%">' + reconciliationTitleOptions(defaultType) + '</select>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label class="fld">Conta Bancária *</label><select class="select" id="br-bank" style="width:100%"><option value="">— escolher —</option>' + banks.map(function (b) { return '<option value="' + esc(b.id) + '">' + esc(b.nome + (b.banco ? ' — ' + b.banco : '')) + '</option>'; }).join('') + '</select></div><div><label class="fld">Data real do movimento *</label><input type="date" class="input" id="br-date" max="' + cpToday() + '" value="' + cpToday() + '"></div></div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label class="fld">Valor movimentado *</label><input class="input" id="br-value" value=""></div><div><label class="fld">Forma *</label><select class="select" id="br-method" style="width:100%"><option value="">— escolher —</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '">' + esc(f) + '</option>'; }).join('') + '</select></div></div>' +
+      '<details style="margin-top:10px"><summary class="rowlink">Juros, multa, desconto ou acréscimo</summary><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px"><div><label class="fld">Juros</label><input class="input" id="br-interest" value="0"></div><div><label class="fld">Multa</label><input class="input" id="br-fine" value="0"></div><div><label class="fld">Desconto</label><input class="input" id="br-discount" value="0"></div><div><label class="fld">Acréscimo</label><input class="input" id="br-addition" value="0"></div></div></details>' +
+      '<label class="fld">Identificador do movimento no extrato *</label><input class="input" id="br-ref" style="width:100%" placeholder="ID único, NSU ou referência bancária">' +
+      '<label class="fld">Justificativa *</label><textarea class="input" id="br-justification" style="width:100%;min-height:70px" placeholder="Motivo do registro retroativo"></textarea>' +
+      '<label class="fld">Comprovante (opcional, até 5 MB)</label><input type="file" class="input" id="br-file" accept=".pdf,.png,.jpg,.jpeg" style="width:100%">';
+    openModal({ title: 'Nova Conciliação Bancária', width: 720, bodyHtml: bodyHtml, confirmLabel: 'Registrar conciliação', loadingLabel: 'Registrando…',
+      onMount: function (panel) {
+        var type = panel.querySelector('#br-type'), title = panel.querySelector('#br-title'), value = panel.querySelector('#br-value');
+        function syncTitleOptions() { title.innerHTML = reconciliationTitleOptions(type.value); value.value = ''; }
+        function syncBalance() { var id = title.value, h = type.value === 'CR' ? contasReceber.find(function (x) { return x.id === id; }) : contasPagar.find(function (x) { return x.id === id; }); value.value = h ? String(type.value === 'CR' ? crSaldo(h) : cpSaldo(h)).replace('.', ',') : ''; }
+        type.onchange = syncTitleOptions; title.onchange = syncBalance;
+      },
+      onConfirm: function (panel) {
+        var type = panel.querySelector('#br-type').value, titleId = panel.querySelector('#br-title').value, bankId = panel.querySelector('#br-bank').value;
+        var date = panel.querySelector('#br-date').value, value = cpParseNum(panel.querySelector('#br-value').value), method = panel.querySelector('#br-method').value;
+        var ref = panel.querySelector('#br-ref').value.trim(), justification = panel.querySelector('#br-justification').value.trim();
+        var interest = cpParseNum(panel.querySelector('#br-interest').value) || 0, fine = cpParseNum(panel.querySelector('#br-fine').value) || 0, discount = cpParseNum(panel.querySelector('#br-discount').value) || 0, addition = cpParseNum(panel.querySelector('#br-addition').value) || 0;
+        var h = type === 'CR' ? contasReceber.find(function (x) { return x.id === titleId; }) : contasPagar.find(function (x) { return x.id === titleId; });
+        var saldo = h ? (type === 'CR' ? crSaldo(h) : cpSaldo(h)) : 0;
+        var amortized = type === 'CR' ? r2((value || 0) + discount - interest - fine - addition) : r2((value || 0) - interest - fine + discount);
+        var errors = [];
+        if ((type === 'CP' && !canCP) || (type === 'CR' && !canCR)) errors.push({ selector: '#br-type', message: 'Você não possui permissão para esta natureza financeira.' });
+        if (!titleId || !h) errors.push({ selector: '#br-title', message: 'Selecione um título em aberto.' });
+        if (!bankId || !banks.some(function (b) { return b.id === bankId; })) errors.push({ selector: '#br-bank', message: 'Selecione uma Conta Bancária ativa desta operação.' });
+        if (!date) errors.push({ selector: '#br-date', message: 'Informe a data real do movimento.' }); else if (date > cpToday()) errors.push({ selector: '#br-date', message: 'A data do movimento não pode ser futura.' });
+        if (!(value > 0)) errors.push({ selector: '#br-value', message: 'Informe um valor movimentado maior que zero.' });
+        if (h && (amortized <= 0 || amortized - saldo > 0.005)) errors.push({ selector: '#br-value', message: 'O principal amortizado deve ser positivo e não pode superar o saldo de ' + brl(saldo) + '.' });
+        if (!method) errors.push({ selector: '#br-method', message: 'Selecione a forma do movimento.' });
+        if (!ref) errors.push({ selector: '#br-ref', message: 'Informe o identificador único do extrato.' }); else if (reconciliationRefExists(ref)) errors.push({ selector: '#br-ref', message: 'Este identificador já foi conciliado nesta operação.' });
+        if (!justification) errors.push({ selector: '#br-justification', message: 'Informe a justificativa do registro retroativo.' });
+        if (showFormErrors(panel, errors, '#br-errors')) return false;
+        return reconciliationAttachment(panel.querySelector('#br-file').files[0]).then(function (attachment) {
+          var metadata = { operationId: opActiveOrNull(), companyId: comp && comp.id || null, movementRef: ref, justification: justification, realMovementDate: date, registeredAt: new Date().toISOString(), registeredBy: who, attachment: attachment };
+          if (type === 'CR') return crRegistrarBaixa(titleId, { valorRecebido: value, date: date, financialAccountId: bankId, paymentMethod: method, juros: interest, multa: fine, desconto: discount, acrescimo: addition, observacao: justification, reconciliation: metadata });
+          return cpRegistrarBaixa(titleId, { valorPago: value, date: date, financialAccountId: bankId, paymentMethod: method, juros: interest, multa: fine, desconto: discount, observacao: justification, manual: false, reconciliation: metadata });
+        }).then(function () { toast('Conciliação registrada', 'Movimento retroativo salvo com auditoria e sem duplicar a baixa.'); if (document.getElementById('cpbody')) cpRenderBody(); if (document.getElementById('crbody')) crRenderBody(); if (onDone) onDone(); });
+      }
+    });
+  }
   function openGerenciarBancos(onDone) {
     function body() {
       var visibleBanks = bankAccountsForActiveCompany();
-      var rows = visibleBanks.map(function (b) { var s = bankAccountSaldoAtual(b.id); return '<tr><td class="cell-text">' + esc(b.nome) + '</td><td class="cell-text">' + esc(b.banco || '—') + '</td><td class="mono">' + esc(b.agencia || '—') + '</td><td class="mono">' + esc(b.conta || '—') + '</td><td>' + esc(b.tipo || '—') + '</td><td class="nowrap">' + brl(s.saldoAtual) + '</td><td>' + (b.ativa !== false ? '<span class="tag ok">ativa</span>' : '<span class="tag neutral">inativa</span>') + '</td><td><button class="btn-sm" data-bankedit="' + esc(b.id) + '">Editar</button> <button class="btn-sm" data-banktoggle="' + esc(b.id) + '">' + (b.ativa !== false ? 'Desativar' : 'Ativar') + '</button></td></tr>'; }).join('');
+      var rows = visibleBanks.map(function (b) { var s = bankAccountSaldoAtual(b.id); return '<tr><td class="cell-text">' + esc(b.nome) + '</td><td class="cell-text">' + esc(b.banco || '—') + '</td><td class="mono">' + esc(b.agencia || '—') + '</td><td class="mono">' + esc(b.conta || '—') + '</td><td>' + esc(b.tipo || '—') + '</td><td class="nowrap">' + brl(s.saldoAtual) + '</td><td>' + (b.ativa !== false ? '<span class="tag ok">ativa</span>' : '<span class="tag neutral">inativa</span>') + '</td><td><button class="btn-sm" data-bankedit="' + esc(b.id) + '">Editar</button> <button class="btn-sm" data-bankmov="' + esc(b.id) + '">Movimentações</button> <button class="btn-sm" data-banktoggle="' + esc(b.id) + '">' + (b.ativa !== false ? 'Inativar' : 'Ativar') + '</button> <button class="btn-sm" data-bankdelete="' + esc(b.id) + '">Excluir</button></td></tr>'; }).join('');
       var table = '<div class="table-wrap"><table class="report"><thead><tr><th>Nome</th><th>Banco</th><th>Agência</th><th>Conta</th><th>Tipo</th><th>Saldo atual</th><th>Status</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="8" class="empty">Nenhuma conta cadastrada ainda.</td></tr>') + '</tbody></table></div>';
       // PROMPT "Correção do fluxo financeiro": financialAccounts (Saldo Carteira Shopee/Recebíveis
       // Shopee) são contas internas geridas pelo próprio sistema (seed automático por operação) — só
@@ -10228,7 +10354,8 @@
       var contasFaGB = financialAccounts.filter(function (a) { return a.active !== false && (!a.operationId || a.operationId === opIdGB); });
       var faRows = contasFaGB.map(function (a) { var s = faSaldoAtual(a.id); return '<tr><td class="cell-text">' + esc(a.name) + '</td><td class="cell-text">Shopee</td><td>—</td><td>—</td><td>Conta interna</td><td class="nowrap">' + brl(s.saldoAtual) + '</td><td><span class="tag ok">ativa</span></td><td>—</td></tr>'; }).join('');
       var tableFa = faRows ? '<div class="table-wrap" style="margin-top:6px"><table class="report"><tbody>' + faRows + '</tbody></table></div>' : '';
-      var form = '<div class="panel" style="margin-top:10px"><div class="ph"><h3>Nova conta</h3></div><div class="pb"><div style="display:flex;gap:8px;flex-wrap:wrap">' +
+      var opGB = opActive(), compGB = opGB ? opCompany(opGB) : null;
+      var form = '<div class="panel" style="margin-top:10px"><div class="ph"><h3>Nova conta</h3><span class="footnote" style="margin:0">' + esc((compGB && (compGB.nomeFantasia || compGB.razaoSocial)) || 'Empresa ativa') + ' · ' + esc((opGB && opGB.nome) || 'Operação ativa') + '</span></div><div class="pb"><div style="display:flex;gap:8px;flex-wrap:wrap">' +
         '<input class="input sm" id="bk-nome" placeholder="Nome da conta" style="width:180px">' +
         '<input class="input sm" id="bk-banco" placeholder="Banco" style="width:140px">' +
         '<input class="input sm" id="bk-agencia" placeholder="Agência" style="width:100px">' +
@@ -10236,11 +10363,12 @@
         '<select class="select sm" id="bk-tipo"><option value="">Tipo</option><option value="Corrente">Corrente</option><option value="Poupança">Poupança</option><option value="Digital">Digital</option></select>' +
         '<input class="input sm" id="bk-saldo" placeholder="Saldo inicial" style="width:120px" value="0,00">' +
         '<input type="date" class="input sm" id="bk-data" placeholder="Data inicial" style="width:140px" value="' + cpToday() + '">' +
+        '<input class="input sm" id="bk-obs" placeholder="Observação" style="width:180px">' +
         '<button class="btn-sm primary" id="bk-salvar">Salvar</button></div></div></div>';
       var visibleIds = {}; visibleBanks.forEach(function (b) { visibleIds[b.id] = true; });
       var payRows = cpPayments.filter(function (p) { return !p.estornado && visibleIds[p.financialAccountId]; }).sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); }).slice(0, 30).map(function (p) { var h = contasPagar.find(function (x) { return x.id === p.accountsPayableId; }); return '<tr><td>' + dbr(p.date) + '</td><td>' + esc(h ? (h.historico || cpSupplierLabel(h.supplierId)) : p.accountsPayableId) + '</td><td>' + esc(cpFinAccountLabel(p.financialAccountId)) + '</td><td>' + brl(p.valorPago) + '</td><td><button class="btn-sm" data-cpreconcile="' + p.id + '">Corrigir data</button></td></tr>'; }).join('');
-      var reconciliation = '<div class="panel" style="margin-top:12px"><div class="ph"><h3>Conciliação Bancária — pagamentos</h3><span class="footnote" style="margin:0">A correção retroativa preserva data anterior, usuário e referência do extrato.</span></div><div class="table-wrap">' + (payRows ? '<table class="report"><thead><tr><th>Data</th><th>Conta a pagar</th><th>Conta Bancária</th><th>Valor</th><th></th></tr></thead><tbody>' + payRows + '</tbody></table>' : '<div class="empty"><p>Nenhum pagamento bancário para conciliar.</p></div>') + '</div></div>';
-      return table + tableFa + reconciliation + form;
+      var reconciliation = '<div class="panel" style="margin-top:12px"><div class="ph"><h3>Conciliação Bancária</h3><span class="footnote" style="margin:0">Baixas retroativas preservam data real, responsável, referência e auditoria.</span><button class="btn-sm primary" id="bk-new-reconciliation">+ Nova conciliação</button></div><div class="table-wrap">' + (payRows ? '<table class="report"><thead><tr><th>Data</th><th>Conta a pagar</th><th>Conta Bancária</th><th>Valor</th><th></th></tr></thead><tbody>' + payRows + '</tbody></table>' : '<div class="empty"><p>Nenhum pagamento bancário para conciliar.</p></div>') + '</div></div>';
+      return '<div class="info-banner">Contas bancárias da empresa e operação ativas. Contas internas da Shopee são protegidas e não podem ser editadas ou excluídas.</div>' + table + tableFa + reconciliation + form;
     }
     var dw = openDrawer({
       title: 'Gerenciar bancos / contas', width: 760, renderBody: body,
@@ -10248,14 +10376,25 @@
       onMount: function (panel, refresh) {
         panel.querySelector('#bk-salvar').onclick = function () {
           var nome = panel.querySelector('#bk-nome').value.trim(); if (!nome) { toast('Informe o nome da conta', '', true); return; }
-          bankAccountSave({ nome: nome, banco: panel.querySelector('#bk-banco').value.trim(), agencia: panel.querySelector('#bk-agencia').value.trim(), conta: panel.querySelector('#bk-conta').value.trim(), tipo: panel.querySelector('#bk-tipo').value, saldoInicial: cpParseNum(panel.querySelector('#bk-saldo').value) || 0, dataInicial: panel.querySelector('#bk-data').value || null }).then(function () { toast('Conta cadastrada', nome); refresh(); });
+          bankAccountSave({ nome: nome, banco: panel.querySelector('#bk-banco').value.trim(), agencia: panel.querySelector('#bk-agencia').value.trim(), conta: panel.querySelector('#bk-conta').value.trim(), tipo: panel.querySelector('#bk-tipo').value, saldoInicial: cpParseNum(panel.querySelector('#bk-saldo').value) || 0, dataInicial: panel.querySelector('#bk-data').value || null, observacao: panel.querySelector('#bk-obs').value.trim(), operationId: opActiveOrNull() }).then(function () { toast('Conta cadastrada', nome); refresh(); });
         };
         panel.querySelectorAll('[data-banktoggle]').forEach(function (b) { b.onclick = function () { var acc = bankAccounts.find(function (x) { return x.id === b.dataset.banktoggle; }); if (acc) bankAccountSave(Object.assign({}, acc, { ativa: acc.ativa === false })).then(refresh); }; });
         panel.querySelectorAll('[data-bankedit]').forEach(function (b) { b.onclick = function () {
           var acc = bankAccounts.find(function (x) { return x.id === b.dataset.bankedit; }); if (!acc) return;
           openBankAccountEdit(acc, refresh);
         }; });
+        panel.querySelectorAll('[data-bankmov]').forEach(function (b) { b.onclick = function () { var acc = bankAccounts.find(function (x) { return x.id === b.dataset.bankmov; }); if (acc) openBankAccountMovements(acc); }; });
+        panel.querySelectorAll('[data-bankdelete]').forEach(function (b) { b.onclick = function () {
+          var acc = bankAccounts.find(function (x) { return x.id === b.dataset.bankdelete; }); if (!acc) return; var links = bankAccountLinks(acc.id);
+          openModal({ title: 'Excluir Conta Bancária', width: 560, destructive: !links.total,
+            bodyHtml: '<p>Conta <b>' + esc(acc.nome) + '</b>.</p>' + (links.total ? '<div class="info-banner">Esta Conta Bancária não pode ser excluída porque existem ' + links.total + ' vínculo(s): ' + links.payments + ' pagamento(s), ' + links.receipts + ' recebimento(s), ' + links.transfers + ' transferência(s) e ' + (links.cpHeaders + links.crHeaders) + ' título(s). Ela será somente inativada.</div><button class="btn-sm" id="bank-view-links" style="margin-top:10px">Ver vínculos</button>' : '<div class="form-err">Sem vínculos. A exclusão será definitiva.</div>'),
+            confirmLabel: links.total ? 'Inativar conta' : 'Excluir conta',
+            onMount: function (m) { var v = m.querySelector('#bank-view-links'); if (v) v.onclick = function () { openBankAccountMovements(acc); }; },
+            onConfirm: function () { return bankAccountDelete(acc.id).then(function () { toast(links.total ? 'Conta inativada' : 'Conta excluída', links.total ? 'Vínculos preservados.' : acc.nome); refresh(); }); }
+          });
+        }; });
         panel.querySelectorAll('[data-cpreconcile]').forEach(function (b) { b.onclick = function () { openCpReconcilePaymentDate(b.dataset.cpreconcile, refresh); }; });
+        var newReconciliation = panel.querySelector('#bk-new-reconciliation'); if (newReconciliation) newReconciliation.onclick = function () { openBankReconciliationModal(refresh); };
       },
     });
   }
@@ -12213,7 +12352,7 @@
       return Promise.reject(new Error('Já existe um funcionário cadastrado com esta matrícula.'));
     }
     var rec = id ? fatorFuncionarios.find(function (f) { return f.id === id; }) : null;
-    if (!rec) { rec = { id: fatorUid(), operationId: opId }; fatorFuncionarios.push(rec); }
+    if (!rec) { rec = { id: fatorUid(), operationId: opId, createdAt: new Date().toISOString() }; fatorFuncionarios.push(rec); }
     Object.assign(rec, {
       nome: dto.nome, matricula: matricula, cpf: dto.cpf || '', cargo: dto.cargo || '', setorId: dto.setorId || null,
       salario: cpParseNum(dto.salario) || 0, encargosPct: cpParseNum(dto.encargosPct) || 0, beneficios: cpParseNum(dto.beneficios) || 0,
@@ -12223,7 +12362,19 @@
     });
     return putMany('fatorfuncionarios', [rec]).then(function () { return rec; });
   }
-  function fatorFuncionarioRemove(id) { fatorFuncionarios = fatorFuncionarios.filter(function (f) { return f.id !== id; }); return delOne('fatorfuncionarios', id); }
+  function fatorFuncionarioLinks(id) {
+    var rec = fatorFuncionarios.find(function (f) { return f.id === id; }); if (!rec) return { snapshots: 0, total: 0 };
+    // Snapshots são imutáveis e guardam o custo consolidado, não o funcionário individual. Havendo
+    // snapshot na mesma operação, a remoção física seria impossível de auditar com segurança.
+    var snapshots = fatorPedidoSnapshots.filter(function (s) { return fatorOpMatch(s, rec.operationId); }).length;
+    return { snapshots: snapshots, total: snapshots };
+  }
+  function fatorFuncionarioRemove(id) {
+    var rec = fatorFuncionarios.find(function (f) { return f.id === id; }); if (!rec) return Promise.resolve();
+    var links = fatorFuncionarioLinks(id);
+    if (links.total) { rec.ativo = false; rec.removedAt = new Date().toISOString(); rec.updatedAt = rec.removedAt; return putMany('fatorfuncionarios', [rec]); }
+    fatorFuncionarios = fatorFuncionarios.filter(function (f) { return f.id !== id; }); return delOne('fatorfuncionarios', id);
+  }
 
   // Cadastro administrativo das categorias industriais. O texto legado (`categoria`) continua
   // preservado nos custos antigos; registros novos também guardam categoryId, sem criar qualquer
@@ -12248,6 +12399,11 @@
     var used = fatorCustosFixos.some(function (x) { return x.categoryId === id; }) || fatorCustosVariaveis.some(function (x) { return x.categoryId === id; });
     if (used) { rec.ativo = false; rec.removedAt = new Date().toISOString(); rec.updatedAt = rec.removedAt; return putMany('fatorcategories', [rec]); }
     fatorCategories = fatorCategories.filter(function (c) { return c.id !== id; }); return delOne('fatorcategories', id);
+  }
+  function fatorCategoryLinks(id) {
+    var fixos = fatorCustosFixos.filter(function (x) { return x.categoryId === id; }).length;
+    var variaveis = fatorCustosVariaveis.filter(function (x) { return x.categoryId === id; }).length;
+    return { fixos: fixos, variaveis: variaveis, total: fixos + variaveis };
   }
   // Custo minuto homem POR SETOR — soma custo mensal dos funcionários ativos daquele setor ÷ soma dos
   // minutos produtivos reais deles. Sem funcionário no setor ou sem minutos > 0 → 0 (nunca div/0).
@@ -12671,7 +12827,16 @@
   function bindFatorFuncionariosView(opId) {
     var nb = document.getElementById('ff-new'); if (nb) nb.onclick = function () { openFatorFuncionarioEditor(opId, null); };
     document.querySelectorAll('[data-ffedit]').forEach(function (b) { b.onclick = function () { openFatorFuncionarioEditor(opId, fatorFuncionarios.find(function (f) { return f.id === b.dataset.ffedit; })); }; });
-    document.querySelectorAll('[data-ffdel]').forEach(function (b) { b.onclick = function () { if (!confirm('Remover este funcionário?')) return; fatorFuncionarioRemove(b.dataset.ffdel).then(function () { render(); toast('Removido', ''); }); }; });
+    document.querySelectorAll('[data-ffdel]').forEach(function (b) { b.onclick = function () {
+      var f = fatorFuncionarios.find(function (x) { return x.id === b.dataset.ffdel; }); if (!f) return;
+      var links = fatorFuncionarioLinks(f.id);
+      openModal({ title: 'Remover funcionário produtivo', width: 540, destructive: !links.total,
+        bodyHtml: '<p>Você está removendo <b>' + esc(f.nome) + '</b>.</p>' + (links.total ? '<div class="info-banner">Este funcionário não pode ser excluído porque há <b>' + links.snapshots + '</b> snapshot(s) histórico(s) na operação. Ele será apenas inativado e deixará de entrar em novos cálculos.</div><button class="btn-sm" id="ff-view-links" style="margin-top:10px">Ver registros vinculados</button>' : '<div class="form-err">Sem vínculos históricos detectados. A exclusão será definitiva.</div>'),
+        confirmLabel: links.total ? 'Inativar funcionário' : 'Excluir funcionário',
+        onMount: function (panel) { var view = panel.querySelector('#ff-view-links'); if (view) view.onclick = function () { toast('Vínculos do funcionário', links.snapshots + ' snapshot(s) históricos preservados nesta operação.'); }; },
+        onConfirm: function () { return fatorFuncionarioRemove(f.id).then(function () { render(); toast(links.total ? 'Funcionário inativado' : 'Funcionário removido', links.total ? 'Histórico preservado.' : f.nome); }); }
+      });
+    }; });
   }
   function openFatorFuncionarioEditor(opId, f) {
     var setOpts = fatorSetores.filter(function (s) { return fatorOpMatch(s, opId); }).map(function (s) { return '<option value="' + esc(s.id) + '"' + (f && f.setorId === s.id ? ' selected' : '') + '>' + esc(s.nome) + '</option>'; }).join('');
@@ -12723,7 +12888,16 @@
     var nb = document.getElementById('fcat-new'); if (nb) nb.onclick = function () { edit(null); };
     document.querySelectorAll('[data-fcatedit]').forEach(function (b) { b.onclick = function () { edit(fatorCategories.find(function (c) { return c.id === b.dataset.fcatedit; })); }; });
     document.querySelectorAll('[data-fcattoggle]').forEach(function (b) { b.onclick = function () { var c = fatorCategories.find(function (x) { return x.id === b.dataset.fcattoggle; }); if (!c) return; fatorCategorySave(opId, { nome: c.nome, ativo: c.ativo === false }, c.id).then(function () { render(); }); }; });
-    document.querySelectorAll('[data-fcatdel]').forEach(function (b) { b.onclick = function () { if (!confirm('Remover esta categoria? Se houver histórico, ela será apenas inativada.')) return; fatorCategoryRemove(b.dataset.fcatdel).then(function () { toast('Categoria removida', 'Referências históricas preservadas.'); render(); }); }; });
+    document.querySelectorAll('[data-fcatdel]').forEach(function (b) { b.onclick = function () {
+      var c = fatorCategories.find(function (x) { return x.id === b.dataset.fcatdel; }); if (!c) return;
+      var links = fatorCategoryLinks(c.id);
+      openModal({ title: 'Remover categoria do Fator', width: 540, destructive: !links.total,
+        bodyHtml: '<p>Você está removendo <b>' + esc(c.nome) + '</b>.</p>' + (links.total ? '<div class="info-banner">Esta categoria não pode ser excluída porque possui ' + links.fixos + ' custo(s) fixo(s) e ' + links.variaveis + ' custo(s) variável(is). Ela será apenas inativada e continuará no histórico.</div><button class="btn-sm" id="fcat-view-links" style="margin-top:10px">Ver registros vinculados</button>' : '<div class="form-err">Sem vínculos. A exclusão será definitiva.</div>'),
+        confirmLabel: links.total ? 'Inativar categoria' : 'Excluir categoria',
+        onMount: function (panel) { var view = panel.querySelector('#fcat-view-links'); if (view) view.onclick = function () { toast('Vínculos da categoria', links.fixos + ' fixo(s) · ' + links.variaveis + ' variável(is).'); }; },
+        onConfirm: function () { return fatorCategoryRemove(c.id).then(function () { toast(links.total ? 'Categoria inativada' : 'Categoria removida', links.total ? 'Referências históricas preservadas.' : c.nome); render(); }); }
+      });
+    }; });
   }
 
   // ---------- 4. Custos Fixos ----------
@@ -13275,14 +13449,15 @@
     dto = dto || {};
     if (!dto.financialAccountId || dto.financialAccountId === '__none') return Promise.reject(new Error('Selecione a Conta Bancária do pagamento.'));
     if (!dto.date) return Promise.reject(new Error('Informe a data do pagamento.'));
+    if (dto.date > cpToday()) return Promise.reject(new Error('A data do pagamento não pode ser futura.'));
     if (dto.manual !== false && dto.date !== cpToday()) return Promise.reject(new Error('A data do pagamento manual deve ser a data de hoje.'));
     var id = cpUid('PAG'); var now = new Date().toISOString();
-    var full = { id: id, accountsPayableId: headerId, date: dto.date || cpToday(), financialAccountId: dto.financialAccountId || null, paymentMethod: dto.paymentMethod || null, valorPago: r2(dto.valorPago || 0), juros: r2(dto.juros || 0), multa: r2(dto.multa || 0), desconto: r2(dto.desconto || 0), observacao: dto.observacao || null, estornado: false, createdAt: now };
+    var full = { id: id, accountsPayableId: headerId, date: dto.date || cpToday(), financialAccountId: dto.financialAccountId || null, paymentMethod: dto.paymentMethod || null, valorPago: r2(dto.valorPago || 0), juros: r2(dto.juros || 0), multa: r2(dto.multa || 0), desconto: r2(dto.desconto || 0), observacao: dto.observacao || null, estornado: false, createdAt: now, origin: dto.reconciliation ? 'Conciliação Bancária' : (dto.origin || 'Baixa manual'), reconciliation: dto.reconciliation || null };
     cpPayments = [full].concat(cpPayments);
-    cpPushHistory(h, 'BAIXA', 'Pagamento de ' + brl(full.valorPago) + (full.financialAccountId ? ' pela conta ' + cpFinAccountLabel(full.financialAccountId) : '') + (full.juros || full.multa || full.desconto ? ' (juros ' + brl(full.juros) + ', multa ' + brl(full.multa) + ', desconto ' + brl(full.desconto) + ')' : '') + '.');
+    cpPushHistory(h, dto.reconciliation ? 'BAIXA_CONCILIACAO' : 'BAIXA', 'Pagamento de ' + brl(full.valorPago) + (full.financialAccountId ? ' pela conta ' + cpFinAccountLabel(full.financialAccountId) : '') + (full.juros || full.multa || full.desconto ? ' (juros ' + brl(full.juros) + ', multa ' + brl(full.multa) + ', desconto ' + brl(full.desconto) + ')' : '') + (dto.reconciliation ? ' · Conciliação Bancária · movimento ' + dto.reconciliation.movementRef : '') + '.');
     h.updatedAt = now;
     return Promise.all([putMany('cppayments', [full]), putMany('cpheader', [h])]).then(function () {
-      auditLocal('CP_PAY', 'contas-a-pagar', 'AccountsPayablePayment', id, null, { valorPago: full.valorPago, accountsPayableId: headerId, financialAccountId: full.financialAccountId });
+      auditLocal(dto.reconciliation ? 'CP_BANK_RECONCILE' : 'CP_PAY', dto.reconciliation ? 'conciliacao-bancaria' : 'contas-a-pagar', 'AccountsPayablePayment', id, null, { valorPago: full.valorPago, accountsPayableId: headerId, financialAccountId: full.financialAccountId, reconciliation: full.reconciliation });
       return full;
     });
   }
@@ -13360,13 +13535,24 @@
   // ---- ocorrência / recorrência (§21-22) ----
   function cpOccIntervalDays(type) { return { SEMANAL: 7, QUINZENAL: 15 }[type] || null; }
   function cpOccIntervalMonths(type) { return { MENSAL: 1, BIMESTRAL: 2, TRIMESTRAL: 3, SEMESTRAL: 6, ANUAL: 12 }[type] || null; }
+  function cpWeekdayFromDate(dateStr) { return dateStr ? new Date(dateStr + 'T00:00:00').getDay() : null; }
+  function cpWeekdayLabel(dateStr) {
+    var labels = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
+    var day = cpWeekdayFromDate(dateStr); return day == null || isNaN(day) ? 'dia ainda não definido' : labels[day];
+  }
+  function cpWeeklyPhrase(dateStr) {
+    var day = cpWeekdayFromDate(dateStr); var article = (day === 0 || day === 6) ? 'todo' : 'toda';
+    return 'Repete ' + article + ' ' + cpWeekdayLabel(dateStr) + ', a partir de ' + dbr(dateStr) + '.';
+  }
   // Gera N rascunhos de título a partir de UMA ocorrência configurada — todos com o mesmo
   // recurrenceGroupId (§22), cada um com seu próprio vencimento/valor/status independentes.
   function cpGenerateOccurrenceDrafts(baseDraft, occ) {
     if (!occ || occ.type === 'UNICA') return [baseDraft];
     var n = occ.type === 'PARCELADA' ? Math.max(1, parseInt(occ.installments, 10) || 1) : Math.max(1, parseInt(occ.installments, 10) || 1);
     var first = occ.firstDueDate || baseDraft.vencimento || cpToday();
-    if (occ.type === 'SEMANAL') first = cpAlignWeekday(first, occ.weekDay != null ? occ.weekDay : new Date(first + 'T00:00:00').getDay());
+    // O primeiro vencimento é a fonte de verdade da recorrência semanal. O campo weekDay continua
+    // no objeto apenas para compatibilidade com registros antigos, mas nunca desloca a data digitada.
+    if (occ.type === 'SEMANAL') occ.weekDay = cpWeekdayFromDate(first);
     var groupId = cpUid('CPGRP');
     var valorTotal = baseDraft.valor; var valorParcela = r2(valorTotal / n); var soma = 0;
     var out = [];
@@ -13527,7 +13713,7 @@
 
   // ---- UI: raiz do módulo ----
   function cpTabsHtml() {
-    return '<div class="tabs">' + [['lista', 'Contas a pagar'], ['dre', 'DRE de Despesas']].map(function (t) { return '<div class="tab' + (cpSub === t[0] ? ' active' : '') + '" data-cptab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '<div class="tab" data-cp-config="1">Configurações</div></div>';
+    return '<div class="tabs">' + [['lista', 'Contas a pagar'], ['dre', 'DRE de Despesas']].map(function (t) { return '<div class="tab' + (cpSub === t[0] ? ' active' : '') + '" data-cptab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '<div class="tab" data-cp-reconcile="1">Conciliação Bancária</div><div class="tab" data-cp-config="1">Configurações</div></div>';
   }
   function renderContasPagar() {
     var moved = { categorias: 'cp-categorias', planocontas: 'cp-planocontas', centroscusto: 'cp-centroscusto', fornecedores: 'cp-fornecedores' };
@@ -13535,6 +13721,7 @@
     app.innerHTML = cpHead() + cpTabsHtml() + '<div id="cpbody" style="margin-top:14px"></div>';
     cpRenderBody();
     app.querySelectorAll('[data-cptab]').forEach(function (t) { t.onclick = function () { cpSub = t.dataset.cptab; cpPage = 1; render(); }; });
+    var reconcile = app.querySelector('[data-cp-reconcile]'); if (reconcile) reconcile.onclick = function () { openBankReconciliationModal(function () { if (document.getElementById('cpbody')) cpRenderBody(); }); };
     var cfg = app.querySelector('[data-cp-config]'); if (cfg) cfg.onclick = function () { configNavigate('cp'); };
   }
   function cpHead() { return PageHeader({ variant: 'eyebrow', eyebrow: 'FINANCEIRO', title: 'Contas a Pagar', compact: true }); }
@@ -13818,8 +14005,7 @@
     };
     d.querySelector('[data-act="excluir"]').onclick = function () {
       d.remove();
-      if (!confirm('Excluir esta conta a pagar? Essa ação não pode ser desfeita.')) return;
-      cpDeleteHeader(id).then(function () { toast('Conta excluída', ''); cpRenderBody(); }).catch(function (e) { toast('Não foi possível excluir', e.message, true); });
+      openModal({ title: 'Excluir conta a pagar', destructive: true, confirmLabel: 'Excluir conta', bodyHtml: '<p>Excluir <b>' + esc(h.historico || cpSupplierLabel(h.supplierId)) + '</b>?</p><div class="form-err">A exclusão é definitiva e só será permitida se não existir nenhuma baixa vinculada.</div>', onConfirm: function () { return cpDeleteHeader(id).then(function () { toast('Conta excluída', ''); if (document.getElementById('cpbody')) cpRenderBody(); }); } });
     };
   }
   function openCpBaixaEmMassa(ids) {
@@ -13940,6 +14126,7 @@
       var header = '<div class="dh"><div><b>Conta a pagar</b>' + (existing ? '<span class="footnote" style="margin:4px 0 0">' + esc(CP_ORIGEM_LABEL[draft.origin] || draft.origin) + (draft.installmentsTotal > 1 ? ' · parcela ' + draft.installmentIndex + '/' + draft.installmentsTotal : '') + '</span>' : '') + '</div><button class="x">&times;</button></div>';
 
       var camposTopo = '<div class="dbd">' +
+        '<div class="validation-summary" id="cp-form-errors" style="display:none"></div>' +
         (locked ? callout('warn', 'Título com pagamento registrado', 'Valor e itens ficam travados enquanto houver baixa ativa. Estorne a baixa (na aba Pagamento) para poder alterá-los.') : '') +
         '<div style="display:grid;grid-template-columns:2fr 1fr;gap:12px"><div><label class="fld">Fornecedor *</label><div style="display:flex;gap:6px"><select class="select" id="cp-fornecedor-sel" style="flex:1">' + cpSupplierOptions(draft.supplierId).replace('Todos os fornecedores', '— selecione —') + '</select><button class="btn-sm" id="cp-fornecedor-novo">+ cadastrar</button></div></div>' +
         '<div><label class="fld">Valor (R$) *</label><input class="input" id="cp-valor" value="' + (valorFinal != null ? valorFinal.toFixed(2).replace('.', ',') : '') + '" ' + (items.length ? 'title="Calculado a partir dos itens — edite para sobrescrever manualmente"' : '') + (locked ? ' disabled' : '') + '></div></div>' +
@@ -14004,15 +14191,13 @@
     }
     function cpTabOcorrencia() {
       var occ = draft.occurrence || { type: 'UNICA' };
-      var weekDays = [['1', 'Segunda-feira'], ['2', 'Terça-feira'], ['3', 'Quarta-feira'], ['4', 'Quinta-feira'], ['5', 'Sexta-feira']];
-      if (!occ.onlyBusinessDays) weekDays = weekDays.concat([['6', 'Sábado'], ['0', 'Domingo']]);
+      var firstDue = occ.firstDueDate || draft.vencimento || cpToday();
       return (existing && existing.recurrenceGroupId ? callout('', '', 'Esta conta faz parte de uma série recorrente/parcelada (parcela ' + (existing.installmentIndex || '?') + ' de ' + (existing.installmentsTotal || '?') + '). Alterar a ocorrência aqui não afeta as demais parcelas já geradas.') : '') +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><div><label class="fld">Ocorrência</label><select class="select" id="cp-occ-type" style="width:100%">' + CP_OCORRENCIAS.map(function (o) { return '<option value="' + o[0] + '"' + (occ.type === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
         '<div><label class="fld"><input type="checkbox" id="cp-occ-uteis"' + (occ.onlyBusinessDays ? ' checked' : '') + '> Considerar somente dias úteis</label></div></div>' +
-        '<div id="cp-occ-extra" style="display:' + (occ.type === 'UNICA' ? 'none' : 'grid') + ';grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:10px">' +
+        '<div id="cp-occ-extra" style="display:' + (occ.type === 'UNICA' ? 'none' : 'grid') + ';grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">' +
         '<div><label class="fld">Quantidade de ocorrências</label><input class="input" id="cp-occ-n" value="' + (occ.installments || 1) + '"></div>' +
-        '<div><label class="fld">Primeiro vencimento</label><input class="input" type="date" id="cp-occ-first" value="' + esc(occ.firstDueDate || draft.vencimento || cpToday()) + '"></div>' +
-        '<div id="cp-occ-week-wrap" style="display:' + (occ.type === 'SEMANAL' ? 'block' : 'none') + '"><label class="fld">Dia da semana</label><select class="select" id="cp-occ-week" style="width:100%">' + weekDays.map(function (w) { return '<option value="' + w[0] + '"' + (String(occ.weekDay == null ? 1 : occ.weekDay) === w[0] ? ' selected' : '') + '>' + w[1] + '</option>'; }).join('') + '</select></div>' +
+        '<div><label class="fld">Primeiro vencimento</label><input class="input" type="date" id="cp-occ-first" value="' + esc(firstDue) + '"><div id="cp-occ-week-info" class="footnote" style="display:' + (occ.type === 'SEMANAL' ? 'block' : 'none') + ';margin:6px 0 0">' + esc(cpWeeklyPhrase(firstDue)) + '</div></div>' +
         '</div>' + (existing ? '' : '<p class="footnote" style="margin-top:10px">Ao salvar, serão geradas todas as contas da série de uma vez — cada uma com seu próprio vencimento, valor e status, todas vinculadas à mesma origem.</p>');
     }
     function cpTabAnexos() {
@@ -14058,7 +14243,10 @@
       var ou = fieldVal('cp-outras'); if (ou != null) draft.outrasDespesasValor = cpParseNum(ou) || 0;
       var ctaFrete = fieldVal('cp-cta-frete'); if (ctaFrete != null) draft.freteAccountingAccountId = ctaFrete || null;
       var ctaOutras = fieldVal('cp-cta-outras'); if (ctaOutras != null) draft.outrasDespesasAccountingAccountId = ctaOutras || null;
-      var occType = fieldVal('cp-occ-type'); if (occType != null) draft.occurrence = { type: occType, onlyBusinessDays: !!(panel.querySelector('#cp-occ-uteis') || {}).checked, installments: parseInt(fieldVal('cp-occ-n'), 10) || 1, firstDueDate: fieldVal('cp-occ-first') || draft.vencimento, intervalDays: 30, weekDay: parseInt(fieldVal('cp-occ-week'), 10) || 1 };
+      var occType = fieldVal('cp-occ-type'); if (occType != null) {
+        var firstDue = fieldVal('cp-occ-first') || draft.vencimento;
+        draft.occurrence = { type: occType, onlyBusinessDays: !!(panel.querySelector('#cp-occ-uteis') || {}).checked, installments: parseInt(fieldVal('cp-occ-n'), 10) || 1, firstDueDate: firstDue, intervalDays: 30, weekDay: cpWeekdayFromDate(firstDue) };
+      }
       var valorInput = cpParseNum(fieldVal('cp-valor'));
       var calc = cpValorOriginal(items, draft.freteValor, draft.outrasDespesasValor);
       draft.valorManualOverride = valorInput != null && Math.abs(valorInput - calc) > 0.005;
@@ -14089,15 +14277,24 @@
     var cpSaving = false;
     function doSave(andBaixa) {
       if (cpSaving) return;
-      if (!fieldVal('cp-fornecedor-sel')) { toast('Fornecedor obrigatório', 'Selecione ou cadastre um fornecedor antes de salvar.', true); return; }
-      if (!fieldVal('cp-vencimento')) { toast('Vencimento obrigatório', '', true); return; }
       collectDraftFromForm();
       // PROMPT "Correção da Base Financeira" §1: "todo lançamento deve ter Categoria financeira/Conta
       // financeira — nunca incompleto" — mesma exigência já aplicada ao modal da Carteira
       // (openWalletTx). Valida DEPOIS de collectDraftFromForm() pra não descartar o que o usuário
       // digitou no select único de Categoria financeira (cp-categoria, topo do formulário — Fase 4).
-      if (!draft.categoryId) { toast('Categoria financeira obrigatória', 'Selecione uma categoria antes de salvar — necessária para a DRE por categoria.', true); return; }
-      if (!draft.financialAccountId) { toast('Conta Bancária obrigatória', 'Selecione a Conta Bancária de onde sai (ou sairá) o pagamento, na aba Pagamento.', true); return; }
+      var errors = [];
+      if (!draft.supplierId) errors.push({ selector: '#cp-fornecedor-sel', message: 'Selecione ou cadastre um fornecedor.' });
+      if (!(cpParseNum(fieldVal('cp-valor')) > 0)) errors.push({ selector: '#cp-valor', message: 'Informe um valor maior que zero.' });
+      if (!draft.emissao) errors.push({ selector: '#cp-emissao', message: 'Informe a data de emissão.' });
+      if (!draft.competencia) errors.push({ selector: '#cp-competencia', message: 'Informe a data de competência.' });
+      if (!draft.vencimento) errors.push({ selector: '#cp-vencimento', message: 'Informe o vencimento.' });
+      if (!draft.categoryId) errors.push({ selector: '#cp-categoria', message: 'Selecione a categoria financeira.' });
+      if (!draft.financialAccountId) errors.push({ selector: '#cp-conta-fin', message: 'Selecione a Conta Bancária do pagamento.' });
+      if (errors.length) {
+        if (!draft.financialAccountId && cpEdTab !== 'pagamento') { cpEdTab = 'pagamento'; refresh(); }
+        setTimeout(function () { showFormErrors(panel, errors, '#cp-form-errors'); }, 0);
+        return;
+      }
       // PROMPT "Correção da Base Financeira" §3: salvar aqui é sempre um ato manual do operador — marca
       // Categoria/Conta como protegidas contra a próxima integração automática do fechamento (ver
       // cpAplicarUpsertProtegido), que só volta a preenchê-las se o operador algum dia limpar o campo.
@@ -14154,7 +14351,33 @@
       var occType = panel.querySelector('#cp-occ-type'); if (occType) occType.onchange = function () {
         collectDraftFromForm(); draft.occurrence.type = occType.value; refresh();
       };
-      var occUteis = panel.querySelector('#cp-occ-uteis'); if (occUteis) occUteis.onchange = function () { collectDraftFromForm(); draft.occurrence.onlyBusinessDays = occUteis.checked; if (occUteis.checked && (draft.occurrence.weekDay === 0 || draft.occurrence.weekDay === 6)) draft.occurrence.weekDay = 1; refresh(); };
+      function requestBusinessDayAdjustment() {
+        collectDraftFromForm();
+        var first = draft.occurrence.firstDueDate || draft.vencimento;
+        var weekday = cpWeekdayFromDate(first);
+        if (weekday !== 0 && weekday !== 6) { draft.occurrence.onlyBusinessDays = true; return; }
+        draft.occurrence.onlyBusinessDays = false; occUteis.checked = false;
+        var adjusted = cpAdjustBusinessDay(first);
+        openModal({
+          title: 'Primeiro vencimento em fim de semana',
+          width: 560,
+          bodyHtml: '<p style="margin:0">O primeiro vencimento informado cai em um <b>' + esc(cpWeekdayLabel(first)) + '</b>. Deseja ajustá-lo para o próximo dia útil, segunda-feira, <b>' + dbr(adjusted) + '</b>?</p>',
+          confirmLabel: 'Ajustar para o próximo dia útil',
+          onCancel: function () { draft.occurrence.onlyBusinessDays = false; },
+          onConfirm: function () {
+            draft.occurrence.firstDueDate = adjusted; draft.occurrence.weekDay = cpWeekdayFromDate(adjusted); draft.occurrence.onlyBusinessDays = true;
+            draft.vencimento = adjusted;
+            refresh();
+            return Promise.resolve();
+          }
+        });
+      }
+      var occUteis = panel.querySelector('#cp-occ-uteis'); if (occUteis) occUteis.onchange = function () { if (!occUteis.checked) { collectDraftFromForm(); draft.occurrence.onlyBusinessDays = false; return; } requestBusinessDayAdjustment(); };
+      var occFirst = panel.querySelector('#cp-occ-first'); if (occFirst) occFirst.onchange = function () {
+        collectDraftFromForm(); draft.occurrence.firstDueDate = occFirst.value; draft.occurrence.weekDay = cpWeekdayFromDate(occFirst.value);
+        if (draft.occurrence.onlyBusinessDays && [0, 6].indexOf(draft.occurrence.weekDay) >= 0) { draft.occurrence.onlyBusinessDays = false; occUteis.checked = false; requestBusinessDayAdjustment(); return; }
+        refresh();
+      };
       var vencTopo = panel.querySelector('#cp-vencimento'); if (vencTopo) vencTopo.onchange = function () { var old = draft.vencimento; draft.vencimento = vencTopo.value; if (!draft.occurrence.firstDueDate || draft.occurrence.firstDueDate === old) draft.occurrence.firstDueDate = vencTopo.value; var firstEl = panel.querySelector('#cp-occ-first'); if (firstEl) firstEl.value = draft.occurrence.firstDueDate; };
       // ---- itens: edição SEM re-render (correção da raiz da perda de foco) — cada tecla atualiza
       // só `items[idx]` + o total da própria linha (célula) + o resumo da compra; o <input> em si
@@ -14211,7 +14434,7 @@
         atts[replaceIdx] = Object.assign({}, atts[replaceIdx], { filename: name, kind: kind, blob: file, createdAt: new Date().toISOString() });
         replaceIdx = null; refresh();
       };
-      panel.querySelectorAll('[data-estornar]').forEach(function (b) { b.onclick = function () { if (!confirm('Estornar esta baixa? A conta volta a ficar (parcial ou totalmente) em aberto.')) return; collectDraftFromForm(); cpEstornarBaixa(b.dataset.estornar).then(function () { toast('Baixa estornada', ''); refresh(); }); }; });
+      panel.querySelectorAll('[data-estornar]').forEach(function (b) { b.onclick = function () { var payment = cpPayments.find(function (p) { return p.id === b.dataset.estornar; }); openModal({ title: 'Estornar baixa', destructive: true, confirmLabel: 'Estornar baixa', bodyHtml: '<p>Estornar o pagamento de <b>' + brl(payment && payment.valorPago || 0) + '</b>?</p><div class="info-banner">A conta voltará a ficar parcial ou totalmente em aberto. O evento permanecerá no histórico.</div>', onConfirm: function () { collectDraftFromForm(); return cpEstornarBaixa(b.dataset.estornar).then(function () { toast('Baixa estornada', 'Histórico preservado.'); refresh(); }); } }); }; });
       function handleFiles(fileList) {
         collectDraftFromForm(); readItemsFromForm();
         Array.from(fileList).forEach(function (file) {
@@ -14321,6 +14544,7 @@
     var h = contasPagar.find(function (x) { return x.id === headerId; }); if (!h) return;
     var saldo = cpSaldo(h);
     var bodyHtml =
+      '<div class="validation-summary" id="cpb-errors" style="display:none"></div>' +
       '<div class="cx-kv"><span class="cxl">Fornecedor</span><span class="cxv">' + esc(cpSupplierLabel(h.supplierId)) + '</span></div>' +
       '<div class="cx-kv"><span class="cxl">Valor em aberto</span><span class="cxv">' + brl(saldo) + '</span></div>' +
       '<label class="fld">Valor pago</label><input class="input" id="cpb-valor" style="width:100%" value="' + (mode === 'total' ? saldo.toFixed(2).replace('.', ',') : '') + '"' + (mode === 'total' ? ' readonly' : '') + '>' +
@@ -14333,9 +14557,15 @@
       title: mode === 'total' ? 'Baixa total do pagamento' : 'Baixa parcial do pagamento', width: 480, bodyHtml: bodyHtml, confirmLabel: 'Confirmar baixa',
       onConfirm: function (panel) {
         var valorPago = cpParseNum(panel.querySelector('#cpb-valor').value);
-        if (!valorPago || valorPago <= 0) { toast('Informe o valor pago', '', true); return false; }
-        return cpRegistrarBaixa(headerId, { valorPago: valorPago, date: panel.querySelector('#cpb-data').value, financialAccountId: panel.querySelector('#cpb-conta').value, paymentMethod: panel.querySelector('#cpb-forma').value, juros: cpParseNum(panel.querySelector('#cpb-juros').value) || 0, multa: cpParseNum(panel.querySelector('#cpb-multa').value) || 0, desconto: cpParseNum(panel.querySelector('#cpb-desc').value) || 0, observacao: panel.querySelector('#cpb-obs').value.trim() || null })
-          .then(function () { toast('Baixa registrada', brl(valorPago)); cpRenderBody(); });
+        var date = panel.querySelector('#cpb-data').value, accountId = panel.querySelector('#cpb-conta').value, method = panel.querySelector('#cpb-forma').value;
+        var errors = [];
+        if (!(valorPago > 0)) errors.push({ selector: '#cpb-valor', message: 'Informe um valor pago maior que zero.' });
+        if (!date) errors.push({ selector: '#cpb-data', message: 'Informe a data do pagamento.' });
+        if (!accountId || accountId === '__none') errors.push({ selector: '#cpb-conta', message: 'Selecione a Conta Bancária do pagamento.' });
+        if (!method) errors.push({ selector: '#cpb-forma', message: 'Selecione a forma de pagamento.' });
+        if (showFormErrors(panel, errors, '#cpb-errors')) return false;
+        return cpRegistrarBaixa(headerId, { valorPago: valorPago, date: date, financialAccountId: accountId, paymentMethod: method, juros: cpParseNum(panel.querySelector('#cpb-juros').value) || 0, multa: cpParseNum(panel.querySelector('#cpb-multa').value) || 0, desconto: cpParseNum(panel.querySelector('#cpb-desc').value) || 0, observacao: panel.querySelector('#cpb-obs').value.trim() || null })
+          .then(function () { toast('Baixa registrada', brl(valorPago)); if (document.getElementById('cpbody')) cpRenderBody(); });
       },
     });
   }
@@ -14362,6 +14592,22 @@
     if (used) { c.active = false; c.updatedAt = new Date().toISOString(); return putMany('cpcategories', [c]); }
     cpCategories = cpCategories.filter(function (x) { return x.id !== id; }); return delOne('cpcategories', id);
   }
+  function cpCategoryLinks(id) {
+    var headers = contasPagar.filter(function (h) { return h.categoryId === id || h.freteCategoryId === id || h.outrasDespesasCategoryId === id; }).length;
+    var items = cpItemsAll.filter(function (it) { return it.categoryId === id; }).length;
+    var children = cpCategories.filter(function (child) { return child.parentId === id; }).length;
+    return { headers: headers, items: items, children: children, total: headers + items + children };
+  }
+  function openCpCategoryRemove(cat, onDone) {
+    if (!cat) return;
+    var links = cpCategoryLinks(cat.id);
+    openModal({ title: 'Remover categoria financeira', width: 560, destructive: !links.total,
+      bodyHtml: '<p>Você está removendo <b>' + esc(cat.name) + '</b>.</p>' + (links.total ? '<div class="info-banner">Esta categoria não pode ser excluída porque possui ' + links.headers + ' conta(s), ' + links.items + ' item(ns) e ' + links.children + ' categoria(s) dependente(s). Ela será apenas inativada e continuará no histórico.</div><button class="btn-sm" id="cpcat-view-links" style="margin-top:10px">Ver registros vinculados</button>' : '<div class="form-err">Sem vínculos financeiros. A exclusão será definitiva.</div>'),
+      confirmLabel: links.total ? 'Inativar categoria' : 'Excluir categoria',
+      onMount: function (panel) { var view = panel.querySelector('#cpcat-view-links'); if (view) view.onclick = function () { toast('Vínculos da categoria', links.headers + ' conta(s) · ' + links.items + ' item(ns) · ' + links.children + ' dependente(s).'); }; },
+      onConfirm: function () { return cpRemoveCategory(cat.id).then(function () { toast(links.total ? 'Categoria inativada' : 'Categoria removida', links.total ? 'Registros históricos preservados.' : cat.name); if (onDone) onDone(); }); }
+    });
+  }
   function renderCpCategoriasTab() {
     var counts = {}; contasPagar.forEach(function (h) { if (h.categoryId) counts[h.categoryId] = (counts[h.categoryId] || 0) + 1; });
     var filtered = cpFilteredCategories();
@@ -14374,7 +14620,7 @@
   function bindCpCategoriasTab() {
     var n = document.getElementById('cp-cat-new'); if (n) n.onclick = function () { openCpCategoryEditor(null); };
     app.querySelectorAll('[data-cpcatedit]').forEach(function (b) { b.onclick = function () { openCpCategoryEditor(cpCategories.find(function (c) { return c.id === b.dataset.cpcatedit; })); }; });
-    app.querySelectorAll('[data-cpcatremove]').forEach(function (b) { b.onclick = function () { if (!confirm('Remover esta categoria? Categorias já usadas serão apenas inativadas para preservar o histórico.')) return; cpRemoveCategory(b.dataset.cpcatremove).then(function () { cpCatSel.delete(b.dataset.cpcatremove); cpRenderBody(); }); }; });
+    app.querySelectorAll('[data-cpcatremove]').forEach(function (b) { b.onclick = function () { var cat = cpCategories.find(function (c) { return c.id === b.dataset.cpcatremove; }); openCpCategoryRemove(cat, function () { cpCatSel.delete(b.dataset.cpcatremove); cpRenderBody(); }); }; });
     var search = document.getElementById('cpcat-search'); if (search) search.oninput = cpDebounce(function () { cpCatF.search = search.value; cpRenderBody(); }, 180);
     var status = document.getElementById('cpcat-status'); if (status) status.onchange = function () { cpCatF.status = status.value; cpRenderBody(); };
     app.querySelectorAll('.cpcat-chk').forEach(function (c) { c.onchange = function () { if (c.checked) cpCatSel.add(c.dataset.id); else cpCatSel.delete(c.dataset.id); cpRenderBody(); }; });
@@ -14382,7 +14628,14 @@
     function bulkStatus(active) { return Promise.all(Array.from(cpCatSel).map(function (id) { var c = cpCategories.find(function (x) { return x.id === id; }); if (!c) return Promise.resolve(); c.active = active; c.updatedAt = new Date().toISOString(); return putMany('cpcategories', [c]); })).then(function () { cpCatSel.clear(); cpRenderBody(); }); }
     var on = document.getElementById('cpcat-on'); if (on) on.onclick = function () { bulkStatus(true); };
     var off = document.getElementById('cpcat-off'); if (off) off.onclick = function () { bulkStatus(false); };
-    var del = document.getElementById('cpcat-del'); if (del) del.onclick = function () { if (!confirm('Remover as categorias selecionadas? As já usadas serão apenas inativadas.')) return; Promise.all(Array.from(cpCatSel).map(cpRemoveCategory)).then(function () { cpCatSel.clear(); cpRenderBody(); }); };
+    var del = document.getElementById('cpcat-del'); if (del) del.onclick = function () {
+      var ids = Array.from(cpCatSel), linked = ids.reduce(function (n, id) { return n + (cpCategoryLinks(id).total ? 1 : 0); }, 0);
+      openModal({ title: 'Remover categorias selecionadas', width: 540, destructive: linked === 0,
+        bodyHtml: '<p><b>' + ids.length + '</b> categoria(s) selecionada(s).</p><div class="info-banner">' + linked + ' possuem vínculos e serão somente inativadas; ' + (ids.length - linked) + ' sem vínculos serão excluídas.</div>',
+        confirmLabel: 'Confirmar remoção',
+        onConfirm: function () { return Promise.all(ids.map(cpRemoveCategory)).then(function () { cpCatSel.clear(); cpRenderBody(); toast('Categorias processadas', 'Históricos vinculados foram preservados.'); }); }
+      });
+    };
     var clear = document.getElementById('cpcat-clear'); if (clear) clear.onclick = function () { cpCatSel.clear(); cpRenderBody(); };
   }
   function openCpCategoryEditor(cat) {
@@ -14744,6 +14997,21 @@
   // ---- Fase 9 — telas de cadastro CR (Centros de Recebimentos / Categorias), mesmo padrão visual
   // das telas de CP (renderCpCentrosCustoTab/renderCpCategoriasTab), mas 100% isoladas: leem e
   // gravam só em crCostCenters/crCategories, nunca em cpCostCenters/cpCategories.
+  function crCategoryLinks(id) { var headers = contasReceber.filter(function (h) { return h.categoryId === id; }).length; return { headers: headers, total: headers }; }
+  function crRemoveCategory(id) {
+    var c = crCategories.find(function (x) { return x.id === id; }); if (!c) return Promise.resolve();
+    if (crCategoryLinks(id).total) { c.active = false; c.updatedAt = new Date().toISOString(); return putMany('crcategories', [c]); }
+    crCategories = crCategories.filter(function (x) { return x.id !== id; }); return delOne('crcategories', id);
+  }
+  function openCrCategoryRemove(cat) {
+    if (!cat) return; var links = crCategoryLinks(cat.id);
+    openModal({ title: 'Remover categoria de recebimento', width: 540, destructive: !links.total,
+      bodyHtml: '<p>Você está removendo <b>' + esc(cat.name) + '</b>.</p>' + (links.total ? '<div class="info-banner">Esta categoria não pode ser excluída porque possui <b>' + links.headers + '</b> título(s) vinculado(s). Ela será apenas inativada e permanecerá visível no histórico.</div><button class="btn-sm" id="crcat-view-links" style="margin-top:10px">Ver registros vinculados</button>' : '<div class="form-err">Sem vínculos financeiros. A exclusão será definitiva.</div>'),
+      confirmLabel: links.total ? 'Inativar categoria' : 'Excluir categoria',
+      onMount: function (panel) { var view = panel.querySelector('#crcat-view-links'); if (view) view.onclick = function () { toast('Vínculos da categoria', links.headers + ' título(s) a receber.'); }; },
+      onConfirm: function () { return crRemoveCategory(cat.id).then(function () { toast(links.total ? 'Categoria inativada' : 'Categoria removida', links.total ? 'Histórico preservado.' : cat.name); crRenderBody(); }); }
+    });
+  }
   function renderCrClassificacoesTab() {
     var countsCat = {}; contasReceber.forEach(function (h) { if (h.categoryId) countsCat[h.categoryId] = (countsCat[h.categoryId] || 0) + 1; });
     var rowsCc = crCostCenters.slice().sort(function (a, b) { return a.name.localeCompare(b.name); }).map(function (c) {
@@ -14755,7 +15023,7 @@
       // humano nasce marcada — vira dado "confirmado" só quando alguém abre o editor e escolhe (ou
       // reafirma) um Centro de verdade, não pelo simples fato de já ter um categoryId preenchido.
       var pendente = crCategoriaPendenteRevisao(c.id);
-      return '<tr><td><b>' + esc(c.name) + '</b>' + (pendente ? ' <span class="tag" style="color:var(--warn,#b06a00)" title="Categoria criada automaticamente pela migração de Contas a Pagar — nunca confirmada por um humano">⚠ Classificação migrada — revisar</span>' : '') + '</td><td>' + esc(crCostCenterLabel(c.costCenterId)) + '</td><td>' + (countsCat[c.id] || 0) + '</td><td><span class="badge ' + (c.active ? 'b-ok' : 'b-neutral') + '">' + (c.active ? 'Ativa' : 'Inativa') + '</span></td><td><button class="btn-sm" data-crcatedit="' + c.id + '">Editar</button></td></tr>';
+      return '<tr><td><b>' + esc(c.name) + '</b>' + (pendente ? ' <span class="tag" style="color:var(--warn,#b06a00)" title="Categoria criada automaticamente pela migração de Contas a Pagar — nunca confirmada por um humano">⚠ Classificação migrada — revisar</span>' : '') + '</td><td>' + esc(crCostCenterLabel(c.costCenterId)) + '</td><td>' + (countsCat[c.id] || 0) + '</td><td><span class="badge ' + (c.active ? 'b-ok' : 'b-neutral') + '">' + (c.active ? 'Ativa' : 'Inativa') + '</span></td><td><button class="btn-sm" data-crcatedit="' + c.id + '">Editar</button> <button class="btn-sm" data-crcatremove="' + c.id + '">Remover</button></td></tr>';
     }).join('');
     return '<div class="panel"><div class="ph"><h3>Centros de Recebimentos</h3><button class="btn-sm primary" id="cr-cc-new">+ Novo centro de recebimentos</button></div><div class="table-wrap">' + (rowsCc ? '<table><thead><tr><th>Nome</th><th>Categorias</th><th>Status</th><th></th></tr></thead><tbody>' + rowsCc + '</tbody></table>' : '<div class="empty"><p>Nenhum centro de recebimentos cadastrado.</p></div>') + '</div></div>' +
       '<div class="panel" style="margin-top:16px"><div class="ph"><h3>Categorias</h3><button class="btn-sm primary" id="cr-cat-new">+ Nova categoria</button></div><div class="table-wrap">' + (rowsCat ? '<table><thead><tr><th>Categoria</th><th>Centro de Recebimentos</th><th>Títulos vinculados</th><th>Status</th><th></th></tr></thead><tbody>' + rowsCat + '</tbody></table>' : '<div class="empty"><p>Nenhuma categoria cadastrada.</p></div>') + '</div></div>';
@@ -14766,6 +15034,7 @@
     app.querySelectorAll('[data-crccsug]').forEach(function (b) { b.onclick = function () { openCrSugerirCategoriasModal(crCostCenters.find(function (c) { return c.id === b.dataset.crccsug; })); }; });
     var na = document.getElementById('cr-cat-new'); if (na) na.onclick = function () { openCrCategoryEditor(null); };
     app.querySelectorAll('[data-crcatedit]').forEach(function (b) { b.onclick = function () { openCrCategoryEditor(crCategories.find(function (c) { return c.id === b.dataset.crcatedit; })); }; });
+    app.querySelectorAll('[data-crcatremove]').forEach(function (b) { b.onclick = function () { openCrCategoryRemove(crCategories.find(function (c) { return c.id === b.dataset.crcatremove; })); }; });
   }
   function openCrCostCenterEditor(cc) {
     var bodyHtml = '<label class="fld">Nome *</label><input class="input" id="crcce-nm" style="width:100%" value="' + esc(cc ? cc.name : '') + '"><label class="fld"><input type="checkbox" id="crcce-ativa"' + (!cc || cc.active ? ' checked' : '') + '> Ativo</label>';
@@ -14915,9 +15184,9 @@
     var receiptDate = dto.date || cpToday();
     if (receiptDate > cpToday()) return Promise.reject(new Error('A data do recebimento não pode ser futura.'));
     var id = crUid('REC'); var now = new Date().toISOString();
-    var full = { id: id, accountsReceivableId: headerId, date: receiptDate, financialAccountId: dto.financialAccountId || null, paymentMethod: dto.paymentMethod || null, valorOriginal: r2(h.valor || 0), valorRecebido: r2(dto.valorRecebido || 0), desconto: r2(dto.desconto || 0), juros: r2(dto.juros || 0), multa: r2(dto.multa || 0), acrescimo: r2(dto.acrescimo || 0), observacao: dto.observacao || null, estornado: false, auto: !!dto.auto, createdAt: now };
+    var full = { id: id, accountsReceivableId: headerId, date: receiptDate, financialAccountId: dto.financialAccountId || null, paymentMethod: dto.paymentMethod || null, valorOriginal: r2(h.valor || 0), valorRecebido: r2(dto.valorRecebido || 0), desconto: r2(dto.desconto || 0), juros: r2(dto.juros || 0), multa: r2(dto.multa || 0), acrescimo: r2(dto.acrescimo || 0), observacao: dto.observacao || null, estornado: false, auto: !!dto.auto, createdAt: now, origin: dto.reconciliation ? 'Conciliação Bancária' : (dto.origin || 'Baixa manual'), reconciliation: dto.reconciliation || null };
     crReceipts = [full].concat(crReceipts);
-    crPushHistory(h, 'RECEBIMENTO', 'Original ' + brl(full.valorOriginal) + ' · recebido ' + brl(full.valorRecebido) + ' · desconto ' + brl(full.desconto) + ' · juros ' + brl(full.juros) + ' · multa ' + brl(full.multa) + ' · outros acréscimos ' + brl(full.acrescimo) + ' · principal amortizado ' + brl(crAmortizado(full)) + (full.financialAccountId ? ' · Conta Bancária ' + crFinAccountLabel(full.financialAccountId) : '') + '.');
+    crPushHistory(h, dto.reconciliation ? 'RECEBIMENTO_CONCILIACAO' : 'RECEBIMENTO', 'Original ' + brl(full.valorOriginal) + ' · recebido ' + brl(full.valorRecebido) + ' · desconto ' + brl(full.desconto) + ' · juros ' + brl(full.juros) + ' · multa ' + brl(full.multa) + ' · outros acréscimos ' + brl(full.acrescimo) + ' · principal amortizado ' + brl(crAmortizado(full)) + (full.financialAccountId ? ' · Conta Bancária ' + crFinAccountLabel(full.financialAccountId) : '') + (dto.reconciliation ? ' · Conciliação Bancária · movimento ' + dto.reconciliation.movementRef : '') + '.');
     // §CAIXA_TRANSFERENCIA (Pix auto-detectado nasce sem conta escolhida — ver caixaMontarIntegracaoFinanceira):
     // a baixa manual é o momento em que o operador CONFIRMA em qual banco o dinheiro entrou — refletir
     // isso na conta do título (não só do recebimento) pra lista/coluna "Conta" nunca ficar mostrando
@@ -14925,7 +15194,7 @@
     if (full.financialAccountId && !h.financialAccountId) h.financialAccountId = full.financialAccountId;
     h.updatedAt = now;
     return Promise.all([putMany('crreceipts', [full]), putMany('crheader', [h])]).then(function () {
-      auditLocal('CR_RECEIVE', 'contas-a-receber', 'AccountsReceivableReceipt', id, null, { valorRecebido: full.valorRecebido, accountsReceivableId: headerId, financialAccountId: full.financialAccountId });
+      auditLocal(dto.reconciliation ? 'CR_BANK_RECONCILE' : 'CR_RECEIVE', dto.reconciliation ? 'conciliacao-bancaria' : 'contas-a-receber', 'AccountsReceivableReceipt', id, null, { valorRecebido: full.valorRecebido, accountsReceivableId: headerId, financialAccountId: full.financialAccountId, reconciliation: full.reconciliation });
       return full;
     });
   }
@@ -14965,10 +15234,11 @@
   function renderContasReceber() {
     if (crSub === 'classificacoes') { route = 'configuracoes'; configSub = 'cr-classificacoes'; return render(); }
     app.innerHTML = PageHeader({ variant: 'eyebrow', eyebrow: 'FINANCEIRO', title: 'Contas a Receber', compact: true }) +
-      '<div class="subtabs">' + [['visaogeral', 'Visão Geral'], ['lista', 'Lista'], ['shopee', 'Pedidos (auditoria)'], ['projecao', 'Projeção de Recebimentos']].map(function (t) { return '<div class="subtab' + (crSub === t[0] ? ' active' : '') + '" data-crtab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '<div class="subtab" data-cr-config="1">Configurações</div></div>' +
+      '<div class="subtabs">' + [['visaogeral', 'Visão Geral'], ['lista', 'Lista'], ['shopee', 'Pedidos (auditoria)'], ['projecao', 'Projeção de Recebimentos']].map(function (t) { return '<div class="subtab' + (crSub === t[0] ? ' active' : '') + '" data-crtab="' + t[0] + '">' + t[1] + '</div>'; }).join('') + '<div class="subtab" data-cr-reconcile="1">Conciliação Bancária</div><div class="subtab" data-cr-config="1">Configurações</div></div>' +
       '<div id="crbody" style="margin-top:14px"></div>';
     crRenderBody();
     app.querySelectorAll('[data-crtab]').forEach(function (t) { t.onclick = function () { crSub = t.dataset.crtab; crPage = 1; render(); }; });
+    var reconcile = app.querySelector('[data-cr-reconcile]'); if (reconcile) reconcile.onclick = function () { openBankReconciliationModal(function () { if (document.getElementById('crbody')) crRenderBody(); }); };
     var cfg = app.querySelector('[data-cr-config]'); if (cfg) cfg.onclick = function () { configNavigate('cr'); };
   }
   function crRenderBody() {
@@ -15286,6 +15556,9 @@
       var saldo = h ? crSaldo(h) : 0;
       var statusLbl = h ? CR_STATUS_LABEL[crStatusDerivado(h)] : null;
       var readOnlyOrigin = h && h.origin === 'SHOPEE_PEDIDO';
+      var historyRows = h && h.history && h.history.length ? h.history.map(function (ev) {
+        return '<tr><td class="nowrap">' + new Date(ev.at).toLocaleString('pt-BR') + '</td><td>' + esc(ev.user || 'Operador') + '</td><td>' + esc(ev.action || 'EVENTO') + '</td><td class="cell-text">' + esc(ev.detail || '') + '</td></tr>';
+      }).join('') : '';
       panel.innerHTML = '<div class="dh"><div><b>' + (isNew ? 'Nova conta a receber' : 'Conta a receber') + '</b>' + (statusLbl ? ' <span class="badge ' + statusLbl[1] + '" style="margin-left:8px">' + statusLbl[0] + '</span>' : '') + '</div><button class="x">&times;</button></div><div class="dbd">' +
         (readOnlyOrigin ? '<div class="footnote" style="margin-bottom:8px">Gerado automaticamente pelo fechamento de caixa (Pedido ' + esc(h.orderId || '') + '). Descrição, valor e vencimento não são editáveis manualmente — só o recebimento.</div>' : '') +
         '<label class="fld">Descrição *</label><input class="input" id="cr-descricao" style="width:100%" value="' + esc(draft.descricao || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '>' +
@@ -15303,12 +15576,13 @@
         '<label class="fld">Referência</label><input class="input" id="cr-referencia" style="width:100%" value="' + esc(draft.referencia || '') + '"' + (readOnlyOrigin ? ' disabled' : '') + '>' +
         '<label class="fld">Observação</label><input class="input" id="cr-obs" style="width:100%" value="' + esc(draft.observacao || '') + '">' +
         (!isNew ? ('<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)"><div class="prow"><span>Recebido</span><b>' + brl(crRecebidoTotal(h)) + '</b></div><div class="prow"><span>Saldo</span><b>' + brl(saldo) + '</b></div></div>') : '') +
-        (!isNew && recibos.length ? ('<div style="margin-top:10px"><b class="footnote">Recebimentos</b><div class="table-wrap"><table class="report"><thead><tr><th>Data / Conta Bancária</th><th>Original</th><th>Recebido</th><th>Desconto</th><th>Juros</th><th>Multa</th><th>Outros acréscimos</th><th></th></tr></thead><tbody>' + recibos.map(function (p) { return '<tr><td>' + dbr(p.date) + ' — ' + esc(crFinAccountLabel(p.financialAccountId)) + (p.auto ? ' <span class="footnote" style="margin:0">(automático)</span>' : '') + '</td><td>' + brl(p.valorOriginal != null ? p.valorOriginal : h.valor) + '</td><td>' + brl(p.valorRecebido) + '</td><td>' + brl(p.desconto || 0) + '</td><td>' + brl(p.juros || 0) + '</td><td>' + brl(p.multa || 0) + '</td><td>' + brl(p.acrescimo || 0) + '</td><td><button class="btn-sm" data-crestorno="' + p.id + '">Estornar</button></td></tr>'; }).join('') + '</tbody></table></div></div>') : '') +
+        (!isNew && recibos.length ? ('<div style="margin-top:10px"><b class="footnote">Recebimentos</b><div class="table-wrap"><table class="report"><thead><tr><th>Data / Conta Bancária</th><th>Origem / Referência</th><th>Original</th><th>Recebido</th><th>Desconto</th><th>Juros</th><th>Multa</th><th>Outros acréscimos</th><th></th></tr></thead><tbody>' + recibos.map(function (p) { return '<tr><td>' + dbr(p.date) + ' — ' + esc(crFinAccountLabel(p.financialAccountId)) + (p.auto ? ' <span class="footnote" style="margin:0">(automático)</span>' : '') + '</td><td>' + esc(p.origin || 'Baixa manual') + (p.reconciliation && p.reconciliation.movementRef ? '<div class="mono footnote" style="margin:2px 0 0">' + esc(p.reconciliation.movementRef) + '</div>' : '') + '</td><td>' + brl(p.valorOriginal != null ? p.valorOriginal : h.valor) + '</td><td>' + brl(p.valorRecebido) + '</td><td>' + brl(p.desconto || 0) + '</td><td>' + brl(p.juros || 0) + '</td><td>' + brl(p.multa || 0) + '</td><td>' + brl(p.acrescimo || 0) + '</td><td><button class="btn-sm" data-crestorno="' + p.id + '">Estornar</button></td></tr>'; }).join('') + '</tbody></table></div></div>') : '') +
+        (!isNew ? '<div style="margin-top:10px"><b class="footnote">Histórico</b>' + (historyRows ? '<div class="table-wrap"><table class="report"><thead><tr><th>Quando</th><th>Quem</th><th>Ação</th><th>Detalhe</th></tr></thead><tbody>' + historyRows + '</tbody></table></div>' : '<div class="footnote">Sem eventos registrados.</div>') + '</div>' : '') +
         '<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">' +
         '<button class="btn-sm primary" id="cr-salvar">Salvar</button>' +
         (!isNew && saldo > 0.005 && !h.canceledAt ? '<button class="btn-sm" id="cr-baixa">Registrar recebimento</button>' : '') +
         (!isNew && !h.canceledAt && !recibos.length ? '<button class="btn-sm" id="cr-cancelar" style="background:var(--err);border-color:var(--err);color:#fff">Cancelar conta</button>' : '') +
-        '</div><div id="cr-err"></div></div>';
+        '</div><div class="validation-summary" id="cr-err" style="display:none"></div></div>';
       panel.querySelector('.x').onclick = function () { d.remove(); };
       // Sincroniza o que o operador já digitou nos outros campos antes de redesenhar o drawer (troca
       // de categoria dispara um novo draw() — sem isto, texto já digitado em Descrição/Pagador/Valor
@@ -15333,11 +15607,8 @@
       panel.querySelector('#cr-salvar').onclick = function () {
         var desc = panel.querySelector('#cr-descricao').value.trim(); var valor = cpParseNum(panel.querySelector('#cr-valor').value);
         var categoryId = panel.querySelector('#cr-categoria').value || null;
-        if (!desc) { panel.querySelector('#cr-err').innerHTML = '<div class="form-err">Informe a descrição.</div>'; return; }
-        if (valor == null || valor <= 0) { panel.querySelector('#cr-err').innerHTML = '<div class="form-err">Informe um valor válido.</div>'; return; }
         // PROMPT "Correção da Base Financeira" §1/§7: categoria financeira obrigatória em todo
         // lançamento — mesma exigência já aplicada ao editor de Contas a Pagar (openCpEditor).
-        if (!categoryId) { panel.querySelector('#cr-err').innerHTML = '<div class="form-err">Selecione a categoria financeira.</div>'; return; }
         // FIX (achado real da Prioridade 8 — auditoria): "__none" é só o sentinela do FILTRO da
         // listagem (crFinAccountLabel/`crF.financialAccountId==='__none'`, linha ~13808) — nunca pode
         // ser persistido como valor de um registro. Antes deste fix, escolher "Sem conta financeira"
@@ -15352,7 +15623,14 @@
         // origin SHOPEE_PEDIDO/CAIXA_TRANSFERENCIA) nascem de propósito sem conta (o banco só é
         // confirmado depois, no Registrar recebimento — ver §CAIXA_TRANSFERENCIA/openCrBaixaModal),
         // e reabrir um título existente só pra editar Observação, por exemplo, nunca deve travar.
-        if (isNew && !readOnlyOrigin && !financialAccountId) { panel.querySelector('#cr-err').innerHTML = '<div class="form-err">Selecione a Conta Bancária prevista.</div>'; return; }
+        var errors = [];
+        if (!desc) errors.push({ selector: '#cr-descricao', message: 'Informe a descrição.' });
+        if (!(valor > 0)) errors.push({ selector: '#cr-valor', message: 'Informe um valor maior que zero.' });
+        if (!categoryId) errors.push({ selector: '#cr-categoria', message: 'Selecione a categoria financeira.' });
+        if (!panel.querySelector('#cr-competencia').value) errors.push({ selector: '#cr-competencia', message: 'Informe a competência.' });
+        if (!panel.querySelector('#cr-vencimento').value) errors.push({ selector: '#cr-vencimento', message: 'Informe o vencimento.' });
+        if (isNew && !readOnlyOrigin && !financialAccountId) errors.push({ selector: '#cr-conta-fin', message: 'Selecione a Conta Bancária prevista.' });
+        if (showFormErrors(panel, errors, '#cr-err')) return;
         // PROMPT "Correção da Base Financeira" §3: salvar aqui é sempre um ato manual do operador —
         // marca Categoria/Conta como protegidas contra a próxima integração automática (ver
         // cpAplicarUpsertProtegido em crUpsertBySourceKey).
@@ -15365,8 +15643,8 @@
         crHeaderSave(toSave).then(function (full) { h = full; isNew = false; toast('Conta a receber salva', desc); d.remove(); crRenderBody(); });
       };
       var baixaBtn = panel.querySelector('#cr-baixa'); if (baixaBtn) baixaBtn.onclick = function () { openCrBaixaModal(h, function () { draw(); crRenderBody(); }); };
-      var cancelBtn = panel.querySelector('#cr-cancelar'); if (cancelBtn) cancelBtn.onclick = function () { if (!confirm('Cancelar esta conta a receber?')) return; crCancelHeader(h.id).then(function () { toast('Conta cancelada', ''); draw(); crRenderBody(); }); };
-      panel.querySelectorAll('[data-crestorno]').forEach(function (b) { b.onclick = function () { if (!confirm('Estornar este recebimento?')) return; crEstornarBaixa(b.dataset.crestorno).then(function () { toast('Recebimento estornado', ''); draw(); crRenderBody(); }); }; });
+      var cancelBtn = panel.querySelector('#cr-cancelar'); if (cancelBtn) cancelBtn.onclick = function () { openModal({ title: 'Cancelar conta a receber', destructive: true, confirmLabel: 'Cancelar conta', bodyHtml: '<p>Cancelar <b>' + esc(h.descricao || h.id) + '</b>?</p><div class="info-banner">O título será cancelado, nunca apagado, e continuará no histórico.</div>', onConfirm: function () { return crCancelHeader(h.id).then(function () { toast('Conta cancelada', 'Histórico preservado.'); draw(); if (document.getElementById('crbody')) crRenderBody(); }); } }); };
+      panel.querySelectorAll('[data-crestorno]').forEach(function (b) { b.onclick = function () { var receipt = crReceipts.find(function (p) { return p.id === b.dataset.crestorno; }); openModal({ title: 'Estornar recebimento', destructive: true, confirmLabel: 'Estornar recebimento', bodyHtml: '<p>Estornar o recebimento de <b>' + brl(receipt && receipt.valorRecebido || 0) + '</b>?</p><div class="info-banner">O saldo do título e da Conta Bancária será recomposto; o evento permanecerá no histórico.</div>', onConfirm: function () { return crEstornarBaixa(b.dataset.crestorno).then(function () { toast('Recebimento estornado', 'Histórico preservado.'); draw(); if (document.getElementById('crbody')) crRenderBody(); }); } }); }; });
     }
     draw();
   }
@@ -15378,22 +15656,38 @@
   function openCrBaixaModal(h, onDone) {
     var saldo = crSaldo(h);
     var bodyHtml =
+      '<div class="validation-summary" id="crb-err" style="display:none"></div>' +
       '<label class="fld">Valor recebido</label><input class="input" id="crb-valor" style="width:100%" value="' + saldo + '">' +
       '<label class="fld">Data do Recebimento</label><input type="date" class="input" id="crb-data" style="width:100%" max="' + cpToday() + '" value="' + cpToday() + '">' +
       '<label class="fld">Conta Bancária *</label><select class="select" id="crb-conta" style="width:100%">' + crFinAccountOptions(h.financialAccountId).replace('Todas as contas bancárias', '— escolher —') + '</select>' +
       '<label class="fld">Forma de recebimento *</label><select class="select" id="crb-forma" style="width:100%"><option value="">— escolher —</option>' + CP_FORMAS_PGTO.map(function (f) { return '<option value="' + esc(f) + '">' + esc(f) + '</option>'; }).join('') + '</select>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label class="fld">Desconto</label><input class="input" id="crb-desconto" value="0"></div><div><label class="fld">Juros</label><input class="input" id="crb-juros" value="0"></div><div><label class="fld">Multa</label><input class="input" id="crb-multa" value="0"></div><div><label class="fld">Outros acréscimos</label><input class="input" id="crb-acrescimo" value="0"></div></div>' +
+      '<div class="panel" style="margin-top:10px"><div class="pb" id="crb-summary"></div></div>' +
       '<label class="fld">Observação</label><input class="input" id="crb-obs" style="width:100%">' +
-      '<div id="crb-err"></div>';
+      '<p class="footnote">A sugestão usa a fórmula oficial já aprovada. Se você editar o valor recebido manualmente, o sistema preserva sua escolha.</p>';
     openModal({
       title: 'Registrar recebimento', width: 440, bodyHtml: bodyHtml, confirmLabel: 'Confirmar recebimento',
+      onMount: function (panel) {
+        var valueEl = panel.querySelector('#crb-valor'), manualValue = false;
+        var modifierIds = ['#crb-desconto', '#crb-juros', '#crb-multa', '#crb-acrescimo'];
+        function num(id) { return cpParseNum(panel.querySelector(id).value) || 0; }
+        function update(fromModifier) {
+          var discount = num('#crb-desconto'), interest = num('#crb-juros'), fine = num('#crb-multa'), addition = num('#crb-acrescimo');
+          var suggested = r2(saldo - discount + interest + fine + addition);
+          if (fromModifier && !manualValue) valueEl.value = String(suggested).replace('.', ',');
+          var received = cpParseNum(valueEl.value) || 0;
+          var principal = crAmortizado({ valorRecebido: received, desconto: discount, juros: interest, multa: fine, acrescimo: addition });
+          var finalBalance = r2(saldo - principal);
+          var status = Math.abs(finalBalance) <= 0.005 ? 'Quitado' : finalBalance > 0 ? 'Parcial' : 'Valor acima do saldo';
+          panel.querySelector('#crb-summary').innerHTML = '<div class="prow"><span>Saldo anterior</span><b>' + brl(saldo) + '</b></div><div class="prow"><span>Desconto</span><b>' + brl(discount) + '</b></div><div class="prow"><span>Juros / multa / acréscimos</span><b>' + brl(interest + fine + addition) + '</b></div><div class="prow"><span>Valor recebido</span><b>' + brl(received) + '</b></div><div class="prow"><span>Valor sugerido</span><b>' + brl(suggested) + '</b></div><div class="prow"><span>Principal amortizado</span><b>' + brl(principal) + '</b></div><div class="prow"><span>Saldo final</span><b>' + brl(finalBalance) + '</b></div><div class="prow"><span>Situação prevista</span><b>' + status + '</b></div>';
+        }
+        valueEl.oninput = function () { manualValue = true; update(false); };
+        modifierIds.forEach(function (id) { panel.querySelector(id).oninput = function () { update(true); }; });
+        update(false);
+      },
       onConfirm: function (panel) {
-        var errEl = panel.querySelector('#crb-err'); errEl.innerHTML = '';
         var valorRecebido = cpParseNum(panel.querySelector('#crb-valor').value);
-        if (valorRecebido == null || valorRecebido <= 0) { errEl.innerHTML = '<div class="form-err">Informe um valor válido.</div>'; return false; }
         var dataBaixa = panel.querySelector('#crb-data').value;
-        if (!dataBaixa) { errEl.innerHTML = '<div class="form-err">Informe a data do recebimento.</div>'; return false; }
-        if (dataBaixa > cpToday()) { errEl.innerHTML = '<div class="form-err">A data do recebimento não pode ser futura.</div>'; return false; }
         // FIX (achado real da Prioridade 8): "__none" é o sentinela de FILTRO (nunca um valor válido
         // de conta financeira) — normalizado aqui pra nunca ser persistido no recibo, mesmo achado do
         // editor de cabeçalho acima (30/151 recibos reais afetados, R$14.700,32).
@@ -15402,9 +15696,13 @@
         // BUG CRÍTICO (auditoria noturna, "Contas a Receber sem Conta financeira"): sem Conta financeira
         // + Forma de recebimento obrigatórias na baixa, o recebimento era confirmado sem nunca impactar o
         // saldo bancário — o fluxo correto é CR → Baixa → Conta financeira → Saldo do banco.
-        if (!financialAccountId) { errEl.innerHTML = '<div class="form-err">Selecione a Conta Bancária que recebeu o valor.</div>'; return false; }
         var paymentMethod = panel.querySelector('#crb-forma').value;
-        if (!paymentMethod) { errEl.innerHTML = '<div class="form-err">Selecione a forma de recebimento.</div>'; return false; }
+        var errors = [];
+        if (!(valorRecebido > 0)) errors.push({ selector: '#crb-valor', message: 'Informe um valor recebido maior que zero.' });
+        if (!dataBaixa) errors.push({ selector: '#crb-data', message: 'Informe a data do recebimento.' }); else if (dataBaixa > cpToday()) errors.push({ selector: '#crb-data', message: 'A data do recebimento não pode ser futura.' });
+        if (!financialAccountId) errors.push({ selector: '#crb-conta', message: 'Selecione a Conta Bancária que recebeu o valor.' });
+        if (!paymentMethod) errors.push({ selector: '#crb-forma', message: 'Selecione a forma de recebimento.' });
+        if (showFormErrors(panel, errors, '#crb-err')) return false;
         return crRegistrarBaixa(h.id, { valorRecebido: valorRecebido, date: dataBaixa, financialAccountId: financialAccountId, paymentMethod: paymentMethod, desconto: cpParseNum(panel.querySelector('#crb-desconto').value) || 0, juros: cpParseNum(panel.querySelector('#crb-juros').value) || 0, multa: cpParseNum(panel.querySelector('#crb-multa').value) || 0, acrescimo: cpParseNum(panel.querySelector('#crb-acrescimo').value) || 0, observacao: panel.querySelector('#crb-obs').value.trim() }).then(function () { toast('Recebimento registrado', brl(valorRecebido)); if (onDone) onDone(); });
       },
     });
